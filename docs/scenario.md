@@ -325,7 +325,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `gate_answers_delivered: false` | asserts that at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — useful for negative-path tests of delivery failures |
 | `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass (mirrors `transcript_contains` pairing with `computer_links_resolve`) |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
-| `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. |
+| `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. On `replay` the modifier is a no-op pass — there's no live tier to probe, so it neither suppresses nor triggers anything there. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
@@ -356,9 +356,10 @@ path **needs** (e.g. `office_convert`, `ocr`, `pdf_tables`, `ml_extract`, `cv`, 
 This closes the false-green for extraction-heavy skills: a PDF/Excel-ingestion skill that silently fell back
 to manual parsing on a tier without the deps now fails loudly instead of passing. Unlike the *use*-detection
 fail (which catches an omitted family the skill was observed using), this is a *declared-need* check, so it
-fires even when the skill's fallback masks the gap. The check is computed at run time and persisted, so
-`verify-run`/`replay` honor the recorded outcome — a clean full-parity run records nothing and never
-false-fails later. Opt out with `allow_missing_capability: true` when the fallback is genuinely equivalent.
+fires even when the skill's fallback masks the gap. The check is computed at run time and persisted;
+`verify-run` reads the persisted outcome and honors it, while `replay` re-drives and does not re-surface it —
+a clean full-parity run records nothing here either way. Opt out with `allow_missing_capability: true` when
+the fallback is genuinely equivalent.
 
 When `requires_capabilities` is declared, the harness probes the image **before** driving and, if a declared
 family is omitted, **fails fast — it aborts the run (exit 3) before spending a single token**, instead of
@@ -502,7 +503,8 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**
-are also content assertions, plus the hook-blocked keys `hook_blocked` and `no_hook_blocked` — all of
+are also content assertions, plus the hook-blocked keys `hook_blocked` and `no_hook_blocked`, and the
+path-denial keys `vm_path_denied`, `path_denied`, and `no_path_denied` — all of
 which require the cassette to carry `controlOut` (full-fidelity replay). When
 `controlOut` is present, the decision pipeline runs on replay and populates `rec.questions` /
 `rec.gateDeliveries` — so these keys are genuinely evaluated.

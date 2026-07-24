@@ -36,6 +36,11 @@
 //   9. DESIGN.md's current-state sentence ("currently **<agent>**, per `baselines/desktop-<ver>.json`")
 //      matches the max baseline + its agentVersion. Unlike DESIGN.md's dated verification notes
 //      (exempt, see 7), this sentence claims the PRESENT, so it must not lag.
+//   10. SKILL.md's prose "Version note" blockquote (the human-facing sentence right below the
+//       intro — "the facts ... track `cowork-harness X.Y.Z` (baseline `desktop-X.Y.Z`)") must agree
+//       with the floor and skillBaseline invariants above already enforce. This prose was previously
+//       an UNGUARDED version surface: nothing stopped it drifting independently of the machine-checked
+//       tracks-harness/floor metadata line right above it.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -72,6 +77,17 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
 
   // Baseline pins (invariant 7) — extracted here so they can ride in `values` alongside the rest.
   const skillBaseline = skillMd.match(/tracks-harness:\s*cowork-harness\s+\d+\.\d+\.\d+\s*\(baseline\s+desktop-(\d+\.\d+\.\d+)\)/)?.[1];
+
+  // "Version note" prose blockquote (invariant 10) — the human-facing sentence, distinct from the
+  // machine-readable `tracks-harness:` frontmatter line above. It wraps across a `> `-prefixed line
+  // break in the actual Markdown, so the regex spans that break explicitly rather than relying on
+  // a dotall flag.
+  const versionNote = skillMd.match(
+    /\*\*Version note:\*\*.*?track\s+`cowork-harness\s+(\d+\.\d+\.\d+)`\s*\(baseline\s*\n>\s*`desktop-(\d+\.\d+\.\d+)`\)/,
+  );
+  const versionNoteVersion = versionNote?.[1];
+  const versionNoteBaseline = versionNote?.[2];
+
   const readmeText = r("README.md");
   const readmeBaseline = readmeText.match(/latest shipped baseline[^.]*?is\s+\*\*`desktop-(\d+\.\d+\.\d+)`\*\*/)?.[1];
   const baselineFiles = readdirSync(join(REPO_ROOT, "baselines")).filter((f) => /^desktop-\d+\.\d+\.\d+\.json$/.test(f));
@@ -90,6 +106,8 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     skillBaseline,
     readmeBaseline,
     maxBaseline,
+    versionNoteVersion,
+    versionNoteBaseline,
   };
 
   // 1. npm self-consistency
@@ -220,6 +238,21 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     }
     if (maxBaseline && designCurrent[2] !== maxBaseline) {
       errors.push(`DESIGN.md current-state baseline "desktop-${designCurrent[2]}" != max baseline "desktop-${maxBaseline}"`);
+    }
+  }
+
+  // 10. SKILL.md's prose "Version note" blockquote must agree with the floor and skillBaseline it
+  //     sits right next to — otherwise it's an ungrounded, ungoverned copy of the version metadata.
+  if (!versionNote) {
+    errors.push(`could not find SKILL.md "Version note" blockquote (version + baseline)`);
+  } else {
+    if (floor && versionNoteVersion !== floor) {
+      errors.push(`SKILL.md "Version note" version "${versionNoteVersion}" != bootstrap floor "@>=${floor}"`);
+    }
+    if (skillBaseline && versionNoteBaseline !== skillBaseline) {
+      errors.push(
+        `SKILL.md "Version note" baseline "desktop-${versionNoteBaseline}" != tracks-harness baseline "desktop-${skillBaseline}"`,
+      );
     }
   }
 

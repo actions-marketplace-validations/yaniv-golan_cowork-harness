@@ -136,9 +136,11 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     }
   }
 
-  // a declared requires_capabilities the running tier couldn't satisfy is a hard fail on BOTH lanes —
-  // the field is run-time truth persisted to result.json, so verify-run/replay honor it (a clean full-parity
-  // run records nothing here, so this never false-fails a later verify-run). Opt out with allow_missing_capability.
+  // a declared requires_capabilities the running tier couldn't satisfy is a hard fail, computed from a
+  // live run and persisted to result.json. verify-run reads that persisted outcome and honors it (a clean
+  // full-parity run records nothing here, so this never false-fails a later verify-run); replay re-drives
+  // and resets requiresCapabilityUnmet to undefined (see cassette.ts), so it does not re-surface on replay.
+  // Opt out with allow_missing_capability.
   if (result.requiresCapabilityUnmet?.caps.length && !result.assertions.some((a) => a.assertion.allow_missing_capability === true)) {
     const { caps, reason } = result.requiresCapabilityUnmet;
     signals.push({

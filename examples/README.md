@@ -104,7 +104,8 @@ cowork-harness run examples/scenarios/                    # every top-level *.ya
 > From a source checkout, `node dist/cli.js run …` works too (skip the `npm link`).
 
 > **CI note:** this live pass only runs when `ANTHROPIC_API_KEY` is set (main-repo pushes/PRs); fork
-> PRs get lint + schema validation + token-free replay only — see `.github/workflows/ci.yml`.
+> PRs get lint + schema validation + token-free replay only — see `.github/workflows/ci.yml`. For a
+> copy-paste GitHub Actions setup, see [ci-recipe.md](../.claude/skills/cowork-harness/references/ci-recipe.md).
 
 The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
 sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent

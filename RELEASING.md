@@ -50,14 +50,14 @@ Never push the tag before CI is green for the exact commit you intend to tag. Th
 enforces this (`Require ci.yml success for this commit` step), but don't rely on it — tag a green
 SHA.
 
-**Tag the MERGE COMMIT (main HEAD after the merge), never the release-branch head — and here's why.**
-The publish gate (`require-ci-success`) queries `ci.yml` runs with `--event push` for the tagged SHA.
-`ci.yml` only triggers `on: push` for **`main`** (plus `pull_request` / `workflow_dispatch`), so a
-release-branch/PR head has *only* a `pull_request` run — which the `--event push` filter ignores.
-Tagging that SHA makes the gate poll ~30 min and then FAIL. Only the merge commit (produced by
-`gh pr merge`, then `git pull`ed onto `main`) has a push-event `ci.yml` run. This is why Phase 3 tags
-`main` HEAD after the merge — do **not** "optimize" by tagging the branch commit whose PR CI you just
-watched go green.
+> **Tag the MERGE COMMIT (main HEAD after the merge), never the release-branch head — and here's why.**
+> The publish gate (`require-ci-success`) queries `ci.yml` runs with `--event push` for the tagged SHA.
+> `ci.yml` only triggers `on: push` for **`main`** (plus `pull_request` / `workflow_dispatch`), so a
+> release-branch/PR head has *only* a `pull_request` run — which the `--event push` filter ignores.
+> Tagging that SHA makes the gate poll ~30 min and then FAIL. Only the merge commit (produced by
+> `gh pr merge`, then `git pull`ed onto `main`) has a push-event `ci.yml` run. This is why Phase 3 tags
+> `main` HEAD after the merge — do **not** "optimize" by tagging the branch commit whose PR CI you just
+> watched go green.
 
 When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) —
 `gh run list --commit <short-sha>` silently returns empty. If you mis-tag: `git push origin

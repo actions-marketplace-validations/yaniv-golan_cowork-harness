@@ -39,7 +39,9 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 > [Old run dirs (pre-`turns/` layout)](#old-run-dirs-pre-turns-layout) at the end of this page for
 > `migrate-run-dir`.
 
-**Why paths look different at different fidelity tiers:** at `hostloop`, `computer://` links and tool
+**Why paths look different at different fidelity tiers** (see
+[boundary.md's tier table](./boundary.md#how-each-tier-enforces-the-boundary) for what each tier
+means): at `hostloop`, `computer://` links and tool
 arguments render as real host paths (`/Users/…`) because hostloop's file tools run natively against your
 machine — the displayed path is the one the model actually touched. At `container`/`microvm`/`protocol`,
 the same content stays VM-shaped (`/sessions/<id>/mnt/…`) because a mount's "host" side there is
