@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [1.10.0] — 2026-07-25
 
+### Changed
+
+- **The packaged `cowork-harness` skill no longer carries a per-release version history.** SKILL.md's
+  "what the floor gates, by release" list had grown to 19 releases / ~15 KB (about a fifth of the file)
+  and was self-defeating: every entry described a feature at or below the floor, so anyone meeting the
+  floor already had all of it. Because SKILL.md is loaded into an agent's context on every invocation,
+  that was pure token cost for content that cannot change behaviour. The version floor (and *why* to pin
+  it rather than use `@latest`) stays; the history now lives where it belongs — this changelog — with a
+  pointer for anyone diagnosing an older CLI. SKILL.md: 77 KB → 62 KB.
+
 ### Added
 
 - **Skill/plugin discovery SDK-MCP servers** (`mcp__skills__list_skills`/`suggest_skills`,
