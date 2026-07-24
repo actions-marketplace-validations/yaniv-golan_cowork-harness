@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-07-25
+
 ### Added
 
 - **Skill/plugin discovery SDK-MCP servers** (`mcp__skills__list_skills`/`suggest_skills`,
