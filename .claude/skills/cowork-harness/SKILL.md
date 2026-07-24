@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.9.0
-  tracks-harness: cowork-harness 1.9.0 (baseline desktop-1.24012.1)
+  version: 1.10.0
+  tracks-harness: cowork-harness 1.10.0 (baseline desktop-1.24012.1)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.9.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.10.0` (baseline
 > `desktop-1.24012.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,9 +39,24 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.9.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.9.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.9.0"`. **Pin `@>=1.9.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.10.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.10.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.10.0"`. **Pin `@>=1.10.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
-  What the ≥ 1.9.0 floor gates, by release:
+  What the ≥ 1.10.0 floor gates, by release:
+
+  - **1.10.0 (skill/plugin discovery SDK-MCP servers):** `container` and `hostloop` (and `cowork`,
+    which resolves to one of those) now declare a `skills` server (`mcp__skills__list_skills`,
+    `suggest_skills`) and a `plugins` server (`mcp__plugins__list_plugins`, `search_plugins`,
+    `suggest_plugin_install`) alongside `cowork`/`workspace`. All five are `alwaysLoad`, so
+    `tool_available: "mcp__skills__.*"` / `"mcp__plugins__.*"` is a real check on those tiers instead of a
+    false negative (`microvm`/`protocol` still declare no such server — a miss there means "not modeled at
+    this tier"). `list_skills`/`list_plugins` report the session's actually-staged skills/plugins; the
+    advisory tools return a well-formed empty-catalog result. Two new session knobs —
+    `skills.suggest_enabled` / `skills.proactive_suggest_enabled` — override the baseline gates that
+    control `suggest_skills`. Fidelity scope: tool inventory, inputSchemas, gating and the `list_*`
+    envelopes are asar/session-log derived; the description strings and the
+    `search_plugins`/`suggest_plugin_install` envelopes are a faithful reconstruction, not byte-captured
+    (see `docs/fidelity-gaps.md`). Also fixes `chat --fidelity container` declaring
+    `mcp__cowork__present_files` without ever announcing its server.
 
   - **1.9.0 (critique report schema + shareable, screenshot-safe output):**
     `schema/critique-report.json` (descriptive, test-pinned — parse the report against it, not prose;

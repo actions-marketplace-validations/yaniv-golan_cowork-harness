@@ -44,7 +44,7 @@ import {
 } from "../runtime/image-capabilities.js";
 import { instanceName, VM_WORK_HOST } from "../runtime/lima.js";
 import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
-import { decideLoopFromBaseline, readGateFlag, readGateNumber } from "../loop-decision.js";
+import { decideLoopFromBaseline, readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
@@ -567,6 +567,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           maxEntries: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupMaxEntries") ?? 100,
         })
       : undefined;
+  // Skills/plugins discovery gates (A2 — see docs/fidelity-gaps.md "Skill/plugin discovery SDK-MCP
+  // servers"). Precedence: explicit session knob ▸ readGateBool (bare-boolean gate, NOT readGateFlag —
+  // these two gates carry their truth in the top-level `.on`, not a named sub-flag) ▸ documented default.
+  // Resolved HERE (session is in scope) and threaded into spawnContainer/spawnHostLoop via `opts` below —
+  // neither spawn function receives `session` itself.
+  const { suggestSkillsEnabled, proactiveSkillSuggestEnabled } = resolveSkillDiscoveryGates(baseline, session.skills);
 
   // Pre-flight: if the skill DECLARES required capabilities and the image provably omits one, FAIL FAST here
   // — before any paid agent run — instead of burning ~12 min to reach a verdict the post-run guard already
@@ -684,6 +690,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           provenanceRef,
           webFetchViaApi: viaApiOn,
           dedup,
+          suggestSkillsEnabled,
+          proactiveSkillSuggestEnabled,
         });
         child = hl.child;
         sdkMcp = hl.sdkMcp;
@@ -708,10 +716,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           egressProxy: sidecar?.proxyUrl,
           dockerNetwork: sidecar?.network,
           runToken,
+          suggestSkillsEnabled,
+          proactiveSkillSuggestEnabled,
         });
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
-        sdkMcp = ct.sdkMcp; // serves cowork/present_files — container has no other sdk-MCP server today
+        sdkMcp = ct.sdkMcp; // cowork/present_files + the skills/plugins discovery servers (combineSdkMcp)
       } else if (effectiveFidelity === "microvm") {
         child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,

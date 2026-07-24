@@ -5,7 +5,10 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan } from "../session.js";
+import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills-handler.js";
+import { makePluginsHandler } from "../hostloop/plugins-handler.js";
+import { listMountedSkills } from "../run/skill-metadata.js";
 import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
@@ -23,7 +26,7 @@ import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
-import type { HookBundle } from "../agent/session.js";
+import { combineSdkMcp, type HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
 
 /** The path-gate's own PreToolUse hook callback id — exported so RunRecord.pathDenials' pretooluse
@@ -118,6 +121,12 @@ export function spawnHostLoop(
     webFetchViaApi?: boolean;
     /** coworkWebFetchDedup per-session cache (execute.ts/chat.ts build it only when the gate is on). */
     dedup?: WebFetchDedupCache;
+    /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
+     *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
+    suggestSkillsEnabled?: boolean;
+    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ default false). Only
+     *  consulted when `suggestSkillsEnabled` is true. */
+    proactiveSkillSuggestEnabled?: boolean;
   } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
@@ -180,10 +189,16 @@ export function spawnHostLoop(
     mcpGuest: mcpHostPath,
     systemPromptAppend,
     disallowed: ["Bash", "WebFetch", "NotebookEdit"],
-    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch"], // both REGISTERED regardless of the gate
+    // The 5 skills/plugins discovery tools declare + pre-approve on the SAME cowork lane as workspace's
+    // own bash/web_fetch (spec §3: `isEnabled` = `sessionType==="cowork"`, which hostloop satisfies).
+    // bash + web_fetch are both REGISTERED regardless of the webFetchViaApi gate; the 5 discovery tools
+    // are unconditional.
+    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...SKILLS_PLUGINS_TOOL_NAMES],
     extraAllowedTools: opts.webFetchViaApi
-      ? ["mcp__workspace__bash"] // web_fetch is gated via can_use_tool (production shape) — pre-approve bash only
-      : ["mcp__workspace__bash", "mcp__workspace__web_fetch"], // gate off (allowlist fallback) — keep web_fetch pre-approved
+      ? // web_fetch is gated via can_use_tool (production shape) — pre-approve bash + the discovery tools only
+        ["mcp__workspace__bash", ...SKILLS_PLUGINS_TOOL_NAMES]
+      : // gate off (allowlist fallback) — keep web_fetch pre-approved alongside bash + the discovery tools
+        ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const nativeEnv = buildHostLoopNativeEnv(baseline, {
     configDir: plan.configDir,
@@ -303,7 +318,25 @@ export function spawnHostLoop(
     dedup: opts.dedup,
     execCwd,
   });
-  const sdkMcp: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
+  const workspaceBundle: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
+  // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged
+  // configDir/skills + plugin mounts (buildLaunchPlan materializes both before spawn), never a live call.
+  const mountedSkills = listMountedSkills(plan.configDir, pluginSkillRootsFromPlan(plan));
+  const mountedPlugins = mountedPluginsFromPlan(plan);
+  const skillsBundle: { servers: string[]; handle: McpHandler } = {
+    servers: ["skills"],
+    handle: makeSkillsHandler({
+      mountedSkills,
+      mountedPluginNames: mountedPlugins.map((p) => p.pluginName),
+      suggestSkillsEnabled: opts.suggestSkillsEnabled ?? true,
+      proactiveSkillSuggestEnabled: opts.proactiveSkillSuggestEnabled ?? false,
+    }),
+  };
+  const pluginsBundle: { servers: string[]; handle: McpHandler } = {
+    servers: ["plugins"],
+    handle: makePluginsHandler({ mountedPlugins }),
+  };
+  const sdkMcp = combineSdkMcp(workspaceBundle, skillsBundle, pluginsBundle);
   return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown };
 }
 

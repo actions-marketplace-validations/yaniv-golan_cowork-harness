@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
-import type { LaunchPlan } from "../session.js";
+import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan } from "../session.js";
 import { resolveMounts, resolveAgentBinary } from "../baseline.js";
 import { agentArgs, spawnEnv, dockerRunArgv } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { stageWorkspace } from "./stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { makeCoworkHandler } from "../hostloop/cowork-handler.js";
+import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills-handler.js";
+import { makePluginsHandler } from "../hostloop/plugins-handler.js";
+import { combineSdkMcp } from "../agent/session.js";
+import { listMountedSkills } from "../run/skill-metadata.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
 
 /**
@@ -25,7 +29,18 @@ export function spawnContainer(
   plan: LaunchPlan,
   outDir: string,
   sessionId: string,
-  opts: { systemPromptAppend?: string; egressProxy?: string; dockerNetwork?: string; runToken?: string } = {},
+  opts: {
+    systemPromptAppend?: string;
+    egressProxy?: string;
+    dockerNetwork?: string;
+    runToken?: string;
+    /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
+     *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
+    suggestSkillsEnabled?: boolean;
+    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ default false). Only
+     *  consulted when `suggestSkillsEnabled` is true. */
+    proactiveSkillSuggestEnabled?: boolean;
+  } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
   const sessionRoot = m.cwd; // /sessions/<id>
@@ -76,8 +91,11 @@ export function spawnContainer(
     // the run (confirmed live against a real container spawn before this was added). extraAllowedTools
     // is stated explicitly (no hidden extraTools→allowedTools coupling), keeping this tier's
     // CURRENT pre-approval set unchanged.
-    extraTools: ["mcp__cowork__present_files"],
-    extraAllowedTools: ["mcp__cowork__present_files"],
+    // The 5 skills/plugins discovery tools are declared on the SAME cowork lane as present_files (spec
+    // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
+    // off-registry-auto-allow reason present_files is.
+    extraTools: ["mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraAllowedTools: ["mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const dockerArgs = dockerRunArgv({
     network,
@@ -94,7 +112,7 @@ export function spawnContainer(
   });
 
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-  const sdkMcp: { servers: string[]; handle: McpHandler } = {
+  const coworkBundle: { servers: string[]; handle: McpHandler } = {
     servers: ["cowork"],
     handle: makeCoworkHandler({
       sessionRootVm: sessionRoot,
@@ -103,5 +121,23 @@ export function spawnContainer(
       folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
     }),
   };
+  // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged
+  // configDir/skills + plugin mounts (buildLaunchPlan materializes both before spawn), never a live call.
+  const mountedSkills = listMountedSkills(plan.configDir, pluginSkillRootsFromPlan(plan));
+  const mountedPlugins = mountedPluginsFromPlan(plan);
+  const skillsBundle: { servers: string[]; handle: McpHandler } = {
+    servers: ["skills"],
+    handle: makeSkillsHandler({
+      mountedSkills,
+      mountedPluginNames: mountedPlugins.map((p) => p.pluginName),
+      suggestSkillsEnabled: opts.suggestSkillsEnabled ?? true,
+      proactiveSkillSuggestEnabled: opts.proactiveSkillSuggestEnabled ?? false,
+    }),
+  };
+  const pluginsBundle: { servers: string[]; handle: McpHandler } = {
+    servers: ["plugins"],
+    handle: makePluginsHandler({ mountedPlugins }),
+  };
+  const sdkMcp = combineSdkMcp(coworkBundle, skillsBundle, pluginsBundle);
   return { child, containerName, sdkMcp };
 }

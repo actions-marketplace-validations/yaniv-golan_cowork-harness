@@ -6,6 +6,40 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-07-25
+
+### Added
+
+- **Skill/plugin discovery SDK-MCP servers** (`mcp__skills__list_skills`/`suggest_skills`,
+  `mcp__plugins__list_plugins`/`search_plugins`/`suggest_plugin_install`) — modeled on `container` and
+  `hostloop` (and `cowork`, which resolves to one of those) alongside the existing `cowork`/`workspace`
+  servers, via a new `combineSdkMcp` composition helper (`src/agent/session.ts`). Every tool is
+  `alwaysLoad` so it surfaces in `system/init.tools` from turn one, matching real Cowork; `list_skills`/
+  `list_plugins` are populated deterministically from the session's actually-mounted skills/plugins,
+  and `suggest_skills`/`search_plugins`/`suggest_plugin_install` return a deterministic empty-catalog
+  advisory result (the real add/install catalog is out of band). Two gates control the `skills` server's
+  `suggest_skills` tool — `suggestSkillsEnabled` (default on) and `proactiveSkillSuggestEnabled` (default
+  off, adds a `trigger` param) — read from the synced baseline via a new bare-boolean `readGateBool`
+  reader, with new session-level overrides `skills.suggest_enabled` / `skills.proactive_suggest_enabled`
+  (see [docs/session.md](./docs/session.md)). `tool_available: "mcp__skills__.*"` /
+  `"mcp__plugins__.*"` is no longer a false negative on `container`/`hostloop`/`cowork` (still absent on
+  `microvm`/`protocol` — see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)). Fidelity scope: the tool
+  inventory, inputSchemas, gating, and the `list_skills`/`list_plugins` envelopes are asar/session-log
+  derived; the tool **description strings** and the `search_plugins`/`suggest_plugin_install` envelopes are
+  a faithful reconstruction rather than byte-captured — see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+  Both catalogs report what the sandbox will actually **receive**: a plugin skill directory that staging
+  drops (untracked, under the default git-tracked staging boundary) is omitted from `list_skills` *and*
+  `list_plugins`, including on `--resume`, so the two never contradict each other within a run.
+
+### Fixed
+
+- **`chat --fidelity container` declared SDK-MCP tools it never served.** The container branch built its
+  SDK-MCP bundle and then discarded it, so `mcp__cowork__present_files` was advertised on `--tools`/
+  `--allowedTools` while its server was never announced in `initialize` — calling it failed, and
+  `context.mcpServers` omitted `cowork`. (`run --fidelity container` was unaffected; this was the
+  interactive `chat` lane only.) The bundle is now forwarded, which also serves the new
+  `skills`/`plugins` discovery servers on that lane.
+
 ## [1.9.0] — 2026-07-24
 
 ### Added

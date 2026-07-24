@@ -13,6 +13,19 @@ Start with the [project README](../README.md) for the overview and quick start, 
 > - **Replay-only usage** (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches.
 > - **Every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model. A further reason replay-only users simply skip `doctor`: a token ✗ there is expected, not a blocker for replay.
 
+## Common tasks (I want to…)
+
+A shortcut into the guides below for a handful of frequent goals — the full picture is still the
+reading order and tables that follow.
+
+| I want to… | Start here |
+|---|---|
+| Gate CI without spending tokens | [cassette.md](./cassette.md) (record/replay) + the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) |
+| Test a local skill before shipping it | [scenario.md](./scenario.md) (author a scenario) and the `skill` command in [README → Commands at a glance](../README.md#commands-at-a-glance) |
+| Sync after a Claude Desktop update | [maintenance.md](./maintenance.md) |
+| Debug a run that no-ops an assertion | [debugging.md](./debugging.md) |
+| Check whether the sandbox really enforces the boundary | [boundary.md](./boundary.md) |
+
 ## Guides
 
 Grouped by the same **author → run → debug** spine as the reading order above.

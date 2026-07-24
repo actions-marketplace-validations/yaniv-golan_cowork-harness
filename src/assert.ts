@@ -441,10 +441,16 @@ export interface AssertContext {
   /** RunResult.context.tools — the SDK's init-event tool manifest, i.e. the run's EAGERLY-LOADED tools.
    *  It is NOT the complete callable surface: a factory-DEFERRED tool (native or MCP) is loaded on demand
    *  via a ToolSearch `select:` round-trip and surfaces in a system-reminder, not in init.tools — so
-   *  tool_available can false-NEGATIVE on a genuinely-available deferred tool (e.g. the skill-discovery
-   *  tools). Capturing the deferred set is a known gap, not yet implemented. Undefined means no context
-   *  telemetry was recorded (an older run that never captured this field) — the evidence-unavailable
-   *  signal for tool_available; an empty `[]` is a valid "no tools" state and is NOT the same as undefined. */
+   *  tool_available can false-NEGATIVE on a genuinely-available deferred tool. Capturing the deferred set
+   *  is a known gap, not yet implemented. The skill/plugin discovery tools (`mcp__skills__list_skills`,
+   *  `mcp__skills__suggest_skills`, `mcp__plugins__list_plugins`, `mcp__plugins__search_plugins`,
+   *  `mcp__plugins__suggest_plugin_install`) are a PARTIAL exception: `container`/`hostloop` (and `cowork`,
+   *  which resolves to one of those) now model them as `alwaysLoad` SDK-MCP tools (see
+   *  `hostloop/skills-handler.ts`/`plugins-handler.ts`), so they DO appear here at those tiers — but
+   *  `microvm`/`protocol` still declare no such server, so a miss on those tiers is still "not modeled",
+   *  not "provably unavailable". Undefined means no context telemetry was recorded (an older run that
+   *  never captured this field) — the evidence-unavailable signal for tool_available; an empty `[]` is a
+   *  valid "no tools" state and is NOT the same as undefined. */
   availableTools?: string[];
   /** RunResult.contextEvents — `system` stream messages the harness doesn't special-case (e.g.
    *  `compact_boundary`). Undefined means no context-events telemetry was recorded for this run (an
@@ -1423,14 +1429,21 @@ function check(
     if ("error" in c) results.push(fail(`tool_available: bad regex "${a.tool_available}": ${c.error}`));
     else if (ctx.availableTools === undefined)
       results.push(fail(`evidence unavailable: availableTools absent from result.json — cannot evaluate tool_available`));
-    else
+    else if (ctx.availableTools.some((t) => c.re.test(t))) results.push(ok());
+    else {
+      // The general caveat applies to every miss; the discovery-server paragraph is appended ONLY when
+      // the pattern actually concerns those tools, so an ordinary `tool_available: "Bash"` miss isn't
+      // buried under ~450 characters about a surface it never mentioned.
+      const discoveryRelevant = /mcp__(?:skills|plugins)/.test(a.tool_available);
       results.push(
-        ctx.availableTools.some((t) => c.re.test(t))
-          ? ok()
-          : fail(
-              `no tool in the init manifest matched "${a.tool_available}" — note context.tools is the EAGERLY-LOADED tool set; a factory-deferred tool (surfaced via a system-reminder, e.g. the skill-discovery tools) can be available yet absent here, so a miss is "not eagerly loaded", not "provably unavailable"`,
-            ),
+        fail(
+          `no tool in the init manifest matched "${a.tool_available}" — note context.tools is the EAGERLY-LOADED tool set; a factory-deferred tool (surfaced via a system-reminder) can be available yet absent here, so a miss is "not eagerly loaded", not "provably unavailable"` +
+            (discoveryRelevant
+              ? `. The mcp__skills__*/mcp__plugins__* discovery tools ARE modeled as alwaysLoad on container/hostloop (and cowork, which resolves to one of those) — a miss there is a real absence, but microvm/protocol still declare no such server, so a miss on those tiers means "not modeled at this tier", not "provably unavailable"`
+              : ""),
+        ),
       );
+    }
   }
   if (a.skill_tool_used !== undefined) {
     const { skill, tool } = a.skill_tool_used;

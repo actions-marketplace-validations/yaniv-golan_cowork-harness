@@ -172,6 +172,14 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "suggest_enabled": {
+          "description": "override for gate 245679952 (suggestSkillsEnabled): when true, the skills SDK-MCP server exposes suggest_skills; when false, suggest_skills is omitted and list_skills' description drops the fallback-to-suggest_skills clause. Omit to use the synced baseline gate (default true).",
+          "type": "boolean"
+        },
+        "proactive_suggest_enabled": {
+          "description": "override for gate 1598976391 (proactiveSkillSuggestEnabled): when true (and suggest_enabled is not false), suggest_skills swaps to the proactive description and gains a `trigger` enum param. Omit to use the synced baseline gate (default false).",
+          "type": "boolean"
         }
       },
       "additionalProperties": false

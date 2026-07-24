@@ -1,6 +1,6 @@
 import { warn } from "./io.js";
 import { z } from "zod";
-import { mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { homedir } from "node:os";
@@ -9,9 +9,9 @@ import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./stag
 import { assignFolderMountNames, RESERVED_MOUNT_NAMES, type MountTier } from "./staging/mount-naming.js";
 import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 import { containedRealPath } from "./boundary-paths.js";
-import { gitModeEnabled, gitFilterFromSet, gitStageStats } from "./run/skill-files.js";
+import { gitModeEnabled, gitFilterFromSet, gitStageStats, gitCpFilter } from "./run/skill-files.js";
 import { BoundaryError } from "./errors.js";
-import type { PluginSkillRoot } from "./run/skill-metadata.js";
+import { readSkillDescription, type PluginSkillRoot } from "./run/skill-metadata.js";
 
 /** Expand a leading `~` the way a shell would for THE CURRENT user only, then resolve whatever's left
  *  against `base`. `~` and `~/x` become `homedir()` / `join(homedir(), "x")`; a bare absolute path is
@@ -113,6 +113,27 @@ export const SessionConfig = z.strictObject({
   skills: z
     .object({
       local: z.array(z.string().min(1)).default([]), // host skill dirs -> CLAUDE_CONFIG_DIR/skills
+      // Session-level overrides for the two skill-discovery SDK-MCP gates (container/hostloop only —
+      // see docs/fidelity-gaps.md "Skill/plugin discovery SDK-MCP servers"). Precedence: this knob ▸
+      // the synced baseline gate (readGateBool) ▸ the documented default. Nested here (rather than two
+      // top-level booleans) to match the existing `skills` object shape and stay out of the top-level
+      // session-docs-sync guard's per-field scope.
+      suggest_enabled: z
+        .boolean()
+        .optional()
+        .describe(
+          "override for gate 245679952 (suggestSkillsEnabled): when true, the skills SDK-MCP server exposes " +
+            "suggest_skills; when false, suggest_skills is omitted and list_skills' description drops the " +
+            "fallback-to-suggest_skills clause. Omit to use the synced baseline gate (default true).",
+        ),
+      proactive_suggest_enabled: z
+        .boolean()
+        .optional()
+        .describe(
+          "override for gate 1598976391 (proactiveSkillSuggestEnabled): when true (and suggest_enabled is not " +
+            "false), suggest_skills swaps to the proactive description and gains a `trigger` enum param. Omit " +
+            "to use the synced baseline gate (default false).",
+        ),
     })
     .default({ local: [] }),
 
@@ -330,7 +351,81 @@ export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
     } catch {
       /* missing/corrupt manifest — best-effort fallback */
     }
-    out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir });
+    out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir, stageFilter: m.stageFilter });
+  }
+  return out;
+}
+
+/** A plugin the `plugins` SDK-MCP server's `list_plugins` (and the skills server's `installed_plugins`
+ *  name list) sees, mirroring the real handler's `{pluginName, pluginId, description, skills}` shape. */
+export interface MountedPlugin {
+  pluginName: string;
+  pluginId: string;
+  description?: string;
+  skills: Array<{ name: string; description?: string }>;
+}
+
+/** Best-effort marketplace qualifier for a plugin mount's `pluginId` (spec shape `<name>@<marketplace>`).
+ *  Real Cowork's `pluginId` is the marketplace-qualified install key from its own plugin registry; the
+ *  harness keeps no such registry, so this recovers the marketplace segment already embedded in the
+ *  mount-path shapes `buildLaunchPlan` produces (`.local-plugins/marketplaces/<mkt>/<name>`, or the
+ *  legacy `.local-plugins/cache/<mkt>/<name>/<version>` for a `marketplace-plugin` mount) and falls back
+ *  to a synthetic qualifier for the shapes that carry none (a bare `local_plugins` mount under the legacy
+ *  cache path, or a `remote_plugins` mount). This is advisory text in a deterministic stub response, not
+ *  a production lookup key — plugin install/search itself happens out of band (§6/§7 of the confirmation
+ *  spec). */
+function guessMarketplaceQualifier(mount: Mount): string {
+  const segs = mount.mountPath.split("/");
+  if (segs[0] === ".local-plugins" && segs[1] === "marketplaces" && segs.length >= 3) return segs[2]; // <mkt>/<name>
+  if (segs[0] === ".local-plugins" && segs[1] === "cache" && mount.kind === "marketplace-plugin" && segs.length >= 4) return segs[2]; // <mkt>/<name>/<version>
+  return mount.kind === "remote-plugin" ? "remote" : "local";
+}
+
+/**
+ * Enumerate every plugin mounted for this session — the `plugins` SDK-MCP server's `list_plugins`
+ * catalog. Reads each plugin mount's `.claude-plugin/plugin.json` for `name`/`description`/`skills`
+ * subdir (best-effort — a missing/corrupt manifest falls back to the mount's dir basename, no
+ * description, and the default "skills" subdir, same fallback `pluginSkillRootsFromPlan` uses), then
+ * lists that subdir's skill dirs with their `SKILL.md` descriptions (empty array if the subdir is
+ * missing/unreadable — a plugin need not have any skills).
+ */
+export function mountedPluginsFromPlan(plan: LaunchPlan): MountedPlugin[] {
+  const out: MountedPlugin[] = [];
+  for (const m of plan.mounts) {
+    if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
+    let name = basename(m.hostPath);
+    let description: string | undefined;
+    let skillsSubdir = "skills";
+    const pj = join(m.hostPath, ".claude-plugin", "plugin.json");
+    try {
+      const parsed = JSON.parse(readFileSync(pj, "utf8")) as { name?: unknown; description?: unknown; skills?: unknown };
+      if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
+      if (typeof parsed.description === "string" && parsed.description) description = parsed.description;
+      if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
+    } catch {
+      /* missing/corrupt manifest — best-effort fallback */
+    }
+    const skillsDir = join(m.hostPath, skillsSubdir);
+    const skills: Array<{ name: string; description?: string }> = [];
+    // Same staging truth `listMountedSkills` applies, with the same `runtime/stage.ts` precedence
+    // (plan-build filter, else derive one under git mode — `stageFilter` is undefined on resume). A
+    // fully-untracked skill dir is excluded from the mount with only a notice (the hard-fail fires only
+    // when the WHOLE plugin has 0 tracked files); without this, `list_plugins` advertises a skill the
+    // agent never received, contradicting `list_skills` in the very same run.
+    // Derived OUTSIDE the try below: that catch means "no skills subdir", and swallowing a git failure
+    // here would defeat gitTrackedSet's deliberate loud-fail on an unreadable tracked set (and silently
+    // report zero skills).
+    const filter = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
+    try {
+      for (const e of readdirSync(skillsDir, { withFileTypes: true })) {
+        if (!e.isDirectory()) continue;
+        if (filter && !filter(join(skillsDir, e.name), "")) continue;
+        skills.push({ name: `${name}:${e.name}`, description: readSkillDescription(join(skillsDir, e.name, "SKILL.md")) });
+      }
+    } catch {
+      /* no skills subdir — fine, a plugin need not declare any skills */
+    }
+    out.push({ pluginName: name, pluginId: `${name}@${guessMarketplaceQualifier(m)}`, description, skills });
   }
   return out;
 }

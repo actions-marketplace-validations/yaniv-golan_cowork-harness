@@ -2,7 +2,8 @@
 
 Thanks for helping make Cowork skill-testing reproducible.
 
-For the full documentation map, see [docs/README.md](./docs/README.md).
+For the full documentation map, see [docs/README.md](./docs/README.md). Read [AGENTS.md](./AGENTS.md) —
+the canonical agent/architecture contract (architecture seams, invariants) — before changing code.
 
 ## Development setup
 
@@ -29,7 +30,8 @@ CI Stage 1 (the `build` job in `.github/workflows/ci.yml`) does **not** invoke `
 gate steps individually — e.g. `check:versions`, `format:check`, `typecheck`, `build`, a CLI smoke
 (`node dist/cli.js list`), three token-free `replay` gate fixtures, `verify-cassettes`, `lint`, and
 source-guard checks — while the unit suite runs separately as the 4-shard `test` job (see `ci.yml` for
-the authoritative list). Only `release.yml` calls `npm run ci`.
+the authoritative list). Only `release.yml` calls `npm run ci`. For a copy-paste GitHub Actions setup,
+see [ci-recipe.md](./.claude/skills/cowork-harness/references/ci-recipe.md).
 
 > **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
 
