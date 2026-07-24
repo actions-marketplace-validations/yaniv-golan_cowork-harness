@@ -363,6 +363,10 @@ L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ
                       routes via host curl. A PreToolUse path-containment hook is the security boundary
                       for real filesystem access at this tier — see docs/boundary.md.
 
+    Both container and hostloop also declare the skills/plugins skill/plugin-discovery SDK-MCP servers
+    (mcp__skills__list_skills/suggest_skills, mcp__plugins__list_plugins/search_plugins/
+    suggest_plugin_install) alongside cowork/workspace — see docs/fidelity-gaps.md.
+
     cowork            Auto-picks hostloop vs container the way Cowork itself does — decoded from
                       GrowthBook gate 1143815894 (Cowork's internal feature-flag system) in the
                       synced baseline. "Do what real Cowork does."

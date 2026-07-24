@@ -136,6 +136,8 @@ plugins:
   remote_plugins: []
 skills:
   local: []                      # extra host skill dirs
+  suggest_enabled: true          # gate 245679952 override — `mcp__skills__suggest_skills` on/off (default true)
+  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param (default false)
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map)
   enabled: []
@@ -274,7 +276,7 @@ same set live from the schema.
 | `no_skill_triggered: <regex>` | no invoked skill id matched — the negative-control / description-collision catcher; evidence-unavailable (never a vacuous pass) if invocation data is absent or the `Skill` tool is unobservable |
 | `skill_available: <regex>` | a staged skill's id matched the regex (offered, not necessarily invoked — see `skill_triggered` for invocation) — content-class: the id list comes from the agent's init `skills` listing, so it replays from the frozen init event (id-only; the `whenToUse` enrichment is live-disk and thus absent on replay, but the id is what's matched); evidence-unavailable only if `RunResult.context.availableSkills` is absent entirely (an older cassette recorded before the available-skills listing was captured) |
 | `connector_available: <regex>` | an MCP server/connector's name matched the regex (available, not necessarily used) — evidence-unavailable if `RunResult.context.mcpServers` is absent |
-| `tool_available: <regex>` | a tool in the init manifest matched the regex (available, not necessarily called — see `tool_called` for invocation) — evidence-unavailable if `RunResult.context.tools` is absent |
+| `tool_available: <regex>` | a tool in the init manifest matched the regex (available, not necessarily called — see `tool_called` for invocation) — evidence-unavailable if `RunResult.context.tools` is absent. The `mcp__skills__*`/`mcp__plugins__*` discovery tools are modeled (as `alwaysLoad`) on `container`/`hostloop`/`cowork` — a miss there is a real absence; `microvm`/`protocol` declare no such server, so a miss on those two tiers means "not modeled at this tier", not "provably unavailable" |
 
 **Name-matching styles differ by key (don't mix them up):** `tool_called`, `tool_not_called`,
 `subagent_tool_used`, `subagent_tool_absent` are **glob** (anchored, case-sensitive, `*`/`?`). `tool_available`,

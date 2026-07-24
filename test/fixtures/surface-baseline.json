@@ -2652,6 +2652,12 @@
       ".skills.local[]": {
         "type": "string"
       },
+      ".skills.proactive_suggest_enabled": {
+        "type": "boolean"
+      },
+      ".skills.suggest_enabled": {
+        "type": "boolean"
+      },
       ".staleness": {
         "type": "object",
         "closed": true

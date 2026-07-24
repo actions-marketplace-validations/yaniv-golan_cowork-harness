@@ -374,6 +374,34 @@ describe("tool_available", () => {
     expect(String(result.message).toLowerCase()).toContain("deferred");
     expect(String(result.message).toLowerCase()).toContain("eagerly-loaded");
   });
+  it("passes for mcp__skills__.*/mcp__plugins__.* when the discovery tools are eagerly-loaded (A2)", () => {
+    // container/hostloop now declare the skills/plugins SDK-MCP servers as alwaysLoad — they surface in
+    // context.tools exactly like mcp__cowork__present_files, so this is no longer the false negative the
+    // WI-2 test above documents for a genuinely-deferred tool.
+    const c = ctx({
+      availableTools: [
+        "Bash",
+        "mcp__cowork__present_files",
+        "mcp__skills__list_skills",
+        "mcp__skills__suggest_skills",
+        "mcp__plugins__list_plugins",
+        "mcp__plugins__search_plugins",
+        "mcp__plugins__suggest_plugin_install",
+      ],
+    });
+    expect(evaluate([{ tool_available: "mcp__skills__.*" }], c)[0].pass).toBe(true);
+    expect(evaluate([{ tool_available: "mcp__plugins__.*" }], c)[0].pass).toBe(true);
+  });
+  it("appends the discovery-tier paragraph ONLY when the pattern concerns those tools", () => {
+    // The tier caveat is ~450 characters; burying an ordinary miss under a surface the assertion never
+    // mentioned is noise. The general deferred-tool caveat must still appear on BOTH.
+    const c = ctx({ availableTools: ["Bash", "Read"] });
+    const ordinary = String(evaluate([{ tool_available: "Grep" }], c)[0].message);
+    const discovery = String(evaluate([{ tool_available: "mcp__skills__.*" }], c)[0].message);
+    expect(ordinary).not.toContain("microvm/protocol");
+    expect(discovery).toContain("microvm/protocol");
+    for (const m of [ordinary, discovery]) expect(m.toLowerCase()).toContain("eagerly-loaded");
+  });
 });
 
 describe("budgetFields (Wave 1 / E6a + Wave 2 / E6b) — the single derivation used by live/replay/verify-run", () => {

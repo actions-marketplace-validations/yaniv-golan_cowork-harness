@@ -80,6 +80,64 @@ export function readGateNumber(baseline: PlatformBaseline, id: string, flag: str
   return undefined;
 }
 
+/**
+ * Read a BARE-BOOLEAN gate (e.g. `suggestSkillsEnabled:245679952`, `proactiveSkillSuggestEnabled:1598976391`)
+ * — one whose truth lives in the top-level `.on` field, NOT a named sub-flag inside `value` (that's
+ * `readGateFlag`'s shape, e.g. `coworkRuntimeConfig`). Same prefixed-then-bare key lookup as
+ * `readGateFlag`/`readGateNumber`; mirrors `decideLoopFromBaseline`'s own `.on`-read for
+ * `hostLoop:1143815894` (the other bare-boolean gate) rather than reusing `readGateFlag`, which would
+ * look for a non-existent sub-flag named after the gate itself and silently return `false` even when the
+ * gate is ON. Returns `undefined` when the gate is genuinely absent from the baseline (so the caller's
+ * precedence chain — explicit knob ▸ this ▸ documented default — can tell "absent" from "off").
+ */
+export function readGateBool(baseline: PlatformBaseline, id: string): boolean | undefined {
+  const gates = (baseline as unknown as { provenance?: { gates?: Record<string, unknown> } }).provenance?.gates ?? {};
+  let entry: unknown = gates[id];
+  if (entry === undefined) {
+    for (const k of Object.keys(gates)) {
+      if (k.endsWith(":" + id)) {
+        entry = gates[k];
+        break;
+      }
+    }
+  }
+  if (entry == null) return undefined;
+  if (typeof entry === "object") {
+    // Return `undefined` — NOT `false` — for an object entry that carries no boolean `.on`. A bare
+    // `false` here would be indistinguishable from a genuinely-OFF gate and would DEFEAT the caller's
+    // documented default (the precedence chain can no longer fall through). No committed baseline uses
+    // such a shape today (all 19 are `{on,source,value}`); this guards the next sync-format change.
+    const on = (entry as { on?: unknown }).on;
+    return typeof on === "boolean" ? on : undefined;
+  }
+  if (typeof entry === "string") return /^(?:on|true|force)\b/i.test(entry);
+  return undefined;
+}
+
+/**
+ * Resolve the two A2 skills/plugins discovery gates to their effective booleans — the SINGLE source of
+ * truth for the precedence chain `explicit session knob ▸ readGateBool ▸ documented default`.
+ *
+ * Extracted because the expression was duplicated verbatim in `run/execute.ts` and `run/chat.ts`, which
+ * is this repo's documented multi-assembler drift class. Pure (baseline + plain booleans in, booleans
+ * out) so the precedence — and, critically, the `readGateBool`-not-`readGateFlag` choice — is unit-testable
+ * without spawning anything. Substituting `readGateFlag` here returns `false` for the ON gate
+ * `245679952` and silently strips `suggest_skills` from every cowork-lane run; `test/loop-decision.test.ts`
+ * pins that against the live baseline.
+ *
+ * Defaults when the gate is absent from the baseline: `suggestSkills` → true, `proactiveSuggest` → false
+ * (the documented production state).
+ */
+export function resolveSkillDiscoveryGates(
+  baseline: PlatformBaseline,
+  knobs: { suggest_enabled?: boolean; proactive_suggest_enabled?: boolean } = {},
+): { suggestSkillsEnabled: boolean; proactiveSkillSuggestEnabled: boolean } {
+  return {
+    suggestSkillsEnabled: knobs.suggest_enabled ?? readGateBool(baseline, "245679952") ?? true,
+    proactiveSkillSuggestEnabled: knobs.proactive_suggest_enabled ?? readGateBool(baseline, "1598976391") ?? false,
+  };
+}
+
 export function decideLoop(inputs: LoopInputs): Loop {
   if (inputs.requireFullVmSandbox === true) return "vm"; // HeA()
   if (inputs.devForceHostLoop === true) return "host"; // dev override

@@ -26,7 +26,7 @@ import { turnWriteDir } from "./turn-layout.js";
 import { appendIndexRow, indexRowFromResult } from "./run-index.js";
 import { scrub, collectSecrets } from "../secrets.js";
 import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from "../decide/decider.js";
-import { readGateFlag, readGateNumber } from "../loop-decision.js";
+import { readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
@@ -37,16 +37,34 @@ const log = (s: string) => process.stderr.write(s);
 
 /** The chat lane's drive() options. Chat previously passed NO subagentAppend on any branch — a
  *  delivery bug (production sends the per-loop sub-agent append on every Cowork session). Pure and
- *  exported so the delivery contract is unit-testable without spawning a session. */
+ *  exported so the delivery contract is unit-testable without spawning a session.
+ *
+ *  `wiring` is tier-discriminated because the two sandboxed tiers need DIFFERENT subsets:
+ *  - `hostloop` carries the workspace sdkMcp bundle + hooks, and `toolAliases` rides along with it
+ *    (host-loop-only — see src/runtime/hostloop.ts's WORKSPACE_TOOL_ALIASES doc comment).
+ *  - `container` carries sdkMcp ONLY (no hooks, no aliases). Forwarding it is load-bearing, not
+ *    cosmetic: spawnContainer puts `mcp__cowork__present_files` + the 5 mcp__skills__/mcp__plugins__
+ *    discovery tools on `--tools`/`--allowedTools`, so dropping the bundle would advertise tools whose
+ *    servers were never announced — they would fail on call, `context.mcpServers` would omit
+ *    skills/plugins, and the `skills.suggest_enabled` knob would silently no-op on this lane.
+ *  - `protocol` (L0) carries none of it, but must say so EXPLICITLY.
+ *
+ *  `wiring` is REQUIRED, and protocol has its own variant, precisely so that forgetting to pass a
+ *  tier's bundle is a COMPILE error rather than a silent no-op. That is not hypothetical: the container
+ *  branch previously called `chatDriveOpts(prompts)` and silently dropped its sdkMcp, and reverting that
+ *  one call site leaves the entire unit suite green (a call-site bug cannot be caught by testing this
+ *  pure function, which was never wrong). The type is the guard. */
 export function chatDriveOpts(
   prompts: { subagentAppend?: string },
-  hl?: { sdkMcp: SdkMcp; hooks: HookBundle },
+  wiring: { tier: "hostloop"; sdkMcp: SdkMcp; hooks: HookBundle } | { tier: "container"; sdkMcp: SdkMcp } | { tier: "protocol" },
 ): { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } {
   return {
     subagentAppend: prompts.subagentAppend,
-    // toolAliases rides along with the hostloop sdkMcp/hooks bundle (host-loop-only — see
-    // src/runtime/hostloop.ts's WORKSPACE_TOOL_ALIASES doc comment).
-    ...(hl ? { sdkMcp: hl.sdkMcp, hooks: hl.hooks, toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
+    ...(wiring.tier === "hostloop"
+      ? { sdkMcp: wiring.sdkMcp, hooks: wiring.hooks, toolAliases: WORKSPACE_TOOL_ALIASES }
+      : wiring.tier === "container"
+        ? { sdkMcp: wiring.sdkMcp }
+        : {}),
   };
 }
 
@@ -314,6 +332,10 @@ export async function cmdChat(args: string[]) {
           maxEntries: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupMaxEntries") ?? 100,
         })
       : undefined;
+  // Skills/plugins discovery gates (A2) — resolved through the SAME shared helper execute.ts uses, so the
+  // two lanes cannot drift. Both spawnHostLoop and spawnContainer take them via `opts` (neither receives
+  // `session`).
+  const { suggestSkillsEnabled, proactiveSkillSuggestEnabled } = resolveSkillDiscoveryGates(baseline, session.skills);
   // ONE readline interface on process.stdin, shared by the turn reader (ttyTurns) and the gate
   // prompter (PromptDecider). Two interfaces would race for the same stdin → undefined input routing.
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
@@ -349,7 +371,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts));
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, { tier: "protocol" }));
     } else if (fidelity === "hostloop") {
       // honor --fidelity hostloop in chat, mirroring execute.ts's branch selection.
       const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
@@ -360,6 +382,8 @@ export async function cmdChat(args: string[]) {
         provenanceRef,
         webFetchViaApi: viaApiOn,
         dedup,
+        suggestSkillsEnabled,
+        proactiveSkillSuggestEnabled,
       });
       child = hl.child;
       containerName = hl.containerName;
@@ -428,13 +452,18 @@ export async function cmdChat(args: string[]) {
           permissiveMode: plan.permissionMode === "bypassPermissions",
         };
       }
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, hl));
+      record = await run.drive(
+        withSeedPrompt(seedPrompt, ttyTurns(rl)),
+        chatDriveOpts(prompts, { tier: "hostloop", sdkMcp: hl.sdkMcp, hooks: hl.hooks }),
+      );
     } else {
       const ct = spawnContainer(scenario, baseline, plan, outDir, sessionId, {
         systemPromptAppend: prompts.systemPromptAppend,
         egressProxy: sidecar!.proxyUrl,
         dockerNetwork: sidecar!.network,
         runToken,
+        suggestSkillsEnabled,
+        proactiveSkillSuggestEnabled,
       });
       child = ct.child;
       containerName = ct.containerName; // so Ctrl-C / finally reap the agent container by name
@@ -454,7 +483,7 @@ export async function cmdChat(args: string[]) {
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
-      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts));
+      record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, { tier: "container", sdkMcp: ct.sdkMcp }));
     }
   } finally {
     stopHeartbeat?.();

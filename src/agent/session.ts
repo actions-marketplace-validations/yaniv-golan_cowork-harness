@@ -6,6 +6,7 @@ import readline from "node:readline";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { TimelineWriter } from "./timeline.js";
+import { BoundaryError } from "../errors.js";
 
 /**
  * AgentSession: the stream-json control protocol over a runtime-provided child.
@@ -139,6 +140,39 @@ export type SdkMcp = {
     | Promise<{ result?: unknown; error?: { code: number; message: string } }>
     | { result?: unknown; error?: { code: number; message: string } };
 };
+
+/**
+ * Compose multiple SDK-MCP bundles into one, so a tier can pass several in-process servers through the
+ * single `sdkMcp` slot `AgentSession.init/start` accepts (e.g. container: `cowork` + `skills` + `plugins`;
+ * hostloop: `workspace` + `skills` + `plugins`). `servers` is the plain concatenation (order preserved,
+ * first-bundle-first); `handle` routes each `mcp_message` to the ONE bundle that declared the message's
+ * `server_name` — the dispatcher already threads `server` through every `handle(server, jr)` call (see
+ * `AgentSession.pump`'s mcp_message branch), so routing by that name is additive, not new plumbing. A
+ * `server_name` no bundle declared (shouldn't happen — the agent only addresses a server it was told
+ * about via `sdkMcpServers` in `initialize`) surfaces the SAME "no handler configured" shape the
+ * no-`sdkMcp`-at-all path already uses, rather than throwing. A bundle's own `handle` may still throw or
+ * reject — that propagates UNCHANGED to the caller (which already catches it, see the `mcp_message`
+ * branch's try/catch), so no sub-handler error is swallowed or reshaped here.
+ */
+export function combineSdkMcp(...bundles: SdkMcp[]): SdkMcp {
+  const servers = bundles.flatMap((b) => b.servers);
+  const byServer = new Map<string, SdkMcp["handle"]>();
+  for (const b of bundles)
+    for (const s of b.servers) {
+      // Fail loud on a wiring mistake: two bundles claiming the same server name would silently shadow
+      // one handler and double the name in `sdkMcpServers`. Names are distinct today; this guards regressions.
+      if (byServer.has(s)) throw new BoundaryError(`combineSdkMcp: duplicate sdkMcp server name "${s}"`);
+      byServer.set(s, b.handle);
+    }
+  return {
+    servers,
+    handle: (server, jsonrpc) => {
+      const handle = byServer.get(server);
+      if (!handle) return { error: { code: -32601, message: `no sdkMcp handler configured for server "${server}"` } };
+      return handle(server, jsonrpc);
+    },
+  };
+}
 
 /**
  * A caller-supplied PreToolUse hook bundle, threaded through `AgentSession.init/start` opts exactly like

@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveAvailableSkills, type PluginSkillRoot } from "../src/run/skill-metadata.js";
+import { resolveAvailableSkills, listMountedSkills, type PluginSkillRoot } from "../src/run/skill-metadata.js";
+import { mountedPluginsFromPlan } from "../src/session.js";
+import { gitStageStats, gitFilterFromSet, gitEnvWithoutAmbientRepo } from "../src/run/skill-files.js";
+import { spawnSync } from "node:child_process";
 
 function stageLocalSkill(configDir: string, name: string, frontmatter: string): void {
   const dir = join(configDir, "skills", name);
@@ -73,5 +76,93 @@ describe("resolveAvailableSkills (§6.2, O1 fix — ids are the authoritative sp
       { id: "local-ghost" },
       { id: "gone:foo" },
     ]);
+  });
+});
+
+// --- staging truth: the discovery catalogs must report what the agent WILL RECEIVE ----------------
+// Under git mode a plugin's UNTRACKED skill dir is excluded from the mount with only a notice (the
+// hard-fail fires only when the WHOLE plugin has 0 tracked files). Enumerating the source tree would
+// therefore advertise a skill the sandbox never got. Both catalogs must apply the same filter — they
+// are read by two tools in the SAME run (`mcp__skills__list_skills` and `mcp__plugins__list_plugins`),
+// so a divergence is self-contradictory output, not just a cosmetic miss.
+describe("plugin skill catalogs honour the mount's staging filter", () => {
+  /** A real git work tree: one committed skill, one untracked. Returns the plugin root. */
+  function gitPluginFixture(): string {
+    const root = mkdtempSync(join(tmpdir(), "stagefilter-"));
+    // env: a git HOOK runs with GIT_DIR/GIT_INDEX_FILE pointing at the invoking repo; inherited, this
+    // fixture's `add -A` would rewrite THAT repo's index (it removes entries, unlike the plain
+    // `add <path>` the older fixtures use). Same helper the cassette path uses.
+    const git = (...a: string[]) => spawnSync("git", a, { cwd: root, stdio: "ignore", env: gitEnvWithoutAmbientRepo() });
+    stagePluginSkill(root, "skills", "tracked-skill", "---\nname: tracked-skill\ndescription: kept\n---\n");
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "myplugin" }));
+    git("init", "-q");
+    git("config", "user.email", "t@t.t");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    // Added AFTER the commit — tracked set does not contain it.
+    stagePluginSkill(root, "skills", "untracked-skill", "---\nname: untracked-skill\ndescription: dropped\n---\n");
+    return root;
+  }
+
+  it("listMountedSkills drops an untracked plugin skill dir, keeps the tracked one", () => {
+    const root = gitPluginFixture();
+    const { tracked } = gitStageStats(root);
+    expect(tracked).toBeTruthy();
+    const filter = gitFilterFromSet(root, tracked!);
+    const roots: PluginSkillRoot[] = [{ pluginName: "myplugin", hostPath: root, skillsSubdir: "skills", stageFilter: filter }];
+    const names = listMountedSkills(mkdtempSync(join(tmpdir(), "cfg-")), roots).map((s) => s.name);
+    expect(names).toContain("myplugin:tracked-skill");
+    expect(names).not.toContain("myplugin:untracked-skill");
+  });
+
+  it("GITSET=0 (raw copy) filters nothing, even for a git source", () => {
+    const root = gitPluginFixture();
+    const roots: PluginSkillRoot[] = [{ pluginName: "myplugin", hostPath: root, skillsSubdir: "skills" }];
+    const prev = process.env.COWORK_HARNESS_GITSET;
+    process.env.COWORK_HARNESS_GITSET = "0";
+    try {
+      const names = listMountedSkills(mkdtempSync(join(tmpdir(), "cfg-")), roots).map((s) => s.name);
+      expect(names).toEqual(expect.arrayContaining(["myplugin:tracked-skill", "myplugin:untracked-skill"]));
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_GITSET;
+      else process.env.COWORK_HARNESS_GITSET = prev;
+    }
+  });
+
+  // RESUME: buildLaunchPlan leaves `stageFilter` undefined (nothing is re-staged), but the persisted mnt
+  // tree WAS filtered on the original run — so the catalog must still derive the filter, or it over-lists
+  // a skill the sandbox does not have. This is the F2 regression.
+  it("derives the filter when stageFilter is absent but git mode is on (the resume path)", () => {
+    const root = gitPluginFixture();
+    const roots: PluginSkillRoot[] = [{ pluginName: "myplugin", hostPath: root, skillsSubdir: "skills" }];
+    const names = listMountedSkills(mkdtempSync(join(tmpdir(), "cfg-")), roots).map((s) => s.name);
+    expect(names).toContain("myplugin:tracked-skill");
+    expect(names).not.toContain("myplugin:untracked-skill");
+  });
+
+  it("mountedPluginsFromPlan derives it too when stageFilter is absent (resume parity)", () => {
+    const root = gitPluginFixture();
+    const plan = {
+      mounts: [{ hostPath: root, mountPath: ".local-plugins/marketplaces/local/myplugin", mode: "r", kind: "local-plugin" }],
+    } as unknown as Parameters<typeof mountedPluginsFromPlan>[0];
+    const skills = mountedPluginsFromPlan(plan)[0].skills.map((s) => s.name);
+    expect(skills).toContain("myplugin:tracked-skill");
+    expect(skills).not.toContain("myplugin:untracked-skill");
+  });
+
+  it("mountedPluginsFromPlan agrees with listMountedSkills (no cross-tool contradiction)", () => {
+    const root = gitPluginFixture();
+    const { tracked } = gitStageStats(root);
+    const filter = gitFilterFromSet(root, tracked!);
+    const plan = {
+      mounts: [
+        { hostPath: root, mountPath: ".local-plugins/marketplaces/local/myplugin", mode: "r", kind: "local-plugin", stageFilter: filter },
+      ],
+    } as unknown as Parameters<typeof mountedPluginsFromPlan>[0];
+    const skills = mountedPluginsFromPlan(plan)[0].skills.map((s) => s.name);
+    expect(skills).toContain("myplugin:tracked-skill");
+    expect(skills).not.toContain("myplugin:untracked-skill"); // the N1 regression
   });
 });

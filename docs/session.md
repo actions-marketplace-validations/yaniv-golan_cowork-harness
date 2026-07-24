@@ -78,6 +78,12 @@ plugins:
   remote_plugins: []             # uploaded / org-remote plugin dirs → mnt/.remote-plugins/plugin_<id> (migrated-Cowork shape)
 skills:
   local: []                      # extra host skill dirs → CLAUDE_CONFIG_DIR/skills
+  # Overrides for the skill-discovery SDK-MCP gates (container/hostloop only — see fidelity-gaps.md
+  # "Skill/plugin discovery SDK-MCP servers"). Precedence: this knob → the synced baseline gate → the
+  # documented default. Both omit-able; the harness resolves gate 245679952/1598976391 from the baseline
+  # when unset.
+  suggest_enabled: true          # gate 245679952 (suggestSkillsEnabled) override; default true when unset
+  proactive_suggest_enabled: false # gate 1598976391 (proactiveSkillSuggestEnabled) override; default false when unset
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map), e.g. ../data/mcp.json
   enabled: []                    # enabledMcpjsonServers
@@ -198,6 +204,8 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `plugins.enabled[]` | `enabledPlugins` | `name@marketplace`. |
 | `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins/plugin_<id>` (migrated-Cowork uploaded/org-remote shape; the id is a stable hash of the declared source). A skill that references these via `${CLAUDE_PLUGIN_ROOT}` must mind [the two-namespace resolution model](./plugin-root.md) — the token is unset in host-loop VM bash. |
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
+| `skills.suggest_enabled` | gate `245679952` (`suggestSkillsEnabled`) override | `container`/`hostloop` (and `cowork`) only. `true` (or unset, if the synced baseline gate is on/absent) declares the `skills` SDK-MCP server's `suggest_skills` tool; `false` omits it and drops `list_skills`' fallback-to-`suggest_skills` clause. See [fidelity-gaps.md](./fidelity-gaps.md). |
+| `skills.proactive_suggest_enabled` | gate `1598976391` (`proactiveSkillSuggestEnabled`) override | Only consulted when `suggest_enabled` (effective) is true. `true` swaps `suggest_skills` to the proactive description and adds a `trigger` enum param (`user_asked` \| `proactive`); default `false`. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
