@@ -123,6 +123,13 @@ All notable changes to this project are documented here. The format is based on
   actionability; "harmless otherwise" is a design smell) and a Traps section for the silent failure modes
   that mislead contributors. **`RELEASING.md`** gains a checklist line naming CHANGELOG + README +
   SKILL.md + references explicitly — a version bump is not documentation.
+- **`AGENTS.md` documents the one-worktree-per-session convention**, because two sessions sharing a single
+  checkout is a failure mode nothing errors on — the integration branch simply advances under an in-flight
+  rebase and the conflict surfaces later. The entry prescribes `git merge --ff-only <branch>` run in the
+  primary, and explicitly warns off the `git fetch . <branch>:main` ref-update as the standard path: it
+  works only while `main` is unchecked-out and fails with `refusing to fetch into branch 'refs/heads/main'
+  checked out at …` the moment a worktree holds it. A ref-update also protects the other session's HEAD
+  while doing nothing for `main` itself, so it never solved the larger half.
 
 ## [1.11.0] — 2026-07-25
 
