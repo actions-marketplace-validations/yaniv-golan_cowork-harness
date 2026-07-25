@@ -175,15 +175,44 @@ describe("doctor — runDoctorChecks", () => {
   // at all). It also must not claim doctor "does not read your Keychain": doctor DOES read it (that is
   // what hasKeychainToken is), and the detail line one row above says so. The claim is scoped to what
   // the harness passes to the AGENT, which is true at every tier.
-  it.each(["container", "hostloop", "protocol", "microvm"] as const)(
-    "the Keychain remedy names no tier-specific actor and is true at %s",
+  // protocol keeps the user's REAL CLAUDE_CONFIG_DIR when no API key is present (protocol.ts:88-97),
+  // because a fresh one breaks OAuth — so a Keychain-only macOS user genuinely CAN run this tier and
+  // must not be told "not ready". Measured live 2026-07-25: scrubbed env + default config dir
+  // authenticates; scrubbed env + fresh managed config dir prints "Not logged in". Every other tier
+  // passes a managed config dir, so the token really is required there.
+  it("protocol + Keychain-only is a non-blocking WARN, not a fail", () => {
+    const tok = get(runDoctorChecks("protocol", probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
+    expect(tok.status).toBe("warn");
+    expect(tok.required).toBe(true); // still reported; readiness gates on status === "fail"
+    expect(tok.detail).toMatch(/real CLAUDE_CONFIG_DIR/i);
+    expect(tok.remedy).toMatch(/likely fine as-is/i);
+  });
+
+  it.each(["container", "hostloop", "microvm"] as const)(
+    "%s + Keychain-only still FAILS — those tiers use a managed config dir, which severs self-sourcing",
     (tier) => {
       const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
-      expect(tok.detail).toMatch(/does not pass a Keychain credential to the agent/i);
-      expect(tok.remedy).toMatch(/injects only env \/ \.env into the agent, at every tier/i);
-      expect(`${tok.detail} ${tok.remedy}`).not.toMatch(/in-Docker/i);
+      expect(tok.status).toBe("fail");
     },
   );
+
+  it("protocol with NO token and NO Keychain still fails (the relaxation is Keychain-gated)", () => {
+    const tok = get(runDoctorChecks("protocol", probe({ hasToken: () => false, hasKeychainToken: () => false })), "token");
+    expect(tok.status).toBe("fail");
+  });
+
+  it.each(["container", "hostloop", "microvm"] as const)("the Keychain remedy names no tier-specific actor and is true at %s", (tier) => {
+    const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
+    expect(tok.detail).toMatch(/does not pass a Keychain credential to the agent/i);
+    expect(tok.remedy).toMatch(/injects only env \/ \.env into the agent, at every tier/i);
+  });
+
+  // The original defect — "the in-Docker agent" emitted at EVERY tier because the branch never consulted
+  // `tier` — must stay dead on all four, including protocol's own separate message.
+  it.each(["container", "hostloop", "protocol", "microvm"] as const)("no tier names the in-Docker agent (%s)", (tier) => {
+    const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
+    expect(`${tok.detail} ${tok.remedy}`).not.toMatch(/in-Docker/i);
+  });
 
   it("no env token and NO Keychain credential → the generic 'set a token' remedy (no Keychain mention)", () => {
     const tok = get(runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => false })), "token");

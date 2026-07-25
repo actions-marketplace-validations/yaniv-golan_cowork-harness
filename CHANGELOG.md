@@ -33,6 +33,14 @@ All notable changes to this project are documented here. The format is based on
   at all), because the branch never consulted the tier. It now states what is true everywhere and does not
   contradict the detail line above it (`doctor` *does* read the Keychain — that is how it detects this
   case): cowork-harness does not pass a Keychain credential to the agent, it injects only env / `.env`.
+- **`doctor --tier protocol` reported "not ready" for a macOS user who could actually run it.** Protocol
+  deliberately keeps your **real** `CLAUDE_CONFIG_DIR` when no API key is present (a fresh one breaks
+  OAuth), so the agent authenticates from local login state and no env / `.env` token is needed. The token
+  check was tier-blind and failed them anyway — a false negative on the one tier that needs neither Docker
+  nor a staged agent, i.e. the cheapest way in. It is now a non-blocking **warning** at `protocol` when a
+  Keychain credential is present (a warning, not a pass: the probe proves a credential exists, not that
+  the login state is still valid). `container`/`microvm`/`hostloop` are unchanged and still require the
+  token — they pass a managed `CLAUDE_CONFIG_DIR`, which severs self-sourcing.
 - **The skill-hash discoverability hint printed once per drifting cassette** — a 16-cassette fleet replay
   emitted the same constant string 16 times on stderr. Now once per process. The
   `COWORK_HARNESS_DEBUG_SKILLHASH=1` dump is unchanged and remains per-cassette, since per-cassette drift
