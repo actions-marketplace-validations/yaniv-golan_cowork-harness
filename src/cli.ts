@@ -184,6 +184,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
       [--strict]               fail on any lint finding (WARN/INFO), not just ERROR
+      [--min-severity <S>]     drop findings below ERROR|WARN|INFO before printing AND before the exit
+                               computation (default INFO = unchanged); applies to --output-format json too
       NOTE: exit 127 means python3 itself is missing — treat any non-zero exit as a CI failure, do not swallow it.
   lint-skill <SKILL.md | skill-dir/>…  lint a skill body (and any sibling hooks.json) for Cowork host-loop footguns (bundled scenario.py; needs python3)
       [--strict]               fail on any finding (the two footguns are WARN-only by default), not just ERROR

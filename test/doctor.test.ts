@@ -170,6 +170,21 @@ describe("doctor — runDoctorChecks", () => {
     expect(tok.remedy).toMatch(/--dotenv <path>/);
   });
 
+  // The message used to name "the in-Docker agent" as the actor — at EVERY tier, because the branch
+  // never consults `tier`. That is false at hostloop (native host process) and at protocol (no Docker
+  // at all). It also must not claim doctor "does not read your Keychain": doctor DOES read it (that is
+  // what hasKeychainToken is), and the detail line one row above says so. The claim is scoped to what
+  // the harness passes to the AGENT, which is true at every tier.
+  it.each(["container", "hostloop", "protocol", "microvm"] as const)(
+    "the Keychain remedy names no tier-specific actor and is true at %s",
+    (tier) => {
+      const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
+      expect(tok.detail).toMatch(/does not pass a Keychain credential to the agent/i);
+      expect(tok.remedy).toMatch(/injects only env \/ \.env into the agent, at every tier/i);
+      expect(`${tok.detail} ${tok.remedy}`).not.toMatch(/in-Docker/i);
+    },
+  );
+
   it("no env token and NO Keychain credential → the generic 'set a token' remedy (no Keychain mention)", () => {
     const tok = get(runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => false })), "token");
     expect(tok.status).toBe("fail");

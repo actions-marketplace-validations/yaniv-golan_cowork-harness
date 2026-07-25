@@ -353,3 +353,53 @@ def test_container_only_key_warn_gates_only_under_strict(tmp_path):
 
     code_strict, _ = _lint_cmd([f], json_out=True, strict=True)
     assert code_strict != 0
+
+
+
+# --- lint --min-severity (1.11.0) -------------------------------------------------------------------
+def _lint_cli(tmp_path, *flags, body="assert:\n  - file_exists: outputs/x.json\n"):
+    """Drive cmd_lint through its real argparse path and capture (exit_code, stdout)."""
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\nfidelity: container\nprompt: hi\n" + body,
+        encoding="utf-8",
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = scenario.main(["lint", str(f), *flags])
+    return code, buf.getvalue()
+
+
+def test_min_severity_defaults_to_unchanged(tmp_path):
+    """Default floor is INFO — the existing INFO advisories still fire (no silent behavior change)."""
+    code, out = _lint_cli(tmp_path)
+    assert "manifest-needs-snapshot" in out
+    assert code == 0
+
+
+def test_min_severity_warn_drops_info(tmp_path):
+    code, out = _lint_cli(tmp_path, "--min-severity", "WARN")
+    assert "manifest-needs-snapshot" not in out
+    assert code == 0
+
+
+def test_strict_with_min_severity_error_is_not_a_contradiction(tmp_path):
+    """`--strict --min-severity ERROR` behaves like a plain lint.
+
+    --strict keys off the finding set. If the filter applied only at render, this would print
+    "0 findings" and still exit 1 — indistinguishable from a bug. The filter runs before BOTH the
+    render and the exit computation, so the two agree.
+    """
+    strict_only, _ = _lint_cli(tmp_path, "--strict")
+    assert strict_only == 1  # an INFO exists at the default floor, so --strict fails
+    filtered, out = _lint_cli(tmp_path, "--strict", "--min-severity", "ERROR")
+    assert filtered == 0
+    assert "manifest-needs-snapshot" not in out
+
+
+def test_min_severity_filters_json_identically(tmp_path):
+    """--json sees the same filtered set, or the two output modes disagree."""
+    _, full = _lint_cli(tmp_path, "--json")
+    _, filtered = _lint_cli(tmp_path, "--json", "--min-severity", "WARN")
+    assert any(f["rule"] == "manifest-needs-snapshot" for f in json.loads(full))
+    assert all(f["severity"] in ("ERROR", "WARN") for f in json.loads(filtered))

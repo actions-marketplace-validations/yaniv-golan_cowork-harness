@@ -709,3 +709,56 @@ describe("checkStaleness — agent-scope attribution", () => {
     }
   });
 });
+
+// --- the skill-hash discoverability hint is once-per-process (1.11.0) -----------------------------
+describe("skill-hash hint noise", () => {
+  // The hint string is a CONSTANT; a 16-cassette fleet replay printed it 16x on stderr, once per drift
+  // notice. Once per process is the whole affordance. Only the HINT is suppressed — the
+  // DEBUG_SKILLHASH=1 dump below it stays per-cassette, since per-cassette drift attribution is the
+  // entire point of that flag. Both calls live in ONE test: the guard is module-level state, so split
+  // tests would be order-dependent.
+  it("prints the set-the-env-var hint at most once across repeated skillHash drifts", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-hint-"));
+    const skillDir = join(root, "skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "# s\n");
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
+    const drifted = () =>
+      ({
+        cassetteVersion: CASSETTE_VERSION,
+        scenario: {
+          name: "s",
+          baseline: "latest",
+          session: sessionPath,
+          fidelity: "container" as const,
+          prompt: "hi",
+          answers: [],
+          expect_denied: [],
+          assert: [],
+        },
+        events: [],
+        fingerprint: { baseline: "99.0.0", skillHash: "0".repeat(64) },
+      }) as unknown as Cassette;
+
+    const prev = process.env.COWORK_HARNESS_DEBUG_SKILLHASH;
+    delete process.env.COWORK_HARNESS_DEBUG_SKILLHASH;
+    const seen: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: unknown }).write = (c: unknown) => (seen.push(String(c)), true);
+    try {
+      checkStaleness(drifted(), root);
+      checkStaleness(drifted(), root);
+      checkStaleness(drifted(), root);
+    } finally {
+      (process.stderr as unknown as { write: unknown }).write = orig;
+      if (prev === undefined) delete process.env.COWORK_HARNESS_DEBUG_SKILLHASH;
+      else process.env.COWORK_HARNESS_DEBUG_SKILLHASH = prev;
+    }
+    const hints = seen.filter((l) => l.includes("skill-hash: set COWORK_HARNESS_DEBUG_SKILLHASH=1"));
+    // `<= 1`, not `=== 1`, ON PURPOSE: the guard is module-level state and an earlier test in this file
+    // may already have consumed the one hint (it did, when this was first written). That does not weaken
+    // the guard — without the fix these three drifts emit THREE hints, so any value > 1 fails.
+    expect(hints.length).toBeLessThanOrEqual(1);
+  });
+});

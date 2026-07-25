@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Cassettes record the harness version that wrote them** — `environment.harnessVersion`. A harness-code
+  change can shift recorded behaviour at an unchanged baseline (1.10.0's new tool surface did exactly
+  that), and no staleness class keys off it, so this was the one fidelity input with no provenance at all.
+  Additive: no `cassetteVersion` bump, absent on older cassettes (and that absence is meaningful — it is
+  never backfilled), readers that don't know the field ignore it.
+- **`verify-cassettes`/`replay` now flag a cassette that predates the skills/plugins discovery surface** —
+  a non-gating `[note]` (never a finding, so it cannot red an existing fleet). It reads the tool inventory
+  the agent actually reported in `system/init`, so it works **retroactively on cassettes recorded long
+  before this release**, and it stays silent where re-recording would not help: `microvm`/`protocol` (which
+  declare no such server), a cassette whose init carries no tool list at all, and any cassette whose tier
+  cannot be determined.
+- **`lint --min-severity ERROR|WARN|INFO`** — drop findings below a floor. Filtering happens before both
+  the render and the exit computation, so `--strict --min-severity ERROR` behaves like a plain lint rather
+  than reporting zero findings and still exiting 1; `--output-format json` is filtered identically.
+  Default `INFO` = unchanged. Note this **mutes** the unconditional `manifest-needs-snapshot` /
+  `gate-needs-controlout` advisories rather than resolving them — the linter is static and cannot read a
+  cassette to know whether they apply, so they still fire by default.
+
+### Fixed
+
+- **`doctor`'s Keychain remedy named the wrong actor at every tier.** It said "the in-Docker agent can't
+  read the Keychain" — emitted verbatim at `hostloop` (a native host process) and at `protocol` (no Docker
+  at all), because the branch never consulted the tier. It now states what is true everywhere and does not
+  contradict the detail line above it (`doctor` *does* read the Keychain — that is how it detects this
+  case): cowork-harness does not pass a Keychain credential to the agent, it injects only env / `.env`.
+- **The skill-hash discoverability hint printed once per drifting cassette** — a 16-cassette fleet replay
+  emitted the same constant string 16 times on stderr. Now once per process. The
+  `COWORK_HARNESS_DEBUG_SKILLHASH=1` dump is unchanged and remains per-cassette, since per-cassette drift
+  attribution is the point of that flag.
+
 ## [1.10.0] — 2026-07-25
 
 ### Changed
