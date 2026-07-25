@@ -510,7 +510,12 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
         miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
     };
     hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
-    hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
+    // "PowerShell" joined the set at Desktop 1.24012.9 (was the 5-element list through 1.24012.1). It is a
+    // REAL tool in the agent registry (its own "Executes a given PowerShell command…" description), but
+    // win32-gated, so it never registers on the macOS/Linux runtimes this harness targets — hence no change
+    // to hostloop's `disallowed` set (see the note in src/runtime/hostloop.ts). Pinned exactly so a future
+    // set change still fires here rather than silently widening what production excludes.
+    hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
     if (!/REQUEST_COWORK_DIRECTORY/.test(defining) || !/"request_cowork_directory"/.test(defining))
       miss("REQUEST_COWORK_DIRECTORY", "the export or its literal is gone");
     if (!/SESSION_TYPE_CHAT/.test(defining) || !/"chat"/.test(defining)) miss("SESSION_TYPE_CHAT", "the export or its literal is gone");
@@ -1580,6 +1585,9 @@ interface ModelEffortEntry {
   effortLevels?: string[];
   recommended?: string;
   modes?: string[];
+  /** Present on a per-model entry since Desktop 1.24012.9, where `claude-opus-5` became the first literal-map
+   *  entry to carry it (previously it appeared only on the regex-default entry). Optional: most entries omit it. */
+  disallowThinkingDisabled?: boolean;
 }
 
 interface EffortRegexDefault {
@@ -1628,7 +1636,9 @@ function parseQuotedArray(inner: string): string[] {
   return [...inner.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
 }
 
-/** Parse one model/regex-default entry's `{...}` body text for the three fields the config carries. */
+/** Parse one model/regex-default entry's `{...}` body text for the fields the config carries. The
+ *  regex-default caller does NOT take `disallowThinkingDisabled` from here — it sets that from its own
+ *  anchor capture — so parsing it is additive for the per-model entries only. */
 function parseModelEntryBody(body: string): ModelEffortEntry {
   const entry: ModelEffortEntry = {};
   const el = body.match(/effortLevels:\[([^\]]*)\]/);
@@ -1637,6 +1647,10 @@ function parseModelEntryBody(body: string): ModelEffortEntry {
   if (rec) entry.recommended = rec[1];
   const modes = body.match(/modes:\[([^\]]*)\]/);
   if (modes) entry.modes = parseQuotedArray(modes[1]);
+  // Minified booleans (`!0`/`!1`) and plain ones both occur; absent stays absent rather than defaulting
+  // to false, so the baseline distinguishes "production omits it" from "production sets it false".
+  const dtd = body.match(/disallowThinkingDisabled:(!0|!1|true|false)/);
+  if (dtd) entry.disallowThinkingDisabled = dtd[1] === "!0" || dtd[1] === "true";
   return entry;
 }
 

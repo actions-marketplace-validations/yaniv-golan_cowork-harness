@@ -1479,7 +1479,7 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
 
 function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string) => string>> = {}): Map<string, string> {
   let defining =
-    `const g5e=["Read","Write","Edit","Glob","Grep"],p5e=["Bash","NotebookEdit","REPL","JavaScript","WebFetch"],Jse="request_cowork_directory",Bse="chat";` +
+    `const g5e=["Read","Write","Edit","Glob","Grep"],p5e=["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"],Jse="request_cowork_directory",Bse="chat";` +
     // resolveFilePath lives in the SHARED/defining chunk — its two hard-block strings are here, NOT in
     // the hostloop consumer (which only carries the caller-side "could not be safely resolved").
     `function JKe(p){throw new Error("Refusing to resolve non-regular file")||new Error("Failed to resolve path")}` +
@@ -1530,6 +1530,12 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
   it("MUTATION: excluded-tool set changed → flags", () => {
     const f = pathHookFiles({ defining: (s) => s.replace(`"WebFetch"]`, `"WebFetch","Agent"]`) });
     expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
+  });
+  it("MUTATION: excluded set reverted to the pre-1.24012.9 5-element form (PowerShell dropped) → flags", () => {
+    // Pins the 1.24012.9 addition specifically. The append-mutation above would still pass against a
+    // loosened regex; this one fails it, so the new member can't be quietly un-pinned.
+    const f = pathHookFiles({ defining: (s) => s.replace(`"Bash","PowerShell",`, `"Bash",`) });
+    expect(checkPathHookFacts(f).some((x) => /excluded set/.test(x))).toBe(true);
   });
   it("DECOY: the gated-set array exists but is NOT bound to the export name → flags (array↔export binding required)", () => {
     // g5e still holds the 5-tool array, but the EXPORT points at an unrelated local zzz=[] — the hop
