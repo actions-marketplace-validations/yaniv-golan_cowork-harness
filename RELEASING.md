@@ -126,8 +126,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] Bump every version location (items 1–10) with **`npm run bump -- X.Y.Z --write`** — it rewrites all
       of them via targeted patterns and updates the lockfile + self-checks `check:versions` (run without
       `--write` first to preview the diff; dry-run is the default). It deliberately does **not** touch the
-      CHANGELOG or add the SKILL.md `- **X.Y.Z:**` release-note bullet — do the CHANGELOG move (above) and
-      add that bullet by hand.
+      CHANGELOG — do the CHANGELOG move (above) by hand. (It also does not add a SKILL.md
+      `- **X.Y.Z:**` release-note bullet, and you should NOT add one: that per-release section was removed
+      in 1.10.0 because SKILL.md is loaded into an agent's context on every invocation and the history
+      could never change its behaviour. The CHANGELOG is the release record.)
 - [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
       tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
       the push-to-main live suite will soft-skip and this release won't be live-validated in CI).

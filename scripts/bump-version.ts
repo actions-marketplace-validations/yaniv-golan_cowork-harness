@@ -269,7 +269,10 @@ function main(): void {
   process.stdout.write(
     "\nReminder — these are MANUAL, not done by this script:\n" +
       `  - Move CHANGELOG.md's [Unreleased] section to "## [${version}] — <DATE>".\n` +
-      `  - Add a new SKILL.md release-note bullet: "- **${version}:** …".\n`,
+      // NOTE: SKILL.md deliberately carries NO per-release history as of 1.10.0 (it is changelog content
+      // billed to every agent's context on load — see CHANGELOG 1.10.0 "Changed"). Do not re-add a
+      // `- **X.Y.Z:**` bullet there; the CHANGELOG is the release record.
+      `  - (SKILL.md carries no per-release bullets — that section was removed in 1.10.0; CHANGELOG only.)\n`,
   );
 }
 

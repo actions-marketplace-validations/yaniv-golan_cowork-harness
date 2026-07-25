@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-07-25
+
 ### Added
 
 - **Cassettes record the harness version that wrote them** — `environment.harnessVersion`. A harness-code
