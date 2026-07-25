@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-07-25
+
+**Upgrade notes.**
+
+- **Your cassettes will report baseline staleness.** `baseline: latest` now resolves to
+  `desktop-1.24012.9` (agent `2.1.219`). A cassette recorded against an earlier baseline replays with
+  `[stale] baseline moved <old> → 1.24012.9 since record`. Re-record, or pin the scenario to the baseline
+  it was recorded against (`baseline: desktop-<ver>`). This repo's own example cassettes are re-stamped.
+- **Cassette staleness notes moved from `::warning::` to `::notice::` and now aggregate.** If a CI step
+  greps stdout for `::warning::` to detect staleness, it will stop matching. Parse the JSON envelope
+  instead — per [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract), annotation text is
+  explicitly not a covered surface.
+
 ### Changed
 
 - **Platform baseline synced to Desktop 1.24012.9** (`baselines/desktop-1.24012.9.json`, now what
@@ -38,6 +51,24 @@ All notable changes to this project are documented here. The format is based on
   (`python3 scenario.py lint`), it still says `scenario.py` — that path is documented and stays honest.
 
 ### Fixed
+
+- **An uploaded file made a scenario impossible to re-record, and burned the paid run doing it.**
+  `buildManifest` captures uploads (`INPUT_ROOTS`, hash-only) deliberately *outside* `userVisibleRoots`,
+  but `redactCassette`'s artifact↔root check measured every artifact against that set — so any
+  upload-bearing scenario threw `redaction broke artifact↔root consistency: artifact path
+  "uploads/…"` and wrote no cassette. The two features shipped with no overlapping tests (the uploads
+  capture had no redaction coverage; the redaction guard had no uploads coverage), which is how a
+  collector and its validator contradicted each other unnoticed. The throw lands *after* the agent run,
+  so a live recording was spent each time. The check now accepts the input roots — redacted with the same
+  policy, so a rule rewriting `uploads` stays consistent on both sides. Matching is by **path prefix**,
+  not by `truncationReason: "input"`: a *symlinked* upload short-circuits in `readEntry` before the
+  reason is applied, so a reason-keyed exemption would miss exactly the case it must cover. A genuine
+  redaction-induced break still throws.
+- **`schema/cassette.v10.json` declared neither `truncationReason: "input"` nor `preRunOrigin`**, both of
+  which the recorder has been emitting. The gap was invisible because the cassette that would have
+  exposed it could not be re-recorded. Both are now declared (additive and corrective — the producer,
+  the TS types and `docs/cassette.md` already promised them; no `cassetteVersion` bump).
+
 
 - **`sync`'s per-model effort extractor silently dropped `disallowThinkingDisabled`.**
   `parseModelEntryBody` read only `effortLevels`/`recommended`/`modes`, because the field had appeared

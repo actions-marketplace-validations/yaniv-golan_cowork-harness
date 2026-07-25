@@ -337,12 +337,20 @@ function isLosslessUtf8(buf: Buffer): boolean {
 
 /** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
+/** Roots holding UPLOADED inputs. Walked separately from `roots`, so by construction they never enter
+ *  `recordRoots` / `cassette.userVisibleRoots` — adding them there would misalign
+ *  `buildRecordTimeFolderPrefixMap`'s positional zip against `session.folders` and would wrongly make
+ *  `user_visible_artifact: uploads/x` pass. Exported because `redactCassette`'s artifact↔root check must
+ *  accept these paths too: an upload artifact is never under a user-visible root, so measuring it against
+ *  that set reports a redaction fault that did not happen. Both sides must read this one constant. */
+export const INPUT_ROOTS = ["uploads"] as const;
+
 export function buildManifest(
   workRoot: string,
   cap?: number,
   roots: string[] = ["outputs", ".projects"],
   bodyLessPrefixes: string[] = [],
-  inputRoots: string[] = ["uploads"],
+  inputRoots: string[] = [...INPUT_ROOTS],
 ): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
   // Read-only connected-folder inputs (`bodyLessPrefixes`) are captured path+bytes+sha256 only, same as
@@ -1498,6 +1506,10 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   // replay. `redactText` is context-free (same input → same token), so the SAME substring redacts identically
   // in both the root and the path, keeping the prefix relationship intact.
   const redactedRoots = cassette.userVisibleRoots?.map((r) => redactText(r, policy));
+  // Upload roots are redacted with the SAME policy before comparing, so a rule that rewrites `uploads`
+  // rewrites it identically on both sides (the context-free property the paragraph above relies on).
+  // A cassette does not persist which input roots produced it, so this reads the shared default.
+  const redactedInputRoots = INPUT_ROOTS.map((r) => redactText(r, policy));
   const redactedArtifacts = cassette.artifacts?.map((a) => {
     const out: ManifestEntry = { ...a, path: redactText(a.path, policy) }; // a filename can name a customer (outputs/Acme-cap-table.json)
     // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
@@ -1530,7 +1542,10 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     // multi-segment (e.g. `.projects/<folder>`), so compare on the full normalized prefix — not just the
     // first path segment. Normalize separators so a `\`-vs-`/` cassette doesn't false-trip the check.
     const norm = (p: string) => p.replace(/\\/g, "/");
-    const normRoots = redactedRoots.map(norm);
+    // Inputs are matched by PATH PREFIX, not by `truncationReason: "input"`: a SYMLINKED upload short-
+    // circuits in readEntry (linkKind returns before the reason is applied), so it carries no reason and a
+    // reason-keyed exemption would miss exactly the case it needs to cover.
+    const normRoots = [...redactedRoots, ...redactedInputRoots].map(norm);
     for (const a of redactedArtifacts) {
       const p = norm(a.path);
       const mapped = normRoots.some((r) => p === r || p.startsWith(r + "/"));

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { redactCassette, assertRedactionVerdictPreserved, replayCassette } from "../src/run/cassette.js";
+import { redactCassette, assertRedactionVerdictPreserved, replayCassette, INPUT_ROOTS } from "../src/run/cassette.js";
 import { redactText, type RedactionPolicy } from "../src/redact.js";
 
 const EMAIL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
@@ -256,6 +256,60 @@ describe("redaction keeps userVisibleRoots structurally consistent with redacted
     expect(() => redactCassette(c2, BREAK)).toThrow(/artifact↔root consistency|no longer maps under/);
     void c;
     void FILE_ONLY;
+  });
+});
+
+/** Uploaded inputs are collected from `INPUT_ROOTS`, deliberately OUTSIDE `userVisibleRoots` (adding them
+ *  there would misalign buildRecordTimeFolderPrefixMap's positional zip and would wrongly make
+ *  `user_visible_artifact: uploads/x` pass). The artifact↔root check therefore has to accept them, or every
+ *  upload-bearing scenario becomes unrecordable under redaction — a paid live run is spent before the throw.
+ *  These two features shipped with no overlapping coverage: the uploads capture had no redaction test and
+ *  the redaction guard had no uploads test, which is precisely how they contradicted each other unnoticed. */
+describe("redaction accepts uploaded-input artifacts, which never sit under a user-visible root", () => {
+  const NOOP: RedactionPolicy = { patterns: [{ re: /nothing-matches-this/g, label: "x" }], keyNames: [] };
+  const withUpload = (artifact: Record<string, unknown>): any => ({
+    scenario: scenario([{ result: "success" }]),
+    events: [JSON.stringify({ type: "result", subtype: "success" })],
+    userVisibleRoots: ["outputs", "project"],
+    artifacts: [{ path: "project/outputs/actions.md", bytes: 2, sha256: "a", body: "{}" }, artifact],
+  });
+
+  it("a hash-only upload records instead of throwing a bogus redaction fault", () => {
+    const c = withUpload({ path: `${INPUT_ROOTS[0]}/report.pdf`, bytes: 9, sha256: "b", truncated: true, truncationReason: "input" });
+    const red: any = redactCassette(c, NOOP);
+    expect(red.artifacts.map((a: any) => a.path)).toContain(`${INPUT_ROOTS[0]}/report.pdf`);
+  });
+
+  it("a SYMLINKED upload records too — it carries linkKind and NO truncationReason, so a reason-keyed exemption would miss it", () => {
+    // readEntry short-circuits on linkKind BEFORE applying the "input" reason, so the entry has no
+    // truncationReason at all. This is the case that makes the exemption path-prefix-based, not reason-based.
+    const entry = { path: `${INPUT_ROOTS[0]}/report.pdf`, bytes: 0, sha256: "", linkKind: "symlink" as const };
+    expect(entry).not.toHaveProperty("truncationReason");
+    const red: any = redactCassette(withUpload(entry), NOOP);
+    expect(red.artifacts.map((a: any) => a.path)).toContain(`${INPUT_ROOTS[0]}/report.pdf`);
+  });
+
+  it("MUTATION: a genuine redaction-induced break under a user-visible root still throws", () => {
+    const BREAK: RedactionPolicy = { patterns: [{ re: /onlyinpath/g, label: "x" }], keyNames: [] };
+    const c: any = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      userVisibleRoots: ["onlyinpath"],
+      artifacts: [{ path: "onlyinpath-x/file.json", bytes: 2, sha256: "x", body: "{}" }],
+    };
+    expect(() => redactCassette(c, BREAK)).toThrow(/artifact↔root consistency|no longer maps under/);
+  });
+
+  it("MUTATION: an artifact under NO known root — neither user-visible nor an input root — still throws", () => {
+    const c = withUpload({ path: "somewhere-else/file.json", bytes: 2, sha256: "c", body: "{}" });
+    expect(() => redactCassette(c, NOOP)).toThrow(/artifact↔root consistency|no longer maps under/);
+  });
+
+  it("the input root is redacted with the SAME policy as the artifact path (a rule rewriting it stays consistent)", () => {
+    const UP: RedactionPolicy = { patterns: [{ re: /uploads/g, label: "u" }], keyNames: [] };
+    const c = withUpload({ path: `${INPUT_ROOTS[0]}/report.pdf`, bytes: 9, sha256: "b", truncated: true, truncationReason: "input" });
+    const red: any = redactCassette(c, UP);
+    expect(red.artifacts.some((a: any) => a.path.endsWith("/report.pdf") && !a.path.includes("uploads"))).toBe(true);
   });
 });
 

@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.11.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.12.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -62,6 +62,7 @@ Top-level fields of a `*.cassette.json` (schema `schema/cassette.v10.json`):
 | `userVisibleRoots` | The user-visible mount roots captured at record time |
 | `preRunPaths` | Pre-run file-path baseline for `no_unexpected_files` (workRoot-relative; co-present with `userVisibleRoots`) |
 | `preRunHashes` | Pre-run per-path sha256 baseline for `input_unmodified` (added 0.27.0, no cassetteVersion bump); a `null` value marks a path whose recorded artifact body was secret-scrubbed (evidence-unavailable, never a false "modified") |
+| `preRunOrigin` | How that pre-run baseline was obtained — `local-walk` (real), `remote-unavailable` or `local-unreadable`. Only `local-walk` supports a verdict: replay fails `no_unexpected_files` as evidence-unavailable on the other two rather than passing vacuously |
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
 | `sessionFingerprint` | Optional even on v9+ (the minimum readable version): hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent → not checked |
