@@ -722,9 +722,19 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
     };
   }
 
-  // IDENTITY. Without this a journal outlives its directory: if the dir was deleted and a fresh run later
-  // reused the same scenario/runId path, the stale plan would replay onto it — mislabeling the new run
-  // and minting phantom turns, reported as success.
+  // IDENTITY — BEST-EFFORT, and it is weaker than it looks. Without it a journal outlives its directory:
+  // if the dir was deleted and a fresh run later reused the same scenario/runId path, the stale plan would
+  // replay onto it — mislabeling the new run and minting phantom turns, reported as success.
+  //
+  // LIMITATION (measured 2026-07-25, node:20-slim/overlayfs, 200 delete-recreate cycles at one path):
+  // Linux reused the inode 200/200 times, and `birthtime` was byte-identical in 171/200 — at NANOSECOND
+  // resolution, so a higher-precision stat does NOT help. macOS/APFS collided 0/200. On such a filesystem
+  // this check cannot distinguish "same dir" from "recreated at the same path", and silently passes.
+  // Detecting that case robustly needs a token written INSIDE the dir (deleting the dir destroys it);
+  // stat alone provably cannot. Not done here: this is legacy-migration-only code, and the trigger needs
+  // three rare conditions at once — an interrupted migration, a deleted dir, AND a reused *stable* run id
+  // (ids are `local_<hrtime>`, so a natural collision cannot happen).
+  // Do not "strengthen" this with higher-resolution timestamps; that was measured and does not work.
   let st: ReturnType<typeof statSync>;
   try {
     st = statSync(outDir);
