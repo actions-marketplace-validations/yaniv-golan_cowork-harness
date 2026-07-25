@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe for the A2 skills/plugins SDK-MCP discovery servers (1.10.0), at the HOSTLOOP
+# tier. This is the ONLY thing that can catch two mutations the unit suite structurally cannot: dropping
+# the skills/plugins bundles from `combineSdkMcp` in src/runtime/hostloop.ts, and dropping the five names
+# from extraTools/extraAllowedTools. Both are call-site omissions — invisible to a unit test of the (
+# correct) pure functions around them, and only observable once a real agent reports its init manifest.
+# Deliberately a no-tool prompt: the assertion is about the DECLARED surface (system/init.tools), not
+# about the model choosing to call anything.
+name: a2-discovery-probe-hostloop
+baseline: latest
+session: (inline)
+fidelity: hostloop
+prompt: |
+  Reply with exactly the word READY and nothing else. Do not call any tools.
+assert:
+  - tool_available: "mcp__skills__list_skills"
+  - tool_available: "mcp__skills__suggest_skills"
+  - tool_available: "mcp__plugins__list_plugins"
+  - tool_available: "mcp__plugins__search_plugins"
+  - tool_available: "mcp__plugins__suggest_plugin_install"
+  # The servers must be ANNOUNCED, not merely named on --tools: a declared tool whose server was never
+  # registered is exactly the chat-container bug fixed in 1.10.0.
+  - connector_available: "skills"
+  - connector_available: "plugins"

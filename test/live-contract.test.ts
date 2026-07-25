@@ -488,3 +488,61 @@ describe.skipIf(!PROBE_CAN)("live: sub-agent WebSearch is captured as subagents[
     expect(r.status).toBe(0);
   }, 620_000);
 });
+
+// A2's skills/plugins SDK-MCP discovery servers (1.10.0), end-to-end — the ONLY guard for a CALL-SITE
+// omission the unit suite structurally cannot see, because the pure functions around it stay correct:
+// `combineSdkMcp(coworkBundle)` dropping the skills/plugins bundles in container.ts / hostloop.ts.
+// Measured 2026-07-25 with that mutation applied: the unit suite stayed **223/223 GREEN** while this
+// probe went **0/7** with `mcpServers: ["cowork"]`. That is the gap this file exists to close.
+//
+// What it does NOT guard, measured rather than assumed: removing the five names from
+// `extraTools`/`extraAllowedTools`. With all three argv arrays stripped in hostloop.ts, every one of the
+// five STILL appeared in `init.tools` — **MCP tools are enumerated by their SERVER, not by `--tools`**.
+// Those names buy PRE-APPROVAL (no permission gate at call time), which a probe that never calls a
+// discovery tool cannot observe. Guarding that needs a probe that actually invokes one, or an argv
+// assertion. (This corrects roadmap E5, which assumed one probe covered both mutations.)
+//
+// Asserts on the SCENARIO ASSERTIONS, not on the process exit code, on purpose: `system/init` (which
+// carries `tools` + `mcp_servers`) is emitted BEFORE the model turn, so the declared-surface evidence is
+// complete even when the turn itself fails for an environmental reason. A weekly usage limit is the
+// expected such reason and is tolerated explicitly — any OTHER non-zero exit fails loudly rather than
+// being waved through (a probe that tolerates every error is not a probe).
+describe.skipIf(!PROBE_CAN)("live: the skills/plugins discovery servers are declared on both cowork-lane tiers", () => {
+  const runProbe = (scenario: string) => {
+    const r = spawnSync("node", ["dist/cli.js", "run", scenario, "--output-format", "json"], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN },
+      timeout: 600_000,
+    });
+    const env = JSON.parse(r.stdout || "{}");
+    const res = (env.results ?? [])[0] ?? {};
+    // Tolerate ONLY a quota stop; anything else is a real failure and must surface with its reason.
+    if (r.status !== 0 && res.resultErrorKind !== "usage_limit")
+      throw new Error(`probe ${scenario} exited ${r.status} (${res.resultErrorKind ?? "no result"})\nstderr:\n${r.stderr}`);
+    return res as {
+      effectiveFidelity?: string;
+      assertions?: Array<{ pass?: boolean; assertion?: unknown }>;
+      context?: { mcpServers?: Array<{ name?: string }>; tools?: string[] };
+    };
+  };
+
+  const expectDiscoverySurface = (res: ReturnType<typeof runProbe>, tier: string, sibling: string) => {
+    const failed = (res.assertions ?? []).filter((a) => !a.pass).map((a) => JSON.stringify(a.assertion));
+    expect(failed, `discovery assertions failed at ${tier}: ${failed.join(", ")}`).toEqual([]);
+    expect(res.assertions?.length, "the probe recorded no assertions at all").toBeGreaterThan(0);
+    expect(res.effectiveFidelity).toBe(tier);
+    // The sibling server proves we MERGED rather than replaced the tier's pre-existing bundle.
+    const servers = (res.context?.mcpServers ?? []).map((s) => s.name);
+    expect(servers, `expected ${sibling}+skills+plugins at ${tier}, got ${JSON.stringify(servers)}`).toEqual(
+      expect.arrayContaining([sibling, "skills", "plugins"]),
+    );
+  };
+
+  it("container: all five tools in the real init manifest, merged alongside cowork", () => {
+    expectDiscoverySurface(runProbe("examples/probes/a2-discovery-probe.scenario.yaml"), "container", "cowork");
+  }, 620_000);
+
+  it("hostloop: same five, merged alongside workspace", () => {
+    expectDiscoverySurface(runProbe("examples/probes/a2-discovery-probe-hostloop.scenario.yaml"), "hostloop", "workspace");
+  }, 620_000);
+});
