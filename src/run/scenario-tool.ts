@@ -76,9 +76,14 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
   const py = process.env.PYTHON ?? "python3";
   const json = isJsonOutput(args);
   const pyArgs = stripOutputFormatFlag(args);
+  // Name the command the user actually typed in python's usage/error lines. Without this the linter
+  // reports `usage: scenario.py lint …` — a command a `cowork-harness` user cannot run. Passed as env
+  // (not a flag) so the script stays honest when invoked DIRECTLY, which SKILL.md and three docs document:
+  // there it falls back to its own basename.
+  const pyEnv = { ...process.env, COWORK_HARNESS_PROG: "cowork-harness" };
 
   if (!json) {
-    const r = spawnSync(py, [script, subcommand, ...pyArgs], { stdio: "inherit" });
+    const r = spawnSync(py, [script, subcommand, ...pyArgs], { stdio: "inherit", env: pyEnv });
     if (r.error) {
       const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
       process.stderr.write((enoent ? pythonNotFoundMessage(py, subcommand) : String(r.error.message)) + "\n");
@@ -87,7 +92,11 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[]): never {
     return process.exit(r.status ?? 1);
   }
 
-  const r = spawnSync(py, [script, subcommand, "--json", ...pyArgs], { stdio: ["inherit", "pipe", "inherit"], encoding: "utf8" });
+  const r = spawnSync(py, [script, subcommand, "--json", ...pyArgs], {
+    stdio: ["inherit", "pipe", "inherit"],
+    encoding: "utf8",
+    env: pyEnv,
+  });
   if (r.error) {
     const enoent = (r.error as NodeJS.ErrnoException).code === "ENOENT";
     process.stderr.write((enoent ? pythonNotFoundMessage(py, subcommand) : String(r.error.message)) + "\n");

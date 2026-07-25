@@ -198,6 +198,15 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
     expect(PINNED_GATES["3246569822"]).toBe("canSaveSkill");
   });
+
+  it("PINNED_GATES tracks canProposeSkills, the still-off sibling of the canSaveSkill flip", () => {
+    // canSaveSkill went off→on server-side on 2026-07-25 and widened production's tool set with a
+    // save_skill tool the harness does not model. canProposeSkills gates the `propose_skills` sibling
+    // and is present-but-off in the fcache (NOT dark) — pinned so the same class of silent widening
+    // can't repeat unnoticed. That it is NOT dark is already pinned by the exact-match assertion on
+    // decodeFcacheGates' absent-marker set above, which does not list this id.
+    expect(PINNED_GATES["1824824999"]).toBe("canProposeSkills");
+  });
 });
 
 describe("countStringInFile — literal occurrence counter for binary string sentinels", () => {

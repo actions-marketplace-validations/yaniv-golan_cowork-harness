@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.11.0` (baseline `desktop-1.24012.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.11.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -67,7 +67,7 @@ Top-level fields of a `*.cassette.json` (schema `schema/cassette.v10.json`):
 | `sessionFingerprint` | Optional even on v9+ (the minimum readable version): hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent → not checked |
 | `folderPrefixMap` | Optional even on v9+: the record-time connected-folder host-path → mount-name map. Replay's `computer_links_resolve` uses THIS (never the current session file); absent → the link is treated as evidence-unavailable, never reconstructed from the current session |
 | `timeline`, `timelineHeader` | The recorded per-event timeline (harness-observation timestamps for tool_use/tool_result/subagent_dispatch/thinking/decision/result, in total order) plus its header (`startedAtWall`/`startedAtMono` anchors); informational only — never affects the replay verdict. Absent on a cassette recorded before this field existed |
-| `environment` | Recording provenance: `location` (`"local"` on every cassette this harness produces), plus the resolved `tier` and `agentBinaryFormat` |
+| `environment` | Recording provenance: `location` (`"local"` on every cassette this harness produces), the resolved `tier`, `agentBinaryFormat`, and `harnessVersion` — the CLI that RECORDED the cassette (≥1.11.0). A harness-code change can shift recorded behaviour at an UNCHANGED baseline, which no staleness class keys off, so this is the only provenance for that class. **Absent** on pre-1.11.0 cassettes, and never backfilled — the absence is itself the signal |
 
 ## Recipe 3 — Set up redaction BEFORE your first hostloop/protocol record
 

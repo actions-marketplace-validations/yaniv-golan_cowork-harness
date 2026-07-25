@@ -113,7 +113,16 @@ export const PINNED_GATES: Record<string, string> = {
   // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
   "1598976391": "proactiveSkillSuggestEnabled", // off/defaultValue — proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with this gate OFF, so it only swaps suggest_skills's description and adds `trigger`.)
-  "3246569822": "canSaveSkill", // off/defaultValue — whether the save-skill affordance is offered
+  // Flipped off/defaultValue -> ON/force server-side (fcache) as of 2026-07-25, i.e. for current users on
+  // any Desktop version — NOT a Desktop change; the machinery already shipped in 1.24012.1 gated off. ON
+  // adds a `save_skill` tool to the session's SDK-MCP inventory AND is passed into
+  // generateSkillsSystemPrompt, so it changes both the tool set and the skills prompt. The harness models
+  // NEITHER yet, so this is a known fidelity gap, not a modelled surface.
+  "3246569822": "canSaveSkill",
+  // off/defaultValue and PRESENT in the fcache (so NOT dark — no DARK_GATES entry) — the `propose_skills`
+  // render-only sibling. Pinned so a production flip surfaces as a sync diff instead of silently widening
+  // the tool set the way canSaveSkill's did.
+  "1824824999": "canProposeSkills",
 };
 
 /**
@@ -1558,6 +1567,11 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     const { config } = extractModelEffortConfig(bundle);
     if (!config) miss("S20 modelEffortConfig", "extractModelEffortConfig could not resolve the per-model config (see its own flags)");
     else {
+      // Deliberately NOT every picker model — this is a CLASS-shape floor, and four entries already
+      // over-cover a one-class check. Adding each new model (e.g. claude-opus-5) would buy no extra class
+      // coverage while making the sentinel fire spuriously the day that model is retired. A new model's
+      // exact config is pinned far more precisely by the golden oracle, which deep-equals the whole map
+      // against the live asar (test/fixtures/model-effort-config.golden.json).
       const withPicker = ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"];
       const noPicker = ["claude-haiku-4-5", "claude-sonnet-4-5"];
       for (const m of withPicker)

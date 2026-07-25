@@ -388,3 +388,66 @@ no signal that a tool was absent. Two consequences to keep in mind:
 - **`tool_available: "mcp__skills__.*"` is a false negative on `microvm`/`protocol` only** — on
   `container`/`hostloop`/`cowork` it is a real, evaluable positive/negative now; the assertion's miss
   message is tier-aware (see the `tool_available` note in the assertion catalog).
+
+---
+
+## Skill authoring — `save_skill` and `propose_skills` are not modeled
+
+**Real Cowork behaviour:** a cowork session on a standard account declares
+`mcp__cowork__save_skill` on the same `cowork` SDK-MCP server that carries `present_files` —
+gated on `canSaveSkill` (`3246569822`, on/force for a standard account) combined with the
+session's `skillsEnabled`. Three properties matter more than the tool's existence:
+
+- **It uploads; it does not write files.** The tool `POST`s a zipped skill to
+  `/api/organizations/{org}/skills/upload-skill`, so a saved skill lands in the user's
+  account-level library and persists across sessions. The local-storage code path belongs to
+  the third-party (`custom-3p`) deployment, which a first-party account does not reach. With
+  `overwrite: true` Cowork resolves the existing user-created skill of that name and replaces
+  its `SKILL.md`, keeping the skill's other files.
+- **It is force-asked.** `save_skill` is one of four tools in Cowork's force-ask set (with
+  `request_cowork_directory`, `allow_cowork_file_delete`, `launch_code_session`): a PreToolUse
+  hook returns `ask` for it *in every permission mode*, including `bypassPermissions`.
+- **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files`, it does not occupy
+  `system/init.tools`; it materialises only when the model looks for it.
+
+The rendered `<available_skills>` block also carries a `canSaveSkill`-dependent sentence: with the
+gate on, staged skill files are described as a read-only cache whose edits do not persist, and the
+model is pointed at `save_skill`; with it off, the model is told it cannot create or modify skills in
+that session. That sentence is emitted only when the skill catalog is non-empty.
+
+`propose_skills` (`mcp__cowork__propose_skills`, gate `canProposeSkills` `1824824999`) is off for a
+standard account. It is render-only — it shows the user an approval card and writes nothing — and the
+prose that prefers it over `save_skill` is scoped to Cowork's screen-recording ("watch record") flow,
+which has no harness analog.
+
+**Harness behaviour:** neither tool is declared, at any tier. Both gates are pinned in the synced
+baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) as drift sentinels, so
+a production flip surfaces as a `sync` diff — but the gates are recorded, not enacted.
+
+### Why it isn't modeled
+
+The faithful side effect is an authenticated upload to the operator's *real* skill library, performed
+with the operator's own credentials. Reproducing it would publish test skills into the author's account
+on every run, and `overwrite: true` resolves and replaces an existing skill by name — so a scenario
+exercising the update path could destroy the very skill under test. A byte-faithful implementation is
+therefore actively unsafe, and only a *simulated* one (production's result strings and forced ask, with
+no network call) is worth building. That is a bounded piece of work, deferred until a skill needs it,
+rather than an architectural limit.
+
+### Where it bites — and it is silent
+
+A skill whose own job is authoring or persisting skills. In real Cowork such a skill reaches for
+`save_skill`; in the harness the tool is absent, so the agent writes `SKILL.md` to disk instead and the
+scenario greens — while the same workflow in production is told, by the prompt sentence above, that disk
+edits do not persist. Treat a green on a skill-authoring workflow as unproven.
+
+For every other skill the gap is inert: a tool that is ToolSearch-deferred and never sought costs
+nothing in context and changes no tool-selection outcome.
+
+### Workarounds
+
+- **Assert on the file-writing path.** A skill-authoring scenario can assert the `SKILL.md` it composes
+  (`file_exists`, `artifact_contains`) and treat account-level persistence as out of scope — that split
+  is honest, and it is the part of the workflow the harness can verify.
+- **Keep skill persistence out of the scenario's claim.** State in the scenario name or `expect_denied`
+  reasoning that persistence is unverified, so a later reader does not over-read the pass.

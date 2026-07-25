@@ -6,15 +6,25 @@ A core design goal is that keeping up with Claude Desktop is **cheap and visible
 
 ```
 STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerated per release)
-  - stream-json control protocol          - agentVersion
+  - stream-json control protocol          - agentVersion (+ agentBinary paths & sha256)
   - scenario / session schemas            - network.allowDomains + network.mode
-  - runtime selector, egress proxy        - gates
+  - runtime selector, egress proxy        - gates (provenance.gates)
                                           - asarFingerprint (drift tripwire)
+                                          - spawn.env
+                                          - spawn.effortByModel + spawn.effortRegexDefault
 
-HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these)
+HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
+forward from the previous baseline untouched)
   - mountLayout (mount modes)
   - bg-env-strip list
+  - spawn.tools / spawn.allowedTools, the spawn scalars (configDirInGuest, settingSources,
+    permissionMode, maxThinkingTokens, effortDefault), the prompt-asset pointers, and every $comment*
 ```
+
+The two generated `spawn` families are **all-or-nothing**: if `deriveSpawnEnv` or
+`extractModelEffortConfig` hard-fails, `sync` preserves the previous baseline's values rather than writing
+a partial map, and reports the failure as an unknown delta. That is why a green `sync` is meaningful — a
+silently half-derived spawn contract is not a state it can produce.
 
 ## Per-release runbook
 
@@ -71,7 +81,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.217   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.219   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"

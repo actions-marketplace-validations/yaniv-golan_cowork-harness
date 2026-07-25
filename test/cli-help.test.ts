@@ -126,24 +126,28 @@ describe.skipIf(!can)("cli --help: top-level analyze-skill summary documents --r
 
 // `lint`/`lint-skill` are parseArgs-direct commands too, but unlike every case above they're thin
 // passthroughs to the bundled `scenario.py` (a Python argparse CLI invoked via subprocess), so their
-// `--help` text is argparse's own `usage: scenario.py lint ...` / `usage: scenario.py lint-skill ...`,
-// not the TS-side "usage: <cmd>" printer — and they need python3 on PATH (exit 127 without it). That
+// `--help` text comes from argparse, not the TS-side "usage: <cmd>" printer. It used to read
+// `usage: scenario.py lint …` — a command a `cowork-harness` user cannot run; the wrapper now passes
+// COWORK_HARNESS_PROG so argparse names the real command. Invoked DIRECTLY (`python3 scenario.py lint`,
+// which SKILL.md and three docs document) the env var is absent and it correctly says `scenario.py` — and they need python3 on PATH (exit 127 without it). That
 // makes them a poor fit for the uniform `cases` table above, so they get their own small block that
 // skips (with a reason) when python3 isn't available, mirroring this suite's `describe.skipIf(!can)`.
 const pythonCheck = spawnSync("python3", ["--version"]);
 const hasPython3 = pythonCheck.status === 0;
 
 describe.skipIf(!can || !hasPython3)("cli --help: lint/lint-skill scenario.py passthrough usage", () => {
-  it("`lint --help` exits 0 with `usage: scenario.py lint`", () => {
+  it("`lint --help` exits 0 with `usage: cowork-harness lint` (not the internal script name)", () => {
     const { code, text } = help("lint");
     expect(code).toBe(0);
-    expect(text).toContain("usage: scenario.py lint");
+    expect(text).toContain("usage: cowork-harness lint");
+    expect(text, "the internal script name must not leak to a CLI user").not.toContain("scenario.py");
   });
 
-  it("`lint-skill --help` exits 0 with `usage: scenario.py lint-skill`", () => {
+  it("`lint-skill --help` exits 0 with `usage: cowork-harness lint-skill` (not the internal script name)", () => {
     const { code, text } = help("lint-skill");
     expect(code).toBe(0);
-    expect(text).toContain("usage: scenario.py lint-skill");
+    expect(text).toContain("usage: cowork-harness lint-skill");
+    expect(text, "the internal script name must not leak to a CLI user").not.toContain("scenario.py");
   });
 });
 

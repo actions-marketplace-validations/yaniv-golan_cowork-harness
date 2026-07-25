@@ -6,6 +6,124 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Platform baseline synced to Desktop 1.24012.9** (`baselines/desktop-1.24012.9.json`, now what
+  `baseline: latest` resolves to). The staged **agent binary is `2.1.219`** (native app + VM ELF, new
+  sha256 for each, `measured-local` with a matching official manifest checksum). **No prompt, spawn-env,
+  or egress-allowlist drift:** `spawn.env` is byte-identical to 1.24012.1 — the agent's five new
+  `CLAUDE_CODE_*` flags are not set by Desktop — no top-level or `spawn` key was added or removed, and
+  every hand-authored field carried forward. One spawn field moved: **`claude-opus-5` joins the per-model
+  effort map** (`low|medium|high|xhigh|max`, recommended `high`, modes `auto`), and it is the first
+  literal-map entry to carry `disallowThinkingDisabled` — see Fixed. The three example cassettes are
+  re-stamped to the new baseline.
+
+- **`canProposeSkills` (gate `1824824999`) is pinned as a drift sentinel.** Its sibling `canSaveSkill`
+  (`3246569822`) is served **on/force** by the live feature cache — a server-side rollout, independent of
+  Desktop version — which widens a real cowork session's tool surface with a `save_skill` tool this
+  harness does not model. `canProposeSkills` gates the `propose_skills` sibling and is present-but-off,
+  so pinning it makes the same class of widening a visible `sync` diff rather than silent drift. Both
+  gate states are recorded in the baseline's `provenance.gates`; neither is enacted. See
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+
+- **Cassette staleness notes are now `::notice::`, and a directory replay collapses them to one line per
+  kind.** They were emitted at `::warning::` — against an adjacent code comment that claimed the opposite —
+  so a non-gating advisory outranked the *actionable* assert-drift `::notice::` beside it on a CI
+  annotation surface. They also repeated a constant string once per cassette (measured: 5 lines over this
+  repo's own 3 example cassettes, one kind firing 3/3); `replay <dir>` now prints
+  `N/M cassette(s) — <reason> [kind]`. Per-file notes are unchanged in `verify-cassettes`' JSON envelope.
+- **`lint` names a command you can actually run.** Its usage and error lines came from the bundled
+  `scenario.py` (`usage: scenario.py lint …`), and an unknown flag additionally printed argparse's
+  internal subcommand list. Both now read `cowork-harness lint`. Invoked directly
+  (`python3 scenario.py lint`), it still says `scenario.py` — that path is documented and stays honest.
+
+### Fixed
+
+- **`sync`'s per-model effort extractor silently dropped `disallowThinkingDisabled`.**
+  `parseModelEntryBody` read only `effortLevels`/`recommended`/`modes`, because the field had appeared
+  solely on the regex-default entry (which sets it from its own anchor capture). Desktop 1.24012.9's
+  `claude-opus-5` is the first entry in the literal per-model map to carry it, so the synced baseline
+  would have recorded that model's config **incomplete, with no flag raised** — the exact silent staleness
+  the S20 sentinel exists to prevent. The field is now parsed for per-model entries too, additively and
+  optionally, and absent stays absent rather than defaulting to `false` (so a baseline distinguishes
+  "production omits it" from "production sets it false"). Nothing enacts the field yet —
+  `validateEffort` reads only `effortLevels` — so this is baseline data fidelity, not a behaviour change.
+  Caught because the golden oracle is transcribed from raw asar text; copying the extractor's own output
+  into it would have rubber-stamped the bug.
+
+- **The path-gate excluded-set sentinel refused the 1.24012.9 sync.** Desktop's
+  `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` gained `"PowerShell"` (a 6-element literal), which the anchor
+  correctly rejected as an unknown delta. `PowerShell` **is** a real tool in the agent registry, but it is
+  win32-gated and never registers on the macOS/Linux runtimes this harness targets, so hostloop's
+  `disallowed` set is unchanged; only the anchor and its stale explanatory comment moved. A mutation test
+  now fails a regex loosened back to the 5-element form, which the pre-existing append-style mutation
+  would not have caught.
+
+### Documentation
+
+- **`save_skill`/`propose_skills` are recorded as an unmodelled surface** in
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md). Cowork declares `mcp__cowork__save_skill` on a
+  standard account; the harness declares neither tool at any tier. The entry states the three properties
+  easiest to get wrong — it **uploads** a zipped skill to the account-level library rather than writing
+  files (the local-storage path belongs to the `custom-3p` deployment, which a first-party account never
+  reaches); it is **force-asked**, so Cowork prompts for it even under `bypassPermissions`; and it is
+  **ToolSearch-deferred**, not `alwaysLoad`, which is why its absence is inert for skills that never seek
+  it. It also states why a byte-faithful emulation would be unsafe: the side effect is an authenticated
+  upload with the operator's own credentials, and `overwrite: true` resolves and replaces an existing
+  skill by name, so a scenario exercising the update path could destroy the very skill under test. Where
+  it bites is narrow but silent — a skill-authoring workflow greens in the harness by writing `SKILL.md`
+  to disk, while production tells the model those edits do not persist.
+
+- **Every doc pin that names the baseline or the agent version tracks 1.24012.9 / 2.1.219.** A baseline
+  sync leaves nine such pins stale across seven files: SKILL.md's `tracks-harness` stamp and its "Version
+  note", README.md's latest-shipped-baseline sentence, the `V=<agentVersion>` recovery snippets in
+  README.md / `docs/maintenance.md` / `references/ci-recipe.md`, and the `(baseline desktop-X.Y.Z)` stamps
+  in all four `references/*.md`. `npm run check:versions` enforces all of them — but it is **not** part of
+  `npm run ci`, only of `preflight`, so a stale pin leaves the suite green and blocks the release instead.
+  DESIGN.md's one present-tense "currently **X**, per `baselines/desktop-Y.json`" sentence is the one pin
+  with no guard at all. Two of the nine are latent: SKILL.md's "Version note" and the `references/*.md`
+  stamps are checked against SKILL.md's `tracks-harness` rather than against the max baseline, so they only
+  start failing once `tracks-harness` is corrected — fix them in the same pass, and re-run
+  `check:versions` until it exits 0 rather than trusting a hand-enumerated list.
+
+- **A guard holds the shipped skill's `docs/` pointers resolvable** (`test/skill-docs-pointers.test.ts`).
+  The payload under `.claude/skills/cowork-harness/**` points at ~a dozen `docs/*.md` files that do not sit
+  beside it; that works only because SKILL.md **defines** "repo-only" as "not bundled with the installed
+  SKILL" and names `node_modules/cowork-harness/docs/<name>.md`. That definition was load-bearing for every
+  such pointer and nothing protected it — delete it and a reader meeting `(repo-only)` concludes the doc is
+  unavailable when it is one path away. The guard now pins three things: the definition survives and still
+  precedes its first parenthetical use; every referenced doc exists; and every referenced doc is actually
+  shipped by `package.json`'s `files` (a doc can exist in the repo and still be excluded by a `files`
+  negation, so a pointer into one would dangle for npm consumers too). Mutation-verified against all three.
+
+- **Two prose enumerations that no guard covers are corrected.** `docs/maintenance.md`'s seam table named
+  neither `spawn.env` nor `spawn.effortByModel`/`effortRegexDefault` in its VOLATILE column, though both are
+  re-derived from the asar every sync — so the doc defining the maintenance contract understated what a sync
+  regenerates, in the release where the effort map moved. Its HAND-AUTHORED column was short by
+  `spawn.tools`/`allowedTools`, the spawn scalars, the prompt-asset pointers and the `$comment*` keys. It now
+  also records the all-or-nothing contract the code implements: on a `deriveSpawnEnv` /
+  `extractModelEffortConfig` hard failure, `sync` preserves the previous values and reports an unknown delta
+  rather than writing a partial map. Separately, the baseline's `provenance.gates.$comment` described its
+  "also pinned" sentinels as ones "the harness deliberately models as OFF" while omitting the four
+  skill-family gates it carries — including `canSaveSkill`, which is **on**. Both were structurally green
+  under every checker; only reading them caught it.
+
+- **The packaged skill documents 1.11.0's surface.** `--min-severity`, `environment.harnessVersion`, and
+  the discovery-surface note shipped documented nowhere a consumer reads; a consumer found them by diffing
+  tarballs. Added to SKILL.md's Gotchas (as workflow guidance — the skill delegates flag detail to
+  `--help`) and the cassette-anatomy table.
+- **`extra-args` and its version coupling are documented** (`references/ci-recipe.md`), and `action.yml`
+  now states that `version` accepts an **npm range**, not only an exact pin. A flag passed through
+  `extra-args` that needs release X fails hard on an older CLI (`unrecognized arguments`, exit 2) — floor
+  the step with `version: ">=X"`. An exact pin rots the moment a recipe adopts a newer flag.
+- **A doc-coupling ratchet for nested cassette fields** (`test/skill-docs-sync.test.ts`). The existing
+  guard checked top-level keys only, which is why `environment.harnessVersion` shipped undocumented
+  despite passing the surface-contract gate: nothing coupled a field's *existence* to its *explanation*.
+- **`AGENTS.md`** gains an advisory-design section (actionable-or-aggregated; severity tracks
+  actionability; "harmless otherwise" is a design smell) and a Traps section for the silent failure modes
+  that mislead contributors. **`RELEASING.md`** gains a checklist line naming CHANGELOG + README +
+  SKILL.md + references explicitly — a version bump is not documentation.
+
 ## [1.11.0] — 2026-07-25
 
 ### Added

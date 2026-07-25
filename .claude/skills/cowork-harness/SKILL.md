@@ -4,7 +4,7 @@ description: Test or debug a Claude Code skill/plugin under Claude Cowork's runt
 metadata:
   author: cowork-harness
   version: 1.11.0
-  tracks-harness: cowork-harness 1.11.0 (baseline desktop-1.24012.1)
+  tracks-harness: cowork-harness 1.11.0 (baseline desktop-1.24012.9)
 ---
 
 # cowork-harness
@@ -23,7 +23,7 @@ allowlist). This skill exists mostly to keep you out of those traps — the Gotc
 the highest-value part. Read it.
 
 > **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.11.0` (baseline
-> `desktop-1.24012.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> `desktop-1.24012.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -750,6 +750,20 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     `effectiveFidelity` at all, or an unloadable pinned `baseline:`, reports `unverifiable-tier` instead
     (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
     produces them. (Details: `docs/cassette.md` § tier staleness — repo-only.)
+
+22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —
+    `manifest-needs-snapshot` and `gate-needs-controlout` — fire on the mere presence of manifest/gate
+    assertion keys, unconditionally. The linter is **static**: it never reads your cassettes, so it cannot
+    know whether yours already carry an `artifacts` manifest and `controlOut` (a current cassette does).
+    On a healthy fleet every one of those lines is a false alarm. *Fix:* `lint --min-severity WARN` in CI
+    (≥1.11.0) — the INFO advisories stay one flag away for interactive use. `--strict --min-severity ERROR`
+    behaves as a plain lint, not a contradiction.
+23. **`verify-cassettes`/`replay` report a `discovery-surface` note on cassettes you just recorded fine.**
+    *Why:* the cassette froze its `system/init` tool inventory from before the skills/plugins discovery
+    servers existed at that tier (added 1.10.0). It is a non-gating **note**, never a finding — it cannot
+    fail your gate. *Fix:* nothing, unless the scenario asserts `tool_available` on
+    `mcp__skills__*`/`mcp__plugins__*`; then re-record. It stays silent at `microvm`/`protocol`, where
+    re-recording would never produce those tools anyway.
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

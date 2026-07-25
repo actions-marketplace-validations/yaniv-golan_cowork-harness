@@ -104,6 +104,24 @@ here**, and the failure is silent. Every one below was hit by an agent working i
   rejected (redirects to `--decider-llm`) to keep deciders in the `--decider-*` family. Don't reintroduce overlap
   (the legacy stdio channel was deliberately removed).
 
+## Advisory design — the rules an emitted note/warning must satisfy
+
+Added after 1.11.0 shipped an advisory that violated all three in the same release it fixed another one.
+
+- **Actionable by construction, or aggregated.** An advisory that fires on every item is noise. If the
+  tool cannot tell the applicable case from the inapplicable one, it must **aggregate to one line per run**
+  (`N/M cassettes — <reason>`), not repeat a constant string per item. Precedent: the skill-hash hint
+  (once per process) and the staleness notes (one summary per kind, `cmdReplay`).
+- **Severity tracks ACTIONABILITY, not novelty.** `notes` are non-gating by construction ⇒ `::notice::`.
+  `findings` gate ⇒ `::warning::`/failure. Getting this backwards makes a self-described-harmless line
+  outrank the actionable one beside it on a CI annotation surface — which is exactly what shipped in
+  1.11.0, against a comment that claimed otherwise.
+- **"harmless otherwise" in an advisory's own text is a DESIGN SMELL.** It concedes the tool cannot
+  distinguish the two cases. Either teach it to, or aggregate. Do not ship the concession.
+
+Corollary: `warn()` (`src/io.ts`) auto-prefixes `::warning::` for an unprefixed message. If you mean
+`::notice::`, say so explicitly — a comment claiming "plain-info" does not make it so.
+
 ## Ethos — decide by these
 - **Binary-verify, don't infer.** Anything mirroring Cowork (spawn env, egress allowlist, GrowthBook gates,
   the AskUserQuestion shape) is verified against the in-VM ELF / `app.asar` and **cited in the change**. Pin
