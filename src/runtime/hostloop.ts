@@ -167,8 +167,12 @@ export function spawnHostLoop(
   // Host-loop deltas: native Bash/WebFetch/NotebookEdit OFF (shell goes through the workspace
   // SDK-MCP server — driver handles mcp_message), the workspace tools pre-approved, the
   // Shell-access prompt section. Host-loop excludes the asar's HOST_LOOP_EXCLUDED_BUILTIN_TOOLS =
-  // {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; of those only Bash/NotebookEdit/WebFetch exist in
-  // the CLI agent's registry, so disallowing the three real ones is the faithful set.
+  // {Bash, PowerShell, NotebookEdit, REPL, JavaScript, WebFetch} (PowerShell joined at Desktop
+  // 1.24012.9). REPL/JavaScript are not in the CLI agent's registry at all; PowerShell IS, but it is
+  // win32-gated and never registers on the macOS/Linux runtimes this harness targets. So the three
+  // that can actually register here are Bash/NotebookEdit/WebFetch, and disallowing them is the
+  // faithful set. Adding PowerShell here would be a no-op today — and would need revisiting only if
+  // this harness ever grows a Windows runtime (the sync extractor's Windows paths are still TODO).
   const hostOutputsDir = join(mntHost, "outputs");
   // Hoisted from the path-gate config below: the SAME staged dir is both the Read-allowed uploads root
   // and the uploads bullet's file-tool path — one value, so the prompt and the gate can never disagree.
