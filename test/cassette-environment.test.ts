@@ -199,3 +199,86 @@ describe("discovery-surface note — answers 'does this cassette predate the dis
     expect(r.findings.some((f) => JSON.stringify(f).includes("discovery-surface"))).toBe(false);
   });
 });
+
+// --- the staleness NOTES channel: grouping contract + severity + batch sink (1.11.1) --------------
+// These guard behaviour that was previously verified only by eyeballing CLI output. Reverting either
+// change left the whole suite green at 4520 — the same "call-site omission a unit test can't see" hole
+// the A2 live probes exist to close, so it is closed here properly.
+describe("staleness notes — kind prefix, severity, and batch aggregation", () => {
+  const initEvt = (tools: string[]) => JSON.stringify({ type: "system", subtype: "init", tools });
+  const resultEvt = JSON.stringify({ type: "result", subtype: "success", is_error: false });
+
+  /** Capture stderr around an async call (the notes channel writes there, not to stdout). */
+  async function captureStderr(fn: () => Promise<unknown>): Promise<string[]> {
+    const seen: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: unknown }).write = (c: unknown) => (seen.push(String(c)), true);
+    try {
+      await fn();
+    } finally {
+      (process.stderr as unknown as { write: unknown }).write = orig;
+    }
+    return seen;
+  }
+
+  // The batch summary groups by a leading `kind:` token. A producer that omits one silently lands in a
+  // catch-all bucket and stops aggregating — so the contract is pinned for EVERY producer, not just the
+  // three that WS-C touched.
+  // Source-scanned, NOT fixture-driven, on purpose: a fixture only reaches the producers it happens to
+  // trigger (a fingerprint-less cassette never reaches promptAssetStaleness), so a fixture-only test
+  // silently exempts the rest — verified: dropping the `prompt-assets:` prefix passed a fixture-only
+  // version of this test. Every note literal in the module must carry a kind, whatever fires it.
+  it("EVERY note literal in cassette.ts carries a `kind:` prefix (all producers, not just the reachable ones)", () => {
+    const src = readFileSync(new URL("../src/run/cassette.ts", import.meta.url), "utf8");
+    const literals = [...src.matchAll(/\bnote:\s*(?:`|")([^`"]{10,})/g), ...src.matchAll(/notes\.push\(\s*(?:`|")([^`"]{10,})/g)].map(
+      (m) => m[1],
+    );
+    expect(literals.length, "found no note literals — the scan regex has rotted").toBeGreaterThanOrEqual(4);
+    const unprefixed = literals.filter((l) => !/^[a-z-]+: /.test(l));
+    expect(
+      unprefixed,
+      `note literal(s) with no kind: prefix — the batch grouper buckets these as "note" and they stop ` +
+        `aggregating: ${unprefixed.map((l) => l.slice(0, 60)).join(" | ")}`,
+    ).toEqual([]);
+  });
+
+  it("every note computeStaleness emits at runtime also carries the prefix", () => {
+    const c = makeMinimalCassette({
+      events: [initEvt(["Bash"]), resultEvt],
+      effectiveFidelity: "container",
+    }) as any;
+    const { notes } = computeStaleness(c, undefined);
+    expect(notes.length, "fixture produced no notes — this test would be vacuous").toBeGreaterThan(0);
+    for (const n of notes) expect(n, `note has no kind: prefix -> ${n}`).toMatch(/^[a-z-]+: /);
+  });
+
+  it("notes are emitted at ::notice::, never ::warning:: (they are non-gating by construction)", async () => {
+    const c = makeMinimalCassette({ events: [initEvt(["Bash"]), resultEvt], effectiveFidelity: "container" }) as any;
+    const lines = await captureStderr(() => replayCassette(c, [], {}).catch(() => undefined));
+    const noteLines = lines.filter((l) => l.includes("cassette note:"));
+    expect(noteLines.length, "no note line was emitted — the test would be vacuous").toBeGreaterThan(0);
+    for (const l of noteLines) {
+      expect(l, "a non-gating note must not outrank the actionable assert-drift ::notice::").toContain("::notice::");
+      expect(l).not.toContain("::warning::");
+    }
+  });
+
+  it("a notesSink diverts notes off stderr so a batch caller can aggregate them", async () => {
+    const c = makeMinimalCassette({ events: [initEvt(["Bash"]), resultEvt], effectiveFidelity: "container" }) as any;
+    const collected: string[] = [];
+    const lines = await captureStderr(() => replayCassette(c, [], { notesSink: (ns) => collected.push(...ns) }).catch(() => undefined));
+    expect(collected.length, "the sink received nothing").toBeGreaterThan(0);
+    expect(
+      lines.filter((l) => l.includes("cassette note:")),
+      "notes must NOT also hit stderr when sunk",
+    ).toEqual([]);
+  });
+
+  // Guard the blast radius: WS-D changed the NOTES channel only. Findings gate the exit code and must
+  // stay ::warning::; assert-drift's deliberate ::notice:: is likewise untouched.
+  it("staleness FINDINGS still emit at ::warning:: (only the notes channel was de-escalated)", () => {
+    const src = readFileSync(new URL("../src/run/cassette.ts", import.meta.url), "utf8");
+    expect(src).toContain("::warning:: [replay] cassette stale:");
+    expect(src).toContain("::notice:: [replay] cassette note:");
+  });
+});

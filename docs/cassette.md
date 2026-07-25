@@ -551,7 +551,8 @@ for the `cowork` → `hostloop`/`container` resolution.
   baseline's prompt-asset pointer moved or the asset file is missing, so the drift check can't run at all
   (can't verify ⇒ not green on `verify-cassettes`, warns on the default replay gate). A cassette recorded
   **before** `promptAssetsHash` existed carries no field at all — that's a non-failing informational note
-  ("cassette predates prompt-asset fingerprinting"), not a finding.
+  ("`prompt-assets:` cassette predates prompt-asset fingerprinting"), not a finding. Notes are emitted at
+  `::notice::` and, on a directory replay, collapsed to one summary line per note kind.
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

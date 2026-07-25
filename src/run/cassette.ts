@@ -337,12 +337,20 @@ function isLosslessUtf8(buf: Buffer): boolean {
 
 /** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
  *  Exported for token-free record→replay round-trip tests. */
+/** Roots holding UPLOADED inputs. Walked separately from `roots`, so by construction they never enter
+ *  `recordRoots` / `cassette.userVisibleRoots` — adding them there would misalign
+ *  `buildRecordTimeFolderPrefixMap`'s positional zip against `session.folders` and would wrongly make
+ *  `user_visible_artifact: uploads/x` pass. Exported because `redactCassette`'s artifact↔root check must
+ *  accept these paths too: an upload artifact is never under a user-visible root, so measuring it against
+ *  that set reports a redaction fault that did not happen. Both sides must read this one constant. */
+export const INPUT_ROOTS = ["uploads"] as const;
+
 export function buildManifest(
   workRoot: string,
   cap?: number,
   roots: string[] = ["outputs", ".projects"],
   bodyLessPrefixes: string[] = [],
-  inputRoots: string[] = ["uploads"],
+  inputRoots: string[] = [...INPUT_ROOTS],
 ): ManifestEntry[] {
   const limit = cap ?? defaultBodyCap();
   // Read-only connected-folder inputs (`bodyLessPrefixes`) are captured path+bytes+sha256 only, same as
@@ -949,7 +957,7 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
       return {
         findings: [],
         notes: [
-          `cassette predates effectiveFidelity, but the scenario pins an explicit tier ('${authored}') — tier statically knowable; nothing baseline-dependent to verify`,
+          `resolved-tier: cassette predates effectiveFidelity, but the scenario pins an explicit tier ('${authored}') — tier statically knowable; nothing baseline-dependent to verify`,
         ],
       };
     return { findings: [], notes: [] };
@@ -1003,7 +1011,7 @@ export function promptAssetStaleness(
 ): StalenessFinding | { note: string } | null {
   if (fp.promptAssetsHash === undefined)
     return {
-      note: "cassette predates prompt-asset fingerprinting — a prompt-asset edit since record would be invisible; re-record to adopt the guard",
+      note: "prompt-assets: cassette predates prompt-asset fingerprinting — a prompt-asset edit since record would be invisible; re-record to adopt the guard",
     };
   if (liveBaselineObj === undefined || liveBaselineObj.appVersion !== fp.baseline) return null; // baseline finding handles the version mismatch
   const liveAssets = hashBaselinePromptAssets(liveBaselineObj);
@@ -1498,6 +1506,10 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
   // replay. `redactText` is context-free (same input → same token), so the SAME substring redacts identically
   // in both the root and the path, keeping the prefix relationship intact.
   const redactedRoots = cassette.userVisibleRoots?.map((r) => redactText(r, policy));
+  // Upload roots are redacted with the SAME policy before comparing, so a rule that rewrites `uploads`
+  // rewrites it identically on both sides (the context-free property the paragraph above relies on).
+  // A cassette does not persist which input roots produced it, so this reads the shared default.
+  const redactedInputRoots = INPUT_ROOTS.map((r) => redactText(r, policy));
   const redactedArtifacts = cassette.artifacts?.map((a) => {
     const out: ManifestEntry = { ...a, path: redactText(a.path, policy) }; // a filename can name a customer (outputs/Acme-cap-table.json)
     // a base64 (binary) body has no text PII to redact, and redacting it would corrupt the bytes
@@ -1530,7 +1542,10 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     // multi-segment (e.g. `.projects/<folder>`), so compare on the full normalized prefix — not just the
     // first path segment. Normalize separators so a `\`-vs-`/` cassette doesn't false-trip the check.
     const norm = (p: string) => p.replace(/\\/g, "/");
-    const normRoots = redactedRoots.map(norm);
+    // Inputs are matched by PATH PREFIX, not by `truncationReason: "input"`: a SYMLINKED upload short-
+    // circuits in readEntry (linkKind returns before the reason is applied), so it carries no reason and a
+    // reason-keyed exemption would miss exactly the case it needs to cover.
+    const normRoots = [...redactedRoots, ...redactedInputRoots].map(norm);
     for (const a of redactedArtifacts) {
       const p = norm(a.path);
       const mapped = normRoots.some((r) => p === r || p.startsWith(r + "/"));
@@ -3224,6 +3239,17 @@ export async function cmdReplay(args: string[]) {
   }
   const results: RunResult[] = [];
   let worst = 0;
+  // WS-C: collect staleness notes across the batch instead of printing the same constant string once per
+  // cassette. Keyed by the note's `kind:` prefix; the tail after the prefix is identical per kind, so one
+  // exemplar + a count is strictly more informative than N repetitions.
+  const notesByKind = new Map<string, { count: number; exemplar: string }>();
+  const collectNotes = (ns: string[]) => {
+    for (const n of ns) {
+      const kind = /^([a-z-]+):/.exec(n)?.[1] ?? "note";
+      const prev = notesByKind.get(kind);
+      notesByKind.set(kind, { count: (prev?.count ?? 0) + 1, exemplar: prev?.exemplar ?? n });
+    }
+  };
   for (const f of resolved.files) {
     const rc = readCassette(f); // safe parse + lenient Zod — never throws
     if ("error" in rc) {
@@ -3333,6 +3359,7 @@ export async function cmdReplay(args: string[]) {
         failOnSkillDrift,
         cassetteDir: dirname(f),
         bestEffortFutureCassette,
+        notesSink: collectNotes,
       });
     } catch (e) {
       log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
@@ -3367,6 +3394,13 @@ export async function cmdReplay(args: string[]) {
     }
   }
   // stdout = machine ONLY under --output-format json; humans get per-file footers on stderr.
+  // One line per note kind, after the batch. `::notice::` (not `::warning::`) — these are non-gating by
+  // construction, and on a CI annotation surface a self-described-harmless advisory must not outrank the
+  // ACTIONABLE assert-drift notice beside it.
+  const total = resolved.files.length;
+  for (const [kind, { count, exemplar }] of notesByKind)
+    warn(`::notice:: [replay] ${count}/${total} cassette(s) — ${exemplar.replace(new RegExp(`^${kind}:\\s*`), "")} [${kind}]\n`);
+
   if (json) out(jsonEnvelope("replay", results));
   return process.exit(worst);
 }
@@ -3679,6 +3713,11 @@ export async function cmdVerifyCassettes(args: string[]) {
       for (const u of r.unverifiable) log(`✗ ${r.file}: [unverifiable] ${u}`);
       for (const d of r.scenarioDrift) log(`✗ ${r.file}: [scenario-drift] ${d}`);
       // Informational, never fails the gate (the `·` row mirrors the privacy channel's `unscanned` precedent).
+      // Per-file on purpose — NOT aggregated like `replay <dir>`. verify-cassettes is a per-file AUDIT:
+      // which file carries which note is the answer you came for, and collapsing that to a count would
+      // destroy the attribution. The two reasons to aggregate in replay do not apply here either: this
+      // uses log() (no ::warning::/::notice:: annotation at all), and a verify sweep is expected to
+      // enumerate files. Deliberate asymmetry, not an oversight.
       for (const n of r.notes) log(`· ${r.file}: [note] ${n}`);
       for (const v of r.version) log(`✗ ${r.file}: [version] ${v}`);
     }
@@ -4068,7 +4107,14 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
 export async function replayCassette(
   cassette: Cassette,
   hooks: RunHooks[] = [],
-  opts: { strict?: boolean; failOnSkillDrift?: boolean; cassetteDir?: string; bestEffortFutureCassette?: boolean } = {},
+  opts: {
+    strict?: boolean;
+    failOnSkillDrift?: boolean;
+    cassetteDir?: string;
+    bestEffortFutureCassette?: boolean;
+    /** Batch collector — when set, staleness notes go here INSTEAD of stderr (see the emission site). */
+    notesSink?: (notes: string[]) => void;
+  } = {},
 ): Promise<RunResult> {
   // Cassette format version: ABSENT = legacy (0); a FUTURE version means this harness may misread fields
   // it doesn't know about, so a future-version cassette is a hard FAILURE BY DEFAULT (future semantics may
@@ -4099,9 +4145,17 @@ export async function replayCassette(
   // GITSET/agent-scope flip buckets, and the both-buckets attribution fix for free.
   const { findings: staleness, notes: stalenessNotes } = computeStaleness(cassette, opts.cassetteDir);
   for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
-  // Notes are the non-failing informational channel (pre-effectiveFidelity explicit-tier) — surfaced so
-  // they're never a silent drop, but plain-info (no ::warning::) and never escalated by --strict.
-  for (const n of stalenessNotes) warn(`[replay] cassette note: ${n}\n`);
+  // Notes are the non-failing informational channel — surfaced so they're never a silent drop, but
+  // NEVER escalated by --strict. They are emitted at `::notice::`: `warn()` auto-prefixes `::warning::`
+  // for an unprefixed message, so the comment here used to claim "plain-info (no ::warning::)" while the
+  // code did the opposite — a self-contradiction that made a non-gating advisory shout louder than the
+  // ACTIONABLE assert-drift signal next to it (which is a deliberate `::notice::`). Severity tracks
+  // actionability, not novelty.
+  // `notesSink` lets a BATCH caller collect instead of printing, so a fleet replay emits one summary line
+  // per note kind rather than the same constant string once per cassette (measured: 5 notes over this
+  // repo's own 3 example cassettes, one kind firing 3/3).
+  if (opts.notesSink) opts.notesSink(stalenessNotes);
+  else for (const n of stalenessNotes) warn(`::notice:: [replay] cassette note: ${n}\n`);
 
   // backward compat: warn loudly when controlOut is absent so the user knows question/gate
   // assertions are being EXCLUDED (not vacuously evaluated) from this run.

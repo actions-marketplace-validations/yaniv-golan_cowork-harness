@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.11.0
-  tracks-harness: cowork-harness 1.11.0 (baseline desktop-1.24012.1)
+  version: 1.12.0
+  tracks-harness: cowork-harness 1.12.0 (baseline desktop-1.24012.9)
 ---
 
 # cowork-harness
@@ -22,8 +22,8 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.11.0` (baseline
-> `desktop-1.24012.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.12.0` (baseline
+> `desktop-1.24012.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.11.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.11.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.11.0"`. **Pin `@>=1.11.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.12.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.12.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.12.0"`. **Pin `@>=1.12.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -750,6 +750,20 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     `effectiveFidelity` at all, or an unloadable pinned `baseline:`, reports `unverifiable-tier` instead
     (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
     produces them. (Details: `docs/cassette.md` § tier staleness — repo-only.)
+
+22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —
+    `manifest-needs-snapshot` and `gate-needs-controlout` — fire on the mere presence of manifest/gate
+    assertion keys, unconditionally. The linter is **static**: it never reads your cassettes, so it cannot
+    know whether yours already carry an `artifacts` manifest and `controlOut` (a current cassette does).
+    On a healthy fleet every one of those lines is a false alarm. *Fix:* `lint --min-severity WARN` in CI
+    (≥1.11.0) — the INFO advisories stay one flag away for interactive use. `--strict --min-severity ERROR`
+    behaves as a plain lint, not a contradiction.
+23. **`verify-cassettes`/`replay` report a `discovery-surface` note on cassettes you just recorded fine.**
+    *Why:* the cassette froze its `system/init` tool inventory from before the skills/plugins discovery
+    servers existed at that tier (added 1.10.0). It is a non-gating **note**, never a finding — it cannot
+    fail your gate. *Fix:* nothing, unless the scenario asserts `tool_available` on
+    `mcp__skills__*`/`mcp__plugins__*`; then re-record. It stays silent at `microvm`/`protocol`, where
+    re-recording would never produce those tools anyway.
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

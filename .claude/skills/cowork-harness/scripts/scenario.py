@@ -43,6 +43,7 @@ system PyYAML is preferred when present.
 from __future__ import annotations
 
 import argparse
+import os
 import functools
 import json
 import re
@@ -1397,9 +1398,14 @@ def main(argv=None):
         prog="scenario.py",
         description="Author (scaffold) and check (lint) cowork-harness scenarios.",
     )
+    # The wrapper (`cowork-harness lint`) sets COWORK_HARNESS_PROG so usage/error lines name a command the
+    # user can actually run. Default = the script's own basename, because scenario.py is ALSO documented as
+    # directly runnable (SKILL.md, docs/gotchas.md, docs/plugin-root.md, docs/subagents.md) — hardcoding
+    # "cowork-harness lint" would lie on that path.
+    prog = os.environ.get("COWORK_HARNESS_PROG")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    lp = sub.add_parser("lint", help="lint scenario(s) for silent-false-green invariants")
+    lp = sub.add_parser("lint", prog=f"{prog} lint" if prog else None, help="lint scenario(s) for silent-false-green invariants")
     lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lp.add_argument("--strict", action="store_true", help="exit non-zero on WARN/INFO too, not just ERROR")
@@ -1416,6 +1422,7 @@ def main(argv=None):
 
     lsp = sub.add_parser(
         "lint-skill",
+        prog=f"{prog} lint-skill" if prog else None,
         help="lint SKILL.md bodies for Cowork host-loop footguns + static subagent_type resolution",
         description=(
             "Inspect skill bodies (SKILL.md + any sibling hooks.json) for two antipatterns a paid "
@@ -1491,7 +1498,14 @@ def main(argv=None):
     sp.add_argument("--no-validate", action="store_true", help="skip the self-lint of the generated scenario")
     sp.set_defaults(func=cmd_scaffold)
 
-    args = ap.parse_args(argv)
+    # parse_known_args + the subparser's own error(): argparse bubbles unknown args to the TOP-LEVEL
+    # parser, whose usage line lists {lint,lint-skill,resolve-agent-types,scaffold} — a set that is
+    # meaningless (and partly wrong) through the `cowork-harness` wrapper. Reporting on the subparser keeps
+    # the message about the command the user actually typed.
+    args, extras = ap.parse_known_args(argv)
+    if extras:
+        target = sub.choices.get(getattr(args, "command", "") or "")
+        (target or ap).error("unrecognized arguments: " + " ".join(extras))
     return args.func(args)
 
 

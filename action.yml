@@ -29,6 +29,9 @@ inputs:
     description: >-
       npm version or dist-tag of cowork-harness to install. The `latest` default is intentional so
       copy-paste recipes track the current release; for reproducible CI, pin an exact version here.
+      Any npm range works too (the value is interpolated into `npm install --global cowork-harness@<v>`),
+      so `>=1.11.0` or `^1.11.0` is the right choice when a step's `extra-args` uses a flag added in a
+      specific release — an exact pin silently rots the moment a recipe adopts a newer flag.
       (This differs from the companion skill's `@>=1.7.0` floor guidance, which targets ad-hoc CLI
       installs where an accidental older resolve should fail loud rather than silently downgrade.)
     required: false

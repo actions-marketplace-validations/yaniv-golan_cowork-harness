@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.11.0` (baseline `desktop-1.24012.1`).
+Self-contained reference. Tracks `cowork-harness 1.12.0` (baseline `desktop-1.24012.9`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.11.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "1.12.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.217   # match your scenario's pinned baseline's agentVersion
+          V=2.1.219   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
@@ -57,7 +57,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.11.0"
+- run: npm i -g "cowork-harness@>=1.12.0"
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
 - run: cowork-harness replay cassettes/              # token-free content/structure
@@ -66,6 +66,30 @@ GitHub-hosted runners, no token/Docker/agent:
 The rest of this doc explains the lane split, recording, privacy, and the full pipeline + live job.
 
 ## The core split: token-free PR gate + live nightly (self-hosted)
+
+### `extra-args` and the version it silently requires
+
+The packaged Action builds `path` and `extra-args` **verbatim** into the invocation, for whatever
+subcommand you name — it is not a validated allowlist. That makes `extra-args` the way to pass a flag the
+Action has no input for, and it creates a coupling nothing checks:
+
+> **If a flag in `extra-args` was added in release X, floor that step's `version` to `>=X`.**
+
+`version` defaults to `latest`, and accepts **any npm range** — not just an exact pin. So:
+
+```yaml
+- uses: yaniv-golan/cowork-harness@main
+  with:
+    command: lint
+    path: scenarios/
+    version: ">=1.11.0"          # --min-severity landed in 1.11.0
+    extra-args: --min-severity WARN
+```
+
+Without the floor, an older CLI fails the step with `unrecognized arguments: --min-severity WARN` (exit 2,
+wrapped in an `ok:false` envelope) — it does **not** degrade gracefully. An exact pin is fine for
+reproducibility, but it rots the moment a recipe adopts a newer flag; a floor expresses the real dependency.
+
 
 The harness has two execution lanes with different cost, coverage, AND infrastructure requirements.
 The split is not just about tokens — it decides **where each lane can run**:
@@ -197,7 +221,7 @@ jobs:
         with: { node-version: '20' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.11.0"
+      - run: npm i -g "cowork-harness@>=1.12.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -226,7 +250,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.11.0"
+        run: npm i -g "cowork-harness@>=1.12.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

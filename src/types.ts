@@ -80,6 +80,9 @@ export const PlatformBaseline = z.looseObject({
             effortLevels: z.array(z.string()).optional(),
             recommended: z.string().optional(),
             modes: z.array(z.string()).optional(),
+            // Additive since Desktop 1.24012.9 (first seen on claude-opus-5). Optional, so baselines
+            // synced before it existed — and the many entries that still omit it — stay valid.
+            disallowThinkingDisabled: z.boolean().optional(),
           }),
         )
         .optional(),

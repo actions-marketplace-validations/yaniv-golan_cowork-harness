@@ -113,7 +113,16 @@ export const PINNED_GATES: Record<string, string> = {
   // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
   "1598976391": "proactiveSkillSuggestEnabled", // off/defaultValue — proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with this gate OFF, so it only swaps suggest_skills's description and adds `trigger`.)
-  "3246569822": "canSaveSkill", // off/defaultValue — whether the save-skill affordance is offered
+  // Flipped off/defaultValue -> ON/force server-side (fcache) as of 2026-07-25, i.e. for current users on
+  // any Desktop version — NOT a Desktop change; the machinery already shipped in 1.24012.1 gated off. ON
+  // adds a `save_skill` tool to the session's SDK-MCP inventory AND is passed into
+  // generateSkillsSystemPrompt, so it changes both the tool set and the skills prompt. The harness models
+  // NEITHER yet, so this is a known fidelity gap, not a modelled surface.
+  "3246569822": "canSaveSkill",
+  // off/defaultValue and PRESENT in the fcache (so NOT dark — no DARK_GATES entry) — the `propose_skills`
+  // render-only sibling. Pinned so a production flip surfaces as a sync diff instead of silently widening
+  // the tool set the way canSaveSkill's did.
+  "1824824999": "canProposeSkills",
 };
 
 /**
@@ -510,7 +519,12 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
         miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
     };
     hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
-    hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
+    // "PowerShell" joined the set at Desktop 1.24012.9 (was the 5-element list through 1.24012.1). It is a
+    // REAL tool in the agent registry (its own "Executes a given PowerShell command…" description), but
+    // win32-gated, so it never registers on the macOS/Linux runtimes this harness targets — hence no change
+    // to hostloop's `disallowed` set (see the note in src/runtime/hostloop.ts). Pinned exactly so a future
+    // set change still fires here rather than silently widening what production excludes.
+    hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
     if (!/REQUEST_COWORK_DIRECTORY/.test(defining) || !/"request_cowork_directory"/.test(defining))
       miss("REQUEST_COWORK_DIRECTORY", "the export or its literal is gone");
     if (!/SESSION_TYPE_CHAT/.test(defining) || !/"chat"/.test(defining)) miss("SESSION_TYPE_CHAT", "the export or its literal is gone");
@@ -1553,6 +1567,11 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     const { config } = extractModelEffortConfig(bundle);
     if (!config) miss("S20 modelEffortConfig", "extractModelEffortConfig could not resolve the per-model config (see its own flags)");
     else {
+      // Deliberately NOT every picker model — this is a CLASS-shape floor, and four entries already
+      // over-cover a one-class check. Adding each new model (e.g. claude-opus-5) would buy no extra class
+      // coverage while making the sentinel fire spuriously the day that model is retired. A new model's
+      // exact config is pinned far more precisely by the golden oracle, which deep-equals the whole map
+      // against the live asar (test/fixtures/model-effort-config.golden.json).
       const withPicker = ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"];
       const noPicker = ["claude-haiku-4-5", "claude-sonnet-4-5"];
       for (const m of withPicker)
@@ -1580,6 +1599,9 @@ interface ModelEffortEntry {
   effortLevels?: string[];
   recommended?: string;
   modes?: string[];
+  /** Present on a per-model entry since Desktop 1.24012.9, where `claude-opus-5` became the first literal-map
+   *  entry to carry it (previously it appeared only on the regex-default entry). Optional: most entries omit it. */
+  disallowThinkingDisabled?: boolean;
 }
 
 interface EffortRegexDefault {
@@ -1628,7 +1650,9 @@ function parseQuotedArray(inner: string): string[] {
   return [...inner.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
 }
 
-/** Parse one model/regex-default entry's `{...}` body text for the three fields the config carries. */
+/** Parse one model/regex-default entry's `{...}` body text for the fields the config carries. The
+ *  regex-default caller does NOT take `disallowThinkingDisabled` from here — it sets that from its own
+ *  anchor capture — so parsing it is additive for the per-model entries only. */
 function parseModelEntryBody(body: string): ModelEffortEntry {
   const entry: ModelEffortEntry = {};
   const el = body.match(/effortLevels:\[([^\]]*)\]/);
@@ -1637,6 +1661,10 @@ function parseModelEntryBody(body: string): ModelEffortEntry {
   if (rec) entry.recommended = rec[1];
   const modes = body.match(/modes:\[([^\]]*)\]/);
   if (modes) entry.modes = parseQuotedArray(modes[1]);
+  // Minified booleans (`!0`/`!1`) and plain ones both occur; absent stays absent rather than defaulting
+  // to false, so the baseline distinguishes "production omits it" from "production sets it false".
+  const dtd = body.match(/disallowThinkingDisabled:(!0|!1|true|false)/);
+  if (dtd) entry.disallowThinkingDisabled = dtd[1] === "!0" || dtd[1] === "true";
   return entry;
 }
 

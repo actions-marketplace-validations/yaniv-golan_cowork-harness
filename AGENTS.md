@@ -104,6 +104,62 @@ here**, and the failure is silent. Every one below was hit by an agent working i
   rejected (redirects to `--decider-llm`) to keep deciders in the `--decider-*` family. Don't reintroduce overlap
   (the legacy stdio channel was deliberately removed).
 
+## Parallel sessions — one worktree each
+
+Two agents in ONE checkout share a HEAD: every `git checkout` moves it for both. **This fails silently.**
+Nothing errors — your rebase just gets harder, because the base moved. Measured in one session: `main`
+advanced under an in-flight rebase three times (`3a2f994` → `bc394b9` → `75bc440`), producing one real
+`CHANGELOG.md` conflict and a `--contains` false negative that nearly justified a `reset --hard` over
+commits that looked orphaned but weren't.
+
+**The convention:**
+
+- The **primary checkout stays on `main`** and is the integration point. Do no feature work there.
+- Each session gets its own worktree: `git worktree add .worktrees/<name> -b <branch>`. `.worktrees/` is
+  already gitignored (`.gitignore`) and excluded from test discovery (`vitest.config.ts`).
+- **Land with `git merge --ff-only <branch>`, run IN the primary.** Rebase your branch onto `main` first
+  so the merge is a strict fast-forward — no merge commit, no rebase during the merge, nothing to
+  mis-resolve.
+
+**Do NOT use the ref-update trick (`git fetch . <branch>:main`) under this convention.** It works only
+while the target branch is checked out NOWHERE, and here the primary permanently holds `main`:
+
+```
+fatal: refusing to fetch into branch 'refs/heads/main' checked out at '…/cowork-harness'
+```
+
+(Both paths verified: the fetch succeeds into an unchecked-out branch and fails the moment a worktree
+holds it; `merge --ff-only` succeeds in the holding worktree.) The ref-update is still the right tool for
+the narrow case of advancing a branch nobody has checked out — it just cannot be the standard path.
+
+**Why the split is the real fix:** a ref-update protects the *other* session's HEAD but does nothing for
+`main` itself, so the base can still move under an in-flight rebase. Separate worktrees fix that half.
+
+**Two one-time costs per worktree**, both benign: no `./.env` (use `--dotenv <primary>/.env` — `doctor`
+detects this and prints the remedy, see `docs/gotchas.md`), and no `node_modules` (`npm ci` before tests).
+
+**Structural safety, not just etiquette:** git refuses to check out `main` in a second worktree
+(`fatal: 'main' is already used by worktree at …`), so the integration branch cannot be double-held by
+accident.
+
+## Advisory design — the rules an emitted note/warning must satisfy
+
+Added after 1.11.0 shipped an advisory that violated all three in the same release it fixed another one.
+
+- **Actionable by construction, or aggregated.** An advisory that fires on every item is noise. If the
+  tool cannot tell the applicable case from the inapplicable one, it must **aggregate to one line per run**
+  (`N/M cassettes — <reason>`), not repeat a constant string per item. Precedent: the skill-hash hint
+  (once per process) and the staleness notes (one summary per kind, `cmdReplay`).
+- **Severity tracks ACTIONABILITY, not novelty.** `notes` are non-gating by construction ⇒ `::notice::`.
+  `findings` gate ⇒ `::warning::`/failure. Getting this backwards makes a self-described-harmless line
+  outrank the actionable one beside it on a CI annotation surface — which is exactly what shipped in
+  1.11.0, against a comment that claimed otherwise.
+- **"harmless otherwise" in an advisory's own text is a DESIGN SMELL.** It concedes the tool cannot
+  distinguish the two cases. Either teach it to, or aggregate. Do not ship the concession.
+
+Corollary: `warn()` (`src/io.ts`) auto-prefixes `::warning::` for an unprefixed message. If you mean
+`::notice::`, say so explicitly — a comment claiming "plain-info" does not make it so.
+
 ## Ethos — decide by these
 - **Binary-verify, don't infer.** Anything mirroring Cowork (spawn env, egress allowlist, GrowthBook gates,
   the AskUserQuestion shape) is verified against the in-VM ELF / `app.asar` and **cited in the change**. Pin

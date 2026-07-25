@@ -120,6 +120,12 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 ## Checklist
 
 - [ ] Decide the version per the semver rule above.
+- [ ] **Does this release add or change a user-facing CLI flag, assertion key, cassette field, message, or
+      version coupling?** If so update **CHANGELOG.md + README.md + `.claude/skills/cowork-harness/SKILL.md`
+      + `references/`** — a version bump is NOT documentation. Only *some* of this is guarded (the
+      assertion-key catalog and cassette schema fields, by `test/skill-docs-sync.test.ts`); a new **flag**
+      or **message** is guarded by nothing and is on you. Two consecutive consumer adoption reports spent
+      ~40% of their findings on exactly this.
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").

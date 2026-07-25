@@ -41,7 +41,7 @@
       },
       ".artifacts[].truncationReason": {
         "type": "string",
-        "enum": ["size", "readonly", "unreadable"]
+        "enum": ["size", "readonly", "unreadable", "input"]
       },
       ".authoring": {
         "type": "object"
@@ -163,6 +163,10 @@
       },
       ".preRunHashes{}": {
         "type": ["string", "null"]
+      },
+      ".preRunOrigin": {
+        "type": "string",
+        "enum": ["local-walk", "remote-unavailable", "local-unreadable"]
       },
       ".preRunPaths": {
         "type": "array"

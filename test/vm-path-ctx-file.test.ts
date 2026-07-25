@@ -315,6 +315,7 @@ describe("cassette output shape — mounts can never enter a cassette", () => {
       "folderPrefixMap",
       "generator",
       "preRunHashes",
+      "preRunOrigin",
       "preRunPaths",
       "scenario",
       "scenarioSource",
