@@ -30,6 +30,50 @@ protocol layer or run-loop bookkeeping in the CLI.
 - **`cowork-harness lint` exit 127 is a hard failure** (python3 not installed — PyYAML is bundled, so it's
   never the cause). CI scripts MUST NOT swallow this exit code — treat it as a missing gate, not a vacuous pass.
 
+## Traps — the tooling will mislead you (each one cost real agent-hours)
+
+These are not invariants to preserve; they are places where a **reasonable default assumption is wrong
+here**, and the failure is silent. Every one below was hit by an agent working in this repo.
+
+- **`docs/internal/` is gitignored — `git status` / `git diff` are BLIND to it.** Verify work in that
+  directory on the filesystem (mtimes, content), never via git. (An agent once concluded a completed
+  154-file audit "hadn't run" because git reported a clean tree.) The same applies to `.env` and anything
+  else in `.git/info/exclude`.
+- **`npm test` does NOT typecheck.** It is `vitest run`, which strips types. **`tsconfig.json` includes
+  only `src`** — test files are typechecked *solely* by `tsconfig.test.json`, i.e. only via
+  **`npm run typecheck`** (which `npm run ci` runs). Consequence: a missing import in `src` does not fail
+  `npm test`; it becomes a runtime `ReferenceError`, and if it lands inside a `catch` it becomes **silently
+  wrong data** rather than a crash. After editing `src/`, run `npm run typecheck`, not just `npm test`.
+- **Deriving anything that can throw belongs OUTSIDE a nearby broad `catch`.** Several best-effort blocks
+  (`try { readdirSync(...) } catch { /* no dir — fine */ }`) will happily swallow a *different* exception
+  and report an empty result. Fail-loud contracts (e.g. `gitTrackedSet`'s deliberate throw) are defeated by
+  being called from inside one.
+- **Token resolution has an `<install>/.env` fallback** (`src/cli.ts`, `dist/cli.js` → `../.env`), so
+  running the CLI from *any* cwd still picks up **this repo's** `.env`. Scrubbing `process.env` and
+  `cd`-ing elsewhere is NOT enough to test an unauthenticated path — only a packed install
+  (`npm pack` + `npm i ./tgz`) isolates it. (Two live auth experiments "passed" against a token the author
+  believed was removed.)
+- **Only two `schema/*.json` are generated.** `npm run schema` writes `scenario.schema.json` +
+  `session.schema.json` (+ the skill's `assertion-keys.json`). **Everything else in `schema/` is
+  hand-maintained** — `cassette.v*.json`, `run-result.json`, `doctor.json`, `protocol.v1.json`,
+  `critique-report.json`, `verify-cassettes.json`. Adding a field to those means editing the TS type **and**
+  the JSON by hand; nothing syncs them. Then regenerate the surface baseline (below).
+- **Surface-baseline ordering:** edit the schema → `npm run check:surface` (review the diff, expect
+  `+N -0 ~0`) → `npm run gen:surface` → `check:surface` again (now `+0 -0 ~0`). Running `gen:surface`
+  first hides the very diff you were supposed to review.
+- **A `RunResult` field is a 5-call-site change.** `assembleRunResult` has **5** call sites across
+  `assemble-run-result.ts` / `execute.ts` / `cassette.ts` / `chat-result.ts`, plus the TS type, the
+  hand-maintained `schema/run-result.json`, and 2 fixtures. `CompleteRunResult` makes every key
+  mandatory-to-supply, so a new key touches all of them. Grep the count fresh — it has changed twice.
+- **Some types lie at the seam.** `Cassette.events` is declared `string[]` but arrives `undefined` from
+  several `computeStaleness` callers; partially-constructed cassettes are normal in tests and in the
+  staleness path. Guard structurally (`Array.isArray`) rather than trusting the declaration.
+- **Guards cover machine-readable structure, not prose.** `surface-contract` snapshots
+  `schemas`/`action`/`env`; `skill-docs-sync` covers the assertion-key catalog and top-level cassette
+  fields. Nothing checks that a new **CLI flag**, **message**, **behaviour**, or **version coupling** is
+  documented anywhere a consumer reads. If your change is one of those, the docs are on you — see the
+  release checklist in [RELEASING.md](./RELEASING.md).
+
 ## Invariants — do NOT break (each one cost a real bug)
 > Full index (enforcement + test anchors for every invariant, including the CI-grep-only ones not
 > repeated below): [docs/invariants.md](docs/invariants.md).
