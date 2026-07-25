@@ -160,7 +160,43 @@ describe("recovery — the hazards of a journal that outlives its directory", ()
     if (r.kind === "refuse") expect(r.reason).toMatch(/journal/i);
   });
 
-  it("DISCARDS a stale journal whose run dir was deleted and recreated at the same path", () => {
+  // The guard under test is stat-based (`{ino, birthtimeMs}`), and on some filesystems a
+  // delete-then-recreate at the same path reuses the inode AND reports an identical birthtime — measured
+  // at 171/200 on node:20-slim/overlayfs vs 0/200 on macOS/APFS. There the guard provably cannot fire, so
+  // asserting it does is a test that fails for an environmental reason, not a regression. Probe the actual
+  // filesystem rather than the platform name (a Linux dev box on ext4 may well distinguish) and skip
+  // LOUDLY when the primitive is unavailable — see the LIMITATION note in migrate-run-dir.ts.
+  // Probe N times and require EVERY trial to distinguish. A single trial is not enough: measured on
+  // node:20-slim/overlayfs a lone probe still said "distinguishes" 2/50 times, which would let the test
+  // run and then fail ~86% of those — trading an 86% flake for a ~3% one. Demanding 5/5 drives the
+  // residual to ~0 while staying 5/5 on APFS.
+  const statIdentityDistinguishes = (() => {
+    try {
+      for (let i = 0; i < 5; i++) {
+        const probe = join(mkdtempSync(join(tmpdir(), "ident-probe-")), "d");
+        mkdirSync(probe, { recursive: true });
+        const a = statSync(probe);
+        rmSync(probe, { recursive: true, force: true });
+        mkdirSync(probe, { recursive: true });
+        const b = statSync(probe);
+        if (a.ino === b.ino && Math.round(a.birthtimeMs) === Math.round(b.birthtimeMs)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  // "no silent false-greens" (AGENTS.md ethos): a skipped guard must SAY so, or CI shows a green suite
+  // that never exercised the invariant.
+  if (!statIdentityDistinguishes)
+    process.stderr.write(
+      "::warning:: [test] SKIPPING the stale-journal identity guard — this filesystem reuses the inode AND " +
+        "reports an identical birthtime on delete-recreate, so the stat-based check provably cannot fire here " +
+        "(see the LIMITATION note in src/run/migrate-run-dir.ts). The invariant is UNVERIFIED on this run.\n",
+    );
+
+  it.skipIf(!statIdentityDistinguishes)("DISCARDS a stale journal whose run dir was deleted and recreated at the same path", () => {
     // Nothing sweeps a journal whose dir is gone, so a fresh run reusing scenario/runId would otherwise
     // have the stale plan replayed onto it — mislabeling it into turns/2 and minting phantom turns.
     const d = legacyDir();
