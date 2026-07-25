@@ -50,7 +50,7 @@ Given a session + baseline, returns:
 | field | value |
 |---|---|
 | `configDir` | managed host dir (or `session.plugins.config_dir`); contains `settings.json`, `cowork_settings.json`, `skills/` |
-| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `<collision-resolved-basename>` (work folders), `.local-plugins/marketplaces/<marketplace>/<plugin>` (marketplace-resolved), `.local-plugins/cache/<name>` (direct `local_plugins`), `.remote-plugins/<name>`. (≥1.14271.0; older baselines mount work folders at `.projects/<id>`, which is now a reserved name.) |
+| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `<collision-resolved-basename>` (work folders), `.local-plugins/marketplaces/<marketplace>/<plugin>` (marketplace-resolved), `.local-plugins/cache/<name>` (direct `local_plugins`), `.remote-plugins/plugin_<id>` (uploaded / org-remote; `id` is a stable hash of the DECLARED source, not a basename — two entries sharing a basename would collide). (≥1.14271.0; older baselines mount work folders at `.projects/<id>`, which is now a reserved name.) |
 | `pluginDirs[]` | mnt-relative plugin roots → `--plugin-dir` (incl. marketplace-resolved plugins) |
 | `model/effort/extendedThinking/permissionMode/permissionParity` | from session |
 | `egressAllow[]` | `baseline.network.allowDomains` + `session.egress.extra_allow` (or `["*"]` if unrestricted) |

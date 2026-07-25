@@ -92,6 +92,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **SPEC.md's `mounts[]` row documented a mount path that was fixed away.** It still described
+  `remote_plugins` mounting at `.remote-plugins/<name>` — the basename form that was replaced by
+  `.remote-plugins/plugin_<id>` precisely *because* two entries sharing a basename collided. The
+  implementation (`session.ts`), `docs/discovery.md`, `docs/plugin-root.md` and `docs/session.md` had all
+  said `plugin_<id>` for releases; SPEC was the one stale page, and it is the §12 frozen-contract page,
+  where a wrong path is a misstated contract rather than a typo. Now names the real shape and why the id
+  is a hash of the declared source rather than a basename. Reported by a consumer.
+
 - **`save_skill`/`propose_skills` are recorded as an unmodelled surface** in
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md). Cowork declares `mcp__cowork__save_skill` on a
   standard account; the harness declares neither tool at any tier. The entry states the three properties
