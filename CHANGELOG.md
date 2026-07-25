@@ -37,6 +37,12 @@ All notable changes to this project are documented here. The format is based on
   inventory, inputSchemas, gating, and the `list_skills`/`list_plugins` envelopes are asar/session-log
   derived; the tool **description strings** and the `search_plugins`/`suggest_plugin_install` envelopes are
   a faithful reconstruction rather than byte-captured — see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+  **Upgrade note — existing cassettes:** a cassette recorded before 1.10.0 froze the previous tool inventory,
+  so a scenario asserting `tool_available: "mcp__skills__.*"` / `"mcp__plugins__.*"` will fail against it —
+  correctly, since that recording genuinely had no such tool. No staleness class flags this (the classes key
+  off the baseline and the skill/scenario inputs, and the baseline did not change), so **re-record
+  `container`/`hostloop`/`cowork` cassettes whose scenarios assert on the discovery tools**. See
+  [docs/cassette.md](./docs/cassette.md) → "Upgrading cowork-harness".
   Both catalogs report what the sandbox will actually **receive**: a plugin skill directory that staging
   drops (untracked, under the default git-tracked staging boundary) is omitted from `list_skills` *and*
   `list_plugins`, including on `--resume`, so the two never contradict each other within a run.

@@ -462,7 +462,13 @@ Re-record a cassette when:
 
 ### Upgrading cowork-harness
 
-On every **harness major** (x.0.0) version bump, re-record AND re-verify all cassettes:
+Re-record AND re-verify all cassettes on every **harness major** (x.0.0) bump — **and on any release,
+including a minor, whose changelog reports a change to the emulated tool surface, spawn env, or system
+prompt.** A minor can change what the agent sees: **1.10.0** is the first such release (it added the
+`skills`/`plugins` discovery servers, so `container`/`hostloop`/`cowork` cassettes recorded before it froze
+a tool inventory five tools short). Cassettes recorded earlier keep replaying correctly — but a scenario
+asserting `tool_available: "mcp__skills__.*"` will fail against them, correctly, because that recording
+genuinely had no such tool. Re-record those.
 
 ```bash
 cowork-harness record scenarios/ --dry-run          # preview the scenarios + token/binary checks, write nothing
@@ -471,7 +477,10 @@ cowork-harness verify-cassettes cassettes/
 ```
 
 Why: a major may change the emulated system-prompt, the egress policy, or the hash algorithm — any of
-which can shift recorded behavior. Structural assertions (`artifact_json`, `file_exists`, `result`) are
+which can shift recorded behavior. Most of those inputs have an automatic tripwire (a baseline, prompt-asset
+or skill-hash drift is reported by `verify-cassettes`/`replay` as a staleness finding); a change to the
+*declared tool surface* is the one that historically had none, which is why the changelog is the authority
+for that class. Structural assertions (`artifact_json`, `file_exists`, `result`) are
 stable across these shifts; prose-level `transcript_matches` is not. Prefer structural asserts where
 possible.
 
@@ -546,6 +555,12 @@ re-record error — `rehash` never gets the chance to attempt a digest-only migr
 cowork-harness record scenarios/                 # record every scenario in the dir (one cassette each)
 cowork-harness record cassettes/ --rerecord-stale # re-record ONLY the cassettes whose fingerprint drifted
 ```
+
+Each cassette is written **atomically** — to a same-directory temp file, then `rename`d over the target
+(atomic on POSIX). An interrupted, failed, or OOM-killed batch therefore never leaves a partial or corrupt
+cassette behind: you get the previous cassette or the new one, never a half-written file. **You do not need
+to wrap `record` in your own temp-file + `mv` dance** — a batch that dies part-way leaves the
+already-completed cassettes valid and the rest untouched.
 
 Directory discovery keys on a **positive `prompt:` signal**: a `*.yaml` with no top-level `prompt:` is an
 announced skip (it's a session/other doc), but a doc that *looks* like a scenario (has `prompt:`) yet fails
