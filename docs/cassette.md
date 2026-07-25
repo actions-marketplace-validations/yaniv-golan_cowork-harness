@@ -90,6 +90,20 @@ events-only mode with a loud warning.
 cassettes replay unchanged. `cassetteVersion` is the format-schema version (a monotonic integer, not
 semver): a value newer than the harness understands triggers a loud forward-compat warning.
 
+### Recording provenance (`environment`)
+
+`environment` records where and by what a cassette was made: `location` (always `local`), `tier` (the
+resolved effective fidelity), `agentBinaryFormat`, and **`harnessVersion`** — the cowork-harness CLI that
+recorded it. `harnessVersion` exists because a harness-code change can shift recorded behaviour at an
+*unchanged* baseline (1.10.0's new declared tool surface did), which no staleness class detects. It is
+**absent** on cassettes recorded before 1.11.0, and that absence is meaningful — it is never backfilled.
+
+`verify-cassettes` and `replay` additionally emit a non-gating `[note]` when a cassette's recorded
+`system/init` inventory predates the skills/plugins discovery servers *and* its tier declares them today.
+That check reads the recorded inventory rather than the version, so it works on cassettes made long before
+the field existed. It stays silent at `microvm`/`protocol` (re-recording there would never produce those
+tools) and when the init event carries no tool list.
+
 ## Recording prerequisites
 
 `record` runs a live scenario first, then saves the two output files as a cassette:

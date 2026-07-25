@@ -72,6 +72,9 @@
       ".environment.agentBinaryFormat": {
         "type": "string"
       },
+      ".environment.harnessVersion": {
+        "type": "string"
+      },
       ".environment.location": {
         "type": "string",
         "enum": ["local", "cloud"],

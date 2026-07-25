@@ -715,6 +715,12 @@ def cmd_lint(args):
         )
     for f in args.files:
         all_findings.extend(lint_file(f))
+    # Filter BEFORE rendering AND before the exit computation — deliberately, so --min-severity narrows
+    # what the run actually cares about. Filtering at render only would make `--strict --min-severity ERROR`
+    # print "0 findings" and still exit 1 (because --strict keys off the unfiltered set), which is
+    # indistinguishable from a bug. Applied identically to --json so the two output modes never disagree.
+    floor = SEV_ORDER[getattr(args, "min_severity", "INFO")]
+    all_findings = [x for x in all_findings if SEV_ORDER[x.severity] <= floor]
     if args.json:
         print(json.dumps([x.as_dict() for x in all_findings], indent=2))
     else:
@@ -1397,6 +1403,15 @@ def main(argv=None):
     lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lp.add_argument("--strict", action="store_true", help="exit non-zero on WARN/INFO too, not just ERROR")
+    lp.add_argument(
+        "--min-severity",
+        choices=("ERROR", "WARN", "INFO"),
+        default="INFO",
+        help="drop findings below this severity BEFORE printing and before the exit computation "
+        "(default INFO = keep everything, unchanged). --json is filtered identically. So "
+        "`--strict --min-severity ERROR` behaves exactly like a plain lint, rather than reporting "
+        "0 findings and still exiting 1.",
+    )
     lp.set_defaults(func=cmd_lint)
 
     lsp = sub.add_parser(

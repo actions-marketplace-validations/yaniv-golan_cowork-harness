@@ -68,7 +68,7 @@ import { evaluate, budgetFields, type AssertContext } from "../assert.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
-import { jsonEnvelope, jsonPayloadEnvelope, fail, isJsonOutput } from "./envelope.js";
+import { jsonEnvelope, jsonPayloadEnvelope, fail, isJsonOutput, pkgVersion } from "./envelope.js";
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
@@ -95,6 +95,19 @@ export function recordErrorText(e: unknown): string {
   const msg = (e as Error).message;
   if (e instanceof UnansweredError && e.hint && !msg.includes(e.hint)) return `${msg}\n    ${e.hint}`;
   return msg;
+}
+
+/**
+ * Build the cassette's `environment` provenance block. Pure and exported ONLY so it is unit- and
+ * mutation-testable OFFLINE: `recordScenarioObject` needs a live agent spawn, so an inline stamp could be
+ * asserted only on the live lane (see the standing notes in test/cli-json.test.ts and siblings). Same
+ * reason `defaultCassettePath` is exported.
+ */
+export function buildEnvironmentProvenance(
+  tier: string | undefined,
+  agentBinaryFormat: string | undefined,
+): { location: "local"; tier?: string; agentBinaryFormat?: string; harnessVersion: string } {
+  return { location: "local", tier, agentBinaryFormat, harnessVersion: pkgVersion() };
 }
 
 /** Write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
@@ -224,9 +237,12 @@ export interface Cassette {
   // Recording ENVIRONMENT provenance — the location + tier this cassette was recorded under. Stamped
   // `location:"local"` on every recording (this harness records only local runs), so a hypothetical
   // future cloud-recorded cassette is positively distinguishable. `tier` is the resolved effective
-  // fidelity; `agentBinaryFormat` mirrors baseline.agentBinary.format. Additive, looseObject → no
-  // CASSETTE_VERSION bump. Readers that don't know it ignore it (backward-compat).
-  environment?: { location: "local" | "cloud"; tier?: string; agentBinaryFormat?: string };
+  // fidelity; `agentBinaryFormat` mirrors baseline.agentBinary.format; `harnessVersion` is the CLI that
+  // RECORDED it — the one fidelity input with no other trace, since a harness-code change (e.g. a new
+  // declared tool surface) can shift recorded behavior at an UNCHANGED baseline, which no staleness class
+  // keys off. Additive, looseObject → no CASSETTE_VERSION bump. Readers that don't know it ignore it, and
+  // its ABSENCE positively means "recorded before 1.11.0" (never backfill it).
+  environment?: { location: "local" | "cloud"; tier?: string; agentBinaryFormat?: string; harnessVersion?: string };
 }
 
 /** Current cassette format version. Readers tolerate a FUTURE version (warn) but REFUSE anything below
@@ -810,11 +826,20 @@ function explainSkillHash(sessionPath: string, cassetteDir: string | undefined, 
 /** Debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
  *  to stderr (flagging OS-junk) plus whether the algorithm-independent contentSig also drifted. When the flag
  *  is OFF, write a one-line hint so the affordance is discoverable. Diagnostics only — never affects the gate. */
+/** The discoverability hint is a CONSTANT string, so repeating it once per drifting cassette is pure
+ *  noise (a 16-cassette fleet replay printed it 16x). Once per process is the whole affordance. Only the
+ *  HINT is suppressed — the `=1` dump below stays per-cassette, since per-cassette drift attribution is
+ *  the entire point of the flag. */
+let skillHashHintShown = false;
+
 function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fingerprint, live: Fingerprint): void {
   if (process.env[DEBUG_SKILLHASH_ENV] !== "1") {
-    process.stderr.write(
-      `cowork-harness: skill-hash: set ${DEBUG_SKILLHASH_ENV}=1 to list the files feeding the hash (find the drift source)\n`,
-    );
+    if (!skillHashHintShown) {
+      skillHashHintShown = true;
+      process.stderr.write(
+        `cowork-harness: skill-hash: set ${DEBUG_SKILLHASH_ENV}=1 to list the files feeding the hash (find the drift source)\n`,
+      );
+    }
     return;
   }
   const scope = cassette.scenario.skills?.length ? cassette.scenario.skills.join(", ") : "whole-tree";
@@ -1011,11 +1036,70 @@ export function promptAssetStaleness(
  *  The tier check runs BEFORE the fingerprint guard on purpose: it needs only the embedded scenario +
  *  `effectiveFidelity`, and the oldest cassettes (no fingerprint, no effectiveFidelity, `fidelity: cowork`)
  *  must NOT get a silent legacy-skip. No fingerprint → no further (fingerprint-based) checks. */
+/** Tiers whose cowork lane declares the skills/plugins SDK-MCP discovery servers (added 1.10.0).
+ *  `cowork` is deliberately ABSENT: execute.ts resolves it to hostloop|container BEFORE the tier is
+ *  stamped, so no recorded tier can ever be "cowork" — listing it would be dead code. It appears only as
+ *  the `!== "cowork"` exclusion on the scenario.fidelity fallback below. */
+const DISCOVERY_TIERS = new Set(["container", "hostloop"]);
+const DISCOVERY_TOOL_RE = /^mcp__(?:skills|plugins)__/;
+
+/** The tool inventory the agent reported in `system/init`, or `undefined` when this cassette does not
+ *  carry one. `undefined` and `[]` are BOTH "no evidence" for the caller — a hand-written fixture has an
+ *  init event with no `tools` key at all (test/evals/files/report-check.cassette.json), and treating that
+ *  as "the tools are missing" would advise re-recording a synthetic fixture. Breaks on the first init
+ *  (it is events[0] in every real cassette); events are JSON strings, so parse per line and skip garbage. */
+function recordedInitTools(cassette: Cassette): string[] | undefined {
+  // `events` is TYPED as required, but partially-constructed cassettes reach computeStaleness from
+  // several callers (checkStaleness in the staleness/agent-scope suites builds one without it), so the
+  // type is a lie at this seam. An absent events array is "no evidence", same as an absent tools key.
+  if (!Array.isArray(cassette.events)) return undefined;
+  for (const line of cassette.events) {
+    let m: { type?: string; subtype?: string; tools?: unknown };
+    try {
+      m = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (m?.type !== "system" || m?.subtype !== "init") continue;
+    return Array.isArray(m.tools) ? (m.tools as unknown[]).filter((t): t is string => typeof t === "string") : undefined;
+  }
+  return undefined;
+}
+
+/** NOTE (never a finding): this cassette froze a tool inventory from before the skills/plugins discovery
+ *  servers existed at its tier. Answers the question a `harnessVersion` field cannot answer retroactively
+ *  ("which of my cassettes predate the discovery surface?") by reading what the agent ACTUALLY reported,
+ *  so it works on cassettes recorded long before this code existed.
+ *  Deliberately silent when: the init inventory is absent/empty (no evidence — see recordedInitTools), the
+ *  tier is microvm/protocol (re-recording there would NEVER produce these tools, so the advice would be a
+ *  dead end), or no tier resolves at all (never guess a tier into an advisory).
+ *  It DOES fire on a pre-1.10.0 container/hostloop cassette whose scenario never mentions the discovery
+ *  tools. That is accepted: the note is accurate, it is a `·` row and not a gate, and it self-clears on
+ *  re-record. Narrowing it by introspecting `assert:` would be gold-plating. */
+function computeDiscoverySurfaceNote(cassette: Cassette): string[] {
+  const tools = recordedInitTools(cassette);
+  if (!tools || tools.length === 0) return []; // no evidence — NOT "the tools are missing"
+  if (tools.some((t) => DISCOVERY_TOOL_RE.test(t))) return [];
+  // Tier, in order of authority. scenario.fidelity is the third source because the OLDEST cassettes (the
+  // ones this note most wants to reach) predate `effectiveFidelity` AND `environment` — the same reason
+  // computeTierStaleness treats a non-cowork authored fidelity as statically knowable.
+  const authored = cassette.scenario.fidelity;
+  const tier = cassette.environment?.tier ?? cassette.effectiveFidelity ?? (authored !== "cowork" ? authored : undefined);
+  if (!tier || !DISCOVERY_TIERS.has(tier)) return [];
+  return [
+    `discovery-surface: recorded before the skills/plugins SDK-MCP discovery servers existed at this tier ` +
+      `(${tier}, added in 1.10.0) — its ${tools.length}-tool init inventory declares no mcp__skills__*/mcp__plugins__*. ` +
+      `Re-record if this scenario asserts on those tools; harmless otherwise.`,
+  ];
+}
+
 export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): { findings: StalenessFinding[]; notes: string[] } {
   const tier = computeTierStaleness(cassette);
   const findings: StalenessFinding[] = [...tier.findings];
-  const notes: string[] = [...tier.notes];
+  const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette)];
   const fp = cassette.fingerprint;
+  // BEFORE the fingerprint guard on purpose — same rationale as the tier check above: fingerprint-less
+  // cassettes are the OLDEST, i.e. exactly the population the discovery-surface note targets.
   if (!fp) return { findings, notes };
   let liveBaselineObj: PlatformBaseline | undefined;
   try {
@@ -2599,9 +2683,8 @@ async function recordScenarioObject(
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
     folderPrefixMap: buildRecordTimeFolderPrefixMap(scenario, recordRoots),
-    // Recording environment provenance — location is always "local" (this harness records only local),
-    // tier is the resolved effective fidelity, agentBinaryFormat is optional (from baseline.agentBinary.format).
-    environment: { location: "local", tier: result.effectiveFidelity, agentBinaryFormat },
+    // Recording environment provenance — see buildEnvironmentProvenance (pure, offline-testable).
+    environment: buildEnvironmentProvenance(result.effectiveFidelity, agentBinaryFormat),
   };
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
