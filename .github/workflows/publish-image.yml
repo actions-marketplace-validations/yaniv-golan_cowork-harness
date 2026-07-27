@@ -60,7 +60,7 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@03c851098f316948386b8ff87f424ddf8c01536e # v3.6.0
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v3.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
