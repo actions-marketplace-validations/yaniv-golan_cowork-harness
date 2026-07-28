@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.13.0
-  tracks-harness: cowork-harness 1.13.0 (baseline desktop-1.24012.9)
+  version: 1.13.1
+  tracks-harness: cowork-harness 1.13.1 (baseline desktop-1.24012.9)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.13.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.13.1` (baseline
 > `desktop-1.24012.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.13.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.13.0" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.13.0"`. **Pin `@>=1.13.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.13.1**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.13.1" <cmd>` (Node ≥ 20), or install once with `npm i -g "cowork-harness@>=1.13.1"`. **Pin `@>=1.13.1`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -63,6 +63,12 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
 - **Regression-test your skill's ANSWER quality** (not just its behavior — does its guidance still lead to
   correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
   profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
+- **"What is WRONG with this skill?"** (a graded critique, not a pass/fail) → `cowork-harness critique
+  <folder> --prompt "<probe>"`. Four model workloads and 10–20 minutes; budget from
+  `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
+  **DO**" — routing, artifact location, narration — use `skill` instead**: no evaluator, a fraction of
+  the cost, and it answers that question directly. Report and evidence-package shapes:
+  `references/critique.md`.
 - **A run failed — or greened and you don't trust it** (the debugging loop) → don't re-run and hope.
   The run already wrote its evidence to a **kept run dir** (`~/.cowork-harness/runs/…`; `--keep` prints
   the path, `trace <run-id>` finds it). **Localize the failure post-hoc** from that evidence:
@@ -71,6 +77,9 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
   the loop 0.32.0's observability is built for; the *Triage* and *Inspecting a run's observability
   output* sections in **Part III — Debug** are the detail (the fuller human-facing map lives in
   [`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md) — repo-only, not shipped with the installed skill).
+  **"Evidence" here means the RUN's own record** — events, trace, transcript. `critique`'s evaluator
+  grades against a different artifact, `critique-evidence-package.txt`, which none of these tools
+  surface; see `references/critique.md`.
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in **Part III — Debug**).
 
@@ -515,7 +524,7 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   `outputTruncated` on a matched tool result). Three separately-shaped rollups, easy to conflate in a
   `jq` recipe: `toolCounts` is a flat `{tool: number}` call-count map, `toolErrors` is
   `{tool: {calls, errors}}`, and `toolDurations` is `{tool: {calls, totalMs, maxMs}}`. (Full per-field
-  semantics: the README's "Observability fields" section — repo-only; `schema/run-result.json` is the
+  semantics: the README's "Observability fields" section — repo-only; [`schema/run-result.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/run-result.json) is the
   machine source.)
 - **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
   **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;

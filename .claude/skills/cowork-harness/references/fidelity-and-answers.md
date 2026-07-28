@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 1.13.0` (baseline `desktop-1.24012.9`).
+Self-contained reference. Tracks `cowork-harness 1.13.1` (baseline `desktop-1.24012.9`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -171,9 +171,11 @@ catch a non-matching regex or a wire-protocol bug before twelve minutes of live 
 cowork-harness decide \
   --question "Which output format do you want?" \
   --option Markdown --option PDF \
-  --answer-policy examples/answer-policies/demo.yaml
+  --answer-policy ./answer-policy.yaml
 # ✓ rule matched: "Which output format do you want?" → "Markdown"
 ```
+
+A ready-made sample to copy: [`examples/answer-policies/demo.yaml`](https://github.com/yaniv-golan/cowork-harness/blob/main/examples/answer-policies/demo.yaml).
 
 It works with `--answer`/`--answer-policy` (reports which rule matched, or exits non-zero if none),
 `--decider-cmd` (shows the exact request + answer), or `--decider-llm` (a live model answers).

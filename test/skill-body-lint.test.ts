@@ -340,3 +340,51 @@ describe.skipIf(!havePython)("scenario.py lint-skill — Cowork host-loop footgu
     expect(r.status).toBe(0);
   });
 });
+
+// Corpus-size proximity to the critique evidence ceiling. Guarding the BEHAVIOUR, not just the
+// constant: a cross-language sync test pins the number, but it stays green with the rule deleted
+// entirely — so without these cases the feature could be gutted and nothing would notice.
+describe.skipIf(!havePython)("lint-skill — corpus vs the critique evidence ceiling", () => {
+  const CEILING = 512 * 1024;
+  /** A skill dir whose SKILL.md + references/big.md total ~`bytes`. */
+  function skillOfSize(bytes: number): string {
+    const d = mkdtempSync(join(tmpdir(), "corpus-lint-"));
+    const head = "# t\n";
+    writeFileSync(join(d, "SKILL.md"), head);
+    mkdirSync(join(d, "references"), { recursive: true });
+    writeFileSync(join(d, "references", "big.md"), "x".repeat(Math.max(0, bytes - head.length)));
+    return d;
+  }
+  const rules = (dir: string): string[] => lintSkill(dir).findings.map((f) => f.rule);
+
+  it("stays silent well under the notice band", () => {
+    expect(rules(skillOfSize(1024))).not.toContain("skill-corpus-near-evidence-ceiling");
+    expect(rules(skillOfSize(1024))).not.toContain("skill-corpus-over-evidence-ceiling");
+  });
+
+  it("emits the INFO notice at 80% of the ceiling", () => {
+    const r = rules(skillOfSize(Math.ceil(CEILING * 0.8)));
+    expect(r).toContain("skill-corpus-near-evidence-ceiling");
+    expect(r).not.toContain("skill-corpus-over-evidence-ceiling");
+  });
+
+  it("stays silent one byte below the notice band", () => {
+    expect(rules(skillOfSize(Math.ceil(CEILING * 0.8) - 1))).not.toContain("skill-corpus-near-evidence-ceiling");
+  });
+
+  it("flips to WARN past the ceiling, and exactly AT the ceiling stays INFO (the packager cuts only above it)", () => {
+    expect(rules(skillOfSize(CEILING))).toContain("skill-corpus-near-evidence-ceiling");
+    const over = rules(skillOfSize(CEILING + 1));
+    expect(over).toContain("skill-corpus-over-evidence-ceiling");
+    expect(over).not.toContain("skill-corpus-near-evidence-ceiling");
+  });
+
+  it("the INFO notice never fails --strict; the WARN does", () => {
+    const near = spawnSync(py, [SCRIPT, "lint-skill", "--strict", join(skillOfSize(Math.ceil(CEILING * 0.8)), "SKILL.md")], {
+      encoding: "utf8",
+    });
+    expect(near.status).toBe(0);
+    const over = spawnSync(py, [SCRIPT, "lint-skill", "--strict", join(skillOfSize(CEILING + 1), "SKILL.md")], { encoding: "utf8" });
+    expect(over.status).toBe(1);
+  });
+});

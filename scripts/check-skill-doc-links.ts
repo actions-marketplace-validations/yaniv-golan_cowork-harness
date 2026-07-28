@@ -1,16 +1,18 @@
-// Guards against a `docs/*.md` pointer inside the shipped skill payload (.claude/skills/**) that
-// resolves nowhere for a PLUGIN-install consumer. A Claude Code plugin cache materializes ONLY
-// `.claude/skills/<name>/**` — `docs/` ships in the npm tarball (see package.json `files`), not the
-// plugin payload — so a bare relative reference like `docs/critique.md` is a dead pointer for every
-// plugin-install user, even though it resolves fine for an npm/tarball install. This cost a real
-// consumer hours (they needed `critique-evidence-package.txt`'s name, documented only in
-// docs/critique.md) and shipped unfixed across two releases before this check existed.
+// Guards against a pointer to a repo directory the shipped skill payload (.claude/skills/**) cannot
+// reach. A Claude Code plugin cache materializes ONLY `.claude/skills/<name>/**`, so a bare relative
+// reference like `docs/critique.md`, `schema/run-result.json` or `examples/answer-policies/demo.yaml`
+// is a dead pointer for every plugin-install user, even where it resolves fine for an npm/tarball
+// install. This cost a real consumer hours (they needed `critique-evidence-package.txt`'s name,
+// documented only in docs/critique.md) and shipped unfixed across two releases before this check
+// existed. See DEAD_ROOTS below for which roots are in scope and, just as importantly, which are not.
 //
 //   npx tsx scripts/check-skill-doc-links.ts
 //
-// Fix for a violation: rewrite the bare `docs/x.md` into a GitHub blob permalink
-// (https://github.com/<owner>/<repo>/blob/main/docs/x.md) so it resolves regardless of install
-// path — see the many examples already in .claude/skills/cowork-harness/SKILL.md and references/.
+// Fix for a violation: rewrite the bare path (`docs/x.md`, `schema/x.json`, `examples/x.yaml`) into a
+// GitHub blob permalink (https://github.com/<owner>/<repo>/blob/main/<path>) so it resolves regardless
+// of install path — see the many examples already in .claude/skills/cowork-harness/SKILL.md and
+// references/. Where the surrounding sentence ALREADY qualifies the pointer as npm-only, append the
+// OPT_OUT_MARKER to that line instead.
 //
 // Scope: git-TRACKED files under .claude/skills/** only. This is deliberately the same boundary a
 // plugin marketplace install and the harness's own `local_plugins` staging use — an untracked file
@@ -24,21 +26,50 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// A full GitHub blob permalink for a docs/*.md file, e.g.
+// Repo roots that exist in the REPO but never in a PLUGIN cache, so a bare relative pointer to one is
+// dead for every plugin-install consumer. Deliberately NOT exhaustive:
+//   scripts/   — the payload ships its own .claude/skills/<name>/scripts/, so the path resolves
+//   cassettes/ — in a recipe this names the READER's directory, not ours
+//   src/, test/ — provenance citations ("the rule lives here"), not "go open this"
+//   baselines/ — its payload occurrences are a glob and a bare directory mention; no filename pattern matches either
+// Nested segments are included: a reference into a SUBDIRECTORY is just as dead as a flat one, and a
+// pattern that only matched the flat form would let the next one through.
+const DEAD_ROOTS = ["docs", "schema", "examples"] as const;
+// LEFT boundary `(?<![\w.-])`: without it `mydocs/x.md` and `xschema/y.json` matched their tails and were
+// reported as violations of paths nobody wrote. `/` is deliberately NOT excluded, so a genuine relative
+// pointer (`./docs/x.md`) is still caught — the residual cost is that an absolute system path containing
+// one of these segments would flag, which does not occur in a skill payload and has the marker as an out.
+// RIGHT boundary `(?![\w])`: without it `docs/x.mdx` matched as `docs/x.md`, so the error told the author
+// to permalink a file that does not exist. Case-insensitive so `schema/x.JSON` cannot slip through.
+const DEAD_PATH_BODY = `(?<![\\w.-])(?:${DEAD_ROOTS.join("|")})/(?:[\\w.-]+/)*[\\w.-]+\\.(?:md|json|ya?ml)(?![\\w])`;
+
+// A full GitHub blob permalink to one of those paths, e.g.
 // `https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md` — this resolves
 // regardless of install path, so any occurrence of it is exempt from the bare-reference check below.
-const PERMALINK_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/blob\/[^\s)]+\/docs\/(?:[\w-]+\/)*[\w-]+\.md/g;
+// ANY absolute URL, not just a github blob permalink. Scoping the exemption to one URL shape meant an
+// equally-resolvable link — a raw.githubusercontent URL, a GitLab `/-/blob/`, a github `/tree/` — was
+// reported as a dead relative pointer, i.e. the checker rejected its own prescribed fix written another
+// way. An absolute URL resolves for every install path, which is the only property this guard cares about.
+const ANY_URL_RE = /https?:\/\/\S+/g;
 
 // A markdown link `[text](permalink)` whose target is one of the permalinks above — stripped as a
-// whole unit FIRST, because the link text itself is often the same bare `docs/x.md` string (e.g.
+// whole unit FIRST, because the link text itself is often the same bare path (e.g.
 // `` [`docs/critique.md`](https://…/docs/critique.md) ``) and must not separately trip the bare check.
-const MD_LINK_TO_DOCS_RE = /\[[^\]\n]*\]\(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/blob\/[^\s)]+\/docs\/(?:[\w-]+\/)*[\w-]+\.md\)/g;
+// `[text](url)` — stripped as a whole unit FIRST, because the link TEXT is often the same bare path
+// (`` [`docs/critique.md`](https://…) ``); stripping only the URL would leave that text to trip the bare
+// check. A link whose target is RELATIVE is deliberately not stripped: `[docs/x.md](./docs/x.md)` is dead
+// for a plugin install in both halves.
+const MD_LINK_TO_URL_RE = /\[[^\]\n]*\]\(https?:\/\/[^\s)]+\)/g;
 
-// A bare/relative reference to a docs/*.md page, anywhere it isn't already covered by a permalink —
+// A bare/relative reference to one of those paths, anywhere it isn't already covered by a permalink —
 // this is the dead pointer for a plugin install.
-// Nested segments included: a reference to a doc in a SUBDIRECTORY of docs/ is just as dead as
-// `docs/critique.md`, and a pattern that only matched the flat form would let the next one through.
-const BARE_DOC_RE = /docs\/(?:[\w-]+\/)*[\w-]+\.md/g;
+const BARE_DEAD_RE = new RegExp(DEAD_PATH_BODY, "gi");
+
+// Explicit, greppable per-line opt-out for a pointer the SAME sentence already qualifies as npm-only
+// (e.g. "published as `schema/verify-cassettes.json` in the npm package"). Mirrors lint-skill's
+// `ignore-next-line` convention: an escape hatch visible in the source, never a silent heuristic over
+// surrounding prose. Line-scoped by design — a file-wide opt-out would hide the next real one.
+const OPT_OUT_MARKER = "<!-- npm-only-ok -->";
 
 export interface Violation {
   file: string;
@@ -55,10 +86,11 @@ export function findViolations(files: Array<{ path: string; content: string }>):
   for (const { path, content } of files) {
     const lines = content.split("\n");
     lines.forEach((lineText, i) => {
+      if (lineText.includes(OPT_OUT_MARKER)) return;
       // Strip whole markdown-link-to-permalink constructs, then any remaining bare permalink (the
       // YAML/Python-comment case, where the URL appears with no surrounding [text](...) brackets).
-      const residual = lineText.replace(MD_LINK_TO_DOCS_RE, "").replace(PERMALINK_RE, "");
-      const matches = residual.match(BARE_DOC_RE);
+      const residual = lineText.replace(MD_LINK_TO_URL_RE, "").replace(ANY_URL_RE, "");
+      const matches = residual.match(BARE_DEAD_RE);
       if (matches) {
         for (const target of matches) violations.push({ file: path, line: i + 1, target });
       }
@@ -82,9 +114,10 @@ export function checkSkillDocLinks(repoRoot: string = REPO_ROOT): { ok: boolean;
   const violations = findViolations(files);
   const errors = violations.map(
     (v) =>
-      `${v.file}:${v.line}: bare reference to "${v.target}" — dead for a plugin install (docs/ ships ` +
-      `only in the npm tarball, not the plugin cache); rewrite to a GitHub blob permalink ` +
-      `(https://github.com/yaniv-golan/cowork-harness/blob/main/${v.target})`,
+      `${v.file}:${v.line}: bare reference to "${v.target}" — dead for a plugin install, which ` +
+      `materializes only .claude/skills/<name>/**; rewrite to a GitHub blob permalink ` +
+      `(https://github.com/yaniv-golan/cowork-harness/blob/main/${v.target}), or append ` +
+      `"${OPT_OUT_MARKER}" to the line if its own sentence already qualifies the pointer as npm-only`,
   );
   return { ok: violations.length === 0, errors, violations };
 }
@@ -92,10 +125,10 @@ export function checkSkillDocLinks(repoRoot: string = REPO_ROOT): { ok: boolean;
 function main(): void {
   const { ok, errors, violations } = checkSkillDocLinks();
   if (ok) {
-    process.stdout.write("✓ no dangling docs/*.md references under .claude/skills/**\n");
+    process.stdout.write(`✓ no dangling ${DEAD_ROOTS.join("/")}/ references under .claude/skills/**\n`);
     return;
   }
-  process.stdout.write(`found ${violations.length} dangling docs/*.md reference(s):\n`);
+  process.stdout.write(`found ${violations.length} dangling repo-path reference(s):\n`);
   for (const e of errors) process.stderr.write(`::error::${e}\n`);
   process.exitCode = 1;
 }

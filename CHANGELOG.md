@@ -6,6 +6,68 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.13.1] — 2026-07-28
+
+### Fixed
+
+- **A misplaced global flag written as `--dotenv=<path>` / `--run-dir=<path>` keeps its exact-fix hint.**
+  The pre-dispatch guard matches the spaced form by exact token — deliberately, so a per-command value
+  like `--answer "--dotenv=x=foo"` is never hijacked — which left the equals form to surface as a bare
+  `unknown flag`, dropping the one thing the caller needed: where to put it instead. The hint is derived
+  where usage errors are rendered, and `run` additionally rejects a stray global ahead of its scenario
+  path — that ordering previously absorbed the flag as the target and reported the user's *correct* path
+  as the unexpected argument. The trigger is anchored on the two message shapes that mean "parsed as an
+  unrecognized flag": a broader match fires on errors about a *correctly-placed* leading flag
+  (`--dotenv file not found`, `--dotenv requires a path`) and on a flag name inside a quoted value,
+  telling the user to move a flag that is already in the right place.
+
+  Coverage is most of the CLI, not all of it. A command that never reaches that rendering point
+  (`critique`, `chat`, `prune`, `migrate-run-dir`) or whose usage message is shaped differently (`vm`, a
+  bare `assertions`, and `lint`/`lint-skill`, which forward the token to Python argparse) keeps its own
+  bare `unknown flag` message.
+
+- **The shipped-skill pointer guard covers `schema/` and `examples/`, not `docs/` alone.** A plugin
+  install materializes only `.claude/skills/<name>/**`, so a bare pointer to any other repo directory
+  dangles the same way — including the one naming the machine-readable schema a consumer needs to read
+  field semantics. Four live pointers rewritten to permalinks or made runnable. `scripts/`, `cassettes/`
+  and `src/` stay out of scope: the first resolves inside the payload, the second names the reader's own
+  directory in a recipe, the third is provenance. A line whose sentence already qualifies a pointer as
+  npm-only opts out with an explicit `<!-- npm-only-ok -->` marker.
+
+- **Pointer-guard and hint boundary cases.** The guard matched a path segment that was only the tail of
+  a longer word (`mydocs/x.md`), reported a wrong target for an extension outside its set (`docs/x.mdx`
+  as `docs/x.md`), missed an upper-case extension, and rejected any absolute URL that was not a GitHub
+  *blob* permalink — so an equally-resolvable `raw.githubusercontent` / GitLab / GitHub-`tree` link was
+  reported as a dead relative pointer, the checker refusing its own prescribed fix written another way.
+  The opt-out marker's whole-line scope is a deliberate trade-off and is now pinned by a test. Separately,
+  `.` is no longer a token terminator in the misplaced-flag match: a typo'd filename (`--dotenv.yaml`) was
+  read as the flag and answered with "move it before the subcommand".
+
+### Added
+
+- **`lint-skill` flags a skill corpus at or over the 512 KiB critique evidence ceiling** —
+  `skill-corpus-near-evidence-ceiling` (INFO, ≥ 80%) and `skill-corpus-over-evidence-ceiling` (WARN), so
+  the fact is free and static instead of costing a paid critique. The figure approximates the packager's
+  corpus — it excludes `agents/<skill>.md` and does not apply the tracked-set filter — which the finding
+  text states; `corpusCuts` in the report remains the authority. **CI note:** the over-ceiling finding is a
+  WARN, so a `lint-skill --strict` job that was green can now fail — which is the point, since that corpus
+  is one a critique would cut before grading.
+
+### Documentation
+
+- **`critique` is in the skill's orientation router, with the routing rule.** "What does this skill do"
+  is a `skill` question; "what is wrong with this skill" is a `critique` question, and the second costs
+  four model workloads. The router listed five entry points and `critique` was not among them.
+  Reported by a consumer.
+
+- **`referencesRead` is main-agent-only, stated inside the plugin payload.** Sub-agent Reads live under
+  `subagents[].referencesRead`, so an empty top-level list on a dispatcher-style skill is not evidence
+  the material went unread; the critique report's `noSkillFilesRead` unions both. Reported by a consumer.
+
+- **The run's own evidence and the critique evidence package are distinguished at the router and on the
+  debugging page**, not only mid-document — the first place a reader meets the word, rather than the
+  third. Reported by a consumer.
+
 ## [1.13.0] — 2026-07-28
 
 **Upgrade notes.**

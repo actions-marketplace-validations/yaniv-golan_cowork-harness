@@ -1,6 +1,6 @@
 # Critique — the facts a plugin install can't otherwise reach
 
-Tracks `cowork-harness 1.13.0` (baseline `desktop-1.24012.9`). This is **not** a trim of the full
+Tracks `cowork-harness 1.13.1` (baseline `desktop-1.24012.9`). This is **not** a trim of the full
 [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only —
 flags, cost, reproduction discipline, known limitations all live there). This file covers exactly what a
 plugin install cannot otherwise discover: the run-dir artifact a harvester actually reads, the report's
@@ -51,6 +51,12 @@ named file and byte counts are reported, never silent, never refused. The **tran
 separately at **128 KiB**, cut **head+tail with an elided middle**, so a run's setup and its conclusion
 both survive a cut instead of just one end.
 
+You do not need a paid run to find out where you stand: **`cowork-harness lint-skill <skill-dir>` sizes
+`SKILL.md` + `references/**` against the same ceiling**, reporting `skill-corpus-near-evidence-ceiling`
+(INFO) from 80% and `skill-corpus-over-evidence-ceiling` (WARN, so it fails `--strict`) past it. That
+figure approximates — it excludes `agents/<skill>.md` and does not apply the git-tracked filter — so
+`corpusCuts` below stays the authority.
+
 The report's `evidenceBudget` object says exactly what was shown — read it instead of inferring budgets
 from `dist/` source:
 
@@ -70,3 +76,17 @@ file under the skill folder was never in the agent's mount, so grading against i
 false `already-covered` verdict. It is named in `corpusExcluded` instead, and an untracked `SKILL.md`
 specifically reports `skillMdStatus: "untracked"`, forcing the mechanical `already-covered` →
 `not-adjudicable` downgrade. `git add` it (or commit before critiquing) if it should count as evidence.
+
+## `referencesRead` is main-agent-only — `noSkillFilesRead` is not
+
+`result.json`'s top-level `referencesRead` lists **main-agent Reads only**. A dispatcher-style skill does
+its reading one level down, and those Reads live under `subagents[].referencesRead` — so an empty
+top-level list on a sub-agent-heavy run is not evidence the material went unread. The critique report's
+**`noSkillFilesRead`** unions both, which is why it is the signal to read.
+
+It is stated **observationally** and must be rendered that way: the predicate matches `references/` and
+`scripts/` only — never `assets/`, never `SKILL.md` (delivered whole, never Read as a file) — and keys on
+the `Read` **tool**. A skill that reached its material with `Grep`, or kept it under `assets/`, reports
+`true` having demonstrably done the work. `undefined` has **two** causes and neither means "nothing was read": a degraded turn-1 result
+(genuinely unknown), or a skill that ships no `references/` and no `scripts/` at all — there is nothing
+for the signal to be about, so emitting it would be noise about material that does not exist.

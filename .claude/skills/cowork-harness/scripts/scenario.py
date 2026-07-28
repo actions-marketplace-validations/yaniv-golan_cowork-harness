@@ -1197,6 +1197,60 @@ def _resolve_skill_targets(arg):
     return None, []
 
 
+# Mirrors SKILL_CORPUS_CEILING in the packager (src/critique/package-evidence.ts). A cross-language
+# test pins the two together, so change both or the test fails.
+_EVIDENCE_CORPUS_CEILING = 512 * 1024
+# Warn well before the valve: a corpus this close is one reference file away from being cut mid-grade.
+_EVIDENCE_CORPUS_NOTICE_RATIO = 0.8
+
+
+def _lint_skill_corpus_size(md_path):
+    """Total skill-authored bytes (SKILL.md + references/**) against the critique evidence ceiling.
+
+    APPROXIMATE by design. The packager's corpus is SKILL.md + references/** + agents/<skill>.md
+    COMBINED and is git-tracked-filtered; this sums SKILL.md + references/** from a raw stat, so it
+    under-measures a plugin with a large agents/<name>.md and over-measures untracked reference files.
+    Close enough for a proximity warning, and it makes the fact free instead of costing a paid critique;
+    the report's corpusCuts remains the authority."""
+    skill_dir = Path(md_path).parent
+    total = 0
+    files = [Path(md_path)]
+    refs = skill_dir / "references"
+    if refs.is_dir():
+        files.extend(p for p in sorted(refs.rglob("*")) if p.is_file())
+    for p in files:
+        try:
+            total += p.stat().st_size
+        except OSError:
+            continue  # unreadable file: same posture as the packager's per-file degrade
+    pct = total * 100.0 / _EVIDENCE_CORPUS_CEILING
+    if total > _EVIDENCE_CORPUS_CEILING:
+        return [
+            Finding(
+                "WARN",
+                "skill-corpus-over-evidence-ceiling",
+                f"skill content is {total:,} B ({pct:.0f}% of the {_EVIDENCE_CORPUS_CEILING:,} B critique "
+                f"evidence ceiling) — a critique will cut it before grading.",
+                "Split or trim the largest references/ files. This count excludes agents/<skill>.md, "
+                "which the ceiling also covers, so the real figure may be higher — the critique "
+                "report's corpusCuts names exactly which files lose bytes.",
+                str(skill_dir),
+            )
+        ]
+    if total >= _EVIDENCE_CORPUS_CEILING * _EVIDENCE_CORPUS_NOTICE_RATIO:
+        return [
+            Finding(
+                "INFO",
+                "skill-corpus-near-evidence-ceiling",
+                f"skill content is {total:,} B ({pct:.0f}% of the {_EVIDENCE_CORPUS_CEILING:,} B critique "
+                f"evidence ceiling).",
+                "No action needed yet; adding a large reference file would push a critique into cutting content.",
+                str(skill_dir),
+            )
+        ]
+    return []
+
+
 def cmd_lint_skill(args):
     all_findings = []
     n_files = 0
@@ -1218,6 +1272,7 @@ def cmd_lint_skill(args):
             md_lines = Path(md).read_text(encoding="utf-8").splitlines()
             all_findings.extend(_lint_skill_text(md, md_lines))
             all_findings.extend(_lint_subagent_types(md, md_lines))
+            all_findings.extend(_lint_skill_corpus_size(md))
         for hp in hooks:
             n_files += 1
             all_findings.extend(

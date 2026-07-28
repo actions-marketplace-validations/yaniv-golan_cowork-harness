@@ -257,6 +257,11 @@ describe.skipIf(!can)("global-flag position hint", () => {
     ["run", ["run", "x.yaml", "--dotenv", "/tmp/x.env"]],
     ["assertions (--run-dir)", ["assertions", "--list", "--run-dir", "/tmp/r"]],
     ["decide", ["decide", "--decider-llm", "--dotenv", "/tmp/x.env"]],
+    ["doctor (equals form)", ["doctor", "--tier", "protocol", "--dotenv=/tmp/x.env"]],
+    ["stats (equals form)", ["stats", "--dotenv=/tmp/x.env"]],
+    ["run (equals form)", ["run", "x.yaml", "--dotenv=/tmp/x.env"]],
+    ["assertions (--run-dir equals form)", ["assertions", "--list", "--run-dir=/tmp/r"]],
+    ["scaffold (--run-dir equals form)", ["scaffold", "abc", "--run-dir=/tmp/r"]],
   ] as const) {
     it(`${label}: a misplaced --dotenv/--run-dir → exit 2 with the leading-position hint`, () => {
       const d = mkdtempSync(join(tmpdir(), "gf-"));
@@ -274,6 +279,76 @@ describe.skipIf(!can)("global-flag position hint", () => {
     expect(r.code).toBe(2);
     expect(r.out).toMatch(/unknown flag: --bogus/);
     expect(r.out).not.toMatch(/GLOBAL flag/);
+  });
+
+  // critique accepts --dotenv as a legitimate PER-COMMAND flag, so the hint must never fire there —
+  // it would tell a correct invocation to move a flag that is already in the right place.
+  it("critique: a per-command --dotenv gets critique's own error, never the global hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    const r = run(["critique", "some-skill-dir", "--prompt=hi", "--dotenv=/definitely/missing.env"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+  });
+
+  // The pre-dispatch guard already emits this sentence itself; the auto-hint must not append a second copy.
+  it("the spaced form emits the hint exactly once", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    const r = run(["doctor", "--tier", "protocol", "--dotenv", "/tmp/x.env"], d);
+    expect(r.out.match(/GLOBAL flag and must come BEFORE the subcommand/g)).toHaveLength(1);
+  });
+
+  // THE REGRESSION THIS TASK IS MOST LIKELY TO CAUSE. Each of these is an error about a global flag in
+  // its CORRECT leading position; hinting "move it before the subcommand" there is actively wrong.
+  for (const [label, args] of [
+    ["missing file", ["--dotenv", "/definitely/missing.env", "stats"]],
+    ["no path given", ["--dotenv"]],
+    ["path is a command name", ["--dotenv", "run", "stats"]],
+    ["--run-dir no path", ["--run-dir"]],
+  ] as const) {
+    it(`leading-position --dotenv/--run-dir error (${label}) gets NO misplaced-flag hint`, () => {
+      const d = mkdtempSync(join(tmpdir(), "gf-"));
+      const r = run([...args], d);
+      expect(r.code).toBe(2);
+      expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+    });
+  }
+
+  // ORDERING. `run` takes its scenario as args[0], so a stray `--dotenv=` ahead of the path was absorbed
+  // as the target and the user's REAL path was reported as the unexpected argument — the correct token
+  // blamed, and no hint. This is the order a user actually types (flag straight after the subcommand).
+  for (const [label, args] of [
+    ["flag before the scenario path", ["run", "--dotenv=/tmp/x.env", "s.yaml"]],
+    ["flag as the only argument", ["run", "--dotenv=/tmp/x.env"]],
+    ["--run-dir before the path", ["run", "--run-dir=/tmp/r", "s.yaml"]],
+  ] as const) {
+    it(`run: a misplaced global ${label} gets the hint, and never blames the path`, () => {
+      const d = mkdtempSync(join(tmpdir(), "gf-"));
+      writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+      const r = run([...args], d);
+      expect(r.code).toBe(2);
+      expect(r.out).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+      expect(r.out).toMatch(/cowork-harness --(dotenv|run-dir) <path> run/);
+      // the scenario path must NOT be named as the problem
+      expect(r.out).not.toMatch(/unexpected argument\(s\): s\.yaml/);
+      expect(r.out).not.toMatch(/scenario path not found: --/);
+    });
+  }
+
+  // A filename that merely STARTS with the flag name is not the flag.
+  it("a typo'd filename beginning with the flag name gets NO misplaced-flag hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--dotenv.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+  });
+
+  // The flag name inside a quoted VALUE is being reported as a value, not parsed as a flag.
+  it("a flag-looking value containing --dotenv gets NO hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    const r = run(["decide", "--question", "--dotenv=x=foo"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
   });
 
   it("the correct leading form is accepted (doctor honors a global --dotenv before the subcommand)", () => {

@@ -29,6 +29,14 @@ describe("cowork-harness SKILL.md structural tripwire", () => {
     expect(items.length).toBeGreaterThanOrEqual(21);
   });
 
+  it("the orientation router offers critique, and states the skill-vs-critique routing rule", () => {
+    const router = doc.slice(doc.indexOf("## Orient — the three loops"), doc.indexOf("## Part I"));
+    expect(router).toContain("cowork-harness critique");
+    // \s+ not a literal space: the bullet wraps across lines at exactly this phrase.
+    expect(router).toMatch(/what does this skill\s+\*\*DO\*\*/i);
+    expect(router).toMatch(/use `skill`/i);
+  });
+
   it("retains the two-axes assertions model marker", () => {
     expect(doc).toContain("Assertions: two orthogonal axes");
   });
