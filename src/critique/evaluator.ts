@@ -33,11 +33,18 @@ import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEviden
 //     file, past the boundary — exactly the contamination the turn-1 slicing exists to prevent.
 // It also keeps the loop deterministic and unit-testable (stubbed transport, no filesystem) and keeps
 // pass-1 independence clean (a file-reading pass 1 could read the self-report off disk and defeat it).
-// The accepted PRICE is truncation-blindness (package-evidence.ts's byte caps can cut a long transcript or
-// SKILL.md, so absence from the package is not proof of absence in the run) — mitigated, not eliminated, by
-// the truncation caveat below. If truncation proves costly, the natural next step is a SANDBOXED read tool
-// over the turn-1 slice ONLY, which must rebuild the two guarantees above to stay sound — do not simply
-// hand the evaluator the raw run dir.
+// The accepted PRICE is truncation-blindness: absence from the package is not proof of absence in the run,
+// mitigated (not eliminated) by the truncation caveat below. That price is now much smaller than it was —
+// skill-authored content ships WHOLE, so the only routine cut is the transcript's head+tail elision; a
+// skill large enough to hit the corpus ceiling is cut loudly and by name.
+//
+// A SANDBOXED read tool over the turn-1 slice was evaluated as the escape hatch and REJECTED: it solves
+// truncation-blindness, which whole-corpus packaging already solves, while costing model-chosen and
+// therefore run-VARIABLE evidence (two critiques of one skill would grade against different corpora,
+// destroying the cross-fix comparison this instrument exists for), multi-turn cost unpredictability, a
+// tool-result injection surface, and the stubbed-transport unit tests. It is the right hatch only for a
+// corpus that genuinely cannot fit in context — which is what the ceiling exists to detect. Do not reach
+// for it because a transcript was elided.
 
 /** The evaluator model. A concrete/dated id, like the semantic judge's `DEFAULT_JUDGE_MODEL` — a floating
  *  alias would make "which model produced this critique" unrecoverable after the fact. Env-overridable;

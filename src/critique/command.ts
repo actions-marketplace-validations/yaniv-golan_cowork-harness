@@ -98,7 +98,7 @@ Files and sources (forwarded to the graded run — REQUIRED for "analyze this do
 
 Graded-run tuning (shapes the run being graded):
   --model <id>              session model for the agent doing the work AND reflecting
-  --timeout <ms>            wall-clock budget for the task turn
+  --timeout <ms>            wall-clock budget for the task turn (default 30 min)
   --label <tag>             generation tag in the run index (pair critiques across fixes)
   --allow-missing-capability   don't fail EITHER turn on a lean-image capability gap (both turns)
   --answer "<q-regex>=<choice>" | --answer-policy <yaml>   pre-answer the skill's gates (repeatable)
@@ -707,8 +707,9 @@ export function validateReflectionTurn(
 export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
   if (task.timedOut)
     return (
-      "task turn timed out and was killed before it could complete — pass --timeout <ms> to raise the " +
-      "task-turn wall-clock budget (high-fan-out skills routinely need more than the 10-minute default)"
+      "task turn timed out and was killed before it could complete — raise the wall-clock budget with " +
+      "--timeout <ms> (default 30 min). The turn is killed AFTER its model spend, so this run cost you the " +
+      "graded turn and produced no critique"
     );
   if (task.truncated) return "task turn's output exceeded the byte cap and was killed";
   // A task that exited NONZERO without ever printing a parseable result envelope (a `results[0]` with an
