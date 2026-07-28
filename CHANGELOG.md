@@ -34,13 +34,24 @@ All notable changes to this project are documented here. The format is based on
   directory in a recipe, the third is provenance. A line whose sentence already qualifies a pointer as
   npm-only opts out with an explicit `<!-- npm-only-ok -->` marker.
 
+- **Pointer-guard and hint boundary cases.** The guard matched a path segment that was only the tail of
+  a longer word (`mydocs/x.md`), reported a wrong target for an extension outside its set (`docs/x.mdx`
+  as `docs/x.md`), missed an upper-case extension, and rejected any absolute URL that was not a GitHub
+  *blob* permalink — so an equally-resolvable `raw.githubusercontent` / GitLab / GitHub-`tree` link was
+  reported as a dead relative pointer, the checker refusing its own prescribed fix written another way.
+  The opt-out marker's whole-line scope is a deliberate trade-off and is now pinned by a test. Separately,
+  `.` is no longer a token terminator in the misplaced-flag match: a typo'd filename (`--dotenv.yaml`) was
+  read as the flag and answered with "move it before the subcommand".
+
 ### Added
 
 - **`lint-skill` flags a skill corpus at or over the 512 KiB critique evidence ceiling** —
   `skill-corpus-near-evidence-ceiling` (INFO, ≥ 80%) and `skill-corpus-over-evidence-ceiling` (WARN), so
   the fact is free and static instead of costing a paid critique. The figure approximates the packager's
   corpus — it excludes `agents/<skill>.md` and does not apply the tracked-set filter — which the finding
-  text states; `corpusCuts` in the report remains the authority.
+  text states; `corpusCuts` in the report remains the authority. **CI note:** the over-ceiling finding is a
+  WARN, so a `lint-skill --strict` job that was green can now fail — which is the point, since that corpus
+  is one a critique would cut before grading.
 
 ### Documentation
 

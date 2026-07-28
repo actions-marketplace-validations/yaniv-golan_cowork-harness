@@ -51,6 +51,12 @@ named file and byte counts are reported, never silent, never refused. The **tran
 separately at **128 KiB**, cut **head+tail with an elided middle**, so a run's setup and its conclusion
 both survive a cut instead of just one end.
 
+You do not need a paid run to find out where you stand: **`cowork-harness lint-skill <skill-dir>` sizes
+`SKILL.md` + `references/**` against the same ceiling**, reporting `skill-corpus-near-evidence-ceiling`
+(INFO) from 80% and `skill-corpus-over-evidence-ceiling` (WARN, so it fails `--strict`) past it. That
+figure approximates — it excludes `agents/<skill>.md` and does not apply the git-tracked filter — so
+`corpusCuts` below stays the authority.
+
 The report's `evidenceBudget` object says exactly what was shown — read it instead of inferring budgets
 from `dist/` source:
 

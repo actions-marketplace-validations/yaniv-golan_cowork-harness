@@ -243,7 +243,11 @@ malformed evaluator items (the surviving findings are then not necessarily the c
 agents md), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
 actually breached), `corpusExcluded` (files present on the host but never delivered to the agent by
 staging — untracked, with git-mode on), and `trimRecord` (any section the overall belt-and-suspenders cap
-shaved). On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
+shaved). `cowork-harness lint-skill <skill-dir>` answers the same proximity question **without a paid
+run** — `skill-corpus-near-evidence-ceiling` (INFO) from 80%, `skill-corpus-over-evidence-ceiling` (WARN,
+so it fails `--strict`) past it — approximating the corpus as `SKILL.md` + `references/**`, without
+`agents/<skill>.md` and without the tracked-set filter, so `corpusCuts` stays the authority.
+On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
 
 **A corpus-ceiling breach has a second, sharper consequence than the not-adjudicable steer: DROPPED
