@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { packageEvidence, SKILL_MD_CAP, TRANSCRIPT_CAP, MAX_PACKAGE_BYTES, TRUNCATION_MARKER } from "../src/critique/package-evidence.js";
+import { packageEvidence, MAX_PACKAGE_BYTES, TRUNCATION_MARKER } from "../src/critique/package-evidence.js";
 import { writeVmPathContextFile } from "../src/run/vm-path-ctx-file.js";
 import type { TurnBoundary } from "../src/critique/evidence.js";
 import type { VmPathContext } from "../src/vm-paths.js";
@@ -187,46 +187,45 @@ describe("Attached inputs evidence section", () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  // Was "the 48KB overall shave loop": at 64/32/128KB budgets the per-section sum is under the overall cap,
-  // so the overall trim is unreachable via packageEvidence. What packageEvidence still guarantees is that an
-  // over-cap SKILL.md is cut to its per-section budget and the whole package stays within MAX_PACKAGE_BYTES.
-  it("an over-cap SKILL.md is cut to its per-section budget and the whole package stays within MAX_PACKAGE_BYTES", () => {
+  // Was "an over-cap SKILL.md is cut to its per-section budget" — that per-section SKILL.md ration no
+  // longer exists. Skill-authored content now ships WHOLE up to the SKILL_CORPUS_CEILING sanity valve (see
+  // package-evidence.ts's doc comment): a large SKILL.md must package UNCUT, not merely "cut to a bigger
+  // number". 200KB is comfortably over the OLD 64KB per-section cap and comfortably under the new 512KB
+  // combined ceiling.
+  it("a large SKILL.md (200KB, well over the OLD 64KB cap) is packaged WHOLE and uncut", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     writeTurn1Fixtures(runDir); // small turn-1 result + transcript, at the paths the packager actually reads
     const skillDir = makeSkillDir();
-    const bigSkillMd = "S".repeat(SKILL_MD_CAP + 5_000); // overflow the SKILL.md per-section budget
+    const bigSkillMd = "# big skill\n" + "S".repeat(200 * 1024);
     writeFileSync(join(skillDir, "SKILL.md"), bigSkillMd);
 
     const { pkg, sections, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
 
     const skillSection = sections.find((s) => s.title.startsWith("SKILL.md"))!;
-    const transcriptSection = sections.find((s) => s.title.startsWith("Transcript"))!;
-    // Marker must be in the SKILL.md section specifically, not just somewhere in the flat pkg — anchors this
-    // test to the fixture actually populating the section it claims to overflow (see writeTurn1Fixtures doc).
-    expect(skillSection.body, "the SKILL.md section itself must be cut").toContain(TRUNCATION_MARKER);
-    // The small transcript fixture must stay well under its own cap, so truncation here is driven ONLY by
-    // the oversized SKILL.md, not incidentally by an also-oversized transcript.
-    expect(Buffer.byteLength(transcriptSection.body, "utf8")).toBeLessThan(TRANSCRIPT_CAP);
-    expect(truncated, "an over-cap SKILL.md must report truncation").toBe(true);
-    expect(pkg).toContain(TRUNCATION_MARKER); // the REAL lowercase marker, not "[TRUNCATED"
+    // The section body must be the FULL text, byte-for-byte — not merely "not truncated" but genuinely whole.
+    expect(skillSection.body, "the full 200KB SKILL.md must survive verbatim").toBe(bigSkillMd);
+    expect(skillSection.body, "a whole-corpus SKILL.md must never carry the truncation marker").not.toContain(TRUNCATION_MARKER);
+    expect(truncated, "a SKILL.md well under the corpus ceiling must not report truncation").toBe(false);
+    expect(pkg).not.toContain(TRUNCATION_MARKER);
     expect(Buffer.byteLength(pkg, "utf8")).toBeLessThanOrEqual(MAX_PACKAGE_BYTES);
 
     rmSync(runDir, { recursive: true, force: true });
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it("a just-under-cap (~63KB) SKILL.md packages untruncated", () => {
+  it("a real-world flagship-sized (~51KB) SKILL.md packages whole and untruncated", () => {
     const runDir = mkdtempSync(join(tmpdir(), "cwh-crit-attach-run-"));
     writeTurn1Fixtures(runDir);
     const skillDir = makeSkillDir();
-    // Just under the new cap; would have blown the old 16KB one. A flagship-sized (~51KB) SKILL.md
-    // now fits with headroom to spare, so this just-under-cap fixture is the stronger regression.
-    const flagship = "S".repeat(SKILL_MD_CAP - 1_000);
+    // ~51KB matches the largest real flagship skill measured — comfortably inside both the old (now
+    // deleted) 64KB per-file cap and the new 512KB combined ceiling; this is the "ordinary skill" case,
+    // distinct from the 200KB stress case above.
+    const flagship = "S".repeat(51 * 1024);
     writeFileSync(join(skillDir, "SKILL.md"), flagship);
 
     const { pkg, truncated } = packageEvidence(runDir, EMPTY_BOUNDARY, skillDir);
 
-    expect(truncated, "a sub-cap SKILL.md must not be reported as truncated").toBe(false);
+    expect(truncated, "a flagship-sized SKILL.md must not be reported as truncated").toBe(false);
     expect(pkg, "no truncation marker anywhere when nothing was cut").not.toContain(TRUNCATION_MARKER);
 
     rmSync(runDir, { recursive: true, force: true });

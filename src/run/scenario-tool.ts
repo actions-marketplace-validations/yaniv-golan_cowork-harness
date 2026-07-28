@@ -1,12 +1,13 @@
-import { existsSync, writeSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { fail, isJsonOutput, jsonError, jsonPayloadEnvelope, parseOutputFormat } from "./envelope.js";
+import { writeAllSync } from "../io.js";
 
-// Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeSync flushes before process.exit on
-// a pipe, where an async process.stdout.write can truncate.
-const out = (s: string) => writeSync(1, s + "\n");
+// Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeAllSync retries EAGAIN and loops on
+// short writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
+const out = (s: string) => writeAllSync(1, s + "\n");
 
 /**
  * Resolve the bundled `scenario.py` (the linter/scaffolder). It is the single readable source of the lint

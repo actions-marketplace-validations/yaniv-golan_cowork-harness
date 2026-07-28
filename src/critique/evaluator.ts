@@ -42,6 +42,44 @@ import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEviden
 /** The evaluator model. A concrete/dated id, like the semantic judge's `DEFAULT_JUDGE_MODEL` — a floating
  *  alias would make "which model produced this critique" unrecoverable after the fact. Env-overridable;
  *  `runCritique`'s `opts.model` overrides per call (the `--evaluator-model` CLI flag feeds that). */
+/** The evaluator model's own doc lives on DEFAULT_EVALUATOR_MODEL below; this is the transport timeout.
+ *  Transport timeout for critique's evaluator passes. The shared default (600s) is sized for a DECIDER
+ *  gate — small prompt, one-line answer. An evaluator pass prefills a large evidence corpus and emits tens
+ *  of thousands of reasoning tokens, and its timeout is a SIGKILL with no retry, so a kill during pass 1
+ *  discards the whole critique AFTER both graded turns were paid for. */
+const EVALUATOR_TIMEOUT_MS = 1_800_000;
+
+/** Nesting depth of in-flight `runCritique` calls that raised the transport timeout, plus the value to put
+ *  back when the last one leaves. A plain save/restore pair is WRONG under concurrency: interleaved calls
+ *  capture each other's in-flight value. */
+let evaluatorTimeoutDepth = 0;
+let evaluatorTimeoutPrior: string | undefined;
+function enterEvaluatorTimeoutScope(): boolean {
+  // DEPTH IS CHECKED FIRST, and that ordering is the whole point. Testing the env first meant a second
+  // concurrent call read the value the FIRST call had just written, concluded "the operator set this",
+  // declined to join the scope, and was then left running at the 600s default the moment the first call
+  // exited and deleted it — reproducing precisely the mid-critique SIGKILL this scope exists to prevent.
+  // Once anyone holds the scope, everyone joins it; only the first caller consults the environment.
+  if (evaluatorTimeoutDepth > 0) {
+    evaluatorTimeoutDepth++;
+    return true;
+  }
+  // A whitespace-only value counts as unset, matching `envPositiveNumber`, so a blank env var gets the
+  // critique floor rather than neither the operator's intent nor ours.
+  if ((process.env.COWORK_HARNESS_LLM_TIMEOUT_MS ?? "").trim() !== "") return false;
+  evaluatorTimeoutPrior = process.env.COWORK_HARNESS_LLM_TIMEOUT_MS;
+  process.env.COWORK_HARNESS_LLM_TIMEOUT_MS = String(EVALUATOR_TIMEOUT_MS);
+  evaluatorTimeoutDepth = 1;
+  return true;
+}
+function exitEvaluatorTimeoutScope(): void {
+  evaluatorTimeoutDepth = Math.max(0, evaluatorTimeoutDepth - 1);
+  if (evaluatorTimeoutDepth > 0) return;
+  if (evaluatorTimeoutPrior === undefined) delete process.env.COWORK_HARNESS_LLM_TIMEOUT_MS;
+  else process.env.COWORK_HARNESS_LLM_TIMEOUT_MS = evaluatorTimeoutPrior;
+  evaluatorTimeoutPrior = undefined;
+}
+
 export const DEFAULT_EVALUATOR_MODEL = process.env.COWORK_HARNESS_EVALUATOR_MODEL || "claude-opus-4-8";
 
 const CLASSIFICATIONS = new Set<CritiqueItem["classification"]>([
@@ -237,7 +275,8 @@ If you have no findings besides the canary item described below, return the cana
 const truncationCaveat = (nonce: string) => `
 
 ## ${headTag(nonce)} IMPORTANT — this evidence package was TRUNCATED to fit a byte budget
-One or more sections above were cut at a "[truncated …]" marker, so this package is INCOMPLETE. Content that
+One or more sections above were cut — at a "[truncated …]" marker, or (for the transcript) with the
+middle removed at a "[middle elided …]" marker — so this package is INCOMPLETE. Content that
 is not visible here may still have occurred in the run — absence from a truncated package is NOT evidence
 that something did not happen. Whenever a finding or a self-report claim turns on evidence you cannot see
 because a section was cut, classify it "not-adjudicable"; do NOT classify it "confabulated" or
@@ -448,6 +487,9 @@ export interface RunCritiqueOptions {
    *  transport didn't supply one — e.g. a test double). Lets the caller tally a TRUE per-critique cost:
    *  the evaluator passes are model workloads too, not just the two graded turns. */
   onUsage?: (pass: 1 | 2, usage: Record<string, unknown> | undefined) => void;
+  /** Fires when pass 1 has completed and pass 2 is about to start — the only phase boundary the caller
+   *  cannot observe from outside, since both passes happen inside one `runCritique` await. */
+  onPass2Start?: () => void;
   /** F35: called ONCE, synchronously, after the resolved model is confirmed (agreeing across every pass
    *  that actually ran) — with the TRANSPORT-RESOLVED model id (e.g. `claude-opus-4-8-20260115`), never the
    *  requested alias (e.g. `"opus"`) `opts.model`/`DEFAULT_EVALUATOR_MODEL` may have been. A callback
@@ -493,56 +535,82 @@ export async function runCritique(
   opts.onArmoredEvidence?.(pkg);
   const model = opts.model ?? DEFAULT_EVALUATOR_MODEL;
   const complete = opts.complete ?? claudeCliComplete;
+  // The shared transport's 600s default is sized for a DECIDER gate: a small prompt and a one-line answer.
+  // An evaluator pass is a different workload — a large evidence corpus to prefill plus tens of thousands of
+  // reasoning tokens — and its timeout is enforced with SIGKILL and NO retry (timeouts are classed
+  // non-transient). A kill after pass 1 discards the whole critique AFTER the task and reflection turns have
+  // already been paid for, which is the most expensive possible failure this tool has. Raise the floor for
+  // critique only, and only when the operator has not set the knob themselves.
+  // Scoped, not permanent: restored in a `finally` below. `runCritique` is exported library API called from
+  // tests and potentially more than once per process, so leaking the raised value would silently apply it to
+  // every later decider gate in the process AND be inherited by child processes. Treat a whitespace-only
+  // value as unset, matching `envPositiveNumber`, so a blank env var gets the critique floor rather than
+  // neither the operator's intent nor ours.
+  // Depth-counted, not per-call save/restore: two INTERLEAVED runCritique calls each captured the other's
+  // in-flight value, so the first to finish reset the env under the second (dropping it back to the 600s
+  // default mid-critique — the exact SIGKILL failure this raise exists to prevent) and the last to finish
+  // restored the RAISED value permanently. Only the outermost call touches the env.
+  const raisedTimeout = enterEvaluatorTimeoutScope();
   const truncated = opts.packageTruncated ?? false;
   const skillMdUnreadable = opts.skillMdUnreadable ?? false;
 
-  // Pass 1 FIRST, and its own await completes before pass 2's prompt is ever constructed — the
-  // self-report is not merely "not mentioned," it does not exist yet in this function's execution when
-  // this call is made.
-  const {
-    text: pass1Raw,
-    model: pass1Model,
-    usage: pass1Usage,
-  } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
-  // Raw reply + usage are handed out BEFORE parsing — a parse throw must not lose either (salvage/cost).
-  opts.onRawReply?.(1, pass1Raw);
-  opts.onUsage?.(1, pass1Usage);
-  // The parse strips the canary itself (pre-canonicalization — see parseCritiqueItems) and drops+counts
-  // malformed items per-item, so nothing here re-filters.
-  const p1 = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)", evidence.nonce);
-  let pass1Items = p1.items;
-  if (skillMdUnreadable) pass1Items = forceSkillMdCoverageNotAdjudicable(pass1Items);
+  try {
+    // Pass 1 FIRST, and its own await completes before pass 2's prompt is ever constructed — the
+    // self-report is not merely "not mentioned," it does not exist yet in this function's execution when
+    // this call is made.
+    const {
+      text: pass1Raw,
+      model: pass1Model,
+      usage: pass1Usage,
+    } = await complete(buildPass1Prompt(evidence, truncated, skillMdUnreadable), model);
+    // Raw reply + usage are handed out BEFORE parsing — a parse throw must not lose either (salvage/cost).
+    opts.onRawReply?.(1, pass1Raw);
+    opts.onUsage?.(1, pass1Usage);
+    // The parse strips the canary itself (pre-canonicalization — see parseCritiqueItems) and drops+counts
+    // malformed items per-item, so nothing here re-filters.
+    const p1 = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)", evidence.nonce);
+    let pass1Items = p1.items;
+    if (skillMdUnreadable) pass1Items = forceSkillMdCoverageNotAdjudicable(pass1Items);
 
-  if (selfReport === undefined) {
-    if (!pass1Model) throw new Error("critique pass 1: transport returned no resolved model (required for provenance)");
+    if (selfReport === undefined) {
+      if (!pass1Model) throw new Error("critique pass 1: transport returned no resolved model (required for provenance)");
+      opts.onResolvedModel?.(pass1Model);
+      opts.onEvaluatorIntegrity?.({ pass1Canary: p1.canaryPresent });
+      opts.onDroppedItems?.({ pass1: p1.droppedMalformed });
+      return validateCitations(pass1Items, pkg);
+    }
+
+    // Fires HERE, not after pass 1's reply: pass 2 is skipped entirely when there is no self-report, and a
+    // parse throw can end the run before it. Announcing "pass 2" in either case told the operator a phase
+    // was starting that never would.
+    opts.onPass2Start?.();
+    const {
+      text: pass2Raw,
+      model: pass2Model,
+      usage: pass2Usage,
+    } = await complete(buildPass2Prompt(evidence, pass1Items, selfReport, truncated, skillMdUnreadable), model);
+    opts.onRawReply?.(2, pass2Raw);
+    opts.onUsage?.(2, pass2Usage);
+    const p2 = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)", evidence.nonce);
+    let pass2Items = p2.items;
+    if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
+
+    if (!pass1Model || !pass2Model)
+      throw new Error(
+        `critique evaluator: transport returned no resolved model (pass1="${pass1Model || ""}", pass2="${pass2Model || ""}")`,
+      );
+    if (pass1Model !== pass2Model)
+      throw new Error(
+        `critique evaluator: pass 1 and pass 2 resolved to DIFFERENT models (${pass1Model} vs ${pass2Model}) — refusing to report a heterogeneous-model critique under one provenance record`,
+      );
     opts.onResolvedModel?.(pass1Model);
-    opts.onEvaluatorIntegrity?.({ pass1Canary: p1.canaryPresent });
-    opts.onDroppedItems?.({ pass1: p1.droppedMalformed });
-    return validateCitations(pass1Items, pkg);
+    opts.onEvaluatorIntegrity?.({ pass1Canary: p1.canaryPresent, pass2Canary: p2.canaryPresent });
+    opts.onDroppedItems?.({ pass1: p1.droppedMalformed, pass2: p2.droppedMalformed });
+
+    return validateCitations([...pass1Items, ...pass2Items], pkg);
+  } finally {
+    if (raisedTimeout) exitEvaluatorTimeoutScope();
   }
-
-  const {
-    text: pass2Raw,
-    model: pass2Model,
-    usage: pass2Usage,
-  } = await complete(buildPass2Prompt(evidence, pass1Items, selfReport, truncated, skillMdUnreadable), model);
-  opts.onRawReply?.(2, pass2Raw);
-  opts.onUsage?.(2, pass2Usage);
-  const p2 = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)", evidence.nonce);
-  let pass2Items = p2.items;
-  if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
-
-  if (!pass1Model || !pass2Model)
-    throw new Error(`critique evaluator: transport returned no resolved model (pass1="${pass1Model || ""}", pass2="${pass2Model || ""}")`);
-  if (pass1Model !== pass2Model)
-    throw new Error(
-      `critique evaluator: pass 1 and pass 2 resolved to DIFFERENT models (${pass1Model} vs ${pass2Model}) — refusing to report a heterogeneous-model critique under one provenance record`,
-    );
-  opts.onResolvedModel?.(pass1Model);
-  opts.onEvaluatorIntegrity?.({ pass1Canary: p1.canaryPresent, pass2Canary: p2.canaryPresent });
-  opts.onDroppedItems?.({ pass1: p1.droppedMalformed, pass2: p2.droppedMalformed });
-
-  return validateCitations([...pass1Items, ...pass2Items], pkg);
 }
 
 /** F31: mechanically force-downgrade every `"already-covered"` item to `"not-adjudicable"` (clearing its

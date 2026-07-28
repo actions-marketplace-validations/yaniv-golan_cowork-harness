@@ -1,13 +1,15 @@
-import { readFileSync, writeSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
 import { rollupPasses, type RepeatRollup } from "./repeat.js";
 import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
 import { deriveOutcome } from "./outcome.js";
+import { writeAllSync } from "../io.js";
 
-// Synchronous fd writes (match cli.ts / doctor.ts). writeSync flushes before process.exit on a pipe.
-const out = (s: string) => writeSync(1, s + "\n");
-const log = (s: string) => writeSync(2, s + "\n");
+// Synchronous fd writes (match cli.ts / doctor.ts). writeAllSync retries EAGAIN and loops on short
+// writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
+const out = (s: string) => writeAllSync(1, s + "\n");
+const log = (s: string) => writeAllSync(2, s + "\n");
 
 /** Package version (for the json envelope + `--version`). Resolved package-relative. */
 export function pkgVersion(): string {

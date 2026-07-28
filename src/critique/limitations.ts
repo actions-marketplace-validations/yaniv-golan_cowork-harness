@@ -92,14 +92,15 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     docsAnchor: "cowork tier is refused",
   },
   {
-    id: "skill-md-size-cap",
+    id: "skill-corpus-ceiling",
     summary:
-      'SKILL.md is capped at 64KB in the evidence — an oversized one is truncated but still graded; only a missing/unreadable one forces "not adjudicable"',
+      "skill-authored content (SKILL.md, references/** and agents/<skill>.md) ships WHOLE up to a 512 KiB combined corpus ceiling; the transcript is bounded separately at 128 KiB with a head+tail cut and an elided middle",
     provenance: {
       kind: "deliberate",
-      rationale: "the evidence package is bounded so the evaluator sees a whole record rather than a truncated tail",
+      rationale:
+        "the evaluator's corpus must be closed, frozen and deterministic, never merely small — so skill content is no longer rationed by per-section byte caps; the ceiling is a sanity valve (~2.3x the largest skill measured) that cuts loudly, naming the file and bytes, rather than refusing the run, and a claim about content that fell outside a cut section is routed to not-adjudicable, never treated as evidence the thing didn't happen",
     },
-    docsAnchor: "capped at 64KB",
+    docsAnchor: "512 KiB combined corpus ceiling",
   },
   {
     id: "english-only",

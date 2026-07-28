@@ -6,6 +6,78 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+**Upgrade notes.**
+
+- **`critique` grades are not comparable across this release.** The evaluator now sees materially more of
+  your skill, so a finding count before and after is not a like-for-like measurement. Re-baseline rather
+  than diffing across the boundary.
+- **`skillMdTruncated` is gone from `critique-report.json`**, replaced by `evidenceBudget`
+  (`corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `trimRecord`). A harvester reading
+  the old boolean should read `evidenceBudget.corpusCuts` instead — it is empty on every real skill.
+- **An untracked skill file is no longer graded.** If you critique a skill with uncommitted
+  `references/**` files, they are now excluded from the evidence (they were never in the agent's mount)
+  and named in `evidenceBudget.corpusExcluded` plus a `::warning::`. This covers `SKILL.md`,
+  `references/**` and `agents/<skill>.md`. `git add` them to grade as-published. An untracked `SKILL.md` previously
+  had its content **graded** (the packager read the host directory raw); it now reports
+  `skillMdStatus: "untracked"`, withholds the content, and forces the same `not-adjudicable` downgrade as
+  an unreadable one.
+
+### Fixed
+
+- **`critique` graded skills against a fraction of their own references.** The evidence package shared one
+  8 KiB budget across ALL `references/**` files, filled in filename-sort order — so the alphabetically
+  first file took what it needed and every later file was dropped whole. Measured across nine real runs on
+  a six-skill plugin: the same first file was the sole survivor in 9 of 9, and **11 of 13 distinct
+  reference files had never reached an evaluator in any run**, including a scoring rubric a sub-agent had
+  opened in order to do the scoring. Skill-authored content (SKILL.md, every `references/**` file,
+  `agents/<skill>.md`) now ships **whole**. Reported by a consumer.
+- **The evidence corpus could contain files the agent never received.** Staging delivers git-tracked files
+  only, but the packager read the host directory directly — so an uncommitted reference was absent from
+  the mount and present in the evaluator's evidence. An agent saying "the skill never explains X" could be
+  marked `already-covered` against a file it was never given. The packager now applies staging's own
+  tracked-set filter and reports what it excluded.
+- **`references/**` traversal was neither recursive nor symlink-aware**, so nested and symlinked reference
+  files were dropped silently, with no omission marker.
+- **The overall package trim did not converge.** It shaved a section by exactly the overflow and then
+  appended a truncation marker, leaving the package marker-length over; it then shaved the next section by
+  that amount and re-added the same marker, cascading through every section and exiting still over cap
+  with the whole document mangled. It remains a belt-and-suspenders path that should never fire — the
+  per-section budgets still sum under the cap, now pinned by a test — which is exactly why it had to be
+  correct: nothing exercises it until something else has already gone wrong.
+- **The overall trim destroyed the run record first.** It shaved from the last section backwards, which is
+  the transcript — so a breach caused by oversized *skill* content was paid for by deleting *run*
+  evidence. Trim priority is now explicit and independent of render order.
+- **`writeSync` short writes and `EAGAIN` were unhandled at every stdout/stderr sink.** `verify-cassettes … | tail`
+  died with `EAGAIN` instead of printing its verdict, and a short write on a pipe silently dropped the
+  remainder of a JSON envelope. Every `writeSync` output site in `src/` now goes through `writeAllSync`, including critique's own JSON report — the largest single payload the tool emits, and the one its own code comment already flagged as at risk when piped to `jq`. (Sites already using async `process.stderr.write`, and two dev-only sinks under `scripts/`, are unchanged — the failure was specific to the synchronous idiom.)
+
+### Added
+
+- **`critique` reports progress.** Four `::notice::` lines on stderr at the phase boundaries (task turn →
+  reflection turn → evaluator pass 1 → evaluator pass 2). Previously four model calls over 10–20 minutes
+  produced no output at all until the finished report appeared, so a working run and a hung one were
+  indistinguishable. stdout remains the machine channel.
+- **`evidenceBudget` in `critique-report.json`** — what the evaluator was actually shown, so the budgets
+  are discoverable without reading compiled source. Includes `packageTruncated`, which is what carries the
+  transcript's head+tail elision: that elision is what adds the evaluator's truncation caveat, and without
+  the flag an elided package was indistinguishable from a clean one (`corpusCuts` is empty in that case and
+  would otherwise imply nothing had been cut).
+- **A no-reads signal** (`noSkillFilesRead`). When the graded turn Read no `references/` or `scripts/`
+  file at all — neither the main agent nor any sub-agent — the report says so. Worded observationally on
+  purpose: the underlying predicate counts the `Read` tool only, so `Grep` or `assets/` use produces an
+  empty set having demonstrably reached the material, and calling that "progressive disclosure never
+  fired" would be a false accusation about someone's skill.
+
+### Changed
+
+- **The overall evidence-package cap is 144 KiB → 768 KiB** (`critique --help` reports it). It stays a
+  belt-and-suspenders bound: the per-section budgets deliberately sum under it, pinned by a test.
+- **The transcript bound is 32 KiB → 128 KiB and now keeps head *and* tail** with an elided middle.
+  A tail-only cut is the worst shape for a procedural skill, which puts its workflow steps last.
+- **`critique`'s evaluator passes get a 30-minute transport timeout** (was the decider's 600 s default).
+  That timeout is enforced with SIGKILL and no retry, so a kill during pass 1 discarded the whole critique
+  *after* the graded turns had already been paid for.
+
 ## [1.12.0] — 2026-07-25
 
 **Upgrade notes.**

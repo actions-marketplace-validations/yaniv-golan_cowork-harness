@@ -17,10 +17,9 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
-import { tildeify } from "../io.js";
+import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { writeSync } from "node:fs";
 import { basename, join } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import type { SkillMdStatus } from "./package-evidence.js";
@@ -371,7 +370,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 export function resolveCritiquedSkillDir(
   skillFolder: string,
   skillSelector: string | undefined,
-): { skillDir: string; agentsMdPath?: string; autoSelectedSkill?: string } {
+): { skillDir: string; agentsMdPath?: string; agentsMdRoot?: string; agentsMdRel?: string; autoSelectedSkill?: string } {
   // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
   // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
   // This lives here (not in parseArgs) on purpose: parseArgs is unit-tested with fictitious paths, whereas
@@ -389,6 +388,10 @@ export function resolveCritiquedSkillDir(
     const p = join(skillFolder, "agents", `${name}.md`);
     return existsSync(p) ? p : undefined;
   };
+  // The agents md is tracked relative to the PLUGIN ROOT, not to skillDir (it lives at
+  // <root>/agents/<name>.md while skillDir is <root>/skills/<name>), so the packager needs both to check
+  // it against the same tracked set staging used.
+  const agentsMdKeys = (name: string) => ({ agentsMdRoot: skillFolder, agentsMdRel: `agents/${name}.md` });
   const listPluginSkills = (): string[] => {
     try {
       return readdirSync(join(skillFolder, "skills"), { withFileTypes: true })
@@ -408,12 +411,17 @@ export function resolveCritiquedSkillDir(
           (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
       );
     }
-    return { skillDir: candidate, agentsMdPath: agentsMdFor(skillSelector) };
+    return { skillDir: candidate, agentsMdPath: agentsMdFor(skillSelector), ...agentsMdKeys(skillSelector) };
   }
   if (existsSync(join(skillFolder, "SKILL.md"))) return { skillDir: skillFolder }; // plain skill folder
   const skills = listPluginSkills();
   if (skills.length === 1)
-    return { skillDir: join(skillFolder, "skills", skills[0]!), agentsMdPath: agentsMdFor(skills[0]!), autoSelectedSkill: skills[0]! };
+    return {
+      skillDir: join(skillFolder, "skills", skills[0]!),
+      agentsMdPath: agentsMdFor(skills[0]!),
+      ...agentsMdKeys(skills[0]!),
+      autoSelectedSkill: skills[0]!,
+    };
   if (skills.length > 1)
     throw new Error(
       `${tildeify(skillFolder)} is a multi-skill plugin root (no root SKILL.md; skills: ${skills.join(", ")}) — ` +
@@ -828,11 +836,26 @@ interface ReportState {
    *  source; a non-`"readable"` value means presence/coverage classification was refused (see
    *  `runCritique`'s `skillMdUnreadable` option). */
   skillMdStatus?: SkillMdStatus;
-  /** `packageEvidence`'s `skillMdTruncated` — SKILL.md was readable but larger than its cap, so the
-   *  graded copy is CUT (no mechanical downgrade; the truncation caveat prompts claims past the cut
-   *  toward "not adjudicable"). Surfaced so a truncated-source critique is never mistaken for one over
-   *  the whole skill text. */
-  skillMdTruncated?: boolean;
+  /** Evidence-budget accounting. Skill-authored content (SKILL.md + references + agents md) ships WHOLE;
+   *  these fields exist so the consumer never has to read `dist/` to learn what the evaluator was shown —
+   *  the previous per-file caps were discoverable only by inspecting compiled source, which cost a real
+   *  consumer hours and let 11 of 13 reference files go permanently ungraded without a signal.
+   *
+   *  `corpusCuts` is empty on every real skill (the ceiling is a sanity valve at ~2.3x the largest observed
+   *  skill). `corpusExcluded` names files present on the host that STAGING would not deliver — never in the
+   *  agent's mount, therefore never valid evidence, but the author must be told. `trimRecord` names any
+   *  section the overall belt-and-suspenders trim shaved, replacing a bare boolean that made transcript
+   *  loss undetectable after the fact. */
+  /** See `packageEvidence`'s `noSkillFilesRead`. Rendered as an OBSERVATION, never as a verdict. */
+  noSkillFilesRead?: boolean;
+  evidenceBudget?: {
+    corpusBytes: number;
+    corpusCeiling: number;
+    corpusCuts: Array<{ name: string; keptBytes: number; totalBytes: number; omitted: boolean }>;
+    corpusExcluded: string[];
+    trimRecord: Array<{ section: string; droppedBytes: number }>;
+    packageTruncated: boolean;
+  };
 }
 
 /** critique's verdict is a SELF-RUN graded by a structurally blinded evaluator — a discovery LEAD, NOT an
@@ -922,14 +945,46 @@ export function buildTextReport(state: ReportState): string {
     out.push(
       `  turn-1 transcript slice: DEGRADED (boundary never established, or the append-only prefix it depends on changed/truncated under it)`,
     );
-  if (skillMdStatus && skillMdStatus !== "readable")
-    out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
-  // Truncated is DISTINCT from missing/unreadable: still readable, still graded, no mechanical
-  // downgrade — but the evaluator saw a cut copy, and the consumer must know that.
-  if (state.skillMdTruncated)
+  if (skillMdStatus === "untracked")
     out.push(
-      `  SKILL.md: readable but TRUNCATED at the packaging cap — the evaluator graded a cut copy; claims about content past the cut are steered to "not adjudicable" by the truncation caveat, not mechanically downgraded.`,
+      `  SKILL.md: present on the host but NOT git-tracked, so staging never delivered it — the agent ran without it. Coverage claims are downgraded to "not adjudicable"; 'git add' it to grade as-published`,
     );
+  else if (skillMdStatus && skillMdStatus !== "readable")
+    out.push(`  SKILL.md: ${skillMdStatus} — coverage claims were downgraded to "not adjudicable" because SKILL.md could not be read`);
+  // Evidence budget. Skill content ships whole, so on a normal run this is one reassuring line; the other
+  // branches only fire on a genuinely pathological skill or an untracked-file mistake, and both tell the
+  // author what to DO rather than only what happened.
+  const eb = state.evidenceBudget;
+  if (eb) {
+    out.push(
+      `  evidence corpus: ${eb.corpusBytes.toLocaleString()} B of skill content packaged WHOLE (ceiling ${eb.corpusCeiling.toLocaleString()} B)`,
+    );
+    for (const c of eb.corpusCuts)
+      out.push(
+        c.omitted
+          ? `  corpus OMITTED ${c.name} (${c.totalBytes.toLocaleString()} B) — its share would be below the minimum useful slice; SPLIT this file`
+          : `  corpus CUT ${c.name}: kept ${c.keptBytes.toLocaleString()} of ${c.totalBytes.toLocaleString()} B — the corpus as a whole exceeds the ceiling`,
+      );
+    if (eb.corpusExcluded.length)
+      out.push(
+        `  NOT graded (staging would not deliver them — untracked): ${eb.corpusExcluded.join(", ")} — 'git add' them to grade as-published`,
+      );
+  }
+  if (state.noSkillFilesRead) {
+    out.push(
+      `  no references/ or scripts/ file was Read during the graded turn (main agent or sub-agents) — note this counts the Read tool only, so Grep or assets/ use would not appear here`,
+    );
+  }
+  if (eb) {
+    for (const t of eb.trimRecord) out.push(`  overall-cap trim shaved ${t.droppedBytes.toLocaleString()} B from "${t.section}"`);
+    // Most often the transcript's head+tail elision — and in that common case `corpusCuts` and `trimRecord`
+    // are BOTH empty, so without this line the text report showed only the reassuring "packaged WHOLE" line
+    // and an elided package was indistinguishable from a clean one: exactly the gap this flag was added for.
+    if (eb.packageTruncated && !eb.corpusCuts.length && !eb.trimRecord.length)
+      out.push(
+        `  a bounded section was cut (most likely the transcript's head+tail elision) — claims about content past a cut are steered to "not adjudicable", and a finding quoting past-cut text lands in DROPPED`,
+      );
+  }
   // The dominant real-world cause of a "missing" SKILL.md is pointing critique at a MULTI-SKILL PLUGIN
   // root (skills/<name>/SKILL.md, no root SKILL.md) — name the cause and the fix, not just the symptom.
   if (skillMdStatus === "missing")
@@ -1008,8 +1063,8 @@ export function buildTextReport(state: ReportState): string {
 }
 
 function printTextReport(state: ReportState): void {
-  // writeSync: flush before the hard exit(0) (async stdout truncates a long report on a pipe past ~64KB)
-  writeSync(1, buildTextReport(state) + "\n");
+  // writeAllSync: flush before the hard exit(0) (async stdout truncates a long report on a pipe past ~64KB)
+  writeAllSync(1, buildTextReport(state) + "\n");
 }
 
 /** Pure JSON-report builder (no I/O), mirroring `buildTextReport` — directly unit-testable. F38's typed
@@ -1062,7 +1117,8 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
-    skillMdTruncated: state.skillMdTruncated,
+    evidenceBudget: state.evidenceBudget,
+    noSkillFilesRead: state.noSkillFilesRead,
     verdictProvenance: VERDICT_PROVENANCE,
   };
   if (infraFailure) return { ...base, infraFailure, items: [] };
@@ -1178,6 +1234,13 @@ export function buildTaskTurnArgs(opts: ParsedArgs, sessionId: string): string[]
   ];
 }
 
+/** Phase progress. Four model calls over 10-20 minutes previously produced ZERO output until the whole
+ *  report appeared at once — a working run and a hung one were indistinguishable, and the runs are paid.
+ *  stderr ONLY: stdout is the machine channel (`--output-format json`) and must stay parseable. */
+function progress(step: 1 | 2 | 3 | 4, what: string): void {
+  warn(`::notice:: [critique] ${step}/4 ${what}\n`);
+}
+
 /** Argv for the REFLECTION turn — a resume of the same session.
  *
  *  Only `forwardBoth` is replayed here, and it MUST be: session sources are part of the origin key, so a
@@ -1206,7 +1269,7 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
 
 async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
-    writeSync(1, usage() + "\n");
+    writeAllSync(1, usage() + "\n");
     return;
   }
   let opts: ParsedArgs;
@@ -1243,6 +1306,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // Stretch critique's own kill-switch past a forwarded --timeout: otherwise a longer budget would be
     // killed by the INSTRUMENT and misreported as an infra failure rather than a gradeable timeout. The
     // +60s covers staging and container start — not principled, and a cold image pull can exceed it.
+    progress(1, "task turn (running the skill under test — this is the graded run)");
     const task = await runSkillTurn(
       buildTaskTurnArgs(opts, sessionId),
       opts.taskTimeoutMs ? Math.max(TURN_TIMEOUT_MS, opts.taskTimeoutMs + 60_000) : TURN_TIMEOUT_MS,
@@ -1283,7 +1347,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         requestedModel: opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL,
         infraFailure: taskInfra,
       };
-      if (opts.outputFormat === "json") writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
+      if (opts.outputFormat === "json") writeAllSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
       // Salvage what exists even for a killed task turn: the report itself, structurally on disk.
       persistCritiqueArtifacts(outDir, state, undefined, { rawEvaluatorReplies: [] });
@@ -1350,6 +1414,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // The reflection turn keeps the FIXED default budget deliberately (a forwarded --timeout stretches
     // only the task turn): it is a single Q&A resume with no tool fan-out, so a reflection that needs
     // more than the default is itself an anomaly worth failing loud on, not accommodating.
+    progress(2, "reflection turn (resuming the graded session to collect the agent's self-report)");
     const reflect = await runSkillTurn(buildReflectionTurnArgs(opts, sessionId));
 
     // F37: validate the reflection turn at the PROTOCOL level — exit code, envelope shape, and
@@ -1370,7 +1435,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let turn1ResultDegraded: boolean | undefined;
     let turn1SliceDegraded: boolean | undefined;
     let skillMdStatus: SkillMdStatus | undefined;
-    let skillMdTruncated: boolean | undefined;
+    let evidenceBudget: ReportState["evidenceBudget"];
+    let noSkillFilesRead: boolean | undefined;
     // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
     // BEFORE parsing, so a parse throw cannot lose them) and by the per-turn result reads.
     let evidenceText: string | undefined;
@@ -1410,12 +1476,31 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         turn1ResultDegraded: trd,
         turn1SliceDegraded: tsd,
         skillMdStatus: sms,
-        skillMdTruncated: smt,
-      } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, { agentsMdPath: resolvedSkill.agentsMdPath });
+        corpusBytes: cb,
+        corpusCeiling: cc,
+        corpusCuts: ccuts,
+        corpusExcluded: cex,
+        trimRecord: tr,
+        packageTruncated: pt,
+        noSkillFilesRead: nofr,
+      } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
+        agentsMdPath: resolvedSkill.agentsMdPath,
+        agentsMdRoot: resolvedSkill.agentsMdRoot,
+        agentsMdRel: resolvedSkill.agentsMdRel,
+      });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
-      skillMdTruncated = smt;
+      evidenceBudget = { corpusBytes: cb, corpusCeiling: cc, corpusCuts: ccuts, corpusExcluded: cex, trimRecord: tr, packageTruncated: pt };
+      noSkillFilesRead = nofr;
+      // The agent was never given these, so the evaluator must not be either — but silence would let an
+      // author believe their grade covered a file it never saw.
+      if (cex.length)
+        warn(
+          `::warning:: [critique] ${cex.length} skill file(s) excluded from the evidence because staging would not deliver them ` +
+            `(untracked; real Cowork sees committed files only): ${cex.join(", ")}. 'git add' them to grade as-published.\n`,
+        );
+      progress(3, "evaluator pass 1 (blinded: grades the run record with no sight of the self-report)");
       try {
         items = await runCritique(sections, selfReport, {
           onEvaluatorIntegrity: (i) => {
@@ -1430,6 +1515,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           onRawReply: (pass, raw) => {
             rawEvaluatorReplies.push({ pass, raw });
           },
+          onPass2Start: () => progress(4, "evaluator pass 2 (grades the self-report against pass 1's findings)"),
           onUsage: (pass, usage) => {
             if (pass === 1) evaluatorPass1Usd = sumCostUsd(usage);
             else evaluatorPass2Usd = sumCostUsd(usage);
@@ -1488,11 +1574,12 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
-      skillMdTruncated,
+      evidenceBudget,
+      noSkillFilesRead,
     };
     if (opts.outputFormat === "json") {
-      // writeSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)
-      writeSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
+      // writeAllSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)
+      writeAllSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
     } else {
       printTextReport(state);
     }

@@ -48,7 +48,15 @@ const FULL_STATE = {
   turn1ResultDegraded: false,
   turn1SliceDegraded: false,
   skillMdStatus: "readable" as const,
-  skillMdTruncated: true,
+  evidenceBudget: {
+    corpusBytes: 12_345,
+    corpusCeiling: 524_288,
+    corpusCuts: [{ name: "references/big.md", keptBytes: 100, totalBytes: 900, omitted: false }],
+    corpusExcluded: ["references/untracked.md"],
+    trimRecord: [{ section: "Transcript (turn 1 only …)", droppedBytes: 42 }],
+    packageTruncated: true,
+  },
+  noSkillFilesRead: true,
   evaluatorModel: "claude-opus-4-8-20260115",
   requestedModel: "claude-opus-4-8",
   items: [

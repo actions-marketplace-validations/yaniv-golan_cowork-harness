@@ -1,14 +1,17 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { analyzeArtifacts } from "./analyze-artifact.js";
 import { confirmArtifactRuntime, type RuntimeVerdict } from "./analyze-artifact-runtime.js";
+import { writeAllSync } from "../io.js";
 
 // Synchronous fd writes (match cli.ts / doctor.ts / cassette.ts): machine→stdout, human→stderr.
-const out = (s: string) => writeSync(1, s + "\n");
-const log = (s: string) => writeSync(2, s + "\n");
+// writeAllSync retries EAGAIN and loops on short writes so the whole payload lands on a pipe (see
+// src/io.ts) — a bare writeSync can throw EAGAIN or under-write once fd 1/2 is non-blocking.
+const out = (s: string) => writeAllSync(1, s + "\n");
+const log = (s: string) => writeAllSync(2, s + "\n");
 
 /** The static-analysis source-read cap, mirrored from `analyze-artifact.ts`'s own (unexported) `BYTE_CAP`
  *  = 3 MB. Kept as a literal here (with this comment) rather than importing, since the artifact module

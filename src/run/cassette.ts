@@ -1,17 +1,6 @@
 import { z } from "zod";
-import { warn } from "../io.js";
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  mkdirSync,
-  mkdtempSync,
-  existsSync,
-  readdirSync,
-  statSync,
-  rmSync,
-  writeSync,
-} from "node:fs";
+import { warn, writeAllSync } from "../io.js";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -81,9 +70,10 @@ import { parse as parseYaml } from "yaml";
 
 // Synchronous fd writes (match cli.ts): a `process.stdout.write` + `process.exit()` pair truncates the
 // machine envelope on a PIPE (fd 1 goes non-blocking once the stream is touched; the async tail is dropped
-// at exit past the ~64KB buffer). writeSync blocks until drained.
-const out = (s: string) => writeSync(1, s + "\n");
-const log = (s: string) => writeSync(2, s + "\n");
+// at exit past the ~64KB buffer). writeAllSync retries EAGAIN and loops on short writes (see src/io.ts) —
+// a bare writeSync does NOT block until drained once the fd is non-blocking.
+const out = (s: string) => writeAllSync(1, s + "\n");
+const log = (s: string) => writeAllSync(2, s + "\n");
 
 /** Format a record error for the user. An `UnansweredError` carries the offered labels (and a closest-match
  *  suggestion) in `.hint`; the record catch sites historically printed only `.message`, so a scripted-answer
