@@ -415,10 +415,23 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       agentSessionId = readSessionManifest(manifestPath, opts.sessionId ?? "", effectiveFidelity);
     } else {
       agentSessionId = randomUUID(); // fresh pinned session
+      // `scenario`/`prompt` are IDENTITY, not resume machinery — `readSessionManifest` never reads them and
+      // must not: they are additive-optional, so an older manifest without them still resumes. They are
+      // here because this file's NAME makes it the first thing anyone opens in a run dir, and a manifest
+      // holding only opaque ids answered nothing — a consumer running three concurrent critiques could not
+      // tell which was which without opening each turn's result.json. `result.json` remains authoritative
+      // (it is written at completion, with the resolved values); this is a signpost, not a second source.
       writeFileSync(
         manifestPath,
         JSON.stringify(
-          { sessionId: opts.sessionId, agentSessionId, fidelity: effectiveFidelity, createdAt: new Date().toISOString() },
+          {
+            sessionId: opts.sessionId,
+            agentSessionId,
+            fidelity: effectiveFidelity,
+            createdAt: new Date().toISOString(),
+            scenario: scenario.name,
+            prompt: scenario.prompt,
+          },
           null,
           2,
         ),

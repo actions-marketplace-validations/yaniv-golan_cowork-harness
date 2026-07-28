@@ -93,6 +93,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`session.json` now identifies its own run.** The resume manifest (written for `--session-id`/`--resume`
+  runs) held only opaque ids, so the file whose name makes it the first thing you open in a run dir
+  answered nothing — with several concurrent runs against one plugin there was no way to tell which was
+  which without opening each turn's `result.json`. It now also carries `scenario` and `prompt`. These are
+  **additive-optional**: nothing validates them, and a manifest written before this still resumes.
+  `result.json` remains authoritative for identity; this is a signpost, not a second source of truth.
+  Reported by a consumer.
 - **`critique` reports progress.** Four `::notice::` lines on stderr at the phase boundaries (task turn →
   reflection turn → evaluator pass 1 → evaluator pass 2). Previously four model calls over 10–20 minutes
   produced no output at all until the finished report appeared, so a working run and a hung one were
