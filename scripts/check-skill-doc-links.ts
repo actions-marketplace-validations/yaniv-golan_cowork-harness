@@ -35,21 +35,35 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Nested segments are included: a reference into a SUBDIRECTORY is just as dead as a flat one, and a
 // pattern that only matched the flat form would let the next one through.
 const DEAD_ROOTS = ["docs", "schema", "examples"] as const;
-const DEAD_PATH_BODY = `(?:${DEAD_ROOTS.join("|")})/(?:[\\w.-]+/)*[\\w.-]+\\.(?:md|json|ya?ml)`;
+// LEFT boundary `(?<![\w.-])`: without it `mydocs/x.md` and `xschema/y.json` matched their tails and were
+// reported as violations of paths nobody wrote. `/` is deliberately NOT excluded, so a genuine relative
+// pointer (`./docs/x.md`) is still caught — the residual cost is that an absolute system path containing
+// one of these segments would flag, which does not occur in a skill payload and has the marker as an out.
+// RIGHT boundary `(?![\w])`: without it `docs/x.mdx` matched as `docs/x.md`, so the error told the author
+// to permalink a file that does not exist. Case-insensitive so `schema/x.JSON` cannot slip through.
+const DEAD_PATH_BODY = `(?<![\\w.-])(?:${DEAD_ROOTS.join("|")})/(?:[\\w.-]+/)*[\\w.-]+\\.(?:md|json|ya?ml)(?![\\w])`;
 
 // A full GitHub blob permalink to one of those paths, e.g.
 // `https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md` — this resolves
 // regardless of install path, so any occurrence of it is exempt from the bare-reference check below.
-const PERMALINK_RE = new RegExp(`https://github\\.com/[\\w.-]+/[\\w.-]+/blob/[^\\s)]+/${DEAD_PATH_BODY}`, "g");
+// ANY absolute URL, not just a github blob permalink. Scoping the exemption to one URL shape meant an
+// equally-resolvable link — a raw.githubusercontent URL, a GitLab `/-/blob/`, a github `/tree/` — was
+// reported as a dead relative pointer, i.e. the checker rejected its own prescribed fix written another
+// way. An absolute URL resolves for every install path, which is the only property this guard cares about.
+const ANY_URL_RE = /https?:\/\/\S+/g;
 
 // A markdown link `[text](permalink)` whose target is one of the permalinks above — stripped as a
 // whole unit FIRST, because the link text itself is often the same bare path (e.g.
 // `` [`docs/critique.md`](https://…/docs/critique.md) ``) and must not separately trip the bare check.
-const MD_LINK_TO_DEAD_RE = new RegExp(`\\[[^\\]\\n]*\\]\\(https://github\\.com/[\\w.-]+/[\\w.-]+/blob/[^\\s)]+/${DEAD_PATH_BODY}\\)`, "g");
+// `[text](url)` — stripped as a whole unit FIRST, because the link TEXT is often the same bare path
+// (`` [`docs/critique.md`](https://…) ``); stripping only the URL would leave that text to trip the bare
+// check. A link whose target is RELATIVE is deliberately not stripped: `[docs/x.md](./docs/x.md)` is dead
+// for a plugin install in both halves.
+const MD_LINK_TO_URL_RE = /\[[^\]\n]*\]\(https?:\/\/[^\s)]+\)/g;
 
 // A bare/relative reference to one of those paths, anywhere it isn't already covered by a permalink —
 // this is the dead pointer for a plugin install.
-const BARE_DEAD_RE = new RegExp(DEAD_PATH_BODY, "g");
+const BARE_DEAD_RE = new RegExp(DEAD_PATH_BODY, "gi");
 
 // Explicit, greppable per-line opt-out for a pointer the SAME sentence already qualifies as npm-only
 // (e.g. "published as `schema/verify-cassettes.json` in the npm package"). Mirrors lint-skill's
@@ -75,7 +89,7 @@ export function findViolations(files: Array<{ path: string; content: string }>):
       if (lineText.includes(OPT_OUT_MARKER)) return;
       // Strip whole markdown-link-to-permalink constructs, then any remaining bare permalink (the
       // YAML/Python-comment case, where the URL appears with no surrounding [text](...) brackets).
-      const residual = lineText.replace(MD_LINK_TO_DEAD_RE, "").replace(PERMALINK_RE, "");
+      const residual = lineText.replace(MD_LINK_TO_URL_RE, "").replace(ANY_URL_RE, "");
       const matches = residual.match(BARE_DEAD_RE);
       if (matches) {
         for (const target of matches) violations.push({ file: path, line: i + 1, target });

@@ -334,6 +334,15 @@ describe.skipIf(!can)("global-flag position hint", () => {
     });
   }
 
+  // A filename that merely STARTS with the flag name is not the flag.
+  it("a typo'd filename beginning with the flag name gets NO misplaced-flag hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--dotenv.yaml"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+  });
+
   // The flag name inside a quoted VALUE is being reported as a value, not parsed as a flag.
   it("a flag-looking value containing --dotenv gets NO hint", () => {
     const d = mkdtempSync(join(tmpdir(), "gf-"));

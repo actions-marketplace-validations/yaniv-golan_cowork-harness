@@ -86,6 +86,46 @@ describe("findViolations", () => {
     expect(v).toEqual([]);
   });
 
+  it("does NOT flag a path segment that is only the TAIL of a longer word", () => {
+    const v = findViolations([{ path: "x.md", content: "see mydocs/x.md and xschema/y.json and notexamples/z.yaml" }]);
+    expect(v).toEqual([]);
+  });
+
+  it("STILL flags an explicitly-relative pointer — dead for a plugin install like any other", () => {
+    const v = findViolations([{ path: "x.md", content: "see ./docs/critique.md" }]);
+    expect(v.map((x) => x.target)).toEqual(["docs/critique.md"]);
+  });
+
+  it("does NOT flag a resolvable absolute URL that is not a github blob permalink", () => {
+    // Rejecting these made the checker refuse its own prescribed fix written another way.
+    for (const url of [
+      "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/docs/critique.md",
+      "https://gitlab.com/o/r/-/blob/main/docs/critique.md",
+      "https://github.com/yaniv-golan/cowork-harness/tree/main/docs/critique.md",
+    ]) {
+      expect(findViolations([{ path: "x.md", content: `see ${url}` }]), url).toEqual([]);
+    }
+  });
+
+  it("does not report a WRONG target for an extension outside the set", () => {
+    // `docs/x.mdx` once matched as `docs/x.md` — telling the author to permalink a nonexistent file.
+    expect(findViolations([{ path: "x.md", content: "see docs/guide.mdx" }])).toEqual([]);
+  });
+
+  it("flags an upper-case extension (a miss is a dead pointer either way)", () => {
+    expect(findViolations([{ path: "x.md", content: "see schema/run-result.JSON" }]).length).toBe(1);
+  });
+
+  // KNOWN LIMITATION, pinned deliberately so it is a documented trade-off rather than a silent hole:
+  // the marker exempts its whole LINE, so a second unrelated dead pointer sharing that line is missed.
+  // Keep pointers on separate lines when using the marker.
+  it("the opt-out marker exempts its entire line, including an unrelated pointer on it", () => {
+    const v = findViolations([
+      { path: "x.md", content: "npm-only: `schema/verify-cassettes.json` <!-- npm-only-ok --> but also docs/critique.md" },
+    ]);
+    expect(v).toEqual([]);
+  });
+
   it("the opt-out marker is line-scoped — it does not exempt the next line", () => {
     const v = findViolations([{ path: "x.md", content: "fine <!-- npm-only-ok -->\nsee schema/cassette.v10.json\n" }]);
     expect(v).toEqual([{ file: "x.md", line: 2, target: "schema/cassette.v10.json" }]);

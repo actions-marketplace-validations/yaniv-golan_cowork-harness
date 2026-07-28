@@ -205,8 +205,11 @@ function misplacedGlobalHint(command: string, message: string): string | undefin
   if (command === "cowork-harness") return undefined;
   if (!UNRECOGNIZED_FLAG_SHAPES.some((re) => re.test(message))) return undefined;
   for (const flag of GLOBAL_ONLY_FLAGS) {
-    // Token-boundary match: the flag bare at end-of-token, or introducing an `=value` form.
-    if (!new RegExp(`(^|[\\s:])${flag}(=|$|[\\s,.])`).test(message)) continue;
+    // Token-boundary match: the flag bare at end-of-token, or introducing an `=value` form. `.` is NOT a
+    // terminator — with it, a typo'd filename (`--dotenv.yaml`) was read as the flag and answered with
+    // "move it before the subcommand". No real message ends a flag token with a period; the two shapes
+    // this runs against terminate it with `=`, whitespace, or end-of-string.
+    if (!new RegExp(`(^|[\\s:])${flag}(=|$|[\\s,])`).test(message)) continue;
     return `${flag} is a GLOBAL flag and must come BEFORE the subcommand (e.g. \`cowork-harness ${flag} <path> ${command} …\`)`;
   }
   return undefined;
