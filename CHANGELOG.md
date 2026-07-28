@@ -6,6 +6,51 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.13.1] — 2026-07-28
+
+### Fixed
+
+- **A misplaced global flag written as `--dotenv=<path>` / `--run-dir=<path>` keeps its exact-fix hint.**
+  The pre-dispatch guard matches the spaced form by exact token — deliberately, so a per-command value
+  like `--answer "--dotenv=x=foo"` is never hijacked — which left the equals form to surface as a bare
+  `unknown flag`, dropping the one thing the caller needed: where to put it instead. The hint is derived
+  at the usage-error choke point and covers `run`'s separate `unexpected argument(s)` path too. The
+  trigger is anchored on the two message shapes that mean "parsed as an unrecognized flag", plus a skip
+  when the command is the program name: a broader match fires on errors about a *correctly-placed*
+  leading flag (`--dotenv file not found`, `--dotenv requires a path`) and on a flag name inside a quoted
+  value, telling the user to move a flag that is already in the right place.
+
+- **The shipped-skill pointer guard covers `schema/` and `examples/`, not `docs/` alone.** A plugin
+  install materializes only `.claude/skills/<name>/**`, so a bare pointer to any other repo directory
+  dangles the same way — including the one naming the machine-readable schema a consumer needs to read
+  field semantics. Four live pointers rewritten to permalinks or made runnable. `scripts/`, `cassettes/`
+  and `src/` stay out of scope: the first resolves inside the payload, the second names the reader's own
+  directory in a recipe, the third is provenance. A line whose sentence already qualifies a pointer as
+  npm-only opts out with an explicit `<!-- npm-only-ok -->` marker.
+
+### Added
+
+- **`lint-skill` flags a skill corpus at or over the 512 KiB critique evidence ceiling** —
+  `skill-corpus-near-evidence-ceiling` (INFO, ≥ 80%) and `skill-corpus-over-evidence-ceiling` (WARN), so
+  the fact is free and static instead of costing a paid critique. The figure approximates the packager's
+  corpus — it excludes `agents/<skill>.md` and does not apply the tracked-set filter — which the finding
+  text states; `corpusCuts` in the report remains the authority.
+
+### Documentation
+
+- **`critique` is in the skill's orientation router, with the routing rule.** "What does this skill do"
+  is a `skill` question; "what is wrong with this skill" is a `critique` question, and the second costs
+  four model workloads. The router listed five entry points and `critique` was not among them.
+  Reported by a consumer.
+
+- **`referencesRead` is main-agent-only, stated inside the plugin payload.** Sub-agent Reads live under
+  `subagents[].referencesRead`, so an empty top-level list on a dispatcher-style skill is not evidence
+  the material went unread; the critique report's `noSkillFilesRead` unions both. Reported by a consumer.
+
+- **The run's own evidence and the critique evidence package are distinguished at the router and on the
+  debugging page**, not only mid-document — the first place a reader meets the word, rather than the
+  third. Reported by a consumer.
+
 ## [1.13.0] — 2026-07-28
 
 **Upgrade notes.**
