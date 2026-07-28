@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.13.2] — 2026-07-28
+
+### Fixed
+
+- **`lint-skill`'s corpus check sized a smaller set than the ceiling it warns about, and could pass
+  `--strict` on a corpus a critique would cut.** The evidence ceiling governs `SKILL.md` + `references/**`
+  + `agents/<skill>.md` **combined**; the check summed only the first two. A multi-skill plugin whose
+  SKILL.md and references sat in the INFO band while its `agents/<name>.md` carried the total past the
+  ceiling reported INFO and **exited 0 under `--strict`** — a green gate on content that was already
+  destined to be cut. The check now counts all three classes, resolving `<root>/agents/<name>.md` the same
+  way `critique --skill <name>` does; a standalone skill (no `skills/` parent) is unaffected.
+
+  Two clarifications that follow, because both were understated: every file under `references/` counts
+  regardless of extension — the packager applies **no** extension filter, so JSON schemas and rule packs
+  are part of your corpus — and the remaining approximation now errs in one direction only. The check
+  skips staging's git-tracked filter, so an untracked reference inflates the figure and warns early
+  rather than late. `corpusCuts` in the report remains the authority.
+
+  Reported by a consumer, who caught it by measuring their own plugin against the new check on upgrade.
+
 ## [1.13.1] — 2026-07-28
 
 ### Fixed

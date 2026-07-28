@@ -1205,19 +1205,33 @@ _EVIDENCE_CORPUS_NOTICE_RATIO = 0.8
 
 
 def _lint_skill_corpus_size(md_path):
-    """Total skill-authored bytes (SKILL.md + references/**) against the critique evidence ceiling.
+    """Total skill-authored bytes against the critique evidence ceiling.
 
-    APPROXIMATE by design. The packager's corpus is SKILL.md + references/** + agents/<skill>.md
-    COMBINED and is git-tracked-filtered; this sums SKILL.md + references/** from a raw stat, so it
-    under-measures a plugin with a large agents/<name>.md and over-measures untracked reference files.
-    Close enough for a proximity warning, and it makes the fact free instead of costing a paid critique;
-    the report's corpusCuts remains the authority."""
+    Counts the SAME THREE CLASSES the ceiling governs: SKILL.md, every file under references/ (any
+    extension -- the packager applies no extension filter, so JSON schemas and rule packs count), and,
+    for a skill inside a multi-skill plugin, the invoked skill's <root>/agents/<name>.md.
+
+    Omitting the agents md is not a rounding error: a plugin whose SKILL.md + references sit in the INFO
+    band while the agents md carries the corpus past the ceiling reported INFO and PASSED --strict on
+    content the packager would cut. A proximity check that greens a corpus destined to be cut is worse
+    than no check.
+
+    Still approximate in ONE direction only, and it now over- rather than under-counts: the packager
+    applies staging's git-tracked filter, so an untracked reference inflates this figure. That errs
+    toward warning early. The report's corpusCuts stays the authority."""
     skill_dir = Path(md_path).parent
     total = 0
     files = [Path(md_path)]
     refs = skill_dir / "references"
     if refs.is_dir():
         files.extend(p for p in sorted(refs.rglob("*")) if p.is_file())
+    # Multi-skill plugin layout: skillDir is <root>/skills/<name> and the invoked skill's sub-agent
+    # system prompt is <root>/agents/<name>.md -- the same resolution the critique command performs.
+    # A standalone skill (no `skills/` parent) has no agents md and is unaffected.
+    if skill_dir.parent.name == "skills":
+        agents_md = skill_dir.parent.parent / "agents" / f"{skill_dir.name}.md"
+        if agents_md.is_file():
+            files.append(agents_md)
     for p in files:
         try:
             total += p.stat().st_size
@@ -1231,8 +1245,9 @@ def _lint_skill_corpus_size(md_path):
                 "skill-corpus-over-evidence-ceiling",
                 f"skill content is {total:,} B ({pct:.0f}% of the {_EVIDENCE_CORPUS_CEILING:,} B critique "
                 f"evidence ceiling) — a critique will cut it before grading.",
-                "Split or trim the largest references/ files. This count excludes agents/<skill>.md, "
-                "which the ceiling also covers, so the real figure may be higher — the critique "
+                "Split or trim the largest references/ files. This counts SKILL.md + references/** + "
+                "agents/<skill>.md, the same three classes the ceiling governs; it does not apply "
+                "staging's git-tracked filter, so an untracked reference inflates it. The critique "
                 "report's corpusCuts names exactly which files lose bytes.",
                 str(skill_dir),
             )

@@ -245,8 +245,11 @@ actually breached), `corpusExcluded` (files present on the host but never delive
 staging — untracked, with git-mode on), and `trimRecord` (any section the overall belt-and-suspenders cap
 shaved). `cowork-harness lint-skill <skill-dir>` answers the same proximity question **without a paid
 run** — `skill-corpus-near-evidence-ceiling` (INFO) from 80%, `skill-corpus-over-evidence-ceiling` (WARN,
-so it fails `--strict`) past it — approximating the corpus as `SKILL.md` + `references/**`, without
-`agents/<skill>.md` and without the tracked-set filter, so `corpusCuts` stays the authority.
+so it fails `--strict`) past it. It counts the same three classes the ceiling governs: `SKILL.md`, every
+file under `references/` (**any extension** — the packager applies no extension filter, so JSON schemas
+and rule packs count), and a plugin skill's `agents/<name>.md`. It does not apply staging's git-tracked
+filter, so an untracked reference inflates the figure — it errs toward warning early, and `corpusCuts`
+stays the authority.
 On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
 
