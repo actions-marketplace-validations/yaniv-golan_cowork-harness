@@ -4,6 +4,12 @@ When a run does the wrong thing — or greens when you don't trust it — this i
 the right tool; the authoritative reference for each command's flags is its `--help` and the
 [README → Commands at a glance](../README.md#commands-at-a-glance).
 
+> **Scope.** "Evidence" on this page means the RUN's own record — events, trace, transcript; what
+> `trace` / `inspect` / `diff` / `verify-run` / `replay --explain` read. `critique`'s evaluator grades
+> against a separate, narrower record: `critique-evidence-package.txt`, written at the run-dir root
+> whenever the evaluator ran. None of the five tools below surface it — see
+> [`docs/critique.md`](./critique.md#run-dir-artifacts).
+
 <!-- BEGIN triage-canonical -->
 Two situations need different tools — figure out which one you're in first, then reach for the tool
 instead of re-running and hoping. The run already wrote its evidence to a kept run dir (`--keep` prints

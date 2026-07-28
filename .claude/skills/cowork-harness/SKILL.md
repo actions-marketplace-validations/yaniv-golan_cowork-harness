@@ -77,6 +77,9 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
   the loop 0.32.0's observability is built for; the *Triage* and *Inspecting a run's observability
   output* sections in **Part III — Debug** are the detail (the fuller human-facing map lives in
   [`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md) — repo-only, not shipped with the installed skill).
+  **"Evidence" here means the RUN's own record** — events, trace, transcript. `critique`'s evaluator
+  grades against a different artifact, `critique-evidence-package.txt`, which none of these tools
+  surface; see `references/critique.md`.
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in **Part III — Debug**).
 
