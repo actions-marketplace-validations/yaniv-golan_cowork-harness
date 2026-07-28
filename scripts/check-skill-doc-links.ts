@@ -8,9 +8,11 @@
 //
 //   npx tsx scripts/check-skill-doc-links.ts
 //
-// Fix for a violation: rewrite the bare `docs/x.md` into a GitHub blob permalink
-// (https://github.com/<owner>/<repo>/blob/main/docs/x.md) so it resolves regardless of install
-// path — see the many examples already in .claude/skills/cowork-harness/SKILL.md and references/.
+// Fix for a violation: rewrite the bare path (`docs/x.md`, `schema/x.json`, `examples/x.yaml`) into a
+// GitHub blob permalink (https://github.com/<owner>/<repo>/blob/main/<path>) so it resolves regardless
+// of install path — see the many examples already in .claude/skills/cowork-harness/SKILL.md and
+// references/. Where the surrounding sentence ALREADY qualifies the pointer as npm-only, append the
+// OPT_OUT_MARKER to that line instead.
 //
 // Scope: git-TRACKED files under .claude/skills/** only. This is deliberately the same boundary a
 // plugin marketplace install and the harness's own `local_plugins` staging use — an untracked file

@@ -176,13 +176,18 @@ const UNRECOGNIZED_FLAG_SHAPES = [/^unknown flag:/, /^unexpected argument\(s\):/
  *  match `--dotenv=<path>` — that exact-token rule is what stops a legitimate per-command VALUE
  *  (`skill … --answer "--dotenv=x=foo"`) from being hijacked, and it must stay. The equals form therefore
  *  reaches each command's own parser and surfaces as a bare `unknown flag: --dotenv`, dropping the one
- *  thing the user needs: where to put it instead. Deriving the hint HERE is safe in exactly the case the
- *  pre-dispatch scan cannot be — a usage error means value tokens were already consumed, so the flag is
- *  provably being parsed as a flag. It also covers `run`'s `unexpected argument(s):` path, which a
- *  flag-level fix never reaches.
+ *  thing the user needs: where to put it instead. Deriving it here also covers `run`'s
+ *  `unexpected argument(s):` path, which a flag-level fix never reaches.
  *
- *  `critique` is exempt from the `--dotenv` half: it is a legitimate per-command flag there, and hinting
- *  would tell a correct invocation to move a flag that is already in the right place. */
+ *  "It is a usage error, therefore the flag is misplaced" is FALSE, and the narrowness below is the
+ *  whole safety argument. The same exit serves errors about a CORRECTLY-PLACED leading global, and
+ *  those carry the program name as `command` — hence the skip. It also serves errors naming the flag
+ *  inside a quoted VALUE, which the shape allowlist excludes.
+ *
+ *  `critique` needs no exemption here: it never calls `fail()` (it writes to stderr and exits directly),
+ *  so its legitimate per-command `--dotenv` cannot reach this function. Its exemption lives in cli.ts's
+ *  pre-dispatch guard and nowhere else — do not add a dead branch for it here. `chat` likewise bypasses
+ *  `fail()`, so its bare `unknown flag` message is unaffected. */
 function misplacedGlobalHint(command: string, message: string): string | undefined {
   // Leading-position global-flag errors are emitted with the PROGRAM NAME as `command`, never a
   // subcommand, and are about a flag that is already correctly placed. Never hint there — and the
