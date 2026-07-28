@@ -280,7 +280,7 @@ JSON.
 
 `verify-cassettes` emits its **own** envelope (`{command, ok, coverage, results[]}` with per-file
 `findings`/`staleness`/`unverifiable`/`notes`/`version`/`error`), published as
-`schema/verify-cassettes.json` in the npm package. `ok:false` doesn't say *why* — read the buckets, or
+`schema/verify-cassettes.json` in the npm package. `ok:false` doesn't say *why* — read the buckets, or <!-- npm-only-ok -->
 the exit code (`1` = `findings`/`staleness`/`scenarioDrift` populated, a real problem verified & found;
 `3` = `unverifiable`/`version`/`error` populated, verification could not complete; a real finding wins
 `1` if both are present). Both envelope schemas are covered 1.0 contract surfaces (SPEC §12) — parse the

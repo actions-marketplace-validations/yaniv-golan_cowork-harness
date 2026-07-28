@@ -48,7 +48,7 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema `schema/cassette.v10.json`):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v10.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v10.json)):
 
 | Field | What it is |
 |---|---|

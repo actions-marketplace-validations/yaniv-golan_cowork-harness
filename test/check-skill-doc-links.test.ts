@@ -49,6 +49,47 @@ describe("findViolations", () => {
     const v = findViolations([{ path: "x.md", content: "line one\nline two\nsee docs/cassette.md here\n" }]);
     expect(v).toEqual([{ file: "x.md", line: 3, target: "docs/cassette.md" }]);
   });
+
+  it("flags a bare schema/*.json pointer — dead for a plugin install exactly like docs/", () => {
+    const v = findViolations([{ path: "SKILL.md", content: "`schema/run-result.json` is the machine source." }]);
+    expect(v).toEqual([{ file: "SKILL.md", line: 1, target: "schema/run-result.json" }]);
+  });
+
+  it("flags a bare examples/*.yaml pointer inside a copy-pasteable command", () => {
+    const v = findViolations([
+      { path: "references/fidelity-and-answers.md", content: "  --answer-policy examples/answer-policies/demo.yaml" },
+    ]);
+    expect(v.map((x) => x.target)).toEqual(["examples/answer-policies/demo.yaml"]);
+  });
+
+  it("does NOT flag scripts/ — the payload ships its own scripts/ dir, so the path resolves", () => {
+    expect(findViolations([{ path: "SKILL.md", content: "run `scripts/scenario.py scaffold`" }])).toEqual([]);
+  });
+
+  it("does NOT flag cassettes/ — in a recipe that names the READER's directory, not ours", () => {
+    expect(findViolations([{ path: "references/ci-recipe.md", content: "cowork-harness replay cassettes/my-test.cassette.json" }])).toEqual(
+      [],
+    );
+  });
+
+  it("does NOT flag src/ provenance citations", () => {
+    expect(findViolations([{ path: "references/scenario-schema.md", content: "see src/prompt.ts" }])).toEqual([]);
+  });
+
+  it("honors the explicit opt-out marker on a line whose own sentence qualifies the pointer", () => {
+    const v = findViolations([
+      {
+        path: "references/ci-recipe.md",
+        content: "published as `schema/verify-cassettes.json` in the npm package. <!-- npm-only-ok -->",
+      },
+    ]);
+    expect(v).toEqual([]);
+  });
+
+  it("the opt-out marker is line-scoped — it does not exempt the next line", () => {
+    const v = findViolations([{ path: "x.md", content: "fine <!-- npm-only-ok -->\nsee schema/cassette.v10.json\n" }]);
+    expect(v).toEqual([{ file: "x.md", line: 2, target: "schema/cassette.v10.json" }]);
+  });
 });
 
 // Integration/mutation proof: drive the actual CLI-entry pipeline (git ls-files -> readFileSync ->

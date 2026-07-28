@@ -515,7 +515,7 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   `outputTruncated` on a matched tool result). Three separately-shaped rollups, easy to conflate in a
   `jq` recipe: `toolCounts` is a flat `{tool: number}` call-count map, `toolErrors` is
   `{tool: {calls, errors}}`, and `toolDurations` is `{tool: {calls, totalMs, maxMs}}`. (Full per-field
-  semantics: the README's "Observability fields" section — repo-only; `schema/run-result.json` is the
+  semantics: the README's "Observability fields" section — repo-only; [`schema/run-result.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/run-result.json) is the
   machine source.)
 - **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
   **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
