@@ -91,18 +91,22 @@ describe("packageEvidence: agents/references content sections", () => {
     expect(rendered).toContain("score exhaustively on 28 dimensions");
   });
 
-  it("a references file past the total budget is marked omitted, and the package flags truncated", () => {
+  it("packages ALL references files WHOLE, even ones that would have exceeded the OLD shared budget", () => {
+    // The design this replaced shared a single small budget across every references/ file, filled in
+    // filename order — the alphabetically-first file (a-big.md here) took everything and b-late.md never
+    // reached the evaluator. Both now ship whole and uncut; see test/critique-whole-corpus.test.ts for the
+    // dedicated corpus-ceiling coverage (this test's own subject is skill SELECTION, not truncation).
     const dir = mkdtempSync(join(tmpdir(), "crit-skill-"));
     writeFileSync(join(dir, "SKILL.md"), "# s");
     mkdirSync(join(dir, "references"));
-    writeFileSync(join(dir, "references", "a-big.md"), "x".repeat(9 * 1024)); // > REFERENCES_CONTENT_CAP alone
+    writeFileSync(join(dir, "references", "a-big.md"), "x".repeat(9 * 1024)); // > the OLD 8KB shared budget alone
     writeFileSync(join(dir, "references", "b-late.md"), "the late file's content");
     const runDir = runDirStub();
     const { sections, truncated } = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
     const rendered = renderSections(sections);
-    expect(truncated).toBe(true);
-    expect(rendered).toContain("### b-late.md\n(omitted — references/ content budget exhausted)");
-    expect(rendered).not.toContain("the late file's content");
+    expect(truncated).toBe(false);
+    expect(rendered).toContain("### a-big.md\n" + "x".repeat(9 * 1024));
+    expect(rendered).toContain("### b-late.md\nthe late file's content");
   });
 });
 
@@ -114,36 +118,32 @@ describe("--skill flag parsing", () => {
   });
 });
 
-describe("skillMdTruncated (readable-but-cut is distinct from missing/unreadable)", () => {
-  it("flags an oversized readable SKILL.md and the report renders the distinction", async () => {
+describe("corpus-ceiling accounting (replaces the deleted skillMdTruncated flag)", () => {
+  // `skillMdTruncated` (a per-file SKILL.md-only truncation flag) is gone along with the per-section
+  // SKILL_MD_CAP it was keyed to. What replaced it is corpus-wide: SKILL.md, references/** and agents md
+  // all ship WHOLE unless their COMBINED size breaches SKILL_CORPUS_CEILING (512KB), in which case
+  // `corpusCuts` names exactly which file(s) were cut and by how much (see
+  // test/critique-whole-corpus.test.ts for that breach case). Below the ceiling, "readable" now always
+  // means "whole", for a SKILL.md of any realistic size — that's the distinction worth pinning here.
+  it("an oversized-but-under-ceiling SKILL.md is packaged whole — readable, no corpus cut", () => {
     const dir = mkdtempSync(join(tmpdir(), "crit-big-skill-"));
-    writeFileSync(join(dir, "SKILL.md"), "# big\n" + "x".repeat(70 * 1024)); // > SKILL_MD_CAP (64KB)
+    const bigBody = "x".repeat(70 * 1024); // > the OLD 64KB per-file cap; well under the 512KB ceiling
+    writeFileSync(join(dir, "SKILL.md"), "# big\n" + bigBody);
     const runDir = mkdtempSync(join(tmpdir(), "crit-run-"));
     const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
     expect(r.skillMdStatus).toBe("readable"); // NOT missing/unreadable — no mechanical downgrade
-    expect(r.skillMdTruncated).toBe(true);
-    const { buildTextReport, buildJsonReport } = await import("../src/critique/command");
-    const state = {
-      skillFolder: dir,
-      prompt: "p",
-      sessionId: "s",
-      outDir: runDir,
-      fidelity: "container",
-      taskResult: "success" as const,
-      selfReportStatus: "captured" as const,
-      items: [],
-      requestedModel: "m",
-      skillMdTruncated: true,
-    };
-    expect(buildTextReport(state)).toMatch(/SKILL\.md: readable but TRUNCATED/);
-    expect(buildJsonReport(state).skillMdTruncated).toBe(true);
+    expect(r.corpusCuts).toHaveLength(0); // nothing to cut below the ceiling
+    expect(r.truncated).toBe(false);
+    const rendered = renderSections(r.sections);
+    expect(rendered).toContain(bigBody); // the whole body survives, not a cut copy
   });
 
-  it("a small readable SKILL.md is NOT flagged", () => {
+  it("a small readable SKILL.md is likewise uncut", () => {
     const dir = mkdtempSync(join(tmpdir(), "crit-small-skill-"));
     writeFileSync(join(dir, "SKILL.md"), "# small");
     const runDir = mkdtempSync(join(tmpdir(), "crit-run-"));
     const r = packageEvidence(runDir, snapshotTurnBoundary(runDir), dir);
-    expect(r.skillMdTruncated).toBe(false);
+    expect(r.corpusCuts).toHaveLength(0);
+    expect(r.truncated).toBe(false);
   });
 });

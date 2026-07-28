@@ -1,6 +1,6 @@
 {
   "name": "cowork-harness",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios \u2014 same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
   "license": "MIT",
   "type": "module",
@@ -94,6 +94,7 @@
     "preflight": "tsx scripts/release-preflight.ts",
     "gen:surface": "tsx scripts/gen-surface.ts",
     "check:surface": "tsx scripts/check-surface.ts",
+    "check:skill-doc-links": "tsx scripts/check-skill-doc-links.ts",
     "eval-gate": "tsx scripts/eval-gate.ts",
     "skill-critique": "tsx scripts/skill-critique.ts",
     "skill-critique-acceptance": "tsx scripts/skill-critique-acceptance.ts"

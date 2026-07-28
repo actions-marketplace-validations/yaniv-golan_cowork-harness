@@ -1400,7 +1400,11 @@ def main(argv=None):
     )
     # The wrapper (`cowork-harness lint`) sets COWORK_HARNESS_PROG so usage/error lines name a command the
     # user can actually run. Default = the script's own basename, because scenario.py is ALSO documented as
-    # directly runnable (SKILL.md, docs/gotchas.md, docs/plugin-root.md, docs/subagents.md) — hardcoding
+    # directly runnable (SKILL.md;
+    # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/gotchas.md,
+    # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/plugin-root.md,
+    # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/subagents.md — repo-only, not
+    # shipped with the installed skill) — hardcoding
     # "cowork-harness lint" would lie on that path.
     prog = os.environ.get("COWORK_HARNESS_PROG")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -1505,6 +1509,15 @@ def main(argv=None):
     args, extras = ap.parse_known_args(argv)
     if extras:
         target = sub.choices.get(getattr(args, "command", "") or "")
+        # `--min-severity` is `lint`-only (it filters lint's severity-classed findings; `lint-skill`'s two
+        # footgun checks have no severity ladder to filter). Passing it to `lint-skill` used to fall through
+        # to the bare "unrecognized arguments" message below and leave the user hunting for a flag that DOES
+        # exist, just on the sibling command — name it explicitly, same as the `--output-format` translation
+        # `runLintLike` (src/run/scenario-tool.ts) already does for the other lint/lint-skill flag mismatch.
+        if getattr(args, "command", None) == "lint-skill" and any(
+            e == "--min-severity" or e.startswith("--min-severity=") for e in extras
+        ):
+            (target or ap).error("unrecognized arguments: " + " ".join(extras) + " (--min-severity is a `lint` flag, not `lint-skill` — rerun with `cowork-harness lint` instead)")
         (target or ap).error("unrecognized arguments: " + " ".join(extras))
     return args.func(args)
 

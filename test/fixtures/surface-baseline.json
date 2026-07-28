@@ -411,8 +411,40 @@
         "type": "boolean",
         "required": true
       },
+      ".costUsd.evaluatorPass1Tokens": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd.evaluatorPass1Tokens.cacheRead": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass1Tokens.input": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass1Tokens.output": {
+        "type": "number",
+        "required": true
+      },
       ".costUsd.evaluatorPass1Usd": {
         "type": "number"
+      },
+      ".costUsd.evaluatorPass2Tokens": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd.evaluatorPass2Tokens.cacheRead": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass2Tokens.input": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass2Tokens.output": {
+        "type": "number",
+        "required": true
       },
       ".costUsd.evaluatorPass2Usd": {
         "type": "number"
@@ -454,6 +486,69 @@
       },
       ".evaluatorModel": {
         "type": "string"
+      },
+      ".evidenceBudget": {
+        "type": "object",
+        "closed": true
+      },
+      ".evidenceBudget.corpusBytes": {
+        "type": "number",
+        "required": true
+      },
+      ".evidenceBudget.corpusCeiling": {
+        "type": "number",
+        "required": true
+      },
+      ".evidenceBudget.corpusCuts": {
+        "type": "array",
+        "required": true
+      },
+      ".evidenceBudget.corpusCuts[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".evidenceBudget.corpusCuts[].keptBytes": {
+        "type": "number",
+        "required": true
+      },
+      ".evidenceBudget.corpusCuts[].name": {
+        "type": "string",
+        "required": true
+      },
+      ".evidenceBudget.corpusCuts[].omitted": {
+        "type": "boolean",
+        "required": true
+      },
+      ".evidenceBudget.corpusCuts[].totalBytes": {
+        "type": "number",
+        "required": true
+      },
+      ".evidenceBudget.corpusExcluded": {
+        "type": "array",
+        "required": true
+      },
+      ".evidenceBudget.corpusExcluded[]": {
+        "type": "string"
+      },
+      ".evidenceBudget.packageTruncated": {
+        "type": "boolean",
+        "required": true
+      },
+      ".evidenceBudget.trimRecord": {
+        "type": "array",
+        "required": true
+      },
+      ".evidenceBudget.trimRecord[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".evidenceBudget.trimRecord[].droppedBytes": {
+        "type": "number",
+        "required": true
+      },
+      ".evidenceBudget.trimRecord[].section": {
+        "type": "string",
+        "required": true
       },
       ".fidelity": {
         "type": "string",
@@ -533,6 +628,9 @@
         "enum": ["evaluator", "self-report"],
         "required": true
       },
+      ".noSkillFilesRead": {
+        "type": "boolean"
+      },
       ".outDir": {
         "type": "string",
         "required": true
@@ -559,10 +657,7 @@
       },
       ".skillMdStatus": {
         "type": "string",
-        "enum": ["readable", "missing", "unreadable"]
-      },
-      ".skillMdTruncated": {
-        "type": "boolean"
+        "enum": ["readable", "missing", "unreadable", "untracked"]
       },
       ".taskResult": {
         "type": "string",

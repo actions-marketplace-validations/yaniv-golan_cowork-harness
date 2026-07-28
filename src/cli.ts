@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, writeSync, existsSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { Scenario, AnswerRule, Assertion, FIDELITY_TIERS, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
+import { writeAllSync } from "./io.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
 import {
@@ -117,9 +118,10 @@ import { evaluate, hostMatches, budgetFields, type AssertContext } from "./asser
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
-// would lose the json envelope for any agent/CI that pipes us. writeSync flushes before exit.
-const out = (s: string) => writeSync(1, s + "\n"); // machine (stdout)
-const log = (s: string) => writeSync(2, s + "\n"); // human (stderr)
+// would lose the json envelope for any agent/CI that pipes us. writeAllSync retries EAGAIN and loops
+// on short writes so the whole payload lands before exit (see src/io.ts).
+const out = (s: string) => writeAllSync(1, s + "\n"); // machine (stdout)
+const log = (s: string) => writeAllSync(2, s + "\n"); // human (stderr)
 
 // Matrix runner concurrency bound — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above
 // a handful, concurrent runs exhaust Docker's default address pool / model API rate limits.

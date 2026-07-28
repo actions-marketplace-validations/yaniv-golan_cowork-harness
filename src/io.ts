@@ -1,4 +1,4 @@
-import { writeFileSync, renameSync } from "node:fs";
+import { writeFileSync, renameSync, writeSync } from "node:fs";
 
 /**
  * Emit a structured warning to stderr with the GitHub-actions `::warning::` annotation prefix — the one
@@ -71,4 +71,62 @@ export function writeTextAtomic(path: string, data: string): void {
 /** Write JSON atomically — see {@link writeTextAtomic}, which this delegates to. */
 export function writeJsonAtomic(path: string, data: unknown): void {
   writeTextAtomic(path, JSON.stringify(data));
+}
+
+/**
+ * Write a whole string to a raw fd, synchronously, guaranteeing every byte lands — the safe
+ * replacement for the bare `writeSync(fd, s + "\n")` idiom scattered across the CLI's stdout/stderr
+ * sinks. That idiom's comments claimed "writeSync blocks until drained", which is only true while the
+ * fd is in blocking mode; the moment fd 1/2 is a PIPE (any `| something`) rather than a TTY, Node puts
+ * it in non-blocking mode, and two things the bare call ignores become real:
+ *
+ *   1. EAGAIN: a full pipe with a slow reader makes `writeSync` throw `EAGAIN: resource temporarily
+ *      unavailable` instead of blocking — e.g. `cowork-harness verify-cassettes … | tail -20` dying
+ *      mid-verdict with a stack trace.
+ *   2. Short writes: even when it does NOT throw, `writeSync` returns the number of bytes actually
+ *      written, which can be less than requested on a pipe. Ignoring the return silently drops the
+ *      remainder — not a crash, a corrupted envelope (e.g. truncated JSON).
+ *
+ * Converts to a `Buffer` FIRST and loops on the byte offset — never re-slices the source *string* by
+ * a returned byte count, which would split a multi-byte UTF-8 character mid-sequence and corrupt it.
+ * A stall (EAGAIN, or defensively a zero-length write with no error) backs off via `Atomics.wait`
+ * (the only synchronous sleep Node has) starting at 1ms and doubling to a 50ms per-attempt cap —
+ * short enough to stay responsive, never a busy-loop. The backoff/deadline pair resets on every
+ * write that makes real progress, so a slow-but-alive reader is never penalized; a stall with NO
+ * progress for 2s straight rethrows (the last EAGAIN, or a synthesized stall error for the zero-length
+ * case) rather than hanging the process forever on a truly dead reader.
+ */
+export function writeAllSync(fd: number, s: string): void {
+  const buf = Buffer.from(s, "utf8");
+  let offset = 0;
+  let waitMs = 1;
+  const MAX_WAIT_MS = 50;
+  const STALL_BUDGET_MS = 2000; // no-progress budget; renewed on every write that advances offset
+  let deadline = Date.now() + STALL_BUDGET_MS;
+  let lastEagain: unknown;
+
+  while (offset < buf.length) {
+    let n = 0;
+    try {
+      n = writeSync(fd, buf, offset);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EAGAIN") throw err;
+      lastEagain = err;
+      n = 0;
+    }
+
+    if (n > 0) {
+      offset += n;
+      waitMs = 1;
+      deadline = Date.now() + STALL_BUDGET_MS;
+      continue;
+    }
+
+    // EAGAIN or a zero-length write: stalled. Retry with bounded backoff, bounded total no-progress time.
+    if (Date.now() >= deadline) {
+      throw lastEagain ?? new Error(`writeAllSync: stalled at ${offset}/${buf.length} bytes on fd ${fd}`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    waitMs = Math.min(waitMs * 2, MAX_WAIT_MS);
+  }
 }

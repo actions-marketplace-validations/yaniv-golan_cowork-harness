@@ -1,6 +1,6 @@
 import { FIDELITY_TIERS } from "../types.js";
 import { spawnSync } from "node:child_process";
-import { existsSync, writeSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -16,12 +16,13 @@ import {
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName } from "../runtime/lima.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
+import { writeAllSync } from "../io.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
-// `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer); writeSync
-// blocks until drained.
-const out = (s: string) => writeSync(1, s + "\n");
-const log = (s: string) => writeSync(2, s + "\n");
+// `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer);
+// writeAllSync retries EAGAIN and loops on short writes so the whole payload lands (see src/io.ts).
+const out = (s: string) => writeAllSync(1, s + "\n");
+const log = (s: string) => writeAllSync(2, s + "\n");
 
 type Tier = "protocol" | "container" | "microvm" | "hostloop" | "cowork";
 const LIVE_TIERS: Tier[] = ["container", "microvm", "hostloop", "cowork"];

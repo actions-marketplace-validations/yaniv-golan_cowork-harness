@@ -87,7 +87,7 @@ describe("critique limitations ↔ docs parity", () => {
         "english-only",
         "microvm-tier-refused",
         "protocol-tier-refused",
-        "skill-md-size-cap",
+        "skill-corpus-ceiling",
       ].sort(),
     );
   });

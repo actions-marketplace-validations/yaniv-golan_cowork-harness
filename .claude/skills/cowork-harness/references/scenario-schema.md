@@ -1,8 +1,8 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.12.0`
-(baseline `desktop-1.24012.9`). If your checkout is newer, prefer the live `docs/scenario.md`,
-`docs/session.md`, and `SPEC.md`.
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.13.0`
+(baseline `desktop-1.24012.9`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+[`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
 
@@ -94,10 +94,12 @@ session = your setup.**
 # model & reasoning
 model: claude-opus-4-8           # omit for the agent default
 account_name: my-account         # OPTIONAL — display name rendered into {{accountName}} / the prompt's
-                                    # "User name:" line; NOT a credential/identity selector (see src/prompt.ts, docs/session.md)
+                                    # "User name:" line; NOT a credential/identity selector (see src/prompt.ts,
+                                    # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md)
 effort: high                     # low | medium | high | xhigh | max (+ extra, normalized to xhigh); validated against
-                                  # the resolved model's offered levels (docs/session.md); omit for Cowork's medium
-                                  # fallback — real Cowork always emits --effort, never omits it
+                                  # the resolved model's offered levels
+                                  # (https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md);
+                                  # omit for Cowork's medium fallback — real Cowork always emits --effort, never omits it
 extended_thinking: true          # real Cowork on/off toggle; default true (ON) -> --max-thinking-tokens 31999,
                                   # or --thinking disabled when false (no arbitrary budget in real Cowork)
 agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; omit for the agent default

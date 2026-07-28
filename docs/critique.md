@@ -98,7 +98,7 @@ ignored.
 
 | Flag | |
 |---|---|
-| `--timeout <ms>` | wall-clock budget for the task turn (critique's own kill-switch stretches to fit) |
+| `--timeout <ms>` | wall-clock budget for the task turn (default **30 min**; critique's own kill-switch stretches to fit). The turn is killed *after* its model spend, so too-short costs the money **and** the result — the default errs long deliberately |
 | `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
 | `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
 | `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
@@ -179,6 +179,11 @@ It does **not** record their contents — see Known limitations.
   `--evaluator-model` for the sweep. Caveat: the armor's injection-resistance is verified for the
   shipped **default** evaluator model only — changing it voids that specific verification (matters when
   critiquing skills you did not write).
+- **Trending spend across critiques: use the run index, not the reports.** Each critique appends a
+  roll-up row (`critiqueRole:"rollup"`) carrying `critiqueTotalUsd`; its `costUsd` is the evaluator
+  passes only, so `sum(costUsd)` over every row is exactly true spend — the two graded turns already
+  contribute their own rows. The index is also the only cost record that survives run-dir pruning.
+  See [stats.md](./stats.md).
 - **container** needs Docker/Lima; **hostloop** needs Docker (the bash/web_fetch sidecar) **plus** the
   staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
   `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.
@@ -232,17 +237,22 @@ mismatch is visible rather than assumed away) and a per-critique **cost** rollup
 workloads — the two graded turns *and* the two evaluator passes — marked `INCOMPLETE` whenever any
 workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
 / `costUsd`, and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
-malformed evaluator items (the surviving findings are then not necessarily the complete reply). A
-readable-but-oversized SKILL.md is flagged **`skillMdTruncated`** ("the evaluator graded a cut copy") —
-distinct from missing/unreadable, which alone force the mechanical `"already-covered"` downgrade.
+malformed evaluator items (the surviving findings are then not necessarily the complete reply). An
+**`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
+(total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + references +
+agents md), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
+actually breached), `corpusExcluded` (files present on the host but never delivered to the agent by
+staging — untracked, with git-mode on), and `trimRecord` (any section the overall belt-and-suspenders cap
+shaved). On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
+oversized skill or an untracked-file mistake.
 
-**Truncation has a second, sharper consequence than the not-adjudicable steer: DROPPED findings.**
-Citation validation checks each finding's `evidence` excerpt verbatim against the *packaged* (cut)
-copy — so a finding that quotes text past the cut cannot resolve and lands in **DROPPED**, even when
-the quote is a perfectly accurate excerpt of the real file. A skill well over the cap should expect a
-not-adjudicable/DROPPED skew concentrated on its back half; if you see back-half findings in DROPPED
-on a `skillMdTruncated` run, this is why — front-load the operative guidance, split the skill, or
-treat those items as leads to re-check by hand.
+**A corpus-ceiling breach has a second, sharper consequence than the not-adjudicable steer: DROPPED
+findings.** Citation validation checks each finding's `evidence` excerpt verbatim against the *packaged*
+(cut) copy — so a finding that quotes text past a per-file cut cannot resolve and lands in **DROPPED**,
+even when the quote is a perfectly accurate excerpt of the real file. A skill well over the ceiling should
+expect a not-adjudicable/DROPPED skew concentrated on whichever file(s) `corpusCuts` names; if you see
+findings in DROPPED against a corpus that reported cuts, this is why — front-load the operative guidance,
+split the oversized file, or treat those items as leads to re-check by hand.
 
 ### Run-dir artifacts
 
@@ -348,11 +358,15 @@ the two cannot disagree.
   Desktop baseline), so two runs of the same skill could quietly land in different environments — and
   critique's whole value is comparing runs over time, which needs a fixed, known environment. Naming a real
   tier keeps that comparison honest.
-- **`[deliberate]` SKILL.md is capped at 64KB** in the evidence; an oversized one is **truncated but
-  still graded** (its status stays `readable`) — size alone never forces a downgrade. Only a **missing
-  or unreadable** SKILL.md forces the mechanical `"already-covered"` → `"not adjudicable"` downgrade.
-  The package is bounded so the evaluator sees a whole record rather than a truncated tail; the
-  truncation caveat is a *prompted* nudge toward `not-adjudicable`, never a mechanical one.
+- **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — SKILL.md, every `references/**`
+  file, and `agents/<skill>.md` are packaged in full, up to a **512 KiB combined corpus ceiling** covering
+  all three together. The ceiling is a sanity valve, not an allocation (~2.3x the largest skill measured
+  when it was sized); a breach is cut **loudly** — the named file and byte counts are reported — never
+  refused, and never silent. The **transcript** is bounded separately at **128 KiB**, with a head+tail cut
+  and an elided middle, so both a run's setup and its conclusions survive a cut rather than just one end.
+  A **missing**, **unreadable**, or **untracked** SKILL.md forces the mechanical `"already-covered"` →
+  `"not adjudicable"` downgrade; a claim about content that fell outside a cut section is likewise routed
+  to `not-adjudicable`, never treated as evidence the thing didn't happen.
 - **`[not-built]` English-only prompts.** No localization has been attempted; nothing blocks it.
 
 ### Reading the graded turn's result

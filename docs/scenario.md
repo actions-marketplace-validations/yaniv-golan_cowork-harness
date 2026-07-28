@@ -668,7 +668,10 @@ turns/<N>/        ONE DIRECTORY PER TURN, written once and never renamed. A run 
                   `<run-dir>/result.json` does not exist; a dir that has one instead predates this
                   layout and is refused (naming the shape) by verify-run/inspect/scaffold/--resume.
 egress.log        allow/deny per outbound connection (L1/L2)
-session.json      session manifest (only when --session-id/--resume is used: id + the agent's session UUID)
+session.json      session manifest (only when --session-id/--resume is used): the ids resume needs, plus
+                  the scenario name and the SESSION-STARTING turn's prompt (a --resume never rewrites
+                  the manifest) so the file identifies its own run. RESUME MACHINERY —
+                  result.json stays authoritative for identity; nothing validates the extra fields
 status.json       run status (phase, exit, timing) — see docs/run-status.md
 mounts.json       VM→host path map (feeds trace --translate-paths; hostloop runs)
 timeline.jsonl    per-tool-call timing (feeds trace --view tool-durations)

@@ -136,7 +136,12 @@ the narrow case of advancing a branch nobody has checked out — it just cannot 
 `main` itself, so the base can still move under an in-flight rebase. Separate worktrees fix that half.
 
 **Two one-time costs per worktree**, both benign: no `./.env` (use `--dotenv <primary>/.env` — `doctor`
-detects this and prints the remedy, see `docs/gotchas.md`), and no `node_modules` (`npm ci` before tests).
+detects this and prints the remedy, see `docs/gotchas.md`), and no `node_modules` — run **`npm ci`**.
+
+**Do NOT symlink `node_modules` from the primary** to skip that install. `.gitignore`'s first line is
+`node_modules/` — with a trailing slash, so it matches a *directory* only. A symlink is not a directory to
+git, so it shows up as `?? node_modules` and breaks every clean-tree gate, `npm run preflight` included.
+Verified both ways: a real `node_modules/` directory is correctly ignored; a symlink is not.
 
 **Structural safety, not just etiquette:** git refuses to check out `main` in a second worktree
 (`fatal: 'main' is already used by worktree at …`), so the integration branch cannot be double-held by

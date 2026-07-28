@@ -102,6 +102,7 @@ const CI_RECIPE_MD = ".claude/skills/cowork-harness/references/ci-recipe.md";
 const SCENARIO_SCHEMA_MD = ".claude/skills/cowork-harness/references/scenario-schema.md";
 const FIDELITY_AND_ANSWERS_MD = ".claude/skills/cowork-harness/references/fidelity-and-answers.md";
 const TASK_RECIPES_MD = ".claude/skills/cowork-harness/references/task-recipes.md";
+const CRITIQUE_MD = ".claude/skills/cowork-harness/references/critique.md";
 const PLUGIN_JSON = ".claude/skills/cowork-harness/.claude-plugin/plugin.json";
 const MARKETPLACE_JSON = ".claude-plugin/marketplace.json";
 const REPLAYS_README = "examples/replays/README.md";
@@ -115,6 +116,7 @@ export const TARGET_FILES: readonly string[] = [
   SCENARIO_SCHEMA_MD,
   FIDELITY_AND_ANSWERS_MD,
   TASK_RECIPES_MD,
+  CRITIQUE_MD,
   CI_RECIPE_MD,
   REPLAYS_README,
   "README.md",
@@ -146,6 +148,7 @@ export function rewriteFileContent(relPath: string, content: string, newVersion:
     case SCENARIO_SCHEMA_MD:
     case FIDELITY_AND_ANSWERS_MD:
     case TASK_RECIPES_MD:
+    case CRITIQUE_MD:
       return bumpTracksStamp(content, newVersion);
 
     case CI_RECIPE_MD: {

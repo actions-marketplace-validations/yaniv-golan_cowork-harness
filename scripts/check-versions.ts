@@ -147,7 +147,9 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   //     floor drifted silently (it shipped stale from 0.33.0 through 1.0.0). This catches all of them.
   if (floor) {
     const skillFloors = [...skillMd.matchAll(/@>=(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
-    for (const f of skillFloors) if (f !== floor) errors.push(`SKILL.md floor "@>=${f}" != SKILL.md bootstrap floor "@>=${floor}" (a bare \`@>=X\` drifted — bump it)`);
+    for (const f of skillFloors)
+      if (f !== floor)
+        errors.push(`SKILL.md floor "@>=${f}" != SKILL.md bootstrap floor "@>=${floor}" (a bare \`@>=X\` drifted — bump it)`);
   }
 
   // 6. Each reference doc's "Tracks `cowork-harness X.Y.Z`" stamp must match tracks-harness, and any
@@ -159,6 +161,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
     ".claude/skills/cowork-harness/references/scenario-schema.md",
     ".claude/skills/cowork-harness/references/fidelity-and-answers.md",
     ".claude/skills/cowork-harness/references/task-recipes.md",
+    ".claude/skills/cowork-harness/references/critique.md",
   ];
   for (const f of refFiles) {
     const refText = r(f);

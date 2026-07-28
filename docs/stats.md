@@ -16,8 +16,41 @@ reads it back.
   `stats`/`trace`/`scaffold` too — see [README → Commands at a glance](../README.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
-runLabel?, skillHash?, turn?, signals, costUsd?, tokens?, turns?, cacheReadTokens?, modelCostUsd?,
-durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
+runLabel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
+cacheReadTokens?, modelCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
+
+**Summing a critique's cost: use the roll-up row, not the turns.** A `critique` is FOUR model workloads,
+but only two of them produce a run — the graded turn and the reflection turn each write a row via the inner
+`skill` run, while the two evaluator passes are direct API calls that produce no run and therefore no row.
+Summing `costUsd` across the turn rows alone under-reports a critique by roughly 39%. Each completed
+critique writes one extra row with `critiqueRole:"rollup"` carrying `critiqueTotalUsd` (the whole
+four-workload spend) plus the `skill` it graded; the two turn rows carry `critiqueRole:"task"` and
+`"reflection"`.
+
+**`sum(costUsd)` over all rows is correct with no filtering.** The roll-up's `costUsd` is the EVALUATOR
+passes only — the two turns already contribute their own — so nothing double-counts and nothing is missed.
+`critiqueTotalUsd` is the per-critique convenience figure; summing THAT across roll-ups also gives true
+total critique spend. Roll-ups are excluded from `stats` aggregation entirely (they are bookkeeping, carry
+no verdict, and would otherwise add a phantom run and drag `passRate` toward 1). A roll-up with
+`result:"error"` means a workload was unpriced, so its totals UNDERCOUNT.
+
+`--reindex` reconstructs roll-ups from each run dir's `critique-report.json`, so a lost or corrupted index
+recovers critique costs along with everything else — provided the run dirs survive. Reconstruction is
+skipped for a critique that never produced a cost (e.g. a killed task turn), matching what the live path
+would have written.
+
+**`turn` and `turns` are different things, and the names invite misreading.** `turn` (singular) is the
+1-based turn number within a resumed `--session-id`+`--resume` session — 1 for a normal single-shot run, 2
+for critique's reflection turn. `turns` (plural) is the count of **agent** turns *inside* that one run, from
+the SDK's own usage accounting. So `turn: 2, turns: 1` is not "turn 2 of 1" — it is "the second turn of the
+session, which itself took one agent turn". Neither field bounds the other.
+
+There are **three row shapes**, and only the first two carry either field: an ordinary run row (`turn` set,
+`turns` set), a resumed turn row (same, with `turn > 1`), and a **critique roll-up** — which has *neither*,
+because it accounts for the two evaluator passes and those are not runs at all. Read a missing `turn` as
+"not a completion" rather than "turn zero", and check `critiqueRole` before assuming a row describes a
+run.
+
 `pass`/`signals` come from the same `computeVerdict` every other verdict-facing surface (the footer, the
 JSON envelope, `--repeat`'s rollup) uses — a row's `pass` can never read differently than the run's own
 exit code did. `git` is best-effort (`git rev-parse` in the invoking cwd) — `null` outside a repo, which
@@ -75,10 +108,16 @@ fields to a server-side narrowing it didn't ask for.
 ```bash
 IDX=~/.cowork-harness/runs/index.jsonl
 
-# pass-rate and cost per generation, newest first
+# pass-rate and cost per generation, newest first.
+# NOTE the two `critiqueRole` clauses. This recipe reads RAW rows, so the exclusion `stats` applies
+# internally does not protect it: a critique roll-up carries the graded `skillHash` and `pass:true`, so
+# leaving it in adds a phantom run to every bucket and drags passRate toward 1. Cost is the opposite —
+# the roll-up's costUsd is the evaluator passes the turn rows do NOT carry, so the sum WANTS it.
 jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({
-    skillHash: .[0].skillHash, label: .[0].runLabel, runs: length,
-    passRate: ((map(select(.pass)) | length) / length),
+    skillHash: .[0].skillHash, label: .[0].runLabel,
+    runs: (map(select(.critiqueRole != "rollup")) | length),
+    passRate: ((map(select(.critiqueRole != "rollup" and .pass)) | length)
+               / (map(select(.critiqueRole != "rollup")) | length)),
     costUsd: (map(.costUsd // 0) | add), latest: (map(.ts) | max)
   }) | sort_by(.latest) | reverse' "$IDX"
 

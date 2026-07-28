@@ -1,5 +1,4 @@
-import { writeSync } from "node:fs";
-import { tildeify } from "../io.js";
+import { tildeify, writeAllSync } from "../io.js";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
@@ -51,7 +50,9 @@ export interface Renderer extends RunHooks {
 }
 
 type Sink = (s: string) => void;
-const stderr: Sink = (s) => writeSync(2, s); // sync: the footer is the last write before process.exit (pipe-safe)
+// sync: the footer is the last write before process.exit. writeAllSync retries EAGAIN and loops on
+// short writes (see src/io.ts) — a bare writeSync is NOT pipe-safe on its own once fd 2 is non-blocking.
+const stderr: Sink = (s) => writeAllSync(2, s);
 
 const TRUNC_CHARS = 2000;
 const TRUNC_LINES = 24;
