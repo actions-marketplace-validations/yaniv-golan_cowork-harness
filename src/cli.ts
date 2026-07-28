@@ -1431,6 +1431,14 @@ async function cmdRun(rawArgs: string[]) {
   const keepRequested = rawRest.includes("--keep");
   const args = rawRest.filter((a) => a !== "--keep");
   if (keepRequested) log("note: `run` always keeps runs (under the runs root); --keep is a no-op here.");
+  // A leftover global-only flag is NOT a positional. `takeCommonFlags` has already consumed every real
+  // flag VALUE, so a `--dotenv=`/`--run-dir=` token surviving to here is provably a misplaced flag rather
+  // than someone's argument. Letting it fall through made `args[0]` the FLAG and the user's real scenario
+  // path the "unexpected argument(s)" — blaming the one token that was correct, and in the no-other-arg
+  // case reporting `scenario path not found: --dotenv=…`. Emitting the unknown-flag SHAPE routes this
+  // through fail()'s misplaced-global derivation instead of restating that sentence here.
+  const strayGlobal = args.find((a) => /^--(dotenv|run-dir)(=|$)/.test(a));
+  if (strayGlobal) fail("run", "usage", `unknown flag: ${strayGlobal}`, undefined, flags.output === "json");
   const target = args[0];
   if (!target) fail("run", "usage", "usage: run <scenario.yaml | dir/>", undefined, flags.output === "json");
   // `takeCommonFlags` strips known flags; `run` takes exactly one positional (a scenario file or a

@@ -313,6 +313,27 @@ describe.skipIf(!can)("global-flag position hint", () => {
     });
   }
 
+  // ORDERING. `run` takes its scenario as args[0], so a stray `--dotenv=` ahead of the path was absorbed
+  // as the target and the user's REAL path was reported as the unexpected argument — the correct token
+  // blamed, and no hint. This is the order a user actually types (flag straight after the subcommand).
+  for (const [label, args] of [
+    ["flag before the scenario path", ["run", "--dotenv=/tmp/x.env", "s.yaml"]],
+    ["flag as the only argument", ["run", "--dotenv=/tmp/x.env"]],
+    ["--run-dir before the path", ["run", "--run-dir=/tmp/r", "s.yaml"]],
+  ] as const) {
+    it(`run: a misplaced global ${label} gets the hint, and never blames the path`, () => {
+      const d = mkdtempSync(join(tmpdir(), "gf-"));
+      writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+      const r = run([...args], d);
+      expect(r.code).toBe(2);
+      expect(r.out).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+      expect(r.out).toMatch(/cowork-harness --(dotenv|run-dir) <path> run/);
+      // the scenario path must NOT be named as the problem
+      expect(r.out).not.toMatch(/unexpected argument\(s\): s\.yaml/);
+      expect(r.out).not.toMatch(/scenario path not found: --/);
+    });
+  }
+
   // The flag name inside a quoted VALUE is being reported as a value, not parsed as a flag.
   it("a flag-looking value containing --dotenv gets NO hint", () => {
     const d = mkdtempSync(join(tmpdir(), "gf-"));

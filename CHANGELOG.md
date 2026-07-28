@@ -14,11 +14,17 @@ All notable changes to this project are documented here. The format is based on
   The pre-dispatch guard matches the spaced form by exact token — deliberately, so a per-command value
   like `--answer "--dotenv=x=foo"` is never hijacked — which left the equals form to surface as a bare
   `unknown flag`, dropping the one thing the caller needed: where to put it instead. The hint is derived
-  at the usage-error choke point and covers `run`'s separate `unexpected argument(s)` path too. The
-  trigger is anchored on the two message shapes that mean "parsed as an unrecognized flag", plus a skip
-  when the command is the program name: a broader match fires on errors about a *correctly-placed*
-  leading flag (`--dotenv file not found`, `--dotenv requires a path`) and on a flag name inside a quoted
-  value, telling the user to move a flag that is already in the right place.
+  where usage errors are rendered, and `run` additionally rejects a stray global ahead of its scenario
+  path — that ordering previously absorbed the flag as the target and reported the user's *correct* path
+  as the unexpected argument. The trigger is anchored on the two message shapes that mean "parsed as an
+  unrecognized flag": a broader match fires on errors about a *correctly-placed* leading flag
+  (`--dotenv file not found`, `--dotenv requires a path`) and on a flag name inside a quoted value,
+  telling the user to move a flag that is already in the right place.
+
+  Coverage is most of the CLI, not all of it. A command that never reaches that rendering point
+  (`critique`, `chat`, `prune`, `migrate-run-dir`) or whose usage message is shaped differently (`vm`, a
+  bare `assertions`, and `lint`/`lint-skill`, which forward the token to Python argparse) keeps its own
+  bare `unknown flag` message.
 
 - **The shipped-skill pointer guard covers `schema/` and `examples/`, not `docs/` alone.** A plugin
   install materializes only `.claude/skills/<name>/**`, so a bare pointer to any other repo directory

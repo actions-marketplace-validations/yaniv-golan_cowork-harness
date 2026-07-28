@@ -31,7 +31,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 //   scripts/   — the payload ships its own .claude/skills/<name>/scripts/, so the path resolves
 //   cassettes/ — in a recipe this names the READER's directory, not ours
 //   src/, test/ — provenance citations ("the rule lives here"), not "go open this"
-//   baselines/ — its only payload occurrence is a glob no filename pattern should match
+//   baselines/ — its payload occurrences are a glob and a bare directory mention; no filename pattern matches either
 // Nested segments are included: a reference into a SUBDIRECTORY is just as dead as a flat one, and a
 // pattern that only matched the flat form would let the next one through.
 const DEAD_ROOTS = ["docs", "schema", "examples"] as const;
@@ -101,8 +101,7 @@ export function checkSkillDocLinks(repoRoot: string = REPO_ROOT): { ok: boolean;
   const errors = violations.map(
     (v) =>
       `${v.file}:${v.line}: bare reference to "${v.target}" — dead for a plugin install, which ` +
-      `materializes only .claude/skills/<name>/** (and some of these paths are not in the npm tarball ` +
-      `either — package.json \`files\` ships only examples/replays); rewrite to a GitHub blob permalink ` +
+      `materializes only .claude/skills/<name>/**; rewrite to a GitHub blob permalink ` +
       `(https://github.com/yaniv-golan/cowork-harness/blob/main/${v.target}), or append ` +
       `"${OPT_OUT_MARKER}" to the line if its own sentence already qualifies the pointer as npm-only`,
   );

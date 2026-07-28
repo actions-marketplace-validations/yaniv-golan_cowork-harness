@@ -64,7 +64,7 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
   correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
   profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
 - **"What is WRONG with this skill?"** (a graded critique, not a pass/fail) → `cowork-harness critique
-  <folder> --prompt "<probe>"`. Four model workloads and 10–30 minutes; budget from
+  <folder> --prompt "<probe>"`. Four model workloads and 10–20 minutes; budget from
   `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
   **DO**" — routing, artifact location, narration — use `skill` instead**: no evaluator, a fraction of
   the cost, and it answers that question directly. Report and evidence-package shapes:

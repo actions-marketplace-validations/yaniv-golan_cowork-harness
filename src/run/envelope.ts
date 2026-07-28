@@ -180,14 +180,24 @@ const UNRECOGNIZED_FLAG_SHAPES = [/^unknown flag:/, /^unexpected argument\(s\):/
  *  `unexpected argument(s):` path, which a flag-level fix never reaches.
  *
  *  "It is a usage error, therefore the flag is misplaced" is FALSE, and the narrowness below is the
- *  whole safety argument. The same exit serves errors about a CORRECTLY-PLACED leading global, and
- *  those carry the program name as `command` — hence the skip. It also serves errors naming the flag
- *  inside a quoted VALUE, which the shape allowlist excludes.
+ *  whole safety argument. The same exit serves errors about a CORRECTLY-PLACED leading global
+ *  (`--dotenv file not found: …`) and errors naming the flag inside a quoted VALUE (`… got a
+ *  flag-looking token "--dotenv=/x"`). The SHAPE allowlist is what excludes both: neither wording
+ *  begins with `unknown flag:` or `unexpected argument(s):`. The program-name skip below is
+ *  defense-in-depth on top of that — every leading-position error also carries `cowork-harness` as its
+ *  command — and removing it today changes no observable behaviour. Keep it: it is the guard that still
+ *  holds if a future message is reworded into one of the two shapes.
  *
  *  `critique` needs no exemption here: it never calls `fail()` (it writes to stderr and exits directly),
  *  so its legitimate per-command `--dotenv` cannot reach this function. Its exemption lives in cli.ts's
- *  pre-dispatch guard and nowhere else — do not add a dead branch for it here. `chat` likewise bypasses
- *  `fail()`, so its bare `unknown flag` message is unaffected. */
+ *  pre-dispatch guard and nowhere else — do not add a dead branch for it here.
+ *
+ *  Coverage is most of the CLI, not all of it, and the gaps are structural rather than oversights: a
+ *  command that never reaches `fail()` (`critique`, `chat`, `prune`, `migrate-run-dir` all log and exit
+ *  directly) or whose usage message is shaped differently (`vm` and a bare `assertions` emit a usage
+ *  block; `lint`/`lint-skill` forward the token to Python argparse) keeps its own bare message. Those
+ *  are worth closing at their own call sites — not by widening the allowlist here, which is what keeps
+ *  the false positives out. */
 function misplacedGlobalHint(command: string, message: string): string | undefined {
   // Leading-position global-flag errors are emitted with the PROGRAM NAME as `command`, never a
   // subcommand, and are about a flag that is already correctly placed. Never hint there — and the

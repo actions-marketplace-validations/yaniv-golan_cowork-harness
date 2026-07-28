@@ -81,5 +81,6 @@ top-level list on a sub-agent-heavy run is not evidence the material went unread
 It is stated **observationally** and must be rendered that way: the predicate matches `references/` and
 `scripts/` only — never `assets/`, never `SKILL.md` (delivered whole, never Read as a file) — and keys on
 the `Read` **tool**. A skill that reached its material with `Grep`, or kept it under `assets/`, reports
-`true` having demonstrably done the work. `undefined` means the turn-1 result was degraded: unknown, not
-zero.
+`true` having demonstrably done the work. `undefined` has **two** causes and neither means "nothing was read": a degraded turn-1 result
+(genuinely unknown), or a skill that ships no `references/` and no `scripts/` at all — there is nothing
+for the signal to be about, so emitting it would be noise about material that does not exist.
