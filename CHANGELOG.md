@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-07-28
+
 **Upgrade notes.**
 
 - **`critique` verdicts are not comparable across this release — but the counts still are, and that
