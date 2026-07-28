@@ -379,6 +379,43 @@ describe.skipIf(!havePython)("lint-skill — corpus vs the critique evidence cei
     expect(over).not.toContain("skill-corpus-near-evidence-ceiling");
   });
 
+  // The ceiling governs SKILL.md + references + agents/<name>.md COMBINED. Sizing only the first two
+  // let a plugin sit in the INFO band -- and PASS --strict -- while the packager was already over the
+  // ceiling and would cut content. A proximity check that greens a doomed corpus is worse than none.
+  /** A multi-skill plugin: <root>/skills/<name>/{SKILL.md,references/big.md} + <root>/agents/<name>.md. */
+  function pluginOfSize(refBytes: number, agentsBytes: number): string {
+    const root = mkdtempSync(join(tmpdir(), "corpus-plug-"));
+    const sd = join(root, "skills", "demo");
+    mkdirSync(join(sd, "references"), { recursive: true });
+    mkdirSync(join(root, "agents"), { recursive: true });
+    writeFileSync(join(sd, "SKILL.md"), "# demo\n");
+    writeFileSync(join(sd, "references", "big.md"), "x".repeat(refBytes));
+    writeFileSync(join(root, "agents", "demo.md"), "y".repeat(agentsBytes));
+    return sd;
+  }
+
+  it("counts agents/<name>.md: a plugin under the ceiling on refs alone but over WITH it reports WARN", () => {
+    // refs alone ~83% (INFO band); + agents md pushes past 100%.
+    const sd = pluginOfSize(435_000, 120_000);
+    const r = lintSkill(sd).findings.map((f) => f.rule);
+    expect(r).toContain("skill-corpus-over-evidence-ceiling");
+    expect(r).not.toContain("skill-corpus-near-evidence-ceiling");
+    const strict = spawnSync(py, [SCRIPT, "lint-skill", "--strict", join(sd, "SKILL.md")], { encoding: "utf8" });
+    expect(strict.status, "--strict must fail on a corpus the packager would cut").toBe(1);
+  });
+
+  it("a plugin whose agents md keeps it under the band stays silent", () => {
+    expect(lintSkill(pluginOfSize(1024, 1024)).findings.map((f) => f.rule)).toEqual([]);
+  });
+
+  it("counts a non-.md reference — the packager applies no extension filter", () => {
+    const d = mkdtempSync(join(tmpdir(), "corpus-ext-"));
+    mkdirSync(join(d, "references"), { recursive: true });
+    writeFileSync(join(d, "SKILL.md"), "# t\n");
+    writeFileSync(join(d, "references", "schema.json"), "x".repeat(Math.ceil(512 * 1024 * 0.8)));
+    expect(lintSkill(d).findings.map((f) => f.rule)).toContain("skill-corpus-near-evidence-ceiling");
+  });
+
   it("the INFO notice never fails --strict; the WARN does", () => {
     const near = spawnSync(py, [SCRIPT, "lint-skill", "--strict", join(skillOfSize(Math.ceil(CEILING * 0.8)), "SKILL.md")], {
       encoding: "utf8",

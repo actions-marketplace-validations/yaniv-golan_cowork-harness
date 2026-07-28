@@ -1,6 +1,6 @@
 # Critique — the facts a plugin install can't otherwise reach
 
-Tracks `cowork-harness 1.13.1` (baseline `desktop-1.24012.9`). This is **not** a trim of the full
+Tracks `cowork-harness 1.13.2` (baseline `desktop-1.24012.9`). This is **not** a trim of the full
 [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only —
 flags, cost, reproduction discipline, known limitations all live there). This file covers exactly what a
 plugin install cannot otherwise discover: the run-dir artifact a harvester actually reads, the report's
@@ -52,10 +52,12 @@ separately at **128 KiB**, cut **head+tail with an elided middle**, so a run's s
 both survive a cut instead of just one end.
 
 You do not need a paid run to find out where you stand: **`cowork-harness lint-skill <skill-dir>` sizes
-`SKILL.md` + `references/**` against the same ceiling**, reporting `skill-corpus-near-evidence-ceiling`
-(INFO) from 80% and `skill-corpus-over-evidence-ceiling` (WARN, so it fails `--strict`) past it. That
-figure approximates — it excludes `agents/<skill>.md` and does not apply the git-tracked filter — so
-`corpusCuts` below stays the authority.
+your corpus against the same ceiling**, reporting `skill-corpus-near-evidence-ceiling` (INFO) from 80%
+and `skill-corpus-over-evidence-ceiling` (WARN, so it fails `--strict`) past it. It counts the three
+classes the ceiling governs — `SKILL.md`, every file under `references/` (**any extension**: the packager
+applies no extension filter, so JSON schemas and rule packs count toward your total), and a plugin
+skill's `agents/<name>.md`. It does not apply staging's git-tracked filter, so an untracked reference
+inflates the figure; `corpusCuts` below stays the authority.
 
 The report's `evidenceBudget` object says exactly what was shown — read it instead of inferring budgets
 from `dist/` source:
