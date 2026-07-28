@@ -411,8 +411,40 @@
         "type": "boolean",
         "required": true
       },
+      ".costUsd.evaluatorPass1Tokens": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd.evaluatorPass1Tokens.cacheRead": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass1Tokens.input": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass1Tokens.output": {
+        "type": "number",
+        "required": true
+      },
       ".costUsd.evaluatorPass1Usd": {
         "type": "number"
+      },
+      ".costUsd.evaluatorPass2Tokens": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd.evaluatorPass2Tokens.cacheRead": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass2Tokens.input": {
+        "type": "number",
+        "required": true
+      },
+      ".costUsd.evaluatorPass2Tokens.output": {
+        "type": "number",
+        "required": true
       },
       ".costUsd.evaluatorPass2Usd": {
         "type": "number"

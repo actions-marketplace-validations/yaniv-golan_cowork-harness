@@ -20,13 +20,19 @@ All notable changes to this project are documented here. The format is based on
 - **`skillMdTruncated` is gone from `critique-report.json`**, replaced by `evidenceBudget`
   (`corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `trimRecord`). A harvester reading
   the old boolean should read `evidenceBudget.corpusCuts` instead — it is empty on every real skill.
-- **An untracked skill file is no longer graded.** If you critique a skill with uncommitted
-  `references/**` files, they are now excluded from the evidence (they were never in the agent's mount)
-  and named in `evidenceBudget.corpusExcluded` plus a `::warning::`. This covers `SKILL.md`,
-  `references/**` and `agents/<skill>.md`. `git add` them to grade as-published. An untracked `SKILL.md` previously
-  had its content **graded** (the packager read the host directory raw); it now reports
-  `skillMdStatus: "untracked"`, withholds the content, and forces the same `not-adjudicable` downgrade as
-  an unreadable one.
+- **An untracked skill file is no longer graded**, and the two cases behave differently — do not read one
+  as the other:
+  - **Untracked `references/**` or `agents/<skill>.md`** are simply excluded, named in
+    `evidenceBudget.corpusExcluded`, and announced with a `::warning::`. **This does NOT force
+    `not-adjudicable`** — and it should not: the agent never received those files either, so the
+    evaluator's view now MATCHES the agent's. A finding like "the skill never explains X" against an
+    excluded reference is correctly `grounded`; before this release the evaluator could see the file the
+    agent never got and mark that true finding `already-covered`.
+  - **An untracked `SKILL.md`** previously had its content **graded** (the packager read the host directory
+    raw). It now reports `skillMdStatus: "untracked"`, withholds the content, and **does** force the same
+    `not-adjudicable` downgrade as an unreadable one — coverage claims cannot be judged with no skill source
+    at all.
+  Either way, `git add` before critiquing to grade as-published.
 
 ### Fixed
 
@@ -127,6 +133,12 @@ caps were rationing the cheap term — but it is an increase, and a batch budget
   reflection turn → evaluator pass 1 → evaluator pass 2). Previously four model calls over 10–20 minutes
   produced no output at all until the finished report appeared, so a working run and a hung one were
   indistinguishable. stdout remains the machine channel.
+- **`costUsd` now reports the evaluator passes' token split** (`evaluatorPass1Tokens` /
+  `evaluatorPass2Tokens`, each `{input, output, cacheRead}`). The transport always handed the harness the
+  full usage object and it was summed to a dollar figure and discarded — so the report said what a pass
+  COST and never why, and "is this money evidence or thinking?" was unanswerable from any artifact the tool
+  produced. That is the question that decides whether sending more evidence is cheap, which makes it the
+  number to check first when budgeting a batch under the whole-corpus change above.
 - **`evidenceBudget` in `critique-report.json`** — what the evaluator was actually shown, so the budgets
   are discoverable without reading compiled source. Includes `packageTruncated`, which is what carries the
   transcript's head+tail elision: that elision is what adds the evaluator's truncation caveat, and without

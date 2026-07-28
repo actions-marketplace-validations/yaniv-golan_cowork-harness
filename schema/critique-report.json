@@ -57,6 +57,40 @@
         },
         "complete": {
           "type": "boolean"
+        },
+        "evaluatorPass1Tokens": {
+          "type": "object",
+          "description": "token split for one evaluator pass. Answers 'is this pass's money evidence or thinking?' \u2014 the question that decides whether sending more evidence is cheap. cacheRead is separate because it prices at a tenth of fresh input",
+          "properties": {
+            "input": {
+              "type": "number"
+            },
+            "output": {
+              "type": "number"
+            },
+            "cacheRead": {
+              "type": "number"
+            }
+          },
+          "required": ["input", "output", "cacheRead"],
+          "additionalProperties": false
+        },
+        "evaluatorPass2Tokens": {
+          "type": "object",
+          "description": "token split for one evaluator pass. Answers 'is this pass's money evidence or thinking?' \u2014 the question that decides whether sending more evidence is cheap. cacheRead is separate because it prices at a tenth of fresh input",
+          "properties": {
+            "input": {
+              "type": "number"
+            },
+            "output": {
+              "type": "number"
+            },
+            "cacheRead": {
+              "type": "number"
+            }
+          },
+          "required": ["input", "output", "cacheRead"],
+          "additionalProperties": false
         }
       }
     },

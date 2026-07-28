@@ -33,6 +33,8 @@ const FULL_STATE = {
     reflectionTurnUsd: 0.2,
     evaluatorPass1Usd: 0.45,
     evaluatorPass2Usd: 0.5,
+    evaluatorPass1Tokens: { input: 29_034, output: 36_193, cacheRead: 0 },
+    evaluatorPass2Tokens: { input: 31_002, output: 12_500, cacheRead: 0 },
     totalUsd: 1.24,
     complete: true,
   },

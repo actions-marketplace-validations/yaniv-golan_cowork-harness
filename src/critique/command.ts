@@ -759,6 +759,38 @@ export interface CritiqueCost {
   evaluatorPass2Usd?: number;
   totalUsd: number;
   complete: boolean;
+  /** Token split for each evaluator pass. The transport hands us the full usage object and we previously
+   *  summed it to a dollar figure and discarded the rest — so the report said what a pass COST and never
+   *  why, and "is the money evidence or thinking?" was unanswerable from any artifact the tool produced.
+   *  That is the question that decides whether sending more evidence is cheap, and it was being thrown
+   *  away on every run. `cacheRead` is separated because it prices at a tenth of fresh input. */
+  evaluatorPass1Tokens?: EvaluatorTokens;
+  evaluatorPass2Tokens?: EvaluatorTokens;
+}
+
+export interface EvaluatorTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+}
+
+/** Sum the token counters across a `modelUsage` map — the sibling of `sumCostUsd` over the same shape.
+ *  `undefined` when the map is absent or carries no numeric counter at all (unpriced/unreported), which is
+ *  DIFFERENT from a genuine zero. */
+export function sumTokens(modelUsage: unknown): EvaluatorTokens | undefined {
+  if (!modelUsage || typeof modelUsage !== "object") return undefined;
+  let input = 0,
+    output = 0,
+    cacheRead = 0,
+    seen = false;
+  for (const v of Object.values(modelUsage as Record<string, unknown>)) {
+    if (!v || typeof v !== "object") continue;
+    const m = v as { inputTokens?: unknown; outputTokens?: unknown; cacheReadInputTokens?: unknown };
+    if (typeof m.inputTokens === "number") ((input += m.inputTokens), (seen = true));
+    if (typeof m.outputTokens === "number") ((output += m.outputTokens), (seen = true));
+    if (typeof m.cacheReadInputTokens === "number") ((cacheRead += m.cacheReadInputTokens), (seen = true));
+  }
+  return seen ? { input, output, cacheRead } : undefined;
 }
 
 /** Sum `costUSD` across a result/envelope `modelUsage` map. `undefined` when the map is absent or
@@ -1456,6 +1488,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const rawEvaluatorReplies: Array<{ pass: 1 | 2; raw: string }> = [];
     let evaluatorPass1Usd: number | undefined;
     let evaluatorPass2Usd: number | undefined;
+    let evaluatorPass1Tokens: EvaluatorTokens | undefined;
+    let evaluatorPass2Tokens: EvaluatorTokens | undefined;
     let reflectionTurnUsd: number | undefined;
     let salvageSelfReport: string | undefined;
 
@@ -1530,8 +1564,13 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           },
           onPass2Start: () => progress(4, "evaluator pass 2 (grades the self-report against pass 1's findings)"),
           onUsage: (pass, usage) => {
-            if (pass === 1) evaluatorPass1Usd = sumCostUsd(usage);
-            else evaluatorPass2Usd = sumCostUsd(usage);
+            if (pass === 1) {
+              evaluatorPass1Usd = sumCostUsd(usage);
+              evaluatorPass1Tokens = sumTokens(usage);
+            } else {
+              evaluatorPass2Usd = sumCostUsd(usage);
+              evaluatorPass2Tokens = sumTokens(usage);
+            }
           },
           model: requestedModel,
           packageTruncated: truncated,
@@ -1557,6 +1596,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           reflectionTurnUsd,
           evaluatorPass1Usd,
           evaluatorPass2Usd,
+          evaluatorPass1Tokens,
+          evaluatorPass2Tokens,
           totalUsd: priced.reduce((a, b) => a + b, 0),
           complete: priced.length === costParts.length,
         }

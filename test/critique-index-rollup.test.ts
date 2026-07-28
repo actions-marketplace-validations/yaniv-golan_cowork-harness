@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync }
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { sumTokens } from "../src/critique/command.js";
 import { appendCritiqueRollupRow, readIndex, reindexFromRunsTree, buildStats, CRITIQUE_SESSION_PREFIX } from "../src/run/run-index.js";
 
 // A critique is FOUR model workloads but only TWO of them produce a run: the graded turn and the reflection
@@ -409,5 +410,24 @@ describe("critique roll-up survives and is rebuilt by --reindex", () => {
       {},
     );
     expect(withRollup).toEqual(without);
+  });
+});
+
+describe("evaluator token split", () => {
+  it("sums the counters the transport reports, keeping cacheRead separate", () => {
+    // The usage object always reached the harness; it was summed to a dollar figure and discarded, so the
+    // report said what a pass cost and never why. cacheRead is separate because it prices at ~a tenth.
+    expect(
+      sumTokens({
+        "claude-opus-4-8": { inputTokens: 100, outputTokens: 200, cacheReadInputTokens: 50, costUSD: 1 },
+        other: { inputTokens: 5, outputTokens: 5, cacheReadInputTokens: 5 },
+      }),
+    ).toEqual({ input: 105, output: 205, cacheRead: 55 });
+  });
+
+  it("distinguishes 'no counters reported' from a genuine zero", () => {
+    expect(sumTokens(undefined)).toBeUndefined();
+    expect(sumTokens({ m: { costUSD: 1 } })).toBeUndefined(); // priced but no token counters
+    expect(sumTokens({ m: { inputTokens: 0, outputTokens: 0 } })).toEqual({ input: 0, output: 0, cacheRead: 0 });
   });
 });
