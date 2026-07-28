@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync }
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { sumTokens } from "../src/critique/command.js";
+import { sumTokens, buildTextReport } from "../src/critique/command.js";
 import { appendCritiqueRollupRow, readIndex, reindexFromRunsTree, buildStats, CRITIQUE_SESSION_PREFIX } from "../src/run/run-index.js";
 
 // A critique is FOUR model workloads but only TWO of them produce a run: the graded turn and the reflection
@@ -429,5 +429,38 @@ describe("evaluator token split", () => {
     expect(sumTokens(undefined)).toBeUndefined();
     expect(sumTokens({ m: { costUSD: 1 } })).toBeUndefined(); // priced but no token counters
     expect(sumTokens({ m: { inputTokens: 0, outputTokens: 0 } })).toEqual({ input: 0, output: 0, cacheRead: 0 });
+  });
+});
+
+describe("no-reads signal — three states, never collapsed", () => {
+  const base = {
+    skillFolder: "/x",
+    prompt: "p",
+    sessionId: "s",
+    outDir: "/o",
+    fidelity: "container" as const,
+    selfReportStatus: "captured" as const,
+    items: [],
+    requestedModel: "m",
+  };
+  const line = (s: Partial<Parameters<typeof buildTextReport>[0]>) =>
+    buildTextReport({ ...base, ...s } as Parameters<typeof buildTextReport>[0]);
+
+  it("says nothing was Read when that is what happened", () => {
+    expect(line({ noSkillFilesRead: true })).toMatch(/no references\/ or scripts\/ file was Read/);
+  });
+
+  it("says UNKNOWN — not 'nothing was read' — when the graded result was degraded", () => {
+    // The field is `undefined` for BOTH "degraded" and "nothing to read", so rendering a line only for
+    // `true` left "we could not tell" indistinguishable from "reads happened". Absence-vs-unknown is the
+    // exact conflation this instrument exists to surface; it must not commit it in its own report.
+    const out = line({ noSkillFilesRead: undefined, turn1ResultDegraded: true });
+    expect(out).toMatch(/UNKNOWN/);
+    expect(out).not.toMatch(/no references\/ or scripts\/ file was Read during/);
+  });
+
+  it("stays silent when reads happened, or when there was nothing to read", () => {
+    expect(line({ noSkillFilesRead: false })).not.toMatch(/UNKNOWN|was Read during/);
+    expect(line({ noSkillFilesRead: undefined })).not.toMatch(/UNKNOWN|was Read during/);
   });
 });

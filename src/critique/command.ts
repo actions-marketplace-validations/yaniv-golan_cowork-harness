@@ -1014,6 +1014,14 @@ export function buildTextReport(state: ReportState): string {
         `  NOT graded (staging would not deliver them — untracked): ${eb.corpusExcluded.join(", ")} — 'git add' them to grade as-published`,
       );
   }
+  // Three states, and the report must not collapse them: `true` = nothing was Read, `false` = something
+  // was, `undefined` = we could not tell (a degraded turn-1 result) or there was nothing to read. Printing
+  // a line only for `true` left "could not tell" indistinguishable from "reads happened" — the exact
+  // absence-vs-unknown conflation this instrument exists to surface.
+  if (state.noSkillFilesRead === undefined && state.turn1ResultDegraded)
+    out.push(
+      `  whether any references/ or scripts/ file was Read is UNKNOWN — the graded turn's result was degraded, so treat this as unknown, never as "nothing was read"`,
+    );
   if (state.noSkillFilesRead) {
     out.push(
       `  no references/ or scripts/ file was Read during the graded turn (main agent or sub-agents) — note this counts the Read tool only, so Grep or assets/ use would not appear here`,
