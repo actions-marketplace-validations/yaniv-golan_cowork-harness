@@ -158,6 +158,45 @@ export function isJsonOutput(args: string[]): boolean {
   return process.env.COWORK_HARNESS_OUTPUT_FORMAT === "json";
 }
 
+/** Flags the CLI honors ONLY in leading position, before the subcommand. */
+const GLOBAL_ONLY_FLAGS = ["--dotenv", "--run-dir"] as const;
+
+/** The ONLY message shapes for which "you put a global flag after the subcommand" is a correct
+ *  diagnosis. Anchored deliberately narrowly: the same usage exit also serves errors about a
+ *  CORRECTLY-PLACED leading global (`--dotenv file not found: …`, `--dotenv requires a path …`) and
+ *  errors where the flag name appears inside a QUOTED VALUE (`… got a flag-looking token
+ *  "--dotenv=/x"`). Matching on "the message mentions --dotenv" fires on all of those and tells the user
+ *  to move a flag that is already in the right place. */
+const UNRECOGNIZED_FLAG_SHAPES = [/^unknown flag:/, /^unexpected argument\(s\):/];
+
+/** Recover the "put it before the subcommand" guidance for a misplaced global flag written in the
+ *  `--flag=value` form.
+ *
+ *  The pre-dispatch guard in cli.ts matches the SPACED form by EXACT token and deliberately does not
+ *  match `--dotenv=<path>` — that exact-token rule is what stops a legitimate per-command VALUE
+ *  (`skill … --answer "--dotenv=x=foo"`) from being hijacked, and it must stay. The equals form therefore
+ *  reaches each command's own parser and surfaces as a bare `unknown flag: --dotenv`, dropping the one
+ *  thing the user needs: where to put it instead. Deriving the hint HERE is safe in exactly the case the
+ *  pre-dispatch scan cannot be — a usage error means value tokens were already consumed, so the flag is
+ *  provably being parsed as a flag. It also covers `run`'s `unexpected argument(s):` path, which a
+ *  flag-level fix never reaches.
+ *
+ *  `critique` is exempt from the `--dotenv` half: it is a legitimate per-command flag there, and hinting
+ *  would tell a correct invocation to move a flag that is already in the right place. */
+function misplacedGlobalHint(command: string, message: string): string | undefined {
+  // Leading-position global-flag errors are emitted with the PROGRAM NAME as `command`, never a
+  // subcommand, and are about a flag that is already correctly placed. Never hint there — and the
+  // example string would read `cowork-harness --dotenv <path> cowork-harness …` if we did.
+  if (command === "cowork-harness") return undefined;
+  if (!UNRECOGNIZED_FLAG_SHAPES.some((re) => re.test(message))) return undefined;
+  for (const flag of GLOBAL_ONLY_FLAGS) {
+    // Token-boundary match: the flag bare at end-of-token, or introducing an `=value` form.
+    if (!new RegExp(`(^|[\\s:])${flag}(=|$|[\\s,.])`).test(message)) continue;
+    return `${flag} is a GLOBAL flag and must come BEFORE the subcommand (e.g. \`cowork-harness ${flag} <path> ${command} …\`)`;
+  }
+  return undefined;
+}
+
 /** The single error exit used by every command + the top-level catch, in both `cli.ts` and `doctor.ts`.
  *  boundary → exit 3, every other category → exit 2, UNLESS `exitCode` overrides it — SPEC.md's exit-code
  *  contract names two exceptions that exit `1` instead of the general `2`: `sync` hard-failures (missing
@@ -172,10 +211,13 @@ export function fail(
   json: boolean,
   exitCode?: 1 | 2 | 3,
 ): never {
-  if (json) out(jsonError(command, category, message, hint));
+  // A caller-supplied hint always wins. The pre-dispatch guard's own message is not one of the two
+  // recognized shapes, so it can never pick up a duplicate copy of its own sentence.
+  const effective = hint ?? (category === "usage" ? misplacedGlobalHint(command, message) : undefined);
+  if (json) out(jsonError(command, category, message, effective));
   else {
     log(message);
-    if (hint) log(hint);
+    if (effective) log(effective);
   }
   process.exit(exitCode ?? (category === "boundary" ? 3 : 2));
 }
