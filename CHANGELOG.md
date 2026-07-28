@@ -8,9 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 **Upgrade notes.**
 
-- **`critique` grades are not comparable across this release.** The evaluator now sees materially more of
-  your skill, so a finding count before and after is not a like-for-like measurement. Re-baseline rather
-  than diffing across the boundary.
+- **`critique` verdicts are not comparable across this release — but the counts still are, and that
+  distinction decides what to do with your history.** The evaluator now sees materially more of your skill,
+  so a *per-item* verdict may flip for reasons that have nothing to do with your edits: do not diff
+  individual findings across the boundary, and re-baseline anything that tracks a skill's progress
+  report-to-report. **Do NOT discard your pre-upgrade reports.** Aggregate counts — above all the
+  `not-adjudicable` count on identical prompts — remain the right way to measure what this release did,
+  and your archived reports are the only "before" that exists. Pair that with the
+  `citationResolved:false` (DROPPED) rate, which is the guard in the other direction: a much larger corpus
+  could make the evaluator's citations sloppier, and nothing else would show it.
 - **`skillMdTruncated` is gone from `critique-report.json`**, replaced by `evidenceBudget`
   (`corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `trimRecord`). A harvester reading
   the old boolean should read `evidenceBudget.corpusCuts` instead — it is empty on every real skill.
@@ -70,7 +76,10 @@ All notable changes to this project are documented here. The format is based on
   a six-skill plugin: the same first file was the sole survivor in 9 of 9, and **11 of 13 distinct
   reference files had never reached an evaluator in any run**, including a scoring rubric a sub-agent had
   opened in order to do the scoring. Skill-authored content (SKILL.md, every `references/**` file,
-  `agents/<skill>.md`) now ships **whole**. Reported by a consumer.
+  `agents/<skill>.md`) now ships **whole** — bounded only by a **512 KiB sanity ceiling across all three
+  combined**, which no real skill approaches (the largest measured is ~164 KB, about a third of it). A skill
+  that does breach it is cut **loudly and by name** in `evidenceBudget.corpusCuts` — never silently, and
+  never by refusing the run. The transcript is bounded separately at 128 KiB. Reported by a consumer.
 - **The evidence corpus could contain files the agent never received.** Staging delivers git-tracked files
   only, but the packager read the host directory directly — so an uncommitted reference was absent from
   the mount and present in the evaluator's evidence. An agent saying "the skill never explains X" could be
@@ -98,6 +107,12 @@ All notable changes to this project are documented here. The format is based on
   of agent turns *inside* that one run, and neither bounds the other. A critique roll-up carries neither,
   since it accounts for workloads that are not runs. Documented rather than renamed — a rename breaks
   `stats` and would need a schema version bump for no behavioural gain. Reported by a consumer.
+
+**Cost note.** Sending the whole corpus costs more per critique, not less: roughly **+5% to +18%** on a
+~$5.60 run, scaling with how much of your skill was previously being cut (a skill whose SKILL.md sat under
+the old 64 KiB cap and had few references sees almost nothing; one that was heavily truncated sees the top
+of the range). Evidence input was only ~14% of an evaluator pass's cost to begin with, which is why the old
+caps were rationing the cheap term — but it is an increase, and a batch budget should carry it.
 
 ### Added
 
