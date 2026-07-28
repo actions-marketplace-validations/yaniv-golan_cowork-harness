@@ -70,3 +70,16 @@ file under the skill folder was never in the agent's mount, so grading against i
 false `already-covered` verdict. It is named in `corpusExcluded` instead, and an untracked `SKILL.md`
 specifically reports `skillMdStatus: "untracked"`, forcing the mechanical `already-covered` →
 `not-adjudicable` downgrade. `git add` it (or commit before critiquing) if it should count as evidence.
+
+## `referencesRead` is main-agent-only — `noSkillFilesRead` is not
+
+`result.json`'s top-level `referencesRead` lists **main-agent Reads only**. A dispatcher-style skill does
+its reading one level down, and those Reads live under `subagents[].referencesRead` — so an empty
+top-level list on a sub-agent-heavy run is not evidence the material went unread. The critique report's
+**`noSkillFilesRead`** unions both, which is why it is the signal to read.
+
+It is stated **observationally** and must be rendered that way: the predicate matches `references/` and
+`scripts/` only — never `assets/`, never `SKILL.md` (delivered whole, never Read as a file) — and keys on
+the `Read` **tool**. A skill that reached its material with `Grep`, or kept it under `assets/`, reports
+`true` having demonstrably done the work. `undefined` means the turn-1 result was degraded: unknown, not
+zero.
