@@ -91,6 +91,14 @@ All notable changes to this project are documented here. The format is based on
   died with `EAGAIN` instead of printing its verdict, and a short write on a pipe silently dropped the
   remainder of a JSON envelope. Every `writeSync` output site in `src/` now goes through `writeAllSync`, including critique's own JSON report — the largest single payload the tool emits, and the one its own code comment already flagged as at risk when piped to `jq`. (Sites already using async `process.stderr.write`, and two dev-only sinks under `scripts/`, are unchanged — the failure was specific to the synchronous idiom.)
 
+### Documentation
+
+- **`turn` vs `turns` in `index.jsonl` is now explained.** The names invite reading `turn: 2, turns: 1` as
+  "turn 2 of 1". They are unrelated: `turn` is the position within a resumed session, `turns` is the count
+  of agent turns *inside* that one run, and neither bounds the other. A critique roll-up carries neither,
+  since it accounts for workloads that are not runs. Documented rather than renamed — a rename breaks
+  `stats` and would need a schema version bump for no behavioural gain. Reported by a consumer.
+
 ### Added
 
 - **`session.json` now identifies its own run.** The resume manifest (written for `--session-id`/`--resume`

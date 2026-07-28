@@ -45,6 +45,12 @@ for critique's reflection turn. `turns` (plural) is the count of **agent** turns
 the SDK's own usage accounting. So `turn: 2, turns: 1` is not "turn 2 of 1" — it is "the second turn of the
 session, which itself took one agent turn". Neither field bounds the other.
 
+There are **three row shapes**, and only the first two carry either field: an ordinary run row (`turn` set,
+`turns` set), a resumed turn row (same, with `turn > 1`), and a **critique roll-up** — which has *neither*,
+because it accounts for the two evaluator passes and those are not runs at all. Read a missing `turn` as
+"not a completion" rather than "turn zero", and check `critiqueRole` before assuming a row describes a
+run.
+
 `pass`/`signals` come from the same `computeVerdict` every other verdict-facing surface (the footer, the
 JSON envelope, `--repeat`'s rollup) uses — a row's `pass` can never read differently than the run's own
 exit code did. `git` is best-effort (`git rev-parse` in the invoking cwd) — `null` outside a repo, which
