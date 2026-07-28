@@ -131,7 +131,7 @@ So a helper keys its answer on `questions[N].question`, enumerates choices from
 The `reply_with` field is a literal fill-in template for the reply shape (array placeholder when
 multiSelect). Notes: `options` is *optional* — a free-text / header-only gate arrives with no
 `options`; key off `question` (falling back to `header`). This is the shared wire model for both
-channels — `docs/decider-dir.md` shows the same shape, and the Python `serve_decider(fn)` adapter
+channels — [`docs/decider-dir.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/decider-dir.md) shows the same shape, and the Python `serve_decider(fn)` adapter
 hands `fn` exactly this dict.
 
 ### `--on-unanswered` accepted values (precise)
@@ -207,7 +207,7 @@ up often enough to spell out:
   Everything else that *is* evaluated is checked against the **recording**, not fresh behavior — a
   green replay says the skill produced these events when it was recorded, not that it still does
   (`staleness[]` flags skill/baseline drift as a hint; only a live `run` re-confirms current
-  behavior). See `docs/cassette.md` § "Still skipped on replay" and `docs/scenario.md` § "Which
+  behavior). See [`docs/cassette.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md) § "Still skipped on replay" and [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) § "Which
   assertions survive replay."
 - **Container-only assertions can't verify off the `container` tier.** `no_scratchpad_leak` and
   `present_files_called` check the `present_files` delivery path, which is served **only** on
@@ -222,7 +222,7 @@ up often enough to spell out:
   class of Cowork bug (a client-side write-back to a relative URL that resolves-but-fails against
   Cowork's own origin, or a broken blob-download fallback) is invisible to any live run, however
   faithfully sandboxed, because it only manifests in a rendered DOM a human is driving. See
-  `docs/fidelity-gaps.md` § "Browser↔webview↔human-interaction boundary."
+  [`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md) § "Browser↔webview↔human-interaction boundary."
 
 ## Relevant environment variables
 

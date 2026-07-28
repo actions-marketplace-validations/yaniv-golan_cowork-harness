@@ -287,4 +287,56 @@ describe.skipIf(!havePython)("scenario.py lint-skill — Cowork host-loop footgu
     const strict = spawnSync(py, [SCRIPT, "lint-skill", "--strict", join(d, "SKILL.md")], { encoding: "utf8" });
     expect(strict.status).toBe(1);
   });
+
+  it("`--min-severity` (a `lint`-only flag) names `lint` as the sibling instead of a bare exit 2", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-min-severity-"));
+    writeFileSync(join(d, "SKILL.md"), "# S\n");
+
+    const r = spawnSync(py, [SCRIPT, "lint-skill", join(d, "SKILL.md"), "--min-severity", "ERROR"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/--min-severity is a `lint` flag, not `lint-skill`/);
+    expect(r.stderr).toMatch(/cowork-harness lint\b/);
+  });
+
+  it("`--min-severity=ERROR` (equals form) gets the same named-sibling error", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-min-severity-eq-"));
+    writeFileSync(join(d, "SKILL.md"), "# S\n");
+
+    const r = spawnSync(py, [SCRIPT, "lint-skill", join(d, "SKILL.md"), "--min-severity=ERROR"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/--min-severity is a `lint` flag, not `lint-skill`/);
+  });
+
+  it("an unrelated unknown flag is NOT given the min-severity hint (regression against over-matching)", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-unknown-flag-"));
+    writeFileSync(join(d, "SKILL.md"), "# S\n");
+
+    const r = spawnSync(py, [SCRIPT, "lint-skill", join(d, "SKILL.md"), "--bogus-flag"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/unrecognized arguments: --bogus-flag/);
+    expect(r.stderr).not.toMatch(/--min-severity/);
+  });
+
+  it("`lint` (the actual owner) still accepts --min-severity normally", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-lint-min-severity-owner-"));
+    const scenario = join(d, "demo.yaml");
+    writeFileSync(
+      scenario,
+      [
+        "name: demo",
+        "baseline: latest",
+        "fidelity: container",
+        "on_unanswered: fail",
+        "",
+        "prompt: |",
+        "  hi",
+        "",
+        "assert:",
+        "  - result: success",
+        "",
+      ].join("\n"),
+    );
+    const r = spawnSync(py, [SCRIPT, "lint", scenario, "--min-severity", "ERROR"], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+  });
 });

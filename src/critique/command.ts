@@ -22,6 +22,8 @@ import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, sta
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
+import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
+import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
@@ -446,7 +448,16 @@ interface TurnOutcome {
 // whole process GROUP so `npx` → `tsx` → `node` all die together — killing only the `npx` pid can leave the
 // real runner alive and hung) — a self-contained copy here rather than importing that gate-only helper,
 // since this script isn't the eval-gate and shouldn't couple to it.
-const TURN_TIMEOUT_MS = 10 * 60_000;
+/** Wall-clock kill for a spawned turn. THIRTY minutes, not ten.
+ *
+ *  Ten was sized for a quick single-agent run. A sub-agent-dispatching skill routinely exceeds it, and the
+ *  failure is the most expensive one this tool has: the task turn is killed AFTER its model spend, so the
+ *  consumer pays for a graded run and receives an instrument failure instead of a critique. A reported case
+ *  burned $11.05 that way. Being killed too late costs waiting; being killed too early costs the money AND
+ *  the result, so the asymmetry says err long. `--timeout` still raises it further, and the byte cap plus
+ *  the process-group kill below remain the real runaway guards. Matches the evaluator transport's own
+ *  30-minute floor so neither end of the pipeline is the surprise one. */
+const TURN_TIMEOUT_MS = 30 * 60_000;
 const TURN_MAX_BYTES = 16 * 1024 * 1024;
 
 // F23/F36 residual: `detached: true` (below) makes each spawned child its OWN process-group leader — which
@@ -1299,7 +1310,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       `::notice:: [critique] ${tildeify(opts.skillFolder)} is a single-skill plugin — grading skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
     );
 
-  const sessionId = `crit-${randomUUID()}`;
+  // Minted from the SHARED constant the index detector matches on — see `critiqueRoleFor`.
+  const sessionId = `${CRITIQUE_SESSION_PREFIX}${randomUUID()}`;
 
   try {
     // 1. Task turn.
@@ -1548,6 +1560,36 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           complete: priced.length === costParts.length,
         }
       : undefined;
+    // One roll-up row carrying the WHOLE critique's spend. The two graded turns each wrote their own row via
+    // the inner `skill` runs, but the two evaluator passes are direct API calls that produce no run and
+    // therefore no row — so anything summing the index missed them entirely (~39% light, measured). Written
+    // best-effort: an index-write failure must never sink a critique that otherwise completed and whose
+    // report is about to be printed.
+    try {
+      appendCritiqueRollupRow(runsWriteRoot(), {
+        outDir,
+        // Both from the GRADED turn's own result, not re-derived: `runLabel` in particular is not on
+        // critique's ParsedArgs at all (`--label` is forwarded to the task turn, deliberately not to the
+        // reflection turn), so the turn-1 result is the only place its resolved value exists.
+        scenario: typeof taskRaw?.scenario === "string" ? taskRaw.scenario : `skill-${basename(opts.skillFolder)}`,
+        fidelity: opts.fidelity,
+        effectiveFidelity: gradedEffectiveFidelity,
+        baseline: gradedBaseline ?? "unknown",
+        totalUsd: costUsd?.totalUsd,
+        evaluatorUsd:
+          evaluatorPass1Usd !== undefined || evaluatorPass2Usd !== undefined
+            ? (evaluatorPass1Usd ?? 0) + (evaluatorPass2Usd ?? 0)
+            : undefined,
+        complete: costUsd?.complete ?? false,
+        runLabel: typeof taskRaw?.runLabel === "string" ? taskRaw.runLabel : undefined,
+        skill: gradedSkillName,
+        skillHash: gradedSkillHash,
+      });
+    } catch (err) {
+      warn(
+        `::warning:: [critique] could not append the cost roll-up row to the run index: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
     const state: ReportState = {
       skillFolder: opts.skillFolder,
       prompt: opts.prompt,

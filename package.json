@@ -94,6 +94,7 @@
     "preflight": "tsx scripts/release-preflight.ts",
     "gen:surface": "tsx scripts/gen-surface.ts",
     "check:surface": "tsx scripts/check-surface.ts",
+    "check:skill-doc-links": "tsx scripts/check-skill-doc-links.ts",
     "eval-gate": "tsx scripts/eval-gate.ts",
     "skill-critique": "tsx scripts/skill-critique.ts",
     "skill-critique-acceptance": "tsx scripts/skill-critique-acceptance.ts"

@@ -98,7 +98,7 @@ ignored.
 
 | Flag | |
 |---|---|
-| `--timeout <ms>` | wall-clock budget for the task turn (critique's own kill-switch stretches to fit) |
+| `--timeout <ms>` | wall-clock budget for the task turn (default **30 min**; critique's own kill-switch stretches to fit). The turn is killed *after* its model spend, so too-short costs the money **and** the result — the default errs long deliberately |
 | `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
 | `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
 | `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
@@ -179,6 +179,11 @@ It does **not** record their contents — see Known limitations.
   `--evaluator-model` for the sweep. Caveat: the armor's injection-resistance is verified for the
   shipped **default** evaluator model only — changing it voids that specific verification (matters when
   critiquing skills you did not write).
+- **Trending spend across critiques: use the run index, not the reports.** Each critique appends a
+  roll-up row (`critiqueRole:"rollup"`) carrying `critiqueTotalUsd`; its `costUsd` is the evaluator
+  passes only, so `sum(costUsd)` over every row is exactly true spend — the two graded turns already
+  contribute their own rows. The index is also the only cost record that survives run-dir pruning.
+  See [stats.md](./stats.md).
 - **container** needs Docker/Lima; **hostloop** needs Docker (the bash/web_fetch sidecar) **plus** the
   staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
   `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.

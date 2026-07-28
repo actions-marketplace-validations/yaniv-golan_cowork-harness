@@ -70,7 +70,7 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
   then `verify-run` to re-check a suspect assertion — all token-free, no Docker, no re-record. This is
   the loop 0.32.0's observability is built for; the *Triage* and *Inspecting a run's observability
   output* sections in **Part III — Debug** are the detail (the fuller human-facing map lives in
-  `docs/debugging.md` — repo-only, not shipped with the installed skill).
+  [`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md) — repo-only, not shipped with the installed skill).
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in **Part III — Debug**).
 
@@ -363,7 +363,7 @@ cassette — has its own recipe:
    skillHash keys the whole MOUNTED plugin, so on a multi-skill plugin the hash alone cross-pairs
    critiques of DIFFERENT skills — pair by the report's `(gradedSkillHash, gradedSkill)` pair. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
    pairing step there silently groups on an absent key instead of erroring — check the field is present, or
-   require ≥ 1.5.0. See `docs/debugging.md`
+   require ≥ 1.5.0. See [`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md)
    (repo-only) for the full loop.
 
 #### Interpreting verdict signals
@@ -416,7 +416,7 @@ Recognize these before "fixing" a non-bug:
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 
 The full 14-code signal table (severity + per-signal opt-out) is in
-[`references/scenario-schema.md`](./references/scenario-schema.md); `docs/scenario.md` (repo-only) carries
+[`references/scenario-schema.md`](./references/scenario-schema.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 
 ### Checking whether a background run is alive
@@ -434,7 +434,7 @@ checkable regardless of PID namespace. The harness prints `[status] <outDir>` to
 run starts, so capture stderr to get the exact directory — but `<dir>` also accepts the run-dir root
 passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
 newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
-rather than hanging forever. (Fuller recipe in `docs/run-status.md` — repo-only, not in the installed
+rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
 payload; `cowork-harness status --help` has the flags.)
 
 **A multi-minute `record`/`run` outlives a short-lived wrapper.** Don't launch a long record from a
@@ -456,6 +456,11 @@ A run misbehaved, or greened when you don't trust it. Debugging is a first-class
 afterthought: the run already wrote its evidence, so you **localize the failure post-hoc** rather than
 re-run and hope. Start at the triage below, then use the observability output and, when you need to
 reproduce interactively, `chat`.
+
+> **"Evidence" below means the run's own record** — events, trace, transcript; what `trace` / `inspect` /
+> `diff` / `verify-run` / `replay --explain` read. `critique`'s **evaluator** grades against a separate,
+> narrower record — `critique-evidence-package.txt`, what a grade was actually computed against — none of
+> the five tools above surface it; see `references/critique.md`.
 
 ### Triage — a run misbehaved, or a green looks wrong
 
@@ -479,7 +484,7 @@ already does.
 **deliberate fidelity gap** — the harness intentionally does *not* reproduce a few real-Cowork behaviors,
 so a "bug" you see here that real Cowork also has isn't yours to fix. The tier semantics are in
 `references/fidelity-and-answers.md` (shipped); the specific deltas vs. real Cowork and the sandbox
-boundary model live in `docs/fidelity-gaps.md` / `docs/boundary.md` (repo-only, not in the installed
+boundary model live in [`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md) / [`docs/boundary.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/boundary.md) (repo-only, not in the installed
 payload). If the behavior is on that gap list, it's expected — stop debugging your skill.
 
 ### Inspecting a run's observability output
@@ -749,7 +754,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     `resolved-tier` finding (re-record — the recording now exercises the wrong tier); a cassette with no
     `effectiveFidelity` at all, or an unloadable pinned `baseline:`, reports `unverifiable-tier` instead
     (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
-    produces them. (Details: `docs/cassette.md` § tier staleness — repo-only.)
+    produces them. (Details: [`docs/cassette.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md) § tier staleness — repo-only.)
 
 22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —
     `manifest-needs-snapshot` and `gate-needs-controlout` — fire on the mere presence of manifest/gate
@@ -785,5 +790,5 @@ assertion/replay-relevant ones).
   no-silent-false-green invariants (both usable as CI steps), and `resolve-agent-types <plugin-dir>`
   (validates a pinned `subagent_type` against the plugin's own `plugin.json` + `agents/*.md`).
 - Checking a background run's status without `ps aux` — covered in *Checking whether a background run is
-  alive* (Part II) above; the fuller recipe is in `docs/run-status.md` (repo-only, not shipped with the
+  alive* (Part II) above; the fuller recipe is in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) (repo-only, not shipped with the
   installed skill).

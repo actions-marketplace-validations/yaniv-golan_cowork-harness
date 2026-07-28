@@ -32,6 +32,11 @@ jobs:
       - run: npm ci
       - name: Version lockstep guard (npm package <-> companion skill)
         run: npm run check:versions
+      - name: Skill doc-link guard (no dangling docs/*.md pointer in the plugin payload)
+        # A plugin install materializes ONLY .claude/skills/<name>/** — docs/ ships in the npm tarball,
+        # not the plugin cache — so a bare `docs/x.md` reference inside the skill is a dead pointer for
+        # every plugin-install consumer. Cost a real consumer hours (see scripts/check-skill-doc-links.ts).
+        run: npm run check:skill-doc-links
       - name: Format check
         run: npm run format:check
       - name: CLI parsing-idiom guard (no silent positional-grab)

@@ -27,7 +27,7 @@ Extra prerequisites for specific stages:
 - **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
 
 CI Stage 1 (the `build` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It runs the
-gate steps individually — e.g. `check:versions`, `format:check`, `typecheck`, `build`, a CLI smoke
+gate steps individually — e.g. `check:versions`, `check:skill-doc-links`, `format:check`, `typecheck`, `build`, a CLI smoke
 (`node dist/cli.js list`), three token-free `replay` gate fixtures, `verify-cassettes`, `lint`, and
 source-guard checks — while the unit suite runs separately as the 4-shard `test` job (see `ci.yml` for
 the authoritative list). Only `release.yml` calls `npm run ci`. For a copy-paste GitHub Actions setup,

@@ -1,7 +1,7 @@
 // Queryable cross-run result store. index.jsonl (one JSON line per run) is the SOURCE OF TRUTH for
 // "what runs exist" — the run-dir-per-run physical layout (<runsRoot>/<slug>/<runId>/) still holds the
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
-import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, lstatSync, statSync } from "node:fs";
 import { classifyRunDir, hasTurnDirs, listTurns, turnArtifactPath } from "./turn-layout.js";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
@@ -36,6 +36,25 @@ export interface RunIndexRow {
   // not a valid identity for them. Absent on the chat lane (never tracked) and on rows written before
   // this field existed.
   turn?: number;
+  /** Set on rows a `critique` produced, naming which of its turns this is. The index records the INNER
+   *  command (`skill`) for both, so a critique was otherwise indistinguishable from a plain skill run —
+   *  with three concurrent critiques of three skills against one plugin, every row read
+   *  `scenario: skill-<plugin>` and the only way to tell them apart was opening each run dir.
+   *
+   *  Deliberately a NEW optional field rather than a new `command` value: `isValidRunIndexRow` hard-codes
+   *  the command allowlist, so an older CLI reading a newer index would quarantine every critique row with
+   *  a per-row warning and drop it from `stats`. Additive-optional costs nothing to old readers. */
+  critiqueRole?: "task" | "reflection" | "rollup";
+  /** The skill a critique actually graded (`--skill`, or the auto-selected one on a single-skill plugin).
+   *  The REPORT has always carried this as `gradedSkill`; the index never did, so a harvester could not
+   *  answer "which skill was this row about" without opening the run dir. */
+  skill?: string;
+  /** TOTAL cost of a whole critique, on its roll-up row only. The per-turn rows carry only the two graded
+   *  turns; the two EVALUATOR passes are direct API calls that never produce a run of their own, so
+   *  anything summing the index under-reported a critique's true spend by ~39% (measured: $10.17 indexed
+   *  against $16.67 actual across three runs). The index is also the only cost record that survives run-dir
+   *  pruning, so a spend trend built from it was systematically light. */
+  critiqueTotalUsd?: number;
   signals: string[]; // VerdictSignal["code"][]
   costUsd?: number;
   tokens?: number;
@@ -75,6 +94,30 @@ function slugAndRunIdFromOutDir(outDir: string): { slug: string; runId: string }
  *  checkout" ARE the truth). `reindexFromRunsTree` overrides both explicitly, because for a HISTORICAL run
  *  being walked off disk, "now" and "the checkout doing the reindexing" are not the run's actual
  *  provenance — they'd be fabricated, not derived. */
+/** critique mints its session id as `${CRITIQUE_SESSION_PREFIX}${randomUUID()}` and the run dir becomes
+ *  `sess-<sessionId>`, so the role is derivable where the row is built — no spawn plumbing, no new CLI
+ *  surface, and no env marker (which would leak into the agent's sandbox on hostloop, where the agent is
+ *  spawned over the operator's full `process.env`).
+ *
+ *  Anchored to the FULL minted shape, not the bare prefix: `--session-id` is a public flag accepting any
+ *  `[A-Za-z0-9_-]+`, so `skill --session-id crit-mytest` would otherwise be mis-marked as a critique turn.
+ *  `critique/command.ts` mints from the same exported constant, and a round-trip test binds the two so a
+ *  rename on one side alone fails rather than silently un-marking every future row. */
+export const CRITIQUE_SESSION_PREFIX = "crit-";
+const CRITIQUE_RUN_ID_RE = new RegExp(`^sess-${CRITIQUE_SESSION_PREFIX}[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`);
+// Case-SENSITIVE deliberately: `randomUUID()` mints lowercase, so accepting `sess-CRIT-<UUID>` (reachable
+// via the public --session-id) would fabricate a role for a run critique never made.
+
+/** `undefined` for anything that is not exactly turn 1 or 2 of a critique. A user resuming a `sess-crit-*`
+ *  session with the public `--session-id`/`--resume` flags produces turn >= 3; labelling that "task" would
+ *  fabricate provenance, which is worse than leaving it unmarked. */
+function critiqueRoleFor(runId: string, turn: number | undefined): RunIndexRow["critiqueRole"] {
+  if (!CRITIQUE_RUN_ID_RE.test(runId)) return undefined;
+  if (turn === 1) return "task";
+  if (turn === 2) return "reflection";
+  return undefined;
+}
+
 export function indexRowFromResult(
   result: RunResult,
   opts: {
@@ -110,6 +153,7 @@ export function indexRowFromResult(
     runLabel: result.runLabel,
     skillHash: result.fingerprint?.skillHash?.slice(0, 12), // short prefix — the full hash lives in result.json
     turn: result.turn,
+    critiqueRole: critiqueRoleFor(runId, result.turn),
     signals: verdict.signals.map((s) => s.code),
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
@@ -136,6 +180,9 @@ function indexPath(runsRoot: string): string {
  *  this module's historical behavior for that case, and the only signal available to disambiguate them;
  *  it is not a fix for pre-existing legacy data, only for every row written going forward. */
 function rowIdentity(r: RunIndexRow): string {
+  // A critique's roll-up shares its outDir with the two turn rows and has no `turn` of its own, so without
+  // the role it would collide with a legacy no-turn row under bare `outDir` and be merged away on reindex.
+  if (r.critiqueRole === "rollup") return `${r.outDir} critique:rollup`;
   return r.turn !== undefined ? `${r.outDir} turn:${r.turn}` : r.outDir;
 }
 
@@ -164,6 +211,11 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   // Type-checked because `rowIdentity` interpolates it: a string "2" would otherwise mint an identity
   // distinct from the numeric 2 the walk derives, resurrecting the duplicate-row failure the merge guards.
   if (r.turn !== undefined && typeof r.turn !== "number") return false;
+  // Same reasoning as `turn`: `critiqueRole` is interpolated into `rowIdentity`, so a wrong-typed value
+  // would mint a distinct identity and resurrect the duplicate-row failure the merge guards against.
+  if (r.critiqueRole !== undefined && !["task", "reflection", "rollup"].includes(r.critiqueRole as string)) return false;
+  if (r.skill !== undefined && typeof r.skill !== "string") return false;
+  if (r.critiqueTotalUsd !== undefined && typeof r.critiqueTotalUsd !== "number") return false;
   if (typeof r.git !== "object" || r.git === null) return false;
   const git = r.git as Record<string, unknown>;
   if (git.branch !== null && typeof git.branch !== "string") return false;
@@ -177,6 +229,76 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
 export function appendIndexRow(runsRoot: string, row: RunIndexRow): void {
   mkdirSync(runsRoot, { recursive: true });
   appendFileSync(indexPath(runsRoot), JSON.stringify(row) + "\n");
+}
+
+/** One roll-up row per completed `critique`, carrying the cost the per-turn rows CANNOT.
+ *
+ *  A critique is four model workloads: two graded turns (which each produce a run, and therefore a row) and
+ *  two evaluator passes (direct API calls that produce no run at all). Summing the index therefore missed
+ *  the evaluator passes entirely — measured at $10.17 indexed against $16.67 actual across three runs, a
+ *  39% under-report — and the index is the only cost record that survives run-dir pruning, so a spend trend
+ *  built from it was systematically light.
+ *
+ *  Deliberately NOT synthesized as two more turn-shaped rows: an evaluator pass has no `outDir`, no
+ *  `scenario` and no fingerprint, so a per-pass row would have to fabricate the fields every other consumer
+ *  of this file relies on. One honest roll-up beats two fictional runs.
+ *
+ *  `pass: true` and `signals: []` because this row is bookkeeping, not a verdict — the graded turn's own row
+ *  already carries the verdict, and a roll-up that voted would double-count it in `stats`' pass rate. */
+export function appendCritiqueRollupRow(
+  runsRoot: string,
+  args: {
+    outDir: string;
+    scenario: string;
+    fidelity: string;
+    effectiveFidelity?: string;
+    baseline: string;
+    /** WHOLE-critique total → `critiqueTotalUsd`. */
+    totalUsd?: number;
+    /** The two evaluator passes only → this row's `costUsd`. See the field note below. */
+    evaluatorUsd?: number;
+    complete: boolean;
+    runLabel?: string;
+    skill?: string;
+    skillHash?: string;
+    durationMs?: number;
+    ts?: string;
+  },
+): void {
+  const { slug, runId } = slugAndRunIdFromOutDir(args.outDir);
+  appendIndexRow(runsRoot, {
+    v: 1,
+    ts: args.ts ?? new Date().toISOString(),
+    command: "skill", // the INNER command both turns ran; `critiqueRole` is what identifies this row
+    critiqueRole: "rollup",
+    scenario: args.scenario,
+    slug,
+    runId,
+    fidelity: args.fidelity,
+    effectiveFidelity: args.effectiveFidelity,
+    baseline: args.baseline,
+    // A critique that produced a report succeeded as an INSTRUMENT regardless of what it found — findings
+    // never gate. An incomplete cost is the one thing that must not read as authoritative, so it degrades
+    // the row's `result` rather than being silently summed as if whole.
+    result: args.complete ? "success" : "error",
+    pass: true,
+    runLabel: args.runLabel,
+    skill: args.skill,
+    skillHash: args.skillHash?.slice(0, 12),
+    critiqueTotalUsd: args.totalUsd,
+    signals: [],
+    // The EVALUATOR passes only — deliberately not the whole-critique total. `costUsd` is the per-row
+    // spend field every consumer sums, and the two graded turns already contribute their own rows; putting
+    // the total here would double-count them, while leaving it undefined would under-count by exactly the
+    // ~39% this row exists to fix. The delta makes `sum(costUsd)` over all rows equal true spend with no
+    // trap in either direction. `critiqueTotalUsd` remains the per-critique convenience figure.
+    costUsd: args.evaluatorUsd,
+    durationMs: args.durationMs,
+    partial: !args.complete,
+    nonDeterministic: false,
+    outDir: args.outDir,
+    git: gitInfo(),
+  });
 }
 
 /** Reads every row, tolerating a corrupt/truncated TRAILING line (a crash mid-append) by skipping just
@@ -287,6 +409,76 @@ function readResultFileForWalk(
   }
 }
 
+/** Rebuild a critique's roll-up row from `critique-report.json`, for a run dir the walk has just covered.
+ *
+ *  Only when the report carries `costUsd`: `persistCritiqueArtifacts` writes a report on EVERY outcome,
+ *  including a task-turn infra failure where cost is never computed and the live path never appended a
+ *  roll-up either — synthesizing there would mint rows real runs never produced. (Asymmetry, visible only
+ *  after total index loss: a COMPLETED critique whose four workloads were all unpriced does live-append a
+ *  cost-less roll-up, which this cannot recreate. Reconstructing spend is the point; a row with no spend
+ *  in it is not worth fabricating.)
+ *
+ *  `scenario` and `runLabel` come from the GRADED TURN's row, not the report: the report carries neither,
+ *  and `slug` is not reversible to `scenario` (`slugForPath` is lossy), so deriving them from the path
+ *  would file the row under a fabricated scenario group. `turnRows` is THIS DIR's just-walked rows only.
+ *
+ *  Identity (`outDir`/`slug`/`runId`) is taken from the graded row too, NOT from the walk path. Walked rows
+ *  carry `result.json`'s RECORDED `outDir`, which differs from the walk path whenever the tree has moved —
+ *  a restored backup, a relocated HOME, `/var` vs `/private/var`. Keying on the walk path there produced a
+ *  SECOND roll-up beside the preserved original (different `rowIdentity`) and lost the graded match, so the
+ *  row also landed under a fabricated scenario: both failure modes this function exists to prevent, on the
+ *  disaster-recovery path where it matters most.
+ *
+ *  Provenance is honest, matching the rest of the walk: `ts` is the report file's own mtime, never "now",
+ *  and `git` is `{null, null}` — unknowable from an artifact on disk. */
+function rollupFromCritiqueReport(outDir: string, turnRows: RunIndexRow[]): RunIndexRow | null {
+  const reportPath = join(outDir, "critique-report.json");
+  let report: Record<string, unknown>;
+  let mtime: string;
+  try {
+    report = JSON.parse(readFileSync(reportPath, "utf8")) as Record<string, unknown>;
+    mtime = statSync(reportPath).mtime.toISOString();
+  } catch {
+    return null; // absent, unreadable, or not JSON — never sinks the reindex
+  }
+  const cost = report.costUsd as
+    { totalUsd?: unknown; evaluatorPass1Usd?: unknown; evaluatorPass2Usd?: unknown; complete?: unknown } | undefined;
+  if (!cost || typeof cost.totalUsd !== "number") return null; // no cost → the live path wrote no roll-up either
+  const graded = turnRows.find((r) => r.turn === 1) ?? turnRows[0];
+  const rowOutDir = graded?.outDir ?? outDir;
+  const { slug, runId } = slugAndRunIdFromOutDir(rowOutDir);
+  const num = (x: unknown): number | undefined => (typeof x === "number" ? x : undefined);
+  const evaluatorUsd =
+    num(cost.evaluatorPass1Usd) !== undefined || num(cost.evaluatorPass2Usd) !== undefined
+      ? (num(cost.evaluatorPass1Usd) ?? 0) + (num(cost.evaluatorPass2Usd) ?? 0)
+      : undefined;
+  const complete = cost.complete === true;
+  return {
+    v: 1,
+    ts: mtime,
+    command: "skill",
+    critiqueRole: "rollup",
+    scenario: graded?.scenario ?? (typeof report.skillFolder === "string" ? `skill-${basename(report.skillFolder)}` : slug),
+    slug,
+    runId,
+    fidelity: typeof report.fidelity === "string" ? report.fidelity : (graded?.fidelity ?? "unknown"),
+    effectiveFidelity: typeof report.gradedEffectiveFidelity === "string" ? report.gradedEffectiveFidelity : undefined,
+    baseline: typeof report.gradedBaseline === "string" ? report.gradedBaseline : (graded?.baseline ?? "unknown"),
+    result: complete ? "success" : "error",
+    pass: true,
+    runLabel: graded?.runLabel,
+    skill: typeof report.gradedSkill === "string" ? report.gradedSkill : undefined,
+    skillHash: typeof report.gradedSkillHash === "string" ? report.gradedSkillHash.slice(0, 12) : undefined,
+    critiqueTotalUsd: cost.totalUsd,
+    signals: [],
+    costUsd: evaluatorUsd,
+    partial: !complete,
+    nonDeterministic: false,
+    outDir: rowOutDir,
+    git: { branch: null, sha: null },
+  };
+}
+
 /** One-time local migration + self-heal: rebuilds index.jsonl by walking the physical
  *  `<runsRoot>/<slug>/<runId>/result.json` tree, MERGED with any prior index.jsonl — never a blind
  *  overwrite. Every run dir still on disk gets a FRESH row (re-derived from its real result.json,
@@ -388,6 +580,7 @@ export function reindexFromRunsTree(runsRoot: string): {
         }
 
         // The only addressable shape. Each turn is an independent completion with its own identity.
+        const dirRows: RunIndexRow[] = []; // just this dir's rows, for the roll-up synthesis below
         for (const n of listTurns(outDir)) {
           const p = turnArtifactPath(outDir, n, "result.json");
           const o = readResultFileForWalk(runsRoot, outDir, p, priorByOutDir);
@@ -396,9 +589,18 @@ export function reindexFromRunsTree(runsRoot: string): {
           else if (o.kind === "replay") skippedReplay++;
           else if (o.kind === "row") {
             walked.push(o.row);
+            dirRows.push(o.row);
             walkedIdentities.add(rowIdentity(o.row));
             rootWalkedOutDirs.add(o.row.outDir);
           }
+        }
+        // A critique's roll-up row has no result.json of its own — the two evaluator passes it accounts for
+        // produce no run — so the walk alone could never rebuild it, and losing the index meant losing every
+        // critique's cost record while `critique-report.json` sat in the dir holding it. Re-derive it here.
+        const synthesized = rollupFromCritiqueReport(outDir, dirRows);
+        if (synthesized) {
+          walked.push(synthesized);
+          walkedIdentities.add(rowIdentity(synthesized));
         }
       }
     }
@@ -418,8 +620,13 @@ export function reindexFromRunsTree(runsRoot: string): {
   // could key on an OLDER archived turn and silently delete the legacy row: unrecoverable loss on the index that is supposed to be the
   // durable history, during the operation whose job is to heal it.
   const walkedOutDirs = rootWalkedOutDirs;
+  // The turn-less clause exists to drop LEGACY rows superseded by a walked root result. A critique
+  // roll-up is turn-less by nature and always shares its outDir with the two turn rows, so it matched that
+  // clause and every routine `--reindex` DELETED it — destroying the only cost record that survives run-dir
+  // pruning, during the operation whose job is to heal the index. Its identity (`<outDir> critique:rollup`)
+  // is already collision-proof against the walked rows, so it needs no supersede protection at all.
   const preserved = [...priorByIdentity.values()].filter(
-    (r) => !walkedIdentities.has(rowIdentity(r)) && !(r.turn === undefined && walkedOutDirs.has(r.outDir)),
+    (r) => !walkedIdentities.has(rowIdentity(r)) && !(r.critiqueRole !== "rollup" && r.turn === undefined && walkedOutDirs.has(r.outDir)),
   );
   const rows = [...walked, ...preserved];
   mkdirSync(runsRoot, { recursive: true });
@@ -484,11 +691,19 @@ function percentile(sorted: number[], p: number): number {
  *  this is safe and avoids a Date-parsing dependency). A row whose `outDir` no longer exists on disk
  *  (deleted by `prune`) still counts toward every stat — the index is the durable history — but is flagged `prunedRuns` so a consumer can tell "no evidence left to
  *  re-inspect" apart from "still on disk". */
+/** Rows that are BOOKKEEPING, not runs. A roll-up has no verdict of its own and no duration, and its
+ *  scenario matches the turn rows' — so leaving it in added a phantom run to the count and dragged
+ *  `passRate` toward 1. There is no neutral `pass` value in a RATE, only exclusion. */
+function isAggregatable(r: RunIndexRow): boolean {
+  return r.critiqueRole !== "rollup";
+}
+
 export function buildStats(
   rows: RunIndexRow[],
   filters: { scenario?: string; since?: string; baseline?: string; branch?: string; last?: number },
 ): StatsSummary[] {
-  let filtered = rows;
+  // Bookkeeping rows are excluded BEFORE any filter or grouping — see `isAggregatable`.
+  let filtered = rows.filter(isAggregatable);
   if (filters.scenario) filtered = filtered.filter((r) => r.scenario === filters.scenario);
   if (filters.since) filtered = filtered.filter((r) => r.ts >= filters.since!);
   if (filters.baseline) filtered = filtered.filter((r) => r.baseline === filters.baseline);

@@ -24,6 +24,46 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Every `docs/*.md` pointer in the shipped skill was dead for a plugin install.** A plugin install
+  materializes only `.claude/skills/<name>/**`; `docs/` ships in the npm tarball and not in that payload.
+  The skill referenced `docs/` pages **25 times across 13 targets** anyway, so a consumer following one
+  found nothing. This cost real time: `critique-evidence-package.txt` — the corpus the evaluator actually
+  graded — was documented only in `docs/critique.md` and named nowhere a plugin user could see, so its
+  behaviour got reverse-engineered from compiled `dist/` instead. All 25 are now repo permalinks that
+  resolve for tarball and plugin users alike, a trimmed `references/critique.md` ships inside the payload
+  covering what a plugin install cannot otherwise reach, and **`npm run check:skill-doc-links` fails CI on
+  any new dangling reference** — the durable half, without which the next release re-creates them.
+  Reported by a consumer.
+- **`lint-skill --min-severity` exited 2 with no explanation.** The flag belongs to `lint`; the error now
+  names the sibling command instead of leaving you to diff two help texts.
+- **`index.jsonl` under-reported a critique's cost by ~39%.** A critique is four model workloads, but only
+  the two graded turns produce a run and therefore a row — the two evaluator passes are direct API calls
+  that produce neither. Anything summing the index missed them entirely (measured: $10.17 indexed against
+  $16.67 actual across three runs), and the index is the only cost record that survives run-dir pruning, so
+  spend trends built from it were systematically light. Each critique now writes one roll-up row carrying
+  `critiqueTotalUsd`, and `--reindex` reconstructs it from the run dir's `critique-report.json` so a lost
+  index recovers critique costs too. The roll-up's own `costUsd` is the **evaluator passes only**, so
+  `sum(costUsd)` across all rows is exactly true spend — neither double-counted nor short. Roll-ups are
+  excluded from `stats` aggregation, where they would otherwise add a phantom run and inflate `passRate`.
+  Reported by a consumer.
+
+  **Sharing a runs root across CLI versions:** an *older* CLI's `--reindex` deletes these roll-up rows —
+  its supersede clause drops any prior row without a `turn`, which a roll-up is. Re-run `--reindex` with a
+  current CLI to restore them from the run dirs.
+- **A critique was indistinguishable from a plain `skill` run in the index**, which recorded the *inner*
+  command for both turns and carried no `skill` field despite `--skill`. With three concurrent critiques of
+  three skills against one plugin, every row read `scenario: skill-<plugin>` and the only way to tell them
+  apart was opening each run dir. Rows now carry `critiqueRole` (`task` / `reflection` / `rollup`) and the roll-up carries
+  `skill`. These are **additive-optional fields, not a new `command` value**: the row validator hard-codes
+  the command allowlist, so widening it would make an older CLI quarantine every critique row and drop it
+  from `stats`. The role derives from critique's own session-id shape, so `--reindex` marks rebuilt rows too.
+- **`critique`'s task-turn timeout was 10 minutes**, which a sub-agent-dispatching skill routinely exceeds.
+  The turn is killed *after* its model spend, so the consumer paid for a graded run and received an
+  instrument failure instead of a critique — a reported case burned $11.05 that way. Raised to 30 minutes,
+  matching the evaluator transport; `--timeout` still raises it further, and the byte cap and process-group
+  kill remain the real runaway guards.
+
+
 - **`critique` graded skills against a fraction of their own references.** The evidence package shared one
   8 KiB budget across ALL `references/**` files, filled in filename-sort order — so the alphabetically
   first file took what it needed and every later file was dropped whole. Measured across nine real runs on
