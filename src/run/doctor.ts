@@ -263,12 +263,16 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
   const checks: DoctorCheck[] = [];
 
   const node = probe.nodeMajor();
+  // Floor tracks SUPPORTED Node, not the oldest that happens to run: 20 reached end-of-life on
+  // 2026-04-30 and receives no security patches, so reporting it `ok` told users an unsupported
+  // runtime was fine. 22 is the Maintenance-LTS line and matches the agent sandbox's own pin.
+  // Keep this in lockstep with package.json `engines.node` — a test asserts they agree.
   checks.push({
     id: "node",
-    title: "Node ≥ 20",
-    status: node >= 20 ? "ok" : "fail",
+    title: "Node ≥ 22",
+    status: node >= 22 ? "ok" : "fail",
     detail: `node ${process.versions.node}`,
-    remedy: node >= 20 ? undefined : "install Node 20+ (https://nodejs.org)",
+    remedy: node >= 22 ? undefined : "install Node 22+ (https://nodejs.org) — Node 20 is end-of-life",
     required: true,
   });
 

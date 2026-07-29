@@ -33,7 +33,7 @@ type DoctorProbe = import("../src/run/doctor.js").DoctorProbe;
 type DoctorCheck = import("../src/run/doctor.js").DoctorCheck;
 
 const OK_PROBE: DoctorProbe = {
-  nodeMajor: () => 20,
+  nodeMajor: () => 22,
   platform: () => "darwin",
   arch: () => "arm64",
   runtimeName: () => "docker",
