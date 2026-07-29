@@ -882,9 +882,16 @@ export interface RunStatus {
  *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns`. */
 export type UsageInfo = Record<string, unknown> & { turns?: number };
 
-/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present.
+/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present. THE authoritative
+ *  single-run spend — distinct from summing `modelUsage[].costUSD`, a different SDK-side source that
+ *  `trace --view usage` reports and which can legitimately disagree.
+ *
  *  `raw` = the `api_metrics` event payload (pre-existing; unrelated source, kept alongside `usd` rather
- *  than merged into it since the two are independent SDK signals). */
+ *  than merged into it since the two are independent SDK signals). **Despite living on `CostInfo`, this
+ *  carries no cost**: the SDK's `api_metrics` is a per-API-call OTPS/TTFT lifecycle event
+ *  (`{type:"start",ttftMs}` / `{type:"end",outputTokens}`, subagent-scoped) — verified against the
+ *  staged agent binary. So there is NO live cost signal mid-run; `usd` only lands with the result
+ *  message, which is why a mid-run budget abort is not implementable today. */
 export interface CostInfo {
   usd?: number;
   raw?: Record<string, unknown>;

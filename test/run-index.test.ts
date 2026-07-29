@@ -194,6 +194,29 @@ describe("appendIndexRow / readIndex — the on-disk round trip", () => {
     expect(rows.map((r) => r.scenario)).toEqual(["a"]);
   });
 
+  // `skillHash`/`runLabel` became CONSUMED when `stats` learned to filter/group on them. A wrong-typed
+  // value is valid JSON, so without a type check it passes quarantine and `buildStats`'s prefix filter
+  // throws `a.startsWith is not a function` — the CLI crashing on exactly the input class this
+  // quarantine exists to absorb.
+  it("quarantines a row whose skillHash is not a string, and buildStats survives filtering the survivors", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    const badHash = { ...indexRowFromResult(rr({ scenario: "b" }), { command: "run", partial: false }), skillHash: 123 };
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify(badHash) + "\n");
+    const rows = muteStderr() && readIndex(dir);
+    expect(rows.map((r) => r.scenario)).toEqual(["a"]);
+    expect(() => buildStats(rows, { skillHash: "abcdef" })).not.toThrow();
+  });
+
+  it("quarantines a row whose runLabel is not a string", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
+    const badLabel = { ...indexRowFromResult(rr({ scenario: "b" }), { command: "run", partial: false }), runLabel: { t: 1 } };
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify(badLabel) + "\n");
+    const rows = muteStderr() && readIndex(dir);
+    expect(rows.map((r) => r.scenario)).toEqual(["a"]);
+  });
+
   it("a quarantined row never reaches buildStats — no 'Cannot read properties of undefined (reading branch)' crash", () => {
     const dir = mkdtempSync(join(tmpdir(), "run-index-"));
     const good = indexRowFromResult(rr({ scenario: "a" }), { command: "run", partial: false });
@@ -238,7 +261,7 @@ function row(over: Partial<RunIndexRow>): RunIndexRow {
 describe("buildStats — per-scenario aggregation", () => {
   it("computes runs count and pass rate per scenario", () => {
     const rows = [row({ scenario: "a", pass: true }), row({ scenario: "a", pass: false }), row({ scenario: "b", pass: true })];
-    const stats = buildStats(rows, {});
+    const stats = buildStats(rows, {}).summaries;
     const a = stats.find((s) => s.scenario === "a")!;
     expect(a.runs).toBe(2);
     expect(a.passRate).toBeCloseTo(0.5);
@@ -249,7 +272,7 @@ describe("buildStats — per-scenario aggregation", () => {
 
   it("computes p50/p95 cost and duration", () => {
     const rows = [1, 2, 3, 4, 5].map((n) => row({ scenario: "a", costUsd: n * 0.01, durationMs: n * 1000 }));
-    const stats = buildStats(rows, {});
+    const stats = buildStats(rows, {}).summaries;
     const a = stats.find((s) => s.scenario === "a")!;
     expect(a.p50CostUsd).toBeCloseTo(0.03);
     expect(a.p50DurationMs).toBe(3000);
@@ -257,14 +280,14 @@ describe("buildStats — per-scenario aggregation", () => {
 
   it("computes p50/p95 tokens and turns too (the --metric tokens|turns targets)", () => {
     const rows = [1, 2, 3, 4, 5].map((n) => row({ scenario: "a", tokens: n * 1000, turns: n }));
-    const stats = buildStats(rows, {});
+    const stats = buildStats(rows, {}).summaries;
     const a = stats.find((s) => s.scenario === "a")!;
     expect(a.p50Tokens).toBe(3000);
     expect(a.p50Turns).toBe(3);
   });
 
   it("leaves percentiles undefined (not 0) when no row in the group has that telemetry", () => {
-    const stats = buildStats([row({ scenario: "a" })], {});
+    const stats = buildStats([row({ scenario: "a" })], {}).summaries;
     const a = stats.find((s) => s.scenario === "a")!;
     expect(a.p50CostUsd).toBeUndefined();
     expect(a.p50Tokens).toBeUndefined();
@@ -273,7 +296,7 @@ describe("buildStats — per-scenario aggregation", () => {
 
   it("computes p50/p95 cache-read-tokens and model-cost too (the --metric cache-tokens|model-cost targets)", () => {
     const rows = [1, 2, 3, 4, 5].map((n) => row({ scenario: "a", cacheReadTokens: n * 100, modelCostUsd: n * 0.1 }));
-    const stats = buildStats(rows, {});
+    const stats = buildStats(rows, {}).summaries;
     const a = stats.find((s) => s.scenario === "a")!;
     expect(a.p50CacheReadTokens).toBe(300);
     expect(a.p50ModelCostUsd).toBeCloseTo(0.3);
@@ -285,10 +308,10 @@ describe("buildStats — per-scenario aggregation", () => {
       row({ scenario: "a", ts: "2026-07-01T00:00:00Z", baseline: "desktop-1.18286.0", git: { branch: "feature-x", sha: "bbb" } }),
       row({ scenario: "b", ts: "2026-07-01T00:00:00Z" }),
     ];
-    expect(buildStats(rows, { scenario: "a" }).flatMap((s) => s.runs)).toEqual([2]);
-    expect(buildStats(rows, { since: "2026-06-01" }).find((s) => s.scenario === "a")?.runs).toBe(1);
-    expect(buildStats(rows, { baseline: "desktop-1.18286.0" }).find((s) => s.scenario === "a")?.runs).toBe(1);
-    expect(buildStats(rows, { branch: "feature-x" }).find((s) => s.scenario === "a")?.runs).toBe(1);
+    expect(buildStats(rows, { scenario: "a" }).summaries.flatMap((s) => s.runs)).toEqual([2]);
+    expect(buildStats(rows, { since: "2026-06-01" }).summaries.find((s) => s.scenario === "a")?.runs).toBe(1);
+    expect(buildStats(rows, { baseline: "desktop-1.18286.0" }).summaries.find((s) => s.scenario === "a")?.runs).toBe(1);
+    expect(buildStats(rows, { branch: "feature-x" }).summaries.find((s) => s.scenario === "a")?.runs).toBe(1);
   });
 
   it("--last windows AFTER the other filters apply, not before — 'last N main-branch runs', not 'last N runs, of which some are main'", () => {
@@ -299,7 +322,7 @@ describe("buildStats — per-scenario aggregation", () => {
       row({ scenario: "a", ts: "2026-01-01T00:00:00Z", git: { branch: "main", sha: "m1" } }),
       row({ scenario: "a", ts: "2026-01-02T00:00:00Z", git: { branch: "main", sha: "m2" } }),
     ];
-    const stats = buildStats(rows, { branch: "main", last: 5 });
+    const stats = buildStats(rows, { branch: "main", last: 5 }).summaries;
     expect(stats.find((s) => s.scenario === "a")?.runs).toBe(2); // both main runs found — filter-then-window
   });
 
@@ -308,7 +331,7 @@ describe("buildStats — per-scenario aggregation", () => {
       ...[1, 2, 3].map((n) => row({ scenario: "high-frequency", ts: `2026-07-0${n}T00:00:00Z` })),
       row({ scenario: "low-frequency", ts: "2026-01-01T00:00:00Z" }),
     ];
-    const stats = buildStats(rows, { last: 1 });
+    const stats = buildStats(rows, { last: 1 }).summaries;
     expect(stats.find((s) => s.scenario === "high-frequency")?.runs).toBe(1);
     expect(stats.find((s) => s.scenario === "low-frequency")?.runs).toBe(1); // not starved out by the busier scenario
   });
@@ -318,15 +341,91 @@ describe("buildStats — per-scenario aggregation", () => {
       row({ scenario: "a", ts: "2026-01-01T00:00:00Z", pass: true }),
       row({ scenario: "a", ts: "2026-07-01T00:00:00Z", pass: false }),
     ];
-    expect(buildStats(rows, {}).find((s) => s.scenario === "a")?.lastGreenTs).toBe("2026-01-01T00:00:00Z");
+    expect(buildStats(rows, {}).summaries.find((s) => s.scenario === "a")?.lastGreenTs).toBe("2026-01-01T00:00:00Z");
     const allFail = [row({ scenario: "b", pass: false })];
-    expect(buildStats(allFail, {}).find((s) => s.scenario === "b")?.lastGreenTs).toBeUndefined();
+    expect(buildStats(allFail, {}).summaries.find((s) => s.scenario === "b")?.lastGreenTs).toBeUndefined();
   });
 
   it("marks a row's outDir pruned when the directory no longer exists on disk (a real existsSync check against a genuinely-absent path)", () => {
     const rows = [row({ scenario: "a", outDir: "/definitely/does/not/exist" })];
-    const stats = buildStats(rows, {});
+    const stats = buildStats(rows, {}).summaries;
     expect(stats.find((s) => s.scenario === "a")?.prunedRuns).toBe(1);
+  });
+});
+
+/** The iterate-across-fixes query surface. The index has carried `skillHash`/`runLabel` since they were
+ *  added FOR a group-by step; until now nothing could query them, so a window spanning two skill
+ *  versions aggregated unlike things and only the tool could see it. */
+describe("buildStats — generation filters and grouping", () => {
+  const GEN1 = "5d2d482d80d3";
+  const GEN2 = "8fc999c77cdf";
+  const gens = [
+    row({ scenario: "a", runId: "r1", ts: "2026-07-01T00:00:00Z", skillHash: GEN1, runLabel: "gen-1", pass: true }),
+    row({ scenario: "a", runId: "r2", ts: "2026-07-02T00:00:00Z", skillHash: GEN1, runLabel: "gen-1", pass: false }),
+    row({ scenario: "a", runId: "r3", ts: "2026-07-03T00:00:00Z", skillHash: GEN2, runLabel: "gen-2", pass: true }),
+  ];
+
+  it("--skill-hash narrows to one generation", () => {
+    const stats = buildStats(gens, { skillHash: GEN2 }).summaries;
+    expect(stats).toHaveLength(1);
+    expect(stats[0].runs).toBe(1);
+    expect(stats[0].passRate).toBe(1);
+  });
+
+  it("a FULL 64-char hash matches the 12-char prefix the index row stores (result.json hands you the long form)", () => {
+    const full = GEN2 + "0".repeat(64 - GEN2.length);
+    expect(buildStats(gens, { skillHash: full }).summaries[0]?.runs).toBe(1);
+  });
+
+  it("--label narrows by the human generation tag", () => {
+    expect(buildStats(gens, { label: "gen-1" }).summaries[0]?.runs).toBe(2);
+  });
+
+  it("--group-by skill-hash splits ONE scenario into one row per generation, leaving `scenario` intact", () => {
+    const stats = buildStats(gens, { groupBy: "skill-hash" }).summaries;
+    expect(stats).toHaveLength(2);
+    // The identity is a FIELD, never folded into `scenario` — a composite there would break every
+    // consumer that matches on the scenario name.
+    expect(stats.every((s) => s.scenario === "a")).toBe(true);
+    expect(stats.map((s) => s.skillHash).sort()).toEqual([GEN1, GEN2].sort());
+    expect(stats.find((s) => s.skillHash === GEN1)?.passRate).toBe(0.5);
+    expect(stats.find((s) => s.skillHash === GEN2)?.passRate).toBe(1);
+  });
+
+  it("rows with no skillHash are EXCLUDED from a skill-hash grouping and counted, never bucketed under a blank key", () => {
+    const withChat = [...gens, row({ scenario: "a", runId: "r4", skillHash: undefined })];
+    const { summaries, hashlessRuns } = buildStats(withChat, { groupBy: "skill-hash" });
+    expect(hashlessRuns).toBe(1);
+    expect(summaries).toHaveLength(2);
+    expect(summaries.some((s) => s.skillHash === undefined)).toBe(false);
+    // …and they are NOT dropped at the default grouping, where they are perfectly aggregatable.
+    expect(buildStats(withChat, {}).summaries[0].runs).toBe(4);
+    expect(buildStats(withChat, {}).hashlessRuns).toBe(0);
+  });
+
+  it("distinctSkillHashes counts generations in the window — the signal `stats` warns on", () => {
+    expect(buildStats(gens, {}).summaries[0].distinctSkillHashes).toBe(2);
+    expect(buildStats(gens, { skillHash: GEN1 }).summaries[0].distinctSkillHashes).toBe(1);
+    // Never > 1 when grouped by generation: that is the whole point of the split.
+    expect(buildStats(gens, { groupBy: "skill-hash" }).summaries.every((s) => s.distinctSkillHashes === 1)).toBe(true);
+  });
+
+  it("distinctSkillHashes is computed over the POST-window rows, so the warning can never disagree with the aggregate", () => {
+    // --last 1 keeps only r3 (gen-2); the window is single-generation even though the corpus is not.
+    const s = buildStats(gens, { last: 1 }).summaries[0];
+    expect(s.runs).toBe(1);
+    expect(s.distinctSkillHashes).toBe(1);
+  });
+
+  it("--last windows per GROUP, not per scenario, once grouping by generation", () => {
+    const stats = buildStats(gens, { groupBy: "skill-hash", last: 1 }).summaries;
+    // Per-scenario windowing would have kept exactly one row TOTAL; per-group keeps one per generation.
+    expect(stats).toHaveLength(2);
+    expect(stats.every((s) => s.runs === 1)).toBe(true);
+  });
+
+  it("at the default group-by, --last is bit-identical to the pre-grouping behaviour", () => {
+    expect(buildStats(gens, { last: 2 }).summaries[0].runs).toBe(2);
   });
 });
 

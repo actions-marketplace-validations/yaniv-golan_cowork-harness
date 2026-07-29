@@ -617,8 +617,13 @@ function parseEnvelope(stdout: string): SkillEnvelope | null {
 }
 
 /** The run dir, preferring the envelope's `outDir` and falling back to the `[status] <path>` stderr line
- *  (written unconditionally by the harness regardless of `--output-format`) — so a run whose stdout
- *  envelope didn't parse (e.g. it crashed before ever writing one) can still be located via `--keep`. */
+ *  — so a run whose stdout envelope didn't parse (e.g. it crashed before ever writing one) can still be
+ *  located via `--keep`.
+ *
+ *  The fallback is sound here because the `[status]` line is written regardless of `--output-format` AND
+ *  the only thing that suppresses it — `--compact`/`--demo` (see `statusLine`, run/run-status.ts) —
+ *  `critique` REJECTS outright (run/skill-flag-surface.ts). If that rejection is ever relaxed, this
+ *  fallback silently stops finding killed task turns. */
 function extractOutDir(turn: TurnOutcome): string | undefined {
   const env = parseEnvelope(turn.stdout);
   const fromEnvelope = env?.results?.[0]?.outDir;

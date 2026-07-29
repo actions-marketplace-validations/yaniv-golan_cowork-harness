@@ -73,8 +73,11 @@ export function parseRepeatFlags(args: string[], command: string): RepeatFlags {
   };
   requiresRepeat(minPassRate !== 1.0, "--min-pass-rate");
   requiresRepeat(stopOnDiverge, "--stop-on-diverge");
-  requiresRepeat(maxBudgetUsd !== undefined, "--max-budget-usd");
-  requiresRepeat(allowBudgetStop, "--allow-budget-stop");
+  // `--max-budget-usd` is deliberately NOT in this list: it is meaningful on a SINGLE run too, where it
+  // pre-flights against the scenario's own cost history (see `preflightBudget`, cli.ts). The exploratory
+  // single-run lane is where you have the least idea what you are about to spend, so refusing the flag
+  // there capped the predictable lane and left the unpredictable one open.
+  requiresRepeat(allowBudgetStop, "--allow-budget-stop"); // still batch-only: it modifies a BATCH verdict
 
   return { repeatN, minPassRate, stopOnDiverge, maxBudgetUsd, allowBudgetStop, rest };
 }

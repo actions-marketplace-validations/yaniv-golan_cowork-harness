@@ -295,6 +295,47 @@ describe("renderer — renderFooter", () => {
     });
     expect(s.text()).not.toContain("→ result:");
   });
+
+  it("shows the run's cost in the footer on a passing run", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], cost: { usd: 1.23456 } }, plan({ color: false }), {
+      write: s.write,
+    });
+    expect(s.text()).toContain("$1.2346");
+  });
+
+  it("shows the run's cost in the footer on a FAILING run too (a failing paid run is when you most want the number)", () => {
+    const s = sink();
+    renderFooter(
+      { ...base, assertions: [{ assertion: { file_exists: "x" }, pass: false, message: "missing" }], cost: { usd: 0.5 } },
+      plan({ color: false }),
+      { write: s.write },
+    );
+    expect(s.text()).toContain("$0.5000");
+  });
+
+  it("omits the cost segment entirely when cost is absent (no $0.0000, no placeholder)", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }] }, plan({ color: false }), { write: s.write });
+    expect(s.text()).not.toContain("$");
+  });
+
+  it("suppresses the cost on the replay lane even when a recorded cost is present (regression guard)", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], outDir: "(replay)", cost: { usd: 2.5 } }, plan({ color: false }), {
+      write: s.write,
+      lane: "replay",
+    });
+    expect(s.text()).not.toContain("$");
+  });
+
+  it("prints the cost when lane is omitted (undefined means live)", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], cost: { usd: 3.1 } }, plan({ color: false }), {
+      write: s.write,
+    });
+    expect(s.text()).toContain("$3.1000");
+  });
 });
 
 describe("renderer — startHeartbeat", () => {

@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`stats` can query and group by skill generation.** `--skill-hash <prefix>` and `--label <tag>` narrow
+  to one generation of the iterate-across-fixes loop, and `--group-by scenario|skill-hash|label` splits a
+  scenario per generation instead of aggregating across them — the A/B comparison in one command instead
+  of a hand-written `jq` pipeline. The index has carried `skillHash`/`runLabel` since they were added *for*
+  a group-by step; until now nothing could query them. `--skill-hash` matches the 12-char prefix the index
+  stores or the full hash from `result.json` (6-character floor). `--last <n>` now windows per **group**,
+  which is unchanged at the default grouping.
+- **`stats` warns when one aggregate spans more than one skill generation.** Runs from before and after a
+  skill change accumulate in the same scenario directory, so a plain `stats <scenario>` could silently
+  average pre-fix and post-fix runs into one line. Each summary now carries `distinctSkillHashes`, and a
+  window > 1 emits a `::warning::` on stderr naming both remedies. Rows lacking the grouped-on field (the
+  `chat` lane, a run that mounted no skill) are excluded from grouping and reported as `hashlessRuns`,
+  never bucketed under a blank key.
+- **The single-run verdict footer reports the run's cost.** Previously only a `--repeat` batch printed a
+  total, leaving the open-ended lane — where spend is least predictable — silent. Absent cost telemetry
+  prints nothing rather than `$0.0000`, and the replay lane is suppressed (a replay carries the *recorded*
+  cost of the original paid run; printing it would misreport fresh spend).
+- **`--max-budget-usd` works without `--repeat`.** On a single run it is a **pre-flight** refusal: if the
+  scenario's own cost history exceeds the cap, the run is refused before spending. There is no live cost
+  signal to abort a run mid-flight on — `cost.usd` arrives only with the SDK result message — so with no
+  priced history it warns loudly and proceeds uncapped rather than pretending the cap is enforced.
+  `--allow-budget-stop` still requires `--repeat`: it modifies a batch verdict.
+
+### Fixed
+
+- **`--compact`/`--demo` suppress the `[status] <outDir>` line, and now say so.** The line is a raw host
+  path, which those shareable-output modes exist to withhold — but `SKILL.md` stated the line was printed
+  unconditionally and neither flag was documented in the skill at all, so backgrounding a run with
+  `--compact` and capturing stderr looked like the harness had no liveness signal. `status.json` is still
+  written either way; `cowork-harness status` also accepts the run-dir root.
+- **A corrupt `skillHash`/`runLabel` in `index.jsonl` is quarantined.** Both became load-bearing once
+  `stats` could filter and group on them; a wrong-typed value is valid JSON and would previously have
+  reached `buildStats` and thrown.
+- **`SKILL.md` documents where a run's cost lives** — `result.json` → `cost.usd` (the SDK's
+  `total_cost_usd`), noted as a different source from summing `modelUsage[].costUSD`, which is what
+  `trace --view usage` reports and which can legitimately differ.
+
 ## [1.14.0] — 2026-07-29
 
 ### Changed

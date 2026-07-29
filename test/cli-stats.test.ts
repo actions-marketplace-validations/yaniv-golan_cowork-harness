@@ -167,3 +167,130 @@ describe.skipIf(!can)("cli: stats (E4)", () => {
     expect(r.out).not.toContain("elsewhere-scenario"); // the symlinked target was never indexed
   });
 });
+
+describe.skipIf(!can)("cli: stats — generation queries", () => {
+  const GEN1 = "5d2d482d80d3";
+  const GEN2 = "8fc999c77cdf";
+
+  /** Two generations of one scenario, plus a second scenario, seeded through the real reindex path. */
+  function seedTwoGenerations() {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { fingerprint: { skillHash: GEN1 + "aaaa" }, runLabel: "gen-1" });
+    seedRun(root, "s", "local_2", { fingerprint: { skillHash: GEN2 + "bbbb" }, runLabel: "gen-2" });
+    run(["stats", "--reindex"], root);
+    return root;
+  }
+
+  it("warns when one aggregate spans more than one skill generation, and names both remedies", () => {
+    const r = run(["stats", "s"], seedTwoGenerations());
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::warning::");
+    expect(r.out).toContain("spans 2 skill generations");
+    expect(r.out).toContain("--group-by skill-hash");
+  });
+
+  it("--group-by skill-hash splits the aggregate and silences the warning", () => {
+    const r = run(["stats", "s", "--group-by", "skill-hash"], seedTwoGenerations());
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain("::warning::");
+    expect(r.out).toContain(`skillHash=${GEN1}`);
+    expect(r.out).toContain(`skillHash=${GEN2}`);
+  });
+
+  it("--skill-hash narrows to one generation", () => {
+    const r = run(["stats", "s", "--skill-hash", GEN2], seedTwoGenerations());
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/1 run\(s\)/);
+    expect(r.out).not.toContain("::warning::");
+  });
+
+  // THE parsing trap: `positionals` skips a flag's value only for flags it was told about, so a new
+  // value-flag missing from that list makes its VALUE parse as the scenario positional — `stats
+  // --skill-hash abc` would silently become `stats abc` and match nothing. Mutation-checked: removing
+  // "--skill-hash" from the positionals list turns this green assertion red.
+  it("a value-flag's value is never mistaken for the scenario positional", () => {
+    const root = seedTwoGenerations();
+    const r = run(["stats", "--skill-hash", GEN1, "s"], root);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^s.*1 run\(s\)/m);
+    expect(r.out).not.toContain("no indexed runs match");
+  });
+
+  it("--label filters on the generation tag", () => {
+    const r = run(["stats", "s", "--label", "gen-1"], seedTwoGenerations());
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/1 run\(s\)/);
+  });
+
+  it("rejects an unknown --group-by value with a usage error, not a silent fallback", () => {
+    const r = run(["stats", "--group-by", "bogus"], runsRoot());
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("--group-by must be one of scenario|skill-hash|label");
+  });
+
+  it("rejects a --skill-hash too short to identify a generation", () => {
+    const r = run(["stats", "--skill-hash", "ab"], runsRoot());
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("at least 6 characters");
+  });
+
+  it("the JSON envelope carries the new identity/diagnostic fields", () => {
+    const r = run(["stats", "s", "--group-by", "skill-hash", "--output-format", "json"], seedTwoGenerations());
+    expect(r.code).toBe(0);
+    const envelope = JSON.parse(r.out.split("\n").find((l) => l.startsWith("{"))!);
+    expect(envelope.hashlessRuns).toBe(0);
+    expect(envelope.stats).toHaveLength(2);
+    expect(envelope.stats.map((s: { skillHash: string }) => s.skillHash).sort()).toEqual([GEN1, GEN2].sort());
+    expect(envelope.stats.every((s: { distinctSkillHashes: number }) => s.distinctSkillHashes === 1)).toBe(true);
+  });
+
+  it("the ::warning:: goes to stderr, so a JSON stdout envelope stays parseable", () => {
+    const root = seedTwoGenerations();
+    const r = spawnSync("node", [CLI, "stats", "s", "--output-format", "json"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root },
+    });
+    expect(r.stderr).toContain("::warning::");
+    expect(() => JSON.parse(r.stdout.trim())).not.toThrow();
+  });
+
+  // `--max-budget-usd` on a SINGLE run pre-flights against this same index — a single run has no live
+  // cost signal to abort on, so history is the only thing available before the spend.
+  it("refuses a single run BEFORE spending when the scenario's history exceeds the cap", () => {
+    const root = runsRoot();
+    seedRun(root, "pricey", "local_1", { cost: { usd: 3.5 } });
+    run(["stats", "--reindex"], root);
+    const d = mkdtempSync(join(tmpdir(), "cli-stats-budget-"));
+    writeFileSync(join(d, "pricey.yaml"), "name: pricey\nprompt: hi\n");
+    const r = spawnSync("node", [CLI, "run", join(d, "pricey.yaml"), "--max-budget-usd", "1.0"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root },
+    });
+    expect(r.status).toBe(2);
+    const out = r.stdout + r.stderr;
+    expect(out).toContain("refused before spending");
+    expect(out).toContain("$3.5000");
+  });
+
+  // The complement of the refusal, asserted on the PURE function so the test never has to start a real
+  // run: history under the cap produces no refusal. (`preflightBudget` only refuses on `worst > cap`.)
+  it("history comfortably under the cap yields a max below it — nothing to refuse", () => {
+    const root = runsRoot();
+    seedRun(root, "cheap", "local_1", { cost: { usd: 0.02 } });
+    seedRun(root, "cheap", "local_2", { cost: { usd: 0.05 } });
+    run(["stats", "--reindex"], root);
+    const r = run(["stats", "cheap", "--metric", "cost"], root);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("$0.0"); // priced history exists, and its worst case is well under $1
+  });
+
+  it("counts and reports runs excluded from grouping for want of a skillHash", () => {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { fingerprint: { skillHash: GEN1 + "aaaa" } });
+    seedRun(root, "s", "local_2"); // no fingerprint at all — a chat-lane/no-skill run
+    run(["stats", "--reindex"], root);
+    const r = run(["stats", "s", "--group-by", "skill-hash"], root);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("1 run(s) excluded from grouping");
+  });
+});

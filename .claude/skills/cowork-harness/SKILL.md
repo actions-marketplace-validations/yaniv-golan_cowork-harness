@@ -368,7 +368,12 @@ cassette — has its own recipe:
    input + result are captured, not just errored ones. When iterating, tag generations with `--label` and
    pair a critique only with a `result.json` whose `fingerprint.skillHash` **matches** the skill that
    produced it (`inspect`/the run-index row surface a short `skillHash` prefix; `verify-run` warns when a
-   kept run predates the current skill). **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
+   kept run predates the current skill). **The hazard is general, not critique-specific:** repeated
+   `run`/`skill` invocations of one scenario accumulate in the SAME scenario directory regardless of skill
+   version, so a plain `stats <scenario>` silently averages pre-fix and post-fix runs together. Compare
+   generations with **`stats <scenario> --group-by skill-hash`** (or narrow with `--skill-hash <prefix>` /
+   `--label <tag>`); an un-split window spanning more than one generation now warns.
+   **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
    skillHash keys the whole MOUNTED plugin, so on a multi-skill plugin the hash alone cross-pairs
    critiques of DIFFERENT skills — pair by the report's `(gradedSkillHash, gradedSkill)` pair. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
    pairing step there silently groups on an absent key instead of erroring — check the field is present, or
@@ -440,7 +445,10 @@ harness writes/updates throughout the run's lifecycle (including a crash-safety 
 error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
 either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
 checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
-run starts, so capture stderr to get the exact directory — but `<dir>` also accepts the run-dir root
+run starts, so capture stderr to get the exact directory — **unless you passed `--compact` or `--demo`,
+which suppress that line** (it is a raw, un-tildeified host path, exactly what those shareable-output
+modes exist to withhold; `status.json` is still written either way, so `status` still works) — but
+`<dir>` also accepts the run-dir root
 passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
 newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
@@ -509,8 +517,14 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   bare `trace` digests the whole run. The view set is actively being extended — run `trace --help` for
   the current list rather than relying on a fixed enumeration here.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
-  `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`.
-- **`result.json` carries the raw fields** the assertions read: `verdict`, `toolDurations`, `models`, `toolErrors`,
+  `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
+  plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and
+  `--group-by scenario|skill-hash|label` to split per generation instead of aggregating across them (see
+  Gotcha 6). `--last <n>` windows per group.
+- **`result.json` carries the raw fields** the assertions read: `verdict`, `cost` (`cost.usd` = the SDK's
+  `total_cost_usd` for the run — the authoritative single-run spend; NOT the same source as summing
+  `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
+  `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations`, `models`, `toolErrors`,
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
   `resolvedModel`/output/`attributedSkillId`, `outputTruncated`, `referencesRead`, `reasoning`/`reasoningElided`),
   `context` (tools/mcpServers/availableSkills), `tasks`,

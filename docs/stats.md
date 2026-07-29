@@ -73,16 +73,20 @@ re-run `--reindex` to rebuild from `result.json` if you see this warning.
 cowork-harness stats                              # every indexed scenario
 cowork-harness stats csv-metrics                   # one scenario
 cowork-harness stats --since 2026-07-01 --branch feature-x
-cowork-harness stats --metric cost --last 20        # last 20 runs per scenario, cost view only
+cowork-harness stats --metric cost --last 20        # last 20 runs per group, cost view only
+cowork-harness stats csv-metrics --group-by skill-hash   # one row per skill generation
 ```
 
 Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, and the
-most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed).
+most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed). Each
+summary also carries `distinctSkillHashes` (how many skill generations the window folded together — see
+*Grouping by generation*), and the envelope carries `hashlessRuns` alongside `stats`.
 `--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost` narrows the line to just that one
 view (`cache-tokens` shows cache-read-token p50/p95; `model-cost` shows per-model cost p50/p95, distinct
 from the plain `cost` metric's overall run cost). `--last <n>`
-windows to the N most recent runs **per scenario** (not globally — a global cut would starve a
-low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows).
+windows to the N most recent runs **per group** (not globally — a global cut would starve a
+low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows). A
+group is a scenario unless `--group-by` says otherwise; see *Grouping by generation* below.
 
 `--metric` is a text-mode-only view narrower — `--output-format json` always returns every field for every
 scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` already follow elsewhere in
@@ -96,14 +100,36 @@ fields to a server-side narrowing it didn't ask for.
 > comparison step. What you pair is usually a [`critique`](./critique.md) finding set against the runs
 > that produced it.
 
-`stats` aggregates **by scenario**, and its filters are `--scenario`/`--since`/`--baseline`/`--branch`/
-`--last`. There is no built-in group-by for the run-identity fields, so pair generations with `jq` over
-`index.jsonl` directly — the index is the queryable source of truth, and both fields are on the row:
+`stats` groups **by scenario** by default, and aggregating a window that spans two skill versions
+compares unlike things. Two flags query the run-identity fields directly:
+
+```bash
+cowork-harness stats my-scenario --group-by skill-hash   # one row per generation — the A/B in one command
+cowork-harness stats my-scenario --skill-hash 8fc999c77cdf   # or narrow to one generation
+cowork-harness stats my-scenario --label gen-2               # …by the human tag instead
+```
+
+`--group-by` accepts `scenario` (default) | `skill-hash` | `label`. When a window you did NOT narrow
+spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill generations`) and
+reports `distinctSkillHashes` in the JSON envelope, so CI can gate on the field rather than scraped text.
+`--last <n>` windows per **group**, so `--group-by skill-hash --last 5` means "the last 5 runs of each
+generation".
+
+The two identity fields, on the row and in the summary:
 
 - **`skillHash`** — the correctness key. Content-exact; changes on any tracked edit. **Stored as a 12-char
-  prefix** on the index row (the full hash is in each run's `result.json`), so a recipe groups on the
-  prefix — fine for pairing within one project, but use `result.json` if you need the full value.
+  prefix** on the index row (the full hash is in each run's `result.json`). `--skill-hash` matches either
+  form — it compares prefix-tolerantly in both directions — with a 6-character floor, below which a
+  "prefix" would pair unrelated generations.
 - **`runLabel`** — the `--label <tag>` you passed. Human-readable and orderable; ergonomics, not identity.
+
+A row that has no value for the field you grouped on (a `chat` row, a run that mounted no skill, a
+pre-1.5.0 skill-lane row) is **excluded and counted**, never bucketed under a blank key — `stats` reports
+`N run(s) excluded from grouping`, and the JSON envelope carries `hashlessRuns`.
+
+**The `jq` recipes below are still worth knowing** — they cover what the flags deliberately do not.
+`stats` reports cost *percentiles* over aggregatable rows only, so a per-generation **total spend** that
+includes critique's evaluator passes still needs the recipe (see the `critiqueRole` note in it).
 
 ```bash
 IDX=~/.cowork-harness/runs/index.jsonl

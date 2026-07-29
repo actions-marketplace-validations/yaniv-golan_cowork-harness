@@ -216,6 +216,12 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   if (r.critiqueRole !== undefined && !["task", "reflection", "rollup"].includes(r.critiqueRole as string)) return false;
   if (r.skill !== undefined && typeof r.skill !== "string") return false;
   if (r.critiqueTotalUsd !== undefined && typeof r.critiqueTotalUsd !== "number") return false;
+  // Type-checked for the same reason as the three above — because they are CONSUMED. `stats` filters on
+  // `skillHash` with `String.prototype.startsWith` and groups on both, so a corrupt/hand-edited row
+  // carrying `"skillHash": 123` (valid JSON) would otherwise pass quarantine and throw a TypeError out
+  // of `buildStats` — the CLI crashing on exactly the input class this quarantine exists to absorb.
+  if (r.skillHash !== undefined && typeof r.skillHash !== "string") return false;
+  if (r.runLabel !== undefined && typeof r.runLabel !== "string") return false;
   if (typeof r.git !== "object" || r.git === null) return false;
   const git = r.git as Record<string, unknown>;
   if (git.branch !== null && typeof git.branch !== "string") return false;
@@ -659,10 +665,23 @@ export function resolveRunsFromIndex(rows: RunIndexRow[], arg: string): RunIndex
   return resolveRunsFragmentFromIndex(rows, arg);
 }
 
+/** How `buildStats` buckets rows. `scenario` is the historical (and default) behaviour; the other two
+ *  split a scenario by run IDENTITY, which is what an iterate-across-fixes A/B actually wants — a
+ *  window spanning two skill versions aggregates unlike things, and only the tool can see that. */
+export type StatsGroupBy = "scenario" | "skill-hash" | "label";
+
 export interface StatsSummary {
   scenario: string;
+  /** Set only when grouping by that field — the group's identity, NOT folded into `scenario` (which
+   *  stays exactly what it always was, so a consumer matching on it keeps working). */
+  skillHash?: string;
+  runLabel?: string;
   runs: number;
   passRate: number;
+  /** Distinct non-undefined `skillHash` values among THIS group's post-window rows. > 1 means the
+   *  aggregate compares unlike things; `stats` warns on it. Always 1 under `--group-by skill-hash`.
+   *  Counts only rows that HAVE a hash — see the hashless caveat on `StatsResult.hashlessRuns`. */
+  distinctSkillHashes: number;
   p50CostUsd?: number;
   p95CostUsd?: number;
   p50DurationMs?: number;
@@ -677,6 +696,52 @@ export interface StatsSummary {
   p95ModelCostUsd?: number;
   lastGreenTs?: string;
   prunedRuns: number; // rows whose outDir no longer exists on disk — still aggregated, just flagged
+}
+
+/** `buildStats`'s full return. The summaries are the answer; `hashlessRuns` is the honesty channel —
+ *  under `--group-by skill-hash`/`label` a row lacking that field is EXCLUDED (never bucketed under a
+ *  blank key: a `chat` row, a run that mounted no skill, or a pre-1.5.0 skill-lane row folded into a
+ *  generation would misattribute it), and a silent exclusion reads as "covered everything". */
+export interface StatsResult {
+  summaries: StatsSummary[];
+  hashlessRuns: number;
+}
+
+/** Historical per-run cost for one scenario, newest first — the only basis a PRE-flight budget check can
+ *  reason from. There is no live cost signal to abort a run mid-flight on: `cost.usd` lands only with the
+ *  SDK result message, and `api_metrics` (the one mid-stream cost-adjacent event) is TTFT/output-token
+ *  metering carrying no USD at all (verified against the staged agent binary). So "will this run blow my
+ *  budget?" is answerable only from what the same scenario has cost before.
+ *
+ *  Rows without cost telemetry are skipped, NOT counted as 0 — a zero would silently pull an estimate
+ *  down and let an over-budget run through, the exact false-green this check exists to prevent. */
+export function scenarioCostHistory(rows: RunIndexRow[], scenario: string): number[] {
+  return rows
+    .filter(isAggregatable)
+    .filter((r) => r.scenario === scenario && typeof r.costUsd === "number")
+    .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+    .map((r) => r.costUsd!);
+}
+
+/** Content-exact skill-version keys compare PREFIX-tolerantly in both directions: the index row stores
+ *  a 12-char prefix (see `skillHash` on the row) while `result.json` and every doc recipe hand you the
+ *  full 64-char sha, so a user pasting either must match. Both sides are prefixes of the same hex
+ *  string, so this cannot produce a false pair at any sane length — the CLI enforces the length floor. */
+function skillHashMatches(rowHash: string | undefined, query: string): boolean {
+  if (!rowHash) return false;
+  return rowHash.startsWith(query) || query.startsWith(rowHash);
+}
+
+/** The identity a group is keyed by. Kept as FIELDS, not a joined string: `buildStats` used to
+ *  destructure its map key straight into `StatsSummary.scenario`, so a composite key would have emitted
+ *  `scenario: "my-scenario abc123"` into the text line AND the JSON envelope — breaking scenario
+ *  matching for every consumer. A `--label` value is unvalidated freeform and may contain anything, so
+ *  splitting a joined key back apart is not reliably possible either. */
+interface StatsGroup {
+  scenario: string;
+  skillHash?: string;
+  runLabel?: string;
+  rows: RunIndexRow[];
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -700,39 +765,71 @@ function isAggregatable(r: RunIndexRow): boolean {
 
 export function buildStats(
   rows: RunIndexRow[],
-  filters: { scenario?: string; since?: string; baseline?: string; branch?: string; last?: number },
-): StatsSummary[] {
+  filters: {
+    scenario?: string;
+    since?: string;
+    baseline?: string;
+    branch?: string;
+    last?: number;
+    skillHash?: string;
+    label?: string;
+    groupBy?: StatsGroupBy;
+  },
+): StatsResult {
   // Bookkeeping rows are excluded BEFORE any filter or grouping — see `isAggregatable`.
   let filtered = rows.filter(isAggregatable);
   if (filters.scenario) filtered = filtered.filter((r) => r.scenario === filters.scenario);
   if (filters.since) filtered = filtered.filter((r) => r.ts >= filters.since!);
   if (filters.baseline) filtered = filtered.filter((r) => r.baseline === filters.baseline);
   if (filters.branch) filtered = filtered.filter((r) => r.git.branch === filters.branch);
+  if (filters.skillHash) filtered = filtered.filter((r) => skillHashMatches(r.skillHash, filters.skillHash!));
+  if (filters.label) filtered = filtered.filter((r) => r.runLabel === filters.label);
 
-  const byScenario = new Map<string, RunIndexRow[]>();
+  const groupBy = filters.groupBy ?? "scenario";
+  // Rows lacking the grouping field are DROPPED, not bucketed under a blank key — counted so the caller
+  // can say so out loud rather than silently under-reporting.
+  let hashlessRuns = 0;
+  const groups = new Map<string, StatsGroup>();
   for (const r of filtered) {
-    if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, []);
-    byScenario.get(r.scenario)!.push(r);
+    let identity: string | undefined;
+    if (groupBy === "skill-hash") identity = r.skillHash;
+    else if (groupBy === "label") identity = r.runLabel;
+    if (groupBy !== "scenario" && identity === undefined) {
+      hashlessRuns++;
+      continue;
+    }
+    // NUL joins the composite: `--label` is unvalidated freeform (it may contain spaces, `=`, anything a
+    // shell will pass), so any printable separator could collide two distinct generations into one group.
+    const key = groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        scenario: r.scenario,
+        ...(groupBy === "skill-hash" ? { skillHash: identity } : {}),
+        ...(groupBy === "label" ? { runLabel: identity } : {}),
+        rows: [],
+      };
+      groups.set(key, g);
+    }
+    g.rows.push(r);
   }
-  // `--last` windows to the N most recent rows PER SCENARIO, AFTER since/baseline/branch/scenario have
-  // already narrowed the candidate set — "the last N runs matching these filters", not "of the last N
-  // runs overall, whichever happen to match" (the latter would silently starve a scenario/branch out of
-  // the window entirely once a higher-frequency one dominates the unfiltered recent rows).
+  // `--last` windows to the N most recent rows PER GROUP, AFTER since/baseline/branch/scenario/identity
+  // have already narrowed the candidate set — "the last N runs matching these filters", not "of the last
+  // N runs overall, whichever happen to match" (the latter would silently starve a scenario/branch out of
+  // the window entirely once a higher-frequency one dominates the unfiltered recent rows). At the default
+  // `--group-by scenario` a group IS a scenario, so this is bit-identical to the pre-grouping behaviour.
   if (filters.last !== undefined) {
     const n = filters.last;
-    for (const [scenario, group] of byScenario) {
-      byScenario.set(
-        scenario,
-        group
-          .slice()
-          .sort((a, b) => (a.ts < b.ts ? 1 : -1))
-          .slice(0, n),
-      );
+    for (const g of groups.values()) {
+      g.rows = g.rows
+        .slice()
+        .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+        .slice(0, n);
     }
   }
 
   const summaries: StatsSummary[] = [];
-  for (const [scenario, group] of byScenario) {
+  for (const { scenario, skillHash, runLabel, rows: group } of groups.values()) {
     const numbers = (pick: (r: RunIndexRow) => number | undefined) =>
       group
         .map(pick)
@@ -747,8 +844,14 @@ export function buildStats(
     const greens = group.filter((r) => r.pass).sort((a, b) => (a.ts < b.ts ? 1 : -1));
     summaries.push({
       scenario,
+      // undefined-valued keys are dropped by JSON.stringify, so these appear only when grouped on.
+      ...(skillHash !== undefined ? { skillHash } : {}),
+      ...(runLabel !== undefined ? { runLabel } : {}),
       runs: group.length,
       passRate: group.filter((r) => r.pass).length / group.length,
+      // Counted over the POST-window rows — the same set every other number here is computed from, so
+      // the warning can never disagree with the aggregate it annotates.
+      distinctSkillHashes: new Set(group.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,
       p50CostUsd: costs.length ? percentile(costs, 0.5) : undefined,
       p95CostUsd: costs.length ? percentile(costs, 0.95) : undefined,
       p50DurationMs: durations.length ? percentile(durations, 0.5) : undefined,
@@ -765,5 +868,5 @@ export function buildStats(
       prunedRuns: group.filter((r) => !existsSync(r.outDir)).length,
     });
   }
-  return summaries;
+  return { summaries, hashlessRuns };
 }

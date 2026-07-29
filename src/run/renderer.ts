@@ -5,6 +5,7 @@ import type { RunResult } from "../types.js";
 import { computeVerdict, type GuardReport, type GuardStatus } from "./verdict.js";
 import { formatGateProvenanceLine } from "./gate-provenance.js";
 import { turnArtifactPath } from "./turn-layout.js";
+import { budgetFields } from "../assert.js";
 
 /**
  * Shared output renderer. The seam is `RunHooks` (attached to `Run` via `executeScenario`): it
@@ -271,7 +272,16 @@ export function renderFooter(
   const dur = opts.durationMs != null ? ` · ${(opts.durationMs / 1000).toFixed(1)}s` : "";
   // an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
   const nd = r.nonDeterministic ? " " + red(plan, "⚠ non-deterministic (LLM-decided)") : "";
-  const meta = `[${r.fidelity}] · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}`;
+  // Same helper the repeat rollup (src/run/repeat.ts) sums over — one definition of "the run's cost"
+  // instead of this footer and the batch total drifting apart. Undefined (no cost evidence) prints
+  // nothing: no "$0.0000", no "$n/a" — undefined-ness is this codebase's evidence-unavailable signal.
+  // REPLAY GATE — do not remove: a replay's RunResult carries the RECORDED cost of the original paid
+  // run (cassette.ts stamps `cost: rec.cost` onto the replay result and renders it through this same
+  // footer with lane: "replay"). Printing it here would misreport fresh spend for a token-free replay,
+  // so it's suppressed whenever lane is exactly "replay" — undefined (live) still prints.
+  const costUsd = opts.lane !== "replay" ? budgetFields(r).costUsd : undefined;
+  const cost = costUsd !== undefined ? ` · $${costUsd.toFixed(4)}` : "";
+  const meta = `[${r.fidelity}] · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}${cost}`;
   // Iterate-across-fixes discoverability hook: fires on exploratory (skill-lane, `scaffoldTip`) runs that
   // are non-deterministic — the exact signature of a `--decider-llm --intent` loop run — in BOTH the pass
   // AND fail branches (a failing/partial run is arguably the more useful moment to harvest). Points at the

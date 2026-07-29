@@ -75,7 +75,7 @@ import {
 } from "./run/trace-view.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
-import { readIndex, reindexFromRunsTree, buildStats, type StatsSummary } from "./run/run-index.js";
+import { readIndex, reindexFromRunsTree, buildStats, scenarioCostHistory, type StatsSummary, type StatsGroupBy } from "./run/run-index.js";
 import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
   canonicalizeInput,
@@ -328,16 +328,22 @@ Questions:
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
-  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
-  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
+  --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
+                                   line (a raw host path). The probe + hard-fail stay; status.json is still
+                                   written, so 'status <run-dir-root>' / --session-id still locate the run
+  --demo                           shareable output: --compact (incl. its [status] suppression) + suppress the
+                                   "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
   --repeat <N>                     run the SAME skill+prompt N times (2-100) and aggregate a variance
                                    rollup instead of a single pass/fail — "did this finding reproduce, or
                                    did it pass once?". Every run is still kept and indexed.
   --min-pass-rate <0..1>           batch verdict threshold (default 1.0 = every run must pass). Needs --repeat.
   --stop-on-diverge                stop the batch as soon as one run passes and another fails. Needs --repeat.
-  --max-budget-usd <x>             stop the batch once cumulative cost reaches x (degrades LOUDLY if a run
-                                   reports no cost telemetry). Needs --repeat.
+  --max-budget-usd <x>             with --repeat: stop the batch once cumulative cost reaches x (degrades
+                                   LOUDLY if a run reports no cost telemetry). WITHOUT --repeat: refuse the
+                                   run up front if this scenario's own cost history exceeds x — a PRE-flight
+                                   estimate (a single run has no live cost signal to abort on); with no
+                                   priced history it warns and proceeds uncapped.
   --allow-budget-stop              treat a budget-stopped batch as a pass rather than incomplete. Needs --repeat.
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
@@ -395,10 +401,12 @@ Repeat / flakiness measurement:
   --stop-on-diverge                stop the repeat loop as soon as BOTH a pass and a fail have been observed
                                    (saves paid runs once flakiness is proven) — that batch always FAILS
                                    (divergence observed = flaky = what this flag exists to catch). Requires --repeat.
-  --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. A budget-stopped
-                                   batch fails by default (incomplete is not green; opt out with
-                                   --allow-budget-stop); degrades LOUDLY (never silently runs all N) if a run
-                                   reports no cost telemetry. Requires --repeat.
+  --max-budget-usd <x>             with --repeat: stop the repeat loop once cumulative cost would exceed x. A
+                                   budget-stopped batch fails by default (incomplete is not green; opt out
+                                   with --allow-budget-stop); degrades LOUDLY (never silently runs all N) if a
+                                   run reports no cost telemetry. WITHOUT --repeat: a PRE-flight refusal from
+                                   this scenario's cost history (no live signal exists to abort a run
+                                   mid-flight); warns and proceeds uncapped when there is no priced history.
   --allow-budget-stop             opt back into a PASS verdict for a batch that --max-budget-usd stopped
                                    early (default: a budget-stopped batch always fails — incomplete is not
                                    green). Requires --repeat.
@@ -430,8 +438,11 @@ Matrix testing — one scenario × a cross-product of axes, in one run:
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
-  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
-  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
+  --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
+                                   line (a raw host path). The probe + hard-fail stay; status.json is still
+                                   written, so 'status <run-dir-root>' / --session-id still locate the run
+  --demo                           shareable output: --compact (incl. its [status] suppression) + suppress the
+                                   "runs →" header (runs stay durable)
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
@@ -495,10 +506,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       cannot be combined with a positional <run-id | run-dir> or --follow\n" +
     "       exit codes: 0 found · 2 no runs found for the scenario under the runs root (or a usage error)",
   stats:
-    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
+    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>]\n" +
+    "              [--skill-hash <prefix>] [--label <tag>] [--group-by scenario|skill-hash|label] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
-    "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       --last <n>: the N most recent runs PER GROUP (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       --skill-hash/--label: narrow to ONE generation of the iterate-across-fixes loop. skillHash is the content-exact key (matches a 12-char index prefix or the full hash from result.json); --label is the tag you passed to run/skill.\n" +
+    "       --group-by skill-hash: split each scenario per generation instead of aggregating across them — the A/B in one command. A window spanning >1 generation warns (aggregating unlike things); rows with no skillHash/label are EXCLUDED from grouping and counted, never bucketed under a blank key.\n" +
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
     "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
@@ -1656,6 +1670,9 @@ async function cmdRun(rawArgs: string[]) {
         );
 
       if (repeatN === undefined) {
+        // Per-scenario, so a directory run refuses only the scenario whose own history breaches the cap
+        // rather than aborting the whole sweep on the first expensive one.
+        if (maxBudgetUsd !== undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
         const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
         results.push(
           await runOneScenario({
@@ -2029,6 +2046,9 @@ async function cmdSkill(rawArgs: string[]) {
       undefined,
       o.json,
     );
+  // Single-run budget ceiling. The batch path enforces its own cumulative cap between iterations, so this
+  // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
+  if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
   const runSkillOnce = (label: string, rethrowUnanswered = false) =>
     runOneScenario({
       command: "skill",
@@ -2883,10 +2903,53 @@ function cmdList(args: string[] = []) {
   }
 }
 
-/** One text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
- *  everything the row has (a metric with no telemetry in the group is simply absent, not "0"). */
+/** Minimum `--skill-hash` query length. The match is prefix-tolerant in BOTH directions (the index row
+ *  holds 12 chars, `result.json` holds 64), so a very short query would pair unrelated generations. */
+const SKILL_HASH_QUERY_MIN = 6;
+
+/**
+ * `--max-budget-usd` on a SINGLE run (no `--repeat`): refuse BEFORE spending if this scenario's own
+ * history says the run is likely to exceed the cap.
+ *
+ * Why pre-flight and not a mid-run kill: there is no live cost signal to abort on. `cost.usd` arrives
+ * only with the SDK result message (by which point the run is paid for), and `api_metrics` — the one
+ * mid-stream cost-adjacent event — is TTFT/output-token metering that carries no USD at all (verified
+ * against the staged agent binary; see `CostInfo.raw` in types.ts). History is the only thing available
+ * before the spend, so history is what this uses.
+ *
+ * Degrades LOUDLY, never silently: with no priced history there is nothing to compare against, so it
+ * says so and proceeds rather than either blocking a first run or pretending the cap is enforced. That
+ * mirrors the batch lane's own missing-telemetry degradation in `runRepeatBatch`.
+ */
+function preflightBudget(command: string, scenario: string, maxBudgetUsd: number, json: boolean): void {
+  const history = scenarioCostHistory(readIndex(runsRoot()), scenario);
+  if (history.length === 0) {
+    log(
+      `::warning:: --max-budget-usd: no priced run history for "${scenario}" — cannot pre-flight this run, proceeding UNCAPPED. ` +
+        `(A single run has no mid-run cost signal to abort on; the cap becomes enforceable once this scenario has run once.)`,
+    );
+    return;
+  }
+  // The WORST observed cost, not the median: this is a refusal gate, and an estimate that under-predicts
+  // lets through exactly the expensive run the flag was reached for.
+  const worst = Math.max(...history);
+  if (worst > maxBudgetUsd)
+    fail(
+      command,
+      "runtime",
+      `--max-budget-usd $${maxBudgetUsd.toFixed(4)} refused before spending: "${scenario}" has cost up to $${worst.toFixed(4)} across ${history.length} prior run(s).`,
+      `Raise the cap, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history — a single run cannot be aborted mid-flight on cost (no live cost signal exists).`,
+      json,
+    );
+}
+
+/** One text-mode line per group. `--metric` narrows to a single focused view; omitted shows
+ *  everything the row has (a metric with no telemetry in the group is simply absent, not "0").
+ *  The identity suffix appears only under a non-default `--group-by`, so it composes with EVERY metric
+ *  branch below (each builds on `base`) without changing the default line at all. */
 function formatStatsLine(s: StatsSummary, metric?: string): string {
-  const base = `${s.scenario}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const identity = [s.skillHash ? `skillHash=${s.skillHash}` : null, s.runLabel ? `label=${s.runLabel}` : null].filter(Boolean).join(" ");
+  const base = `${s.scenario}${identity ? ` (${identity})` : ""}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
   if (metric === "pass-rate") return base;
@@ -2923,6 +2986,9 @@ function cmdStats(args: string[]) {
       "--branch",
       "--metric",
       "--last",
+      "--skill-hash",
+      "--label",
+      "--group-by",
       "--reindex",
       "--output-format",
       "--output-format=json",
@@ -2935,6 +3001,21 @@ function cmdStats(args: string[]) {
   const baseline = readValueFlag("stats", args, "--baseline", json);
   const branch = readValueFlag("stats", args, "--branch", json);
   const metric = readValueFlag("stats", args, "--metric", json);
+  const label = readValueFlag("stats", args, "--label", json);
+  const skillHash = readValueFlag("stats", args, "--skill-hash", json);
+  // A 1-2 char "prefix" would pair unrelated generations under the both-ways prefix rule. The index
+  // stores 12 chars, so 6 is a floor with real discriminating power and still short enough to type.
+  if (skillHash !== undefined && skillHash.length < SKILL_HASH_QUERY_MIN)
+    return void fail(
+      "stats",
+      "usage",
+      `--skill-hash needs at least ${SKILL_HASH_QUERY_MIN} characters to identify a generation (got "${skillHash}")`,
+      undefined,
+      json,
+    );
+  const groupBy = readValueFlag("stats", args, "--group-by", json);
+  if (groupBy !== undefined && !["scenario", "skill-hash", "label"].includes(groupBy))
+    return void fail("stats", "usage", `--group-by must be one of scenario|skill-hash|label (got "${groupBy}")`, undefined, json);
   if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns", "cache-tokens", "model-cost"].includes(metric))
     return void fail(
       "stats",
@@ -2951,7 +3032,19 @@ function cmdStats(args: string[]) {
       return void fail("stats", "usage", `--last requires a positive integer (got "${lastRaw}")`, undefined, json);
     last = n;
   }
-  const allPositionals = positionals(args, ["--output-format", "--since", "--baseline", "--branch", "--metric", "--last"]);
+  // EVERY value-taking flag must be listed, or `positionals` treats that flag's VALUE as the scenario
+  // positional — `stats --skill-hash abc` would silently become `stats abc` and match nothing.
+  const allPositionals = positionals(args, [
+    "--output-format",
+    "--since",
+    "--baseline",
+    "--branch",
+    "--metric",
+    "--last",
+    "--skill-hash",
+    "--label",
+    "--group-by",
+  ]);
   if (allPositionals.length > 1) return void fail("stats", "usage", SUBCOMMAND_USAGE.stats, undefined, json);
   const scenario = allPositionals[0];
 
@@ -2968,8 +3061,27 @@ function cmdStats(args: string[]) {
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
   const rows = readIndex(root);
-  const stats = buildStats(rows, { scenario, since, baseline, branch, last });
-  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats }));
+  const { summaries: stats, hashlessRuns } = buildStats(rows, {
+    scenario,
+    since,
+    baseline,
+    branch,
+    last,
+    skillHash,
+    label,
+    groupBy: groupBy as StatsGroupBy | undefined,
+  });
+  // stderr (`log`), so every diagnostic below coexists with a `--output-format json` stdout envelope.
+  // `distinctSkillHashes` rides IN the envelope too, so CI gates on the field, not on scraped text.
+  for (const s of stats)
+    if (s.distinctSkillHashes > 1)
+      log(
+        `::warning:: stats: "${s.scenario}" spans ${s.distinctSkillHashes} skill generations — this aggregate compares unlike things. ` +
+          `Narrow with --skill-hash <prefix>, or split with --group-by skill-hash.`,
+      );
+  if (hashlessRuns > 0)
+    log(`stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded.`);
+  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats, hashlessRuns }));
   if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
   for (const s of stats) log(formatStatsLine(s, metric));
 }
