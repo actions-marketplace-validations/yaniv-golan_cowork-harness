@@ -272,16 +272,21 @@ describe.skipIf(!can)("cli: stats — generation queries", () => {
     expect(out).toContain("$3.5000");
   });
 
-  // The complement of the refusal, asserted on the PURE function so the test never has to start a real
-  // run: history under the cap produces no refusal. (`preflightBudget` only refuses on `worst > cap`.)
-  it("history comfortably under the cap yields a max below it — nothing to refuse", () => {
+  // The matrix branch exits before the per-file loop, so a preflight placed only in that loop left the
+  // cap SILENTLY ignored on the most expensive invocation shape there is (N paid cells of one scenario).
+  it("pre-flights the budget on the --matrix path too, instead of silently ignoring the cap", () => {
     const root = runsRoot();
-    seedRun(root, "cheap", "local_1", { cost: { usd: 0.02 } });
-    seedRun(root, "cheap", "local_2", { cost: { usd: 0.05 } });
+    seedRun(root, "csv-metrics", "local_1", { cost: { usd: 99 } });
     run(["stats", "--reindex"], root);
-    const r = run(["stats", "cheap", "--metric", "cost"], root);
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("$0.0"); // priced history exists, and its worst case is well under $1
+    const d = mkdtempSync(join(tmpdir(), "cli-stats-matrix-"));
+    writeFileSync(join(d, "m.yaml"), "baselines:\n  - desktop-1.18286.0\n");
+    const r = spawnSync(
+      "node",
+      [CLI, "run", resolve("examples/scenarios/csv-metrics.yaml"), "--matrix", join(d, "m.yaml"), "--max-budget-usd", "0.01"],
+      { encoding: "utf8", env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root } },
+    );
+    expect(r.status).toBe(2);
+    expect(r.stdout + r.stderr).toContain("refused before spending");
   });
 
   it("counts and reports runs excluded from grouping for want of a skillHash", () => {

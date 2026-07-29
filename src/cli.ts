@@ -75,7 +75,15 @@ import {
 } from "./run/trace-view.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
-import { readIndex, reindexFromRunsTree, buildStats, scenarioCostHistory, type StatsSummary, type StatsGroupBy } from "./run/run-index.js";
+import {
+  readIndex,
+  reindexFromRunsTree,
+  buildStats,
+  scenarioCostHistory,
+  budgetPreflight,
+  type StatsSummary,
+  type StatsGroupBy,
+} from "./run/run-index.js";
 import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
   canonicalizeInput,
@@ -1511,6 +1519,10 @@ async function cmdRun(rawArgs: string[]) {
     const { cells, totalBeforeCap, truncated } = expandMatrix(matrixDoc!, maxCells);
     if (truncated)
       log(`::warning:: matrix: ${totalBeforeCap} cells before capping — only the first ${maxCells} ran (raise with --max-cells)`);
+    // The matrix branch exits before the per-file loop below, so without this the cap would be SILENTLY
+    // ignored on the single most expensive invocation shape the flag exists to bound (N paid cells of one
+    // scenario). With --repeat the cumulative cap in runRepeatBatch already applies per cell.
+    if (maxBudgetUsd !== undefined && repeatN === undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
     let baseSession: ReturnType<typeof loadSessionFromFile>;
     try {
       baseSession = loadSessionFromFile(scenario.session);
@@ -1653,6 +1665,13 @@ async function cmdRun(rawArgs: string[]) {
     process.exit(matrix.anyFail ? 1 : 0);
   }
 
+  // Budget pre-flight for EVERY resolved scenario, before any of them runs. Deliberately not inside the
+  // loop: a refusal on scenario 3 of 10 would fire only after 1 and 2 had already been paid for, and
+  // `fail()` exits — so those completed results would never reach the JSON envelope either. A pre-flight
+  // that spends money before refusing is not a pre-flight.
+  if (maxBudgetUsd !== undefined && repeatN === undefined)
+    for (const f of files) preflightBudget("run", parseScenarioFile(f).name, maxBudgetUsd, o.json);
+
   const results: RunResult[] = [];
   const rollups: RepeatRollup[] = [];
   try {
@@ -1670,9 +1689,6 @@ async function cmdRun(rawArgs: string[]) {
         );
 
       if (repeatN === undefined) {
-        // Per-scenario, so a directory run refuses only the scenario whose own history breaches the cap
-        // rather than aborting the whole sweep on the first expensive one.
-        if (maxBudgetUsd !== undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
         const label = files.length > 1 ? `[${i + 1}/${files.length}] ${scenario.name}` : scenario.name;
         results.push(
           await runOneScenario({
@@ -3077,13 +3093,20 @@ function cmdStats(args: string[]) {
     if (s.distinctSkillHashes > 1)
       log(
         `::warning:: stats: "${s.scenario}" spans ${s.distinctSkillHashes} skill generations — this aggregate compares unlike things. ` +
-          `Narrow with --skill-hash <prefix>, or split with --group-by skill-hash.`,
+          `Narrow with --skill-hash <prefix>, or split with --group-by skill-hash. ` +
+          // Naming the blind spot: the count is over rows that HAVE a hash, so a window mixing hashed runs
+          // with hashless ones (chat lane, a run that mounted no skill) is also unlike-vs-unlike and this
+          // warning cannot see it. Better to say so than to let silence read as "checked, and fine".
+          `(Counts only runs that recorded a skillHash — runs without one are not compared.)`,
       );
-  if (hashlessRuns > 0)
-    log(`stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded.`);
   if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats, hashlessRuns }));
   if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
   for (const s of stats) log(formatStatsLine(s, metric));
+  if (hashlessRuns > 0)
+    log(
+      `stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded ` +
+        `(the chat lane records no fingerprint, and a run that mounted no skill has nothing to hash).`,
+    );
 }
 
 /** `decide` — validate a decider (helper OR policy) against a sample question in ~2s, so you don't

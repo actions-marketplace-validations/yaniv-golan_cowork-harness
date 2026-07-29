@@ -9,6 +9,8 @@ import {
   buildStats,
   reindexFromRunsTree,
   resolveRunsFromIndex,
+  scenarioCostHistory,
+  budgetPreflight,
   type RunIndexRow,
 } from "../src/run/run-index.js";
 import type { RunResult } from "../src/types.js";
@@ -350,6 +352,59 @@ describe("buildStats — per-scenario aggregation", () => {
     const rows = [row({ scenario: "a", outDir: "/definitely/does/not/exist" })];
     const stats = buildStats(rows, {}).summaries;
     expect(stats.find((s) => s.scenario === "a")?.prunedRuns).toBe(1);
+  });
+});
+
+/** `--max-budget-usd` on a single run. The REFUSAL path terminates the process, so it can only be
+ *  CLI-tested; the PROCEED path continues into a paid run and cannot be. Both live here as a pure
+ *  function precisely so both are guarded — an "always refuse" mutant must not pass the suite. */
+describe("budgetPreflight — the single-run cost ceiling", () => {
+  it("refuses when the worst prior run exceeds the cap", () => {
+    expect(budgetPreflight([0.5, 3.2, 0.9], 1.0)).toEqual({ refuse: true, worst: 3.2, priced: 3 });
+  });
+
+  it("proceeds when every prior run is under the cap", () => {
+    expect(budgetPreflight([0.02, 0.05], 1.0)).toEqual({ refuse: false, worst: 0.05, priced: 2 });
+  });
+
+  it("proceeds on an EXACT tie — a history equal to the cap has never breached it", () => {
+    expect(budgetPreflight([1.0], 1.0).refuse).toBe(false);
+    // …and one cent over does refuse, so the boundary is real rather than a wide-open >=.
+    expect(budgetPreflight([1.01], 1.0).refuse).toBe(true);
+  });
+
+  it("cannot refuse with no priced history — it reports priced:0 so the caller degrades loudly", () => {
+    expect(budgetPreflight([], 1.0)).toEqual({ refuse: false, priced: 0 });
+  });
+
+  it("estimates on the WORST run, not the median — an under-predicting estimator lets the expensive run through", () => {
+    // A median/p50 estimator would see 0.1 here and happily proceed against a $1 cap.
+    expect(budgetPreflight([0.1, 0.1, 0.1, 0.1, 9.0], 1.0).refuse).toBe(true);
+  });
+});
+
+describe("scenarioCostHistory", () => {
+  it("returns only this scenario's priced runs", () => {
+    const rows = [
+      row({ scenario: "a", runId: "1", costUsd: 0.5 }),
+      row({ scenario: "a", runId: "2", costUsd: 2.0 }),
+      row({ scenario: "b", runId: "3", costUsd: 9.0 }),
+    ];
+    expect(scenarioCostHistory(rows, "a").sort()).toEqual([0.5, 2.0]);
+  });
+
+  it("skips rows with NO cost telemetry rather than counting them as 0 — a phantom 0 would drag an estimate down and let an over-budget run through", () => {
+    const rows = [row({ scenario: "a", runId: "1" }), row({ scenario: "a", runId: "2", costUsd: 4.0 })];
+    expect(scenarioCostHistory(rows, "a")).toEqual([4.0]);
+    expect(budgetPreflight(scenarioCostHistory(rows, "a"), 1.0).refuse).toBe(true);
+  });
+
+  it("excludes a critique roll-up row — its costUsd is the evaluator delta, not a run's own cost", () => {
+    const rows = [
+      row({ scenario: "a", runId: "1", costUsd: 0.2 }),
+      row({ scenario: "a", runId: "2", costUsd: 8.0, critiqueRole: "rollup" }),
+    ];
+    expect(scenarioCostHistory(rows, "a")).toEqual([0.2]);
   });
 });
 

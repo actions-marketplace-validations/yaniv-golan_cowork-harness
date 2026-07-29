@@ -107,17 +107,29 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
       reason: "critique mints and manages its own session (the reflection turn IS a resume of it)",
     },
   },
-  ...(["--repeat", "--min-pass-rate", "--stop-on-diverge", "--max-budget-usd", "--allow-budget-stop"] as const).map(
-    (flag): SkillFlagSpec => ({
-      flag,
-      arity: flag === "--stop-on-diverge" || flag === "--allow-budget-stop" ? 0 : 1,
-      critique: {
-        kind: "reject",
-        reason:
-          "critique is a fixed two-turn protocol — loop `critique` itself and pair generations by fingerprint.skillHash (docs/critique.md's 'Reproduction' section has the recipe)",
-      },
-    }),
-  ),
+  ...(["--repeat", "--min-pass-rate", "--stop-on-diverge", "--allow-budget-stop"] as const).map((flag): SkillFlagSpec => ({
+    flag,
+    arity: flag === "--stop-on-diverge" || flag === "--allow-budget-stop" ? 0 : 1,
+    critique: {
+      kind: "reject",
+      reason:
+        "critique is a fixed two-turn protocol — loop `critique` itself and pair generations by fingerprint.skillHash (docs/critique.md's 'Reproduction' section has the recipe)",
+    },
+  })),
+  // Split out from the batch family above once `--max-budget-usd` became meaningful WITHOUT `--repeat`:
+  // the shared "fixed two-turn protocol" reason stopped being true for it. Still rejected, for a reason
+  // that IS true — critique spends across four workloads (two graded turns + two evaluator passes), so a
+  // cap pre-flighted from single-run history would under-predict its cost by design and refuse or permit
+  // on the wrong number. docs/critique.md's COST section is the honest control.
+  {
+    flag: "--max-budget-usd",
+    arity: 1,
+    critique: {
+      kind: "reject",
+      reason:
+        "critique spends across FOUR workloads (two graded turns + two evaluator passes), so a cap pre-flighted from single-run cost history would gate on the wrong number — see docs/critique.md's cost section",
+    },
+  },
   {
     flag: "--ablate-skill",
     arity: 0,

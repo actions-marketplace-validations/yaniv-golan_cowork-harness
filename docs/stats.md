@@ -127,6 +127,11 @@ A row that has no value for the field you grouped on (a `chat` row, a run that m
 pre-1.5.0 skill-lane row) is **excluded and counted**, never bucketed under a blank key — `stats` reports
 `N run(s) excluded from grouping`, and the JSON envelope carries `hashlessRuns`.
 
+**One blind spot, stated plainly:** `distinctSkillHashes` counts only runs that *recorded* a hash, so a
+window mixing one generation with hashless runs is also comparing unlike things and the warning cannot
+see it. `hashlessRuns` is reported only when you group, so on a default `stats <scenario>` those rows are
+folded in silently. If a scenario's history mixes `chat`/no-skill runs with real ones, group explicitly.
+
 **The `jq` recipes below are still worth knowing** — they cover what the flags deliberately do not.
 `stats` reports cost *percentiles* over aggregatable rows only, so a per-generation **total spend** that
 includes critique's evaluator passes still needs the recipe (see the `critiqueRole` note in it).

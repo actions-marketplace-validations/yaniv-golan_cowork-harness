@@ -445,8 +445,8 @@ harness writes/updates throughout the run's lifecycle (including a crash-safety 
 error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
 either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
 checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
-run starts, so capture stderr to get the exact directory — **unless you passed `--compact` or `--demo`,
-which suppress that line** (it is a raw, un-tildeified host path, exactly what those shareable-output
+run starts, so capture stderr to get the exact directory — **unless you passed `--compact` (or `--demo`,
+which implies it), which suppress that line** (it is a raw, un-tildeified host path, exactly what those shareable-output
 modes exist to withhold; `status.json` is still written either way, so `status` still works) — but
 `<dir>` also accepts the run-dir root
 passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the

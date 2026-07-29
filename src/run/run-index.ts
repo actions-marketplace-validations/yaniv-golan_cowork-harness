@@ -719,8 +719,19 @@ export function scenarioCostHistory(rows: RunIndexRow[], scenario: string): numb
   return rows
     .filter(isAggregatable)
     .filter((r) => r.scenario === scenario && typeof r.costUsd === "number")
-    .sort((a, b) => (a.ts < b.ts ? 1 : -1))
     .map((r) => r.costUsd!);
+}
+
+/** The pre-flight verdict itself, as a pure function of history + cap so BOTH outcomes are testable
+ *  without starting a paid run (the refusal path terminates the process; the proceed path does not).
+ *
+ *  `worst`, not a percentile: this is a refusal gate, and an estimator that under-predicts lets through
+ *  exactly the expensive run the flag was reached for. Strict `>` — a history that exactly equals the cap
+ *  has never breached it, and "$1.00 max, cap $1.00" should run. */
+export function budgetPreflight(history: number[], maxBudgetUsd: number): { refuse: boolean; worst?: number; priced: number } {
+  if (history.length === 0) return { refuse: false, priced: 0 };
+  const worst = Math.max(...history);
+  return { refuse: worst > maxBudgetUsd, worst, priced: history.length };
 }
 
 /** Content-exact skill-version keys compare PREFIX-tolerantly in both directions: the index row stores

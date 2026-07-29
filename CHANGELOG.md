@@ -26,10 +26,13 @@ All notable changes to this project are documented here. The format is based on
   prints nothing rather than `$0.0000`, and the replay lane is suppressed (a replay carries the *recorded*
   cost of the original paid run; printing it would misreport fresh spend).
 - **`--max-budget-usd` works without `--repeat`.** On a single run it is a **pre-flight** refusal: if the
-  scenario's own cost history exceeds the cap, the run is refused before spending. There is no live cost
-  signal to abort a run mid-flight on — `cost.usd` arrives only with the SDK result message — so with no
-  priced history it warns loudly and proceeds uncapped rather than pretending the cap is enforced.
-  `--allow-budget-stop` still requires `--repeat`: it modifies a batch verdict.
+  scenario's own cost history exceeds the cap, the run is refused before spending — on the plain, the
+  directory-sweep, and the `--matrix` paths alike, and for a sweep every scenario is checked before any of
+  them runs. There is no live cost signal to abort a run mid-flight on — `cost.usd` arrives only with the
+  SDK result message — so with no priced history it warns loudly and proceeds uncapped rather than
+  pretending the cap is enforced. `--allow-budget-stop` still requires `--repeat`: it modifies a batch
+  verdict. `critique` still rejects the flag, now for an accurate reason: it spends across four workloads,
+  so a cap pre-flighted from single-run history would gate on the wrong number.
 
 ### Fixed
 
