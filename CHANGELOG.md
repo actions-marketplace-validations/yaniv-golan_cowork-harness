@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-07-29
+
+### Changed
+
+- **The supported Node floor moves from 20 to 22.** Node 20 reached end-of-life on 2026-04-30 and
+  receives no security patches; `engines` and `doctor` both claimed it was fine. `doctor`'s Node check
+  **fails** on 20 and its title reads `Node ≥ 22`, so `doctor` exits 1 and any script gating on it stops.
+  Other commands are not gated on the Node version and behave as before. For anyone installing the
+  harness **as a dependency**, `engines` is advisory: npm warns (`EBADENGINE`), pnpm honours
+  `engineStrict` (default off) for dependencies, Yarn 1 enforces (`--ignore-engines` bypasses), Yarn
+  2+/Berry does not check it. Installing on Node 20 therefore keeps working and `doctor` is the gate that
+  reports the problem — but **contributors cloning this repo and running `pnpm install` on Node 20 will
+  hard-fail**, because pnpm always enforces a *project's own* `engines` regardless of `engineStrict`.
+  **Upgrade to Node 22 or 24 before taking this release.** The agent sandbox's own pinned Node is
+  unchanged: it tracks what Cowork ships, not what is current.
+
+- **CI runs on Node 24 (Active LTS), with a dedicated job pinned to 22** so the declared floor is
+  exercised rather than assumed; that job gates the merge context. The packaged Action installs Node 24 —
+  note it uses a composite action, so steps after it in your job also see Node 24.
+
+- **If you copied the CI recipe from the shipped skill, update the runner in YOUR repo.** The recipe in
+  `references/ci-recipe.md` pinned `node-version: '20'` and now pins `'24'` — but that only fixes the
+  copy we ship. A workflow pasted from an earlier release still runs Node 20 in your repository, where
+  this release's CLI will fail `doctor` and warn `EBADENGINE` on install. Bump `node-version` to `'22'`
+  or `'24'` wherever you pasted it.
+
+### Fixed
+
+- **The egress-proxy image builds on a supported Node base, and existing installs actually receive it.**
+  It was built `FROM node:20-slim`. Both `ensureProxyImage` and `doctor` reuse that image on **tag
+  existence alone**, so changing the Dockerfile would have reached nobody who had already built it —
+  their machine would keep serving egress from an end-of-life base while `doctor` reported it healthy.
+  The tag therefore moves to **`cowork-egress-proxy:3`**, which makes the next run rebuild it
+  automatically. **Reclaim the old image with `docker image rm cowork-egress-proxy:2`** — nothing removes
+  it for you. If you pin `COWORK_PROXY_IMAGE`, rebuild that image yourself. **If you bring the proxy up
+  via `docker/compose.yml`** rather than letting the CLI manage it, that service is built under compose's
+  own project namespace and is not covered by the tag bump — rebuild it explicitly with
+  `docker compose -f docker/compose.yml build egress-proxy`.
+
 ## [1.13.2] — 2026-07-28
 
 ### Fixed
