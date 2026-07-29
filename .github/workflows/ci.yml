@@ -412,11 +412,6 @@ jobs:
           echo "merely stale relative to a Desktop release from yesterday — a human still has to run sync"
           echo "after every Desktop update. See docs/maintenance via README → Maintenance."
 
-  # ── Aggregation gate: carries the `typecheck · test · build` status the branch ruleset requires,
-  # kept meaningful after the unit→build+test split — green ONLY when the fast build gate AND every unit
-  # test shard pass, so a red shard blocks a merge exactly as the old monolithic job did, with no ruleset
-  # change. (The separate `pytest cowork-lane …` required context predates this and is already stale vs the
-  # `python` job's name — flagged for a ruleset fix, out of scope here.) ──
   floor:
     name: floor check (node 22 — the declared engines floor)
     runs-on: ubuntu-latest
@@ -425,6 +420,8 @@ jobs:
     # call — only a wall-clock kill can. This job runs the suite UNSHARDED, the shape the `test` job's
     # own header calls "the former `unit` 15-min pole", so 40 is a generous backstop, not a target.
     timeout-minutes: 40
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pinned to the ENGINES FLOOR, deliberately behind the other jobs. Without this, the floor in
@@ -435,6 +432,11 @@ jobs:
       - run: npm ci
       - run: npm run ci
 
+  # ── Aggregation gate: carries the `typecheck · test · build` status the branch ruleset requires,
+  # kept meaningful after the unit→build+test split — green ONLY when the fast build gate, every unit
+  # test shard AND the Node-22 floor check pass, so any of them going red blocks a merge exactly as the
+  # old monolithic job did, with no ruleset change. (The separate `pytest cowork-lane …` required context
+  # predates this and is already stale vs the `python` job's name — flagged for a ruleset fix.) ──
   ci-green:
     name: typecheck · test · build
     runs-on: ubuntu-latest
@@ -442,4 +444,4 @@ jobs:
     permissions:
       contents: read
     steps:
-      - run: echo "build gate + all unit-test shards passed"
+      - run: echo "build gate + all unit-test shards + the node-22 floor check passed"

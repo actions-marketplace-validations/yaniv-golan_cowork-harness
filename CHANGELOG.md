@@ -17,8 +17,9 @@ All notable changes to this project are documented here. The format is based on
   harness **as a dependency**, `engines` is advisory: npm warns (`EBADENGINE`), pnpm honours
   `engineStrict` (default off) for dependencies, Yarn 1 enforces (`--ignore-engines` bypasses), Yarn
   2+/Berry does not check it. Installing on Node 20 therefore keeps working and `doctor` is the gate that
-  reports the problem — but **contributors cloning this repo and running `pnpm install` on Node 20 will
-  hard-fail**, because pnpm always enforces a *project's own* `engines` regardless of `engineStrict`.
+  reports the problem. (Measured against pnpm 10.33: it warns and proceeds by default, including for a
+  project's own `engines`; set `engine-strict=true` to make it fail. pnpm's own documentation still
+  describes the project case as unconditional — the observed behaviour is what is stated here.)
   **Upgrade to Node 22 or 24 before taking this release.** The agent sandbox's own pinned Node is
   unchanged: it tracks what Cowork ships, not what is current.
 
