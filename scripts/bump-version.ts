@@ -93,7 +93,7 @@ function bumpCiRecipeExample(content: string, newVersion: string): string {
 // ---------------------------------------------------------------------------
 // Per-file composition. Each target file gets exactly the pattern set the release-process plan
 // (P3) specifies for it — never a blanket regex applied to every file, which would corrupt
-// unrelated version-shaped mentions the plan explicitly calls out (README.md's `Node ≥ 20` and
+// unrelated version-shaped mentions the plan explicitly calls out (README.md's Node-floor mention and
 // `≥1.14271.0` baseline mentions, for example).
 // ---------------------------------------------------------------------------
 

@@ -838,8 +838,8 @@ function isDenylistedWalkDirName(name: string): boolean {
 /** Recursive `*.md` walk under `dir` (used for EVERY `agents/**`, `commands/**`, and `references/**` shape
  *  — Claude Code discovers namespaced commands/agents in subdirectories, e.g. `commands/tasks/build.md` /
  *  `agents/sub/x.md`, so a single-level listing silently narrowed the scan; this walker is now the ONLY
- *  markdown-collection primitive `resolveSkillTarget` uses) via a hand-rolled `readdirSync` walker — glob
- *  dependencies are unavailable on Node 20 in this repo's runtime target. Matches `.md`/`.MD`/any case
+ *  markdown-collection primitive `resolveSkillTarget` uses) via a hand-rolled `readdirSync` walker — a
+ *  glob dependency is deliberately avoided (`fs.glob` is still experimental at the floor). Matches `.md`/`.MD`/any case
  *  (case-insensitive — Markdown tooling doesn't care about extension case, and neither should this
  *  scanner). `[]` when `dir` doesn't exist.
  *

@@ -725,7 +725,7 @@ surface):
   "ok": true,                        // false iff any `required` check has status:"fail" for the selected tier
   "error": null,
   "tier": "container",               // protocol|container|microvm|hostloop|cowork
-  "checks": [ { "id": "node", "title": "Node ≥ 20", "status": "ok", "detail": "node 22.x.x",
+  "checks": [ { "id": "node", "title": "Node ≥ 22", "status": "ok", "detail": "node 22.x.x",
                 "remedy?": "string", "required": true } ] }  // status: ok|fail|warn|skip
 
 // Shared error envelope (a thrown failure — bad flag, or the top-level catch):

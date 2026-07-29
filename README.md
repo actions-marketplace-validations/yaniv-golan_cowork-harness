@@ -6,7 +6,7 @@
 
 [![ci](https://github.com/yaniv-golan/cowork-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/yaniv-golan/cowork-harness/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![node: >=20](https://img.shields.io/badge/node-%3E%3D20-339933.svg)](#quick-start)
+[![node: >=22](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](#quick-start)
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-F97316)](#drive-it-from-claude-code-companion-skill)
 [![Built with Skill Creator Plus](https://img.shields.io/badge/Built_with-Skill_Creator_Plus-4ecdc4)](https://github.com/yaniv-golan/skill-creator-plus)
 [![Agent Skills compatible](https://img.shields.io/badge/Agent_Skills-compatible-4A90D9)](https://agentskills.io)
@@ -20,7 +20,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 **Debugging a run?** → [docs/debugging.md](./docs/debugging.md) — a separate page, not a section below.
 
 > **Requirements at a glance** (a summary — full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below)
-> - **Free demo (`replay`):** Node ≥ 20 — nothing else (no Docker, token, or Claude Desktop).
+> - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
 > - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
 > - **Live tiers** need three things:
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
@@ -34,7 +34,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 > **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime: real Cowork runs your session inside an Apple Virtualization.framework microVM, and you **cannot** drive that microVM from a script (Cowork's session control plane is closed off; see [DESIGN.md §1](./DESIGN.md#1-what-real-cowork-actually-is-and-why-scripting-it-is-closed) for why). What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in cowork mode (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
 
 **Zero-friction preview — no token, no Docker.** A committed cassette replays from a fresh clone (the example
-cassette ships in the repo; just Node ≥ 20):
+cassette ships in the repo; just Node ≥ 22):
 
 ```bash
 git clone https://github.com/yaniv-golan/cowork-harness && cd cowork-harness
@@ -126,7 +126,7 @@ claude plugin marketplace add yaniv-golan/cowork-harness
 claude plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.13.2"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.13.2"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 22). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://agentskills.io) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) via [`npx skills`](https://github.com/vercel-labs/skills) (Vercel Labs' CLI implementation of that spec):
 
