@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Version lockstep guard (npm package <-> companion skill)
@@ -127,7 +127,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Build (the CLI-integration cases spawn dist/cli.js)
@@ -151,7 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version: "20", cache: npm }
+        with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
       - name: Pack this commit (the action must install THIS code, not the last npm publish)
         id: pack
@@ -279,7 +279,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version: "20", cache: npm }
+        with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
       - name: Agent base image — pull the published GHCR image the Action pins, else build
         # Packaged-Action consumers PULL this image; our CI otherwise only ever `docker build`s it, so a
@@ -328,7 +328,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with: { node-version: "20", cache: npm }
+        with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
       - name: Guard — live inference is best-effort (soft-skip without a key)
         id: guard
@@ -395,7 +395,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       # Fails on a stale (>90d) newest baseline AND on any baseline with an invalid / future
@@ -412,16 +412,36 @@ jobs:
           echo "merely stale relative to a Desktop release from yesterday — a human still has to run sync"
           echo "after every Desktop update. See docs/maintenance via README → Maintenance."
 
-  # ── Aggregation gate: carries the `typecheck · test · build` status the branch ruleset requires,
-  # kept meaningful after the unit→build+test split — green ONLY when the fast build gate AND every unit
-  # test shard pass, so a red shard blocks a merge exactly as the old monolithic job did, with no ruleset
-  # change. (The separate `pytest cowork-lane …` required context predates this and is already stale vs the
-  # `python` job's name — flagged for a ruleset fix, out of scope here.) ──
-  ci-green:
-    name: typecheck · test · build
+  floor:
+    name: floor check (node 22 — the declared engines floor)
     runs-on: ubuntu-latest
-    needs: [build, test]
+    # Hard backstop, same reason the sharded `test` job carries one: a test that spawns a CLI subprocess
+    # which blocks hangs SYNCHRONOUSLY, and vitest's per-test timeout cannot interrupt a blocked sync
+    # call — only a wall-clock kill can. This job runs the suite UNSHARDED, the shape the `test` job's
+    # own header calls "the former `unit` 15-min pole", so 40 is a generous backstop, not a target.
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
-      - run: echo "build gate + all unit-test shards passed"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Pinned to the ENGINES FLOOR, deliberately behind the other jobs. Without this, the floor in
+      # package.json is an unverified claim: everything green on 24 says nothing about whether the
+      # package still runs where it says it does.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npm run ci
+
+  # ── Aggregation gate: carries the `typecheck · test · build` status the branch ruleset requires,
+  # kept meaningful after the unit→build+test split — green ONLY when the fast build gate, every unit
+  # test shard AND the Node-22 floor check pass, so any of them going red blocks a merge exactly as the
+  # old monolithic job did, with no ruleset change. (The separate `pytest cowork-lane …` required context
+  # predates this and is already stale vs the `python` job's name — flagged for a ruleset fix.) ──
+  ci-green:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    needs: [build, test, floor]
+    permissions:
+      contents: read
+    steps:
+      - run: echo "build gate + all unit-test shards + the node-22 floor check passed"

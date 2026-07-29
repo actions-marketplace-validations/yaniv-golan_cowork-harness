@@ -34,7 +34,7 @@ body:
     attributes:
       label: Environment
       description: OS + arch, Node version, Docker/Podman version, container runtime.
-      placeholder: "macOS 15 arm64, Node 20.11, Docker 27, ..."
+      placeholder: "macOS 15 arm64, Node 22.13, Docker 27, ..."
     validations:
       required: true
   - type: textarea

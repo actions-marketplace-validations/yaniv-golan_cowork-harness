@@ -33,7 +33,7 @@ type DoctorProbe = import("../src/run/doctor.js").DoctorProbe;
 type DoctorCheck = import("../src/run/doctor.js").DoctorCheck;
 
 const OK_PROBE: DoctorProbe = {
-  nodeMajor: () => 20,
+  nodeMajor: () => 22,
   platform: () => "darwin",
   arch: () => "arm64",
   runtimeName: () => "docker",
@@ -43,7 +43,7 @@ const OK_PROBE: DoctorProbe = {
   vmInstanceStatus: () => "Running",
   imageName: () => "cowork-agent-base:2",
   imagePresent: () => true,
-  proxyImageName: () => "cowork-egress-proxy:2",
+  proxyImageName: () => "cowork-egress-proxy:3",
   proxyImagePresent: () => true,
   agentBinary: () => ({ ok: true, path: "/x/claude-code-vm/2.1.177/claude" }),
   hostAgentBinary: () => ({ ok: true, path: "/x/claude-code/2.1.177/claude.app/Contents/MacOS/claude" }),

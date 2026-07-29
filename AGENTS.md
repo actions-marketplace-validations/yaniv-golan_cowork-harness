@@ -23,7 +23,7 @@ protocol layer or run-loop bookkeeping in the CLI.
   `npm run test:live` lane. Python fast lane (from `python/`): `pytest -m 'not cowork'`.
 - CLI binary `cowork-harness`; env vars `COWORK_HARNESS_*` (+ `COWORK_AGENT_BINARY` / `COWORK_AGENT_IMAGE`) —
   see README's [Reproducibility knobs](./README.md#reproducibility-knobs) for the full env-var list.
-  Node ≥ 20.
+  Node ≥ 22.
 - `cowork-harness sync` is **local-only** (needs Desktop + `app.asar`; not on CI). The committed
   `baselines/*.json` are CI's source of truth — never hand-edit release facts into source; they come from
   `sync` (see `docs/maintenance.md`).

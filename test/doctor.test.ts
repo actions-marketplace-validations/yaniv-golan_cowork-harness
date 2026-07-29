@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { runDoctorChecks, agentBuildLine, ghcrRefFor, type DoctorProbe, type DoctorCheck, type ImageFreshness } from "../src/run/doctor.js";
 
 const OK_PROBE: DoctorProbe = {
-  nodeMajor: () => 20,
+  nodeMajor: () => 22,
   platform: () => "darwin",
   arch: () => "arm64",
   runtimeName: () => "docker",
@@ -12,7 +14,7 @@ const OK_PROBE: DoctorProbe = {
   vmInstanceStatus: () => "Running",
   imageName: () => "cowork-agent-base:2",
   imagePresent: () => true,
-  proxyImageName: () => "cowork-egress-proxy:2",
+  proxyImageName: () => "cowork-egress-proxy:3",
   proxyImagePresent: () => true,
   agentBinary: () => ({ ok: true, path: "/x/claude-code-vm/2.1.177/claude" }),
   hostAgentBinary: () => ({ ok: true, path: "/x/claude-code/2.1.177/claude.app/Contents/MacOS/claude" }),
@@ -129,8 +131,20 @@ describe("doctor — runDoctorChecks", () => {
     expect(runDoctorChecks("container", OK_PROBE).find((c) => c.id === "vm-instance")).toBeUndefined();
   });
 
-  it("Node < 20 fails", () => {
+  it("the node gate sits at the supported floor: 20 fails, 22 passes", () => {
+    // 20 is EOL (2026-04-30) -- reporting it healthy told users an unsupported runtime was fine.
     expect(get(runDoctorChecks("protocol", probe({ nodeMajor: () => 18 })), "node").status).toBe("fail");
+    expect(get(runDoctorChecks("protocol", probe({ nodeMajor: () => 20 })), "node").status).toBe("fail");
+    expect(get(runDoctorChecks("protocol", probe({ nodeMajor: () => 22 })), "node").status).toBe("ok");
+    expect(get(runDoctorChecks("protocol", probe({ nodeMajor: () => 24 })), "node").status).toBe("ok");
+  });
+
+  it("engines.node and the doctor gate state the same floor", () => {
+    // Two hand-maintained copies of one number; drift makes doctor green on a runtime the package
+    // refuses to install on, or vice versa.
+    const engines = JSON.parse(readFileSync(resolve("package.json"), "utf8")).engines.node as string;
+    const floor = Number(engines.match(/(\d+)/)![1]);
+    expect(get(runDoctorChecks("protocol", probe({})), "node").title).toBe(`Node ≥ ${floor}`);
   });
 
   it("egress proxy image is reported but never blocks (auto-built on first run)", () => {

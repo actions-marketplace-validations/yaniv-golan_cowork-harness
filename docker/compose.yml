@@ -11,6 +11,11 @@
 #     docker compose -f docker/compose.yml up -d egress-proxy
 #   cowork-harness run scenarios/
 #
+#   NOTE: this service is built under compose's own project namespace, NOT the versioned
+#   `cowork-egress-proxy:<n>` tag the CLI manages -- `up -d` reuses whatever it built last. After a
+#   release that changes docker/Dockerfile.proxy, rebuild explicitly:
+#     docker compose -f docker/compose.yml build egress-proxy
+#
 name: cowork-harness
 
 networks:

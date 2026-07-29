@@ -18,7 +18,7 @@ npm run ci            # typecheck + build + test — the core TS gate (CI's `bui
 
 Before pushing: `npm run format:check` and `npm run ci` (see RELEASING.md's release checklist for the full pre-tag list).
 
-Node ≥ 20. The project is ESM TypeScript; no transpiler magic — `tsc` only.
+Node ≥ 22. The project is ESM TypeScript; no transpiler magic — `tsc` only.
 
 Extra prerequisites for specific stages:
 

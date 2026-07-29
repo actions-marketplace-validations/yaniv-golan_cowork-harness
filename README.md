@@ -6,7 +6,7 @@
 
 [![ci](https://github.com/yaniv-golan/cowork-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/yaniv-golan/cowork-harness/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![node: >=20](https://img.shields.io/badge/node-%3E%3D20-339933.svg)](#quick-start)
+[![node: >=22](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](#quick-start)
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-F97316)](#drive-it-from-claude-code-companion-skill)
 [![Built with Skill Creator Plus](https://img.shields.io/badge/Built_with-Skill_Creator_Plus-4ecdc4)](https://github.com/yaniv-golan/skill-creator-plus)
 [![Agent Skills compatible](https://img.shields.io/badge/Agent_Skills-compatible-4A90D9)](https://agentskills.io)
@@ -20,7 +20,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 **Debugging a run?** → [docs/debugging.md](./docs/debugging.md) — a separate page, not a section below.
 
 > **Requirements at a glance** (a summary — full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below)
-> - **Free demo (`replay`):** Node ≥ 20 — nothing else (no Docker, token, or Claude Desktop).
+> - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
 > - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
 > - **Live tiers** need three things:
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
@@ -34,7 +34,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 > **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime: real Cowork runs your session inside an Apple Virtualization.framework microVM, and you **cannot** drive that microVM from a script (Cowork's session control plane is closed off; see [DESIGN.md §1](./DESIGN.md#1-what-real-cowork-actually-is-and-why-scripting-it-is-closed) for why). What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in cowork mode (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
 
 **Zero-friction preview — no token, no Docker.** A committed cassette replays from a fresh clone (the example
-cassette ships in the repo; just Node ≥ 20):
+cassette ships in the repo; just Node ≥ 22):
 
 ```bash
 git clone https://github.com/yaniv-golan/cowork-harness && cd cowork-harness
@@ -91,7 +91,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@>=1.13.2"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@>=1.14.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -101,7 +101,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=1.13.2"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=1.14.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -126,7 +126,7 @@ claude plugin marketplace add yaniv-golan/cowork-harness
 claude plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.13.2"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 20). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.14.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 22). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://agentskills.io) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) via [`npx skills`](https://github.com/vercel-labs/skills) (Vercel Labs' CLI implementation of that spec):
 
@@ -147,7 +147,7 @@ A global install is enough for CI `lint`, reading the teaching skill, and replay
 To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
-above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=1.13.2"` — see
+above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=1.14.0"` — see
 [above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
 
 ### Prerequisites for anything above `protocol` fidelity
@@ -694,14 +694,15 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=1.13.2` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=1.14.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
 
-The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **seven-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `action-self-test`, `python`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
+The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs an **eight-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 
 | Stage | Runs | Needs | Gates |
 |---|---|---|---|
 | **build** | format check · version-lockstep guard · typecheck · source guards · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
 | **test** | the unit suite (vitest), sharded 4-way | nothing | every push/PR |
+| **floor** | the unit suite once, unsharded, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line) | nothing | every push/PR; gates the merge context |
 | **action-self-test** | packs this commit and runs the packaged `uses: ./` Action against the committed example-pdf-skill cassette (pass case) + a nonexistent path (fail case) | nothing | every push/PR |
 | **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check`, then `npm run test:live` (live contract tests that guard the binary-resolution assumptions, no token needed) | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
@@ -741,7 +742,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_EVALUATOR_MODEL` — the default `critique` grading model (overridden by the `--evaluator-model` flag;
   falls back to the pinned default `claude-opus-4-8`).
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag — a **global** flag that must precede the subcommand — `--dotenv` follows the same rule everywhere except `critique`, which also takes it per-command) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.
-- **Networking / loop:** `COWORK_EGRESS_PROXY` overrides the egress-proxy URL injected into the sandbox; `COWORK_PROXY_IMAGE` overrides the egress proxy Docker image name (default `cowork-egress-proxy:2`); `COWORK_DOCKER_NETWORK` pins the Docker network the agent container joins; `CLAUDE_FORCE_HOST_LOOP=1` forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick). `COWORK_LIMACTL` overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
+- **Networking / loop:** `COWORK_EGRESS_PROXY` overrides the egress-proxy URL injected into the sandbox; `COWORK_PROXY_IMAGE` overrides the egress proxy Docker image name (default `cowork-egress-proxy:3`); `COWORK_DOCKER_NETWORK` pins the Docker network the agent container joins; `CLAUDE_FORCE_HOST_LOOP=1` forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick). `COWORK_LIMACTL` overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
 - `COWORK_HARNESS_PRERUN_HASH_CAP` — override the default cap on pre-run file hashing (bytes); raise it if `input_unmodified`/`no_unexpected_files` report evidence unavailable on a large connected folder.
 - `COWORK_HARNESS_MAX_ARTIFACT_BYTES` — override the inline-artifact-body cap (default 65536 bytes;
   same knob as `record --max-artifact-bytes`, which takes precedence) so a large structured deliverable
