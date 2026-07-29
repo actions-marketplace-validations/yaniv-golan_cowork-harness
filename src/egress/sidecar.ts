@@ -36,10 +36,12 @@ export interface EgressSidecar {
   readonly fatalError?: string;
 }
 
-// Tag bumped when the proxy's decision-log format changes so `ensureProxyImage` rebuilds instead of
-// reusing a cached image that logs the old shape (the image is built from dist/egress/proxy.js — a
-// cached older build would silently omit the per-request detail the log line now records).
-const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:2";
+// Tag is part of the CONTRACT, not decoration: ensureProxyImage below reuses an image on tag existence
+// alone, so ANY change to Dockerfile.proxy or to the dist/egress code it bakes in reaches nobody who
+// already built the old tag — a stale image keeps serving, and doctor keeps calling it healthy. Bump
+// this whenever a change must actually reach existing installs (a decision-log format change was the
+// original such case; the base-image move to node:22-slim is another). :3 = the node:22-slim base.
+const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:3";
 
 // A process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
 // instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).

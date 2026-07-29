@@ -1,6 +1,6 @@
 # Default-deny egress proxy sidecar (test fixture, not a security boundary).
 # Built from the SHIPPED dist/ (no source checkout / TS build) so it works from an installed package.
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /app
 # package.json provides "type":"module". dist/egress/proxy.js uses Node built-ins (http/net/fs) plus
 # one shared helper, dist/boundary-paths.js (validateBareDomain) — itself built-ins-only, so these two
