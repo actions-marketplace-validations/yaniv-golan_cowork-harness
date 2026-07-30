@@ -407,7 +407,8 @@ session's `skillsEnabled`. Three properties matter more than the tool's existenc
 - **It is force-asked.** `save_skill` is one of four tools in Cowork's force-ask set (with
   `request_cowork_directory`, `allow_cowork_file_delete`, `launch_code_session`): a PreToolUse
   hook returns `ask` for it *in every permission mode*, including `bypassPermissions`.
-- **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files`, it does not occupy
+- **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files` (see *File delivery* below
+  for the `present_files`/`SendUserFile` lane split), it does not occupy
   `system/init.tools`; it materialises only when the model looks for it.
 
 The rendered `<available_skills>` block also carries a `canSaveSkill`-dependent sentence: with the
@@ -451,3 +452,50 @@ nothing in context and changes no tool-selection outcome.
   is honest, and it is the part of the workflow the harness can verify.
 - **Keep skill persistence out of the scenario's claim.** State in the scenario name or `expect_denied`
   reasoning that persistence is unverified, so a later reader does not over-read the pass.
+
+---
+
+## File delivery — `present_files` here, `SendUserFile` on remote Cowork
+
+Cowork has **two** file-delivery tools, one per product lane, and an agent only ever sees the one for the
+surface it runs on:
+
+- **Desktop-local sandbox** (the lane this harness emulates): the Desktop host serves
+  `mcp__cowork__present_files` on the `cowork` SDK-MCP server — schema
+  `{files: [{file_path: string}]}`, `alwaysLoad` — which promotes scratchpad files into `mnt/outputs`.
+  The spawn's explicit `tools:` allowlist does **not** include `SendUserFile`, so the agent-native tool is
+  absent from the local toolset even though the agent binary contains it and its own enablement gate
+  (`tengu_send_user_file`) would otherwise pass on the `local-agent` entrypoint. The host allowlist is the
+  load-bearing exclusion, not the binary's gate.
+- **Remote (cloud-container) Cowork**: the agent has the native `SendUserFile` —
+  `{files: string[], caption?: string, status: "normal"|"proactive"` (**required**)`, display?:
+  "render"|"attach"}` — which *uploads* files and returns a `file_uuid` that Desktop's remote-lane
+  companion tools consume (device commit, remote `create_artifact`/`update_artifact`).
+
+The agent's own prompt states the rule: *"If the `SendUserFile` tool is in your toolset, you're on a remote
+surface where they can't [open a file path] — send the screenshots and recordings with it."*
+
+Verified against the pinned baseline: the asar's spawn `tools:`/`allowedTools` arrays and its live
+`present_files` handler (1.24012.9), the agent ELF's `SendUserFileTool` schema and `isEnabled()` gate
+(2.1.219), and a live-recorded 2.1.219 init toolset that carries `mcp__cowork__present_files` and no
+`SendUserFile`.
+
+**Harness behaviour:** serves `present_files` with the local lane's exact name and schema, on the
+`container` tier only. `SendUserFile` is deliberately not served — fidelity to the emulated lane, not a
+gap.
+
+### Where it bites — it looks like a harness bug
+
+Probing a *remote* Cowork session ("print your file-delivery tool schema") reports `SendUserFile` with a
+required `status`, which diffs against this harness as "wrong name AND wrong schema". It is neither: the
+two lanes genuinely disagree, and a harness that adopted `SendUserFile` would green skills that then fail
+on real desktop-local Cowork — inverting the failure class the harness exists to catch. When a probe and
+this harness disagree about file delivery, establish which lane the probe ran on first:
+`CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one.
+
+### Workarounds
+
+- **Never hardcode either tool name in a `SKILL.md`.** Describe the outcome ("deliver the file to the
+  user") and let the model pick the tool its surface provides — that phrasing is correct on both lanes.
+- **Assert on delivery, not on the tool.** `present_files_called` / `no_scratchpad_leak` keep working as
+  container-tier assertions; they name the harness's assertion keys, not a production tool name.

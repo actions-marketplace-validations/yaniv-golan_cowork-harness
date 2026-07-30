@@ -67,6 +67,18 @@ All notable changes to this project are documented here. The format is based on
   this release's CLI will fail `doctor` and warn `EBADENGINE` on install. Bump `node-version` to `'22'`
   or `'24'` wherever you pasted it.
 
+### Documentation
+
+- **`docs/fidelity-gaps.md` records the file-delivery lane split.** Cowork has two file-delivery tools —
+  `mcp__cowork__present_files` on the desktop-local sandbox this harness emulates, and the agent-native
+  `SendUserFile` (`files: string[]`, required `status`, optional `caption`/`display`) on remote
+  cloud-container sessions. Probing a remote session and diffing against this harness reads as "wrong tool
+  name AND wrong schema"; it is neither, and adopting `SendUserFile` would green skills that then fail on
+  real desktop-local Cowork. Verified against the pinned baseline's spawn allowlist and `present_files`
+  handler, the agent binary's `SendUserFileTool` schema and enablement gate, and a live-recorded init
+  toolset. The entry names the discriminator (`CLAUDE_CODE_ENTRYPOINT`) and the guidance that holds on
+  both lanes: never hardcode a delivery tool name in a `SKILL.md`.
+
 ### Fixed
 
 - **The egress-proxy image builds on a supported Node base, and existing installs actually receive it.**
