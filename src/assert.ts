@@ -1356,10 +1356,18 @@ function check(
     }
   }
   if (a.no_scratchpad_leak !== undefined) {
-    // present_files is served ONLY on the container tier (binary-verified against real Cowork: hostloop/
-    // microvm/protocol don't advertise the tool, so `presentedFiles` is always [] there and the leak check
-    // below would pass VACUOUSLY). Gate on the tier: anything but container is unsupported → can't-verify,
-    // never a silent green. `effectiveFidelity` is populated on every lane's ctx (live/replay/verify-run).
+    // THE HARNESS serves present_files only on the container tier — a scoping choice (commit 694b7b1: the
+    // container handler's `/sessions/`-prefix path model rejects hostloop's real-host paths), NOT a Cowork
+    // fact. Real Cowork registers the tool unconditionally and `alwaysLoad`, and its handler has BOTH a VM
+    // branch and an `isHostLoopMode` branch — and production runs host-loop mode (the `hostLoop` gate is
+    // force-ON in the pinned baseline). So at hostloop this is a harness COVERAGE GAP, not absence in the
+    // emulated target; see docs/fidelity-gaps.md, "File delivery".
+    //
+    // Gate anyway, because `presentedFiles` is always [] where the harness doesn't serve the tool and the
+    // leak check below would then pass VACUOUSLY. Note the promotion semantics this key asserts are
+    // genuinely container-shaped: production's host-loop branch validates and passes paths through without
+    // promoting, so there is no scratch→outputs copy to leak. `effectiveFidelity` is populated on every
+    // lane's ctx (live/replay/verify-run).
     if (ctx.effectiveFidelity !== "container")
       results.push(
         fail(
@@ -1381,8 +1389,10 @@ function check(
   }
   if (a.present_files_called !== undefined) {
     // The presence companion to no_scratchpad_leak (which is a vacuous pass when nothing was presented).
-    // Same container-tier gate: present_files is only served there, so a missing delivery on another tier
-    // is "cannot verify," never a false negative.
+    // Same container-tier gate: the HARNESS serves present_files only there (a scoping choice — see the
+    // note on no_scratchpad_leak above; real Cowork advertises it in both its modes), so a missing delivery
+    // on another tier is "cannot verify," never a false negative. Unlike no_scratchpad_leak, nothing about
+    // THIS key is container-shaped — it would work at hostloop the moment the tool is served there.
     if (ctx.effectiveFidelity !== "container")
       results.push(
         fail(

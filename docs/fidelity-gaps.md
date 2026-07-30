@@ -481,8 +481,49 @@ Verified against the pinned baseline: the asar's spawn `tools:`/`allowedTools` a
 `SendUserFile`.
 
 **Harness behaviour:** serves `present_files` with the local lane's exact name and schema, on the
-`container` tier only. `SendUserFile` is deliberately not served — fidelity to the emulated lane, not a
-gap.
+`container` tier only. Not serving `SendUserFile` is fidelity to the emulated lane, not a gap. **But
+serving `present_files` on `container` alone IS a gap** — see below.
+
+### Open gap: `hostloop` does not serve `present_files`, and production runs host-loop
+
+Real Cowork registers `present_files` **unconditionally** and `alwaysLoad`, and its handler carries *two*
+branches — a VM branch and an `isHostLoopMode` branch that validates real host paths against
+`[hostOutputsDir, uploads, autoMemoryDir, ...connectedFolders]` and passes them through **without
+promoting**. The `hostLoop` gate is `source: "force", value: true` in the pinned baseline, so
+production's actual configuration is the split-execution shape this harness's `hostloop` tier claims to
+mirror — and that shape advertises the tool.
+
+The harness serves it at `container` only. That is a scoping choice (the container handler's
+`/sessions/`-prefix path model rejects hostloop's host paths), not absence in the emulated target. The
+consequence at `hostloop`: the init toolset diverges from production by one `alwaysLoad` tool, so a skill
+whose prompt says "deliver the file" exercises a different tool-selection landscape than production; and
+`present_files_called` / `no_scratchpad_leak` are unusable there (they hard-FAIL as can't-verify — loud,
+never a vacuous green, but a mitigation rather than a closure).
+
+Closing it means a hostloop-shaped handler modeled on production's own `isHostLoopMode` branch
+(validate + pass through, no promotion), merged into the hostloop SDK-MCP bundle, with
+`present_files_called` relaxed to `container|hostloop`. `no_scratchpad_leak` should stay container-gated
+on the merits: production's host-loop branch never promotes, so there is no scratch→outputs copy to leak.
+
+### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
+
+The remote lane also has an internal MCP server the harness does not model at all, wire-named
+`internal__remote-devices__<tool>` (note the `internal__` prefix, not `mcp__`). Agent-facing tools include
+`device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
+`device_request_folder_access`, `get_device_info`, and device-artifact tools; `device_commit_files` is the
+remote lane's write-to-disk leg and consumes a `file_uuid` from a prior `SendUserFile`. Desktop advertises
+these *outward* to a cloud session over a device-OAuth bridge; every handler logs
+`session_type: "cowork-remote"`, and no `internal__*` name appears in the local spawn's tool list.
+
+`device_bash`'s own description states the topology plainly: *"Run a shell command on the user's local
+machine, inside the desktop Cowork workspace (an isolated Linux VM). This is NOT the cloud container — the
+`Bash` tool runs there; device_bash runs on the user's device."* So a remote session reaches back into a
+local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cleanup deliberately skips).
+
+**Deliberately unmodeled.** Emulating it faithfully would mean real command execution and real writes on
+the operator's machine on behalf of a simulated remote session. The exact inventory is also
+feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed against this harness
+is not misfiled as a harness bug — triage the lane first (`CLAUDE_CODE_ENTRYPOINT`).
 
 ### Where it bites — it looks like a harness bug
 

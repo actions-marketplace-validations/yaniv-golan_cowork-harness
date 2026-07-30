@@ -214,7 +214,7 @@ up often enough to spell out:
 - **Container-only assertions can't verify off the `container` tier.** `no_scratchpad_leak` and
   `present_files_called` check the `present_files` delivery path — the desktop-local lane's tool; remote
   Cowork delivers via the agent-native `SendUserFile` instead, so never hardcode a delivery tool name in
-  a SKILL.md (SKILL.md Gotcha 24). It is served **only** on
+  a SKILL.md (SKILL.md Gotcha 24). **The harness** serves it **only** on
   `container` — not `hostloop`/`microvm`. Asserting them off-container hard-fails at runtime (a red
   run, not a false green), so you won't be fooled if you write the assertion. The quieter trap is a
   scenario that runs at `hostloop`/`microvm`/`protocol` and simply omits these assertions: a green
