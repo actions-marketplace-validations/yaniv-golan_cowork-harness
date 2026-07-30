@@ -51,7 +51,7 @@ Where your vocabulary lands here:
 | Maker/checker split | Enforced by construction — pass 1 never receives the self-report |
 | Ralph loop (run until an external validator passes) | `run`/`skill` are that validator; `verdict.pass`/exit code is the signal. **Not `critique`** — findings never gate |
 | Stopping condition | Exit codes ([SPEC.md](../SPEC.md)); `verdict.pass` |
-| Bounded execution | `--timeout` (both lanes); `--max-budget-usd` on `run`/`skill --repeat` |
+| Bounded execution | `--timeout` (both lanes); `--max-budget-usd` on `run`/`skill` — a cumulative cap with `--repeat`, a history-based pre-flight refusal without it. `critique` itself rejects it: four workloads, so a single-run estimate gates on the wrong number |
 | Circuit breaker / stagnation detection | Consumer-side. We supply the per-iteration signals — `verdict.signals`, `fingerprint.skillHash`, the run index (see [stats.md](./stats.md)'s generation-pairing recipes) |
 | Trace | `trace`, `trace --full-results` |
 | **Hill-climbing loop** | **Deliberately not provided.** See below |

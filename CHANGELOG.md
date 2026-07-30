@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-07-30
+
 ### Added
 
 - **`stats` can query and group by skill generation.** `--skill-hash <prefix>` and `--label <tag>` narrow
@@ -33,22 +35,6 @@ All notable changes to this project are documented here. The format is based on
   pretending the cap is enforced. `--allow-budget-stop` still requires `--repeat`: it modifies a batch
   verdict. `critique` still rejects the flag, now for an accurate reason: it spends across four workloads,
   so a cap pre-flighted from single-run history would gate on the wrong number.
-
-### Fixed
-
-- **`--compact`/`--demo` suppress the `[status] <outDir>` line, and now say so.** The line is a raw host
-  path, which those shareable-output modes exist to withhold — but `SKILL.md` stated the line was printed
-  unconditionally and neither flag was documented in the skill at all, so backgrounding a run with
-  `--compact` and capturing stderr looked like the harness had no liveness signal. `status.json` is still
-  written either way; `cowork-harness status` also accepts the run-dir root.
-- **A corrupt `skillHash`/`runLabel` in `index.jsonl` is quarantined.** Both became load-bearing once
-  `stats` could filter and group on them; a wrong-typed value is valid JSON and would previously have
-  reached `buildStats` and thrown.
-- **`SKILL.md` documents where a run's cost lives** — `result.json` → `cost.usd` (the SDK's
-  `total_cost_usd`), noted as a different source from summing `modelUsage[].costUSD`, which is what
-  `trace --view usage` reports and which can legitimately differ.
-
-## [1.14.0] — 2026-07-29
 
 ### Changed
 
@@ -87,6 +73,18 @@ All notable changes to this project are documented here. The format is based on
   via `docker/compose.yml`** rather than letting the CLI manage it, that service is built under compose's
   own project namespace and is not covered by the tag bump — rebuild it explicitly with
   `docker compose -f docker/compose.yml build egress-proxy`.
+
+- **`--compact`/`--demo` suppress the `[status] <outDir>` line, and now say so.** The line is a raw host
+  path, which those shareable-output modes exist to withhold — but `SKILL.md` stated the line was printed
+  unconditionally and neither flag was documented in the skill at all, so backgrounding a run with
+  `--compact` and capturing stderr looked like the harness had no liveness signal. `status.json` is still
+  written either way; `cowork-harness status` also accepts the run-dir root.
+- **A corrupt `skillHash`/`runLabel` in `index.jsonl` is quarantined.** Both became load-bearing once
+  `stats` could filter and group on them; a wrong-typed value is valid JSON and would previously have
+  reached `buildStats` and thrown.
+- **`SKILL.md` documents where a run's cost lives** — `result.json` → `cost.usd` (the SDK's
+  `total_cost_usd`), noted as a different source from summing `modelUsage[].costUSD`, which is what
+  `trace --view usage` reports and which can legitimately differ.
 
 ## [1.13.2] — 2026-07-28
 

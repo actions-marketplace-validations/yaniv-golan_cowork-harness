@@ -118,7 +118,8 @@ have:
 4. **Replay-class note:** `max_turns` / `tool_calls_max` / `dispatch_count_max` re-evaluate
    token-free on replay; `questions_count_max` needs `controlOut` (Recipe 1's tree applies).
    `max_cost_usd` / `max_tokens` on replay assert the FROZEN recording's spend — near-zero signal
-   as a regression gate; if you need a cost gate, put it on the live lane via `stats`.
+   as a regression gate; if you need a cost gate, put it on the live lane via `stats` (history) or
+   `--max-budget-usd` (a pre-flight refusal before the run spends).
 
 ## Recipe 5 — Evaluate your skill's ANSWER QUALITY (semantic regression gate)
 
@@ -174,7 +175,9 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    output. **Reproduce before acting on a finding:** `cowork-harness skill <folder> "<prompt>" --repeat 5 --label gen-1`
    runs the same skill+prompt N times (2-100) and prints a variance rollup instead of a single pass/fail —
    `--repeat` works on the `skill` lane, not just `run`. A single green run proves it passed *once*.
-   Companions: `--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd`, `--allow-budget-stop`. It rejects `--session-id`/
+   Companions: `--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd`, `--allow-budget-stop`.
+   (`--max-budget-usd` also works WITHOUT `--repeat`, where it pre-flights a single run against that
+   scenario's cost history and refuses before spending; the others are batch-only.) It rejects `--session-id`/
    `--resume` (both pin one run dir) and `--decider-cmd`/`--decider-dir` (a driving agent x N is not a
    measurement).
    The full loop (harvest -> reproduce -> fix -> prove freshness -> compare) is written out end-to-end in

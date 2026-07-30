@@ -735,7 +735,9 @@ cowork-harness run examples/scenarios/csv-metrics.yaml --repeat 10 --min-pass-ra
 - `--stop-on-diverge` stops the loop as soon as **both** a pass and a fail have been observed — saves
   paid runs once flakiness is already proven. That batch always **fails**, regardless of the numeric
   rate reached: divergence *is* the failure this flag exists to catch.
-- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. A budget-stopped batch
+- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. (Without `--repeat` the
+  same flag is a PRE-flight refusal on a single run, estimated from that scenario's own cost history —
+  there is no live cost signal to abort a run mid-flight on.) A budget-stopped batch
   **fails by default**, even if every completed run passed — "incomplete is not green" is the same
   principle `--matrix`'s `truncated` applies (see below). It still prints a loud `::warning::` naming the
   stop. Pass `--allow-budget-stop` to opt back into judging the batch on its own completed-runs pass rate
