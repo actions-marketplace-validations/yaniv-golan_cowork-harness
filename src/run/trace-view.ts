@@ -739,7 +739,7 @@ export function formatToolErrors(rows: ToolErrorRow[]): string {
  */
 interface FileRow {
   path: string;
-  class?: "output" | "mount" | "input";
+  class?: "output" | "mount" | "input" | "scratchpad";
   bytes?: number;
   sha256?: string;
   diff: "added" | "modified" | "removed" | "unchanged" | "unavailable";

@@ -22,11 +22,17 @@
       },
       ".artifacts[].encoding": {
         "type": "string",
-        "enum": ["utf8", "base64"]
+        "enum": [
+          "utf8",
+          "base64"
+        ]
       },
       ".artifacts[].linkKind": {
         "type": "string",
-        "enum": ["symlink", "hardlink"]
+        "enum": [
+          "symlink",
+          "hardlink"
+        ]
       },
       ".artifacts[].path": {
         "type": "string",
@@ -41,14 +47,22 @@
       },
       ".artifacts[].truncationReason": {
         "type": "string",
-        "enum": ["size", "readonly", "unreadable", "input"]
+        "enum": [
+          "size",
+          "readonly",
+          "unreadable",
+          "input"
+        ]
       },
       ".authoring": {
         "type": "object"
       },
       ".authoring.channel": {
         "type": "string",
-        "enum": ["decider-dir", "decider-llm"]
+        "enum": [
+          "decider-dir",
+          "decider-llm"
+        ]
       },
       ".authoring.nonDeterministic": {
         "type": "boolean",
@@ -77,7 +91,10 @@
       },
       ".environment.location": {
         "type": "string",
-        "enum": ["local", "cloud"],
+        "enum": [
+          "local",
+          "cloud"
+        ],
         "required": true
       },
       ".environment.tier": {
@@ -95,7 +112,9 @@
       },
       ".fingerprint.agentScope": {
         "type": "string",
-        "enum": ["skill"]
+        "enum": [
+          "skill"
+        ]
       },
       ".fingerprint.baseline": {
         "type": "string"
@@ -117,7 +136,10 @@
       },
       ".fingerprint.mode": {
         "type": "string",
-        "enum": ["git", "raw"]
+        "enum": [
+          "git",
+          "raw"
+        ]
       },
       ".fingerprint.promptAssetsHash": {
         "type": "string"
@@ -162,11 +184,18 @@
         "type": "object"
       },
       ".preRunHashes{}": {
-        "type": ["string", "null"]
+        "type": [
+          "string",
+          "null"
+        ]
       },
       ".preRunOrigin": {
         "type": "string",
-        "enum": ["local-walk", "remote-unavailable", "local-unreadable"]
+        "enum": [
+          "local-walk",
+          "remote-unavailable",
+          "local-unreadable"
+        ]
       },
       ".preRunPaths": {
         "type": "array"
@@ -263,7 +292,10 @@
       },
       ".artifacts[].encoding": {
         "type": "string",
-        "enum": ["utf8", "base64"]
+        "enum": [
+          "utf8",
+          "base64"
+        ]
       },
       ".artifacts[].path": {
         "type": "string",
@@ -278,14 +310,21 @@
       },
       ".artifacts[].truncationReason": {
         "type": "string",
-        "enum": ["size", "readonly", "unreadable"]
+        "enum": [
+          "size",
+          "readonly",
+          "unreadable"
+        ]
       },
       ".authoring": {
         "type": "object"
       },
       ".authoring.channel": {
         "type": "string",
-        "enum": ["decider-dir", "decider-llm"]
+        "enum": [
+          "decider-dir",
+          "decider-llm"
+        ]
       },
       ".authoring.nonDeterministic": {
         "type": "boolean",
@@ -315,7 +354,9 @@
       },
       ".fingerprint.agentScope": {
         "type": "string",
-        "enum": ["skill"]
+        "enum": [
+          "skill"
+        ]
       },
       ".fingerprint.baseline": {
         "type": "string"
@@ -337,7 +378,10 @@
       },
       ".fingerprint.mode": {
         "type": "string",
-        "enum": ["git", "raw"]
+        "enum": [
+          "git",
+          "raw"
+        ]
       },
       ".fingerprint.sharedHash": {
         "type": "string"
@@ -552,7 +596,10 @@
       },
       ".fidelity": {
         "type": "string",
-        "enum": ["container", "hostloop"],
+        "enum": [
+          "container",
+          "hostloop"
+        ],
         "required": true
       },
       ".gateAnswers": {
@@ -605,7 +652,13 @@
       },
       ".items[].classification": {
         "type": "string",
-        "enum": ["grounded-and-actionable", "grounded-but-not-worth-it", "confabulated", "already-covered", "not-adjudicable"],
+        "enum": [
+          "grounded-and-actionable",
+          "grounded-but-not-worth-it",
+          "confabulated",
+          "already-covered",
+          "not-adjudicable"
+        ],
         "required": true
       },
       ".items[].evidence": {
@@ -625,7 +678,10 @@
       },
       ".items[].source": {
         "type": "string",
-        "enum": ["evaluator", "self-report"],
+        "enum": [
+          "evaluator",
+          "self-report"
+        ],
         "required": true
       },
       ".noSkillFilesRead": {
@@ -641,7 +697,10 @@
       },
       ".selfReportStatus": {
         "type": "string",
-        "enum": ["captured", "unavailable"],
+        "enum": [
+          "captured",
+          "unavailable"
+        ],
         "required": true
       },
       ".sessionId": {
@@ -657,11 +716,19 @@
       },
       ".skillMdStatus": {
         "type": "string",
-        "enum": ["readable", "missing", "unreadable", "untracked"]
+        "enum": [
+          "readable",
+          "missing",
+          "unreadable",
+          "untracked"
+        ]
       },
       ".taskResult": {
         "type": "string",
-        "enum": ["success", "error"]
+        "enum": [
+          "success",
+          "error"
+        ]
       },
       ".turn1ResultDegraded": {
         "type": "boolean"
@@ -684,7 +751,9 @@
       },
       ".verdictProvenance.kind": {
         "type": "string",
-        "enum": ["self-run"],
+        "enum": [
+          "self-run"
+        ],
         "required": true
       }
     },
@@ -719,7 +788,12 @@
       },
       "<oneOf:0>.checks[].status": {
         "type": "string",
-        "enum": ["ok", "fail", "warn", "skip"],
+        "enum": [
+          "ok",
+          "fail",
+          "warn",
+          "skip"
+        ],
         "required": true
       },
       "<oneOf:0>.checks[].title": {
@@ -740,7 +814,13 @@
       },
       "<oneOf:0>.tier": {
         "type": "string",
-        "enum": ["protocol", "container", "microvm", "hostloop", "cowork"],
+        "enum": [
+          "protocol",
+          "container",
+          "microvm",
+          "hostloop",
+          "cowork"
+        ],
         "required": true
       },
       "<oneOf:0>.tool": {
@@ -764,7 +844,13 @@
       },
       "<oneOf:1>.error.category": {
         "type": "string",
-        "enum": ["usage", "unanswered", "boundary", "runtime", "internal"],
+        "enum": [
+          "usage",
+          "unanswered",
+          "boundary",
+          "runtime",
+          "internal"
+        ],
         "required": true
       },
       "<oneOf:1>.error.hint": {
@@ -1148,11 +1234,21 @@
       },
       ".capabilityProbe": {
         "type": "string",
-        "enum": ["definitive", "unverified", "skipped"]
+        "enum": [
+          "definitive",
+          "unverified",
+          "skipped"
+        ]
       },
       ".command": {
         "type": "string",
-        "enum": ["run", "skill", "record", "chat", "replay"]
+        "enum": [
+          "run",
+          "skill",
+          "record",
+          "chat",
+          "replay"
+        ]
       },
       ".context": {
         "type": "object"
@@ -1270,7 +1366,15 @@
       },
       ".errorSource": {
         "type": "string",
-        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"]
+        "enum": [
+          "spawn",
+          "protocol",
+          "exit",
+          "agent",
+          "result",
+          "no_result",
+          "timeout"
+        ]
       },
       ".evidenceErrors": {
         "type": "object"
@@ -1298,12 +1402,18 @@
       },
       ".execution.location": {
         "type": "string",
-        "enum": ["local", "cloud"],
+        "enum": [
+          "local",
+          "cloud"
+        ],
         "required": true
       },
       ".execution.taskKind": {
         "type": "string",
-        "enum": ["interactive", "scheduled"]
+        "enum": [
+          "interactive",
+          "scheduled"
+        ]
       },
       ".fidelity": {
         "type": "string",
@@ -1325,7 +1435,11 @@
         "type": "string"
       },
       ".fileToolAttempts[].origin": {
-        "enum": ["main", "subagent", "unknown"],
+        "enum": [
+          "main",
+          "subagent",
+          "unknown"
+        ],
         "required": true
       },
       ".fileToolAttempts[].parentToolUseId": {
@@ -1356,7 +1470,9 @@
       },
       ".fingerprint.agentScope": {
         "type": "string",
-        "enum": ["skill"]
+        "enum": [
+          "skill"
+        ]
       },
       ".fingerprint.baseline": {
         "type": "string",
@@ -1382,7 +1498,10 @@
       },
       ".fingerprint.mode": {
         "type": "string",
-        "enum": ["git", "raw"]
+        "enum": [
+          "git",
+          "raw"
+        ]
       },
       ".fingerprint.promptAssetsHash": {
         "type": "string"
@@ -1462,7 +1581,11 @@
       },
       ".infraErrors[].source": {
         "type": "string",
-        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar"],
+        "enum": [
+          "hostloop-sidecar",
+          "hostloop-exec",
+          "egress-sidecar"
+        ],
         "required": true
       },
       ".l0PluginDivergence": {
@@ -1482,7 +1605,10 @@
       },
       ".mode": {
         "type": "string",
-        "enum": ["run", "chat"]
+        "enum": [
+          "run",
+          "chat"
+        ]
       },
       ".modelUsage": {
         "type": "object"
@@ -1536,7 +1662,12 @@
       },
       ".outcome": {
         "type": "string",
-        "enum": ["errored", "no_deliverable", "delivered_with_verdict_fail", "delivered_clean"]
+        "enum": [
+          "errored",
+          "no_deliverable",
+          "delivered_with_verdict_fail",
+          "delivered_clean"
+        ]
       },
       ".outputsDir": {
         "type": "string"
@@ -1557,7 +1688,9 @@
         "type": "string"
       },
       ".pathDenials[].decision": {
-        "enum": ["deny"],
+        "enum": [
+          "deny"
+        ],
         "required": true
       },
       ".pathDenials[].decisionReasonType": {
@@ -1570,7 +1703,11 @@
         "type": "string"
       },
       ".pathDenials[].source": {
-        "enum": ["pretooluse", "can_use_tool", "permission_denied"],
+        "enum": [
+          "pretooluse",
+          "can_use_tool",
+          "permission_denied"
+        ],
         "required": true
       },
       ".pathDenials[].tool": {
@@ -1590,14 +1727,21 @@
         "type": "object"
       },
       ".preRunHashes{}": {
-        "type": ["string", "null"]
+        "type": [
+          "string",
+          "null"
+        ]
       },
       ".preRunLinkAware": {
         "type": "boolean"
       },
       ".preRunOrigin": {
         "type": "string",
-        "enum": ["local-walk", "remote-unavailable", "local-unreadable"]
+        "enum": [
+          "local-walk",
+          "remote-unavailable",
+          "local-unreadable"
+        ]
       },
       ".preRunPaths": {
         "type": "array"
@@ -1656,19 +1800,30 @@
       },
       ".requiresCapabilityUnmet.reason": {
         "type": "string",
-        "enum": ["omitted", "unverifiable", "unknown"]
+        "enum": [
+          "omitted",
+          "unverifiable",
+          "unknown"
+        ]
       },
       ".resources": {
         "type": "object"
       },
       ".result": {
         "type": "string",
-        "enum": ["success", "error"],
+        "enum": [
+          "success",
+          "error"
+        ],
         "required": true
       },
       ".resultErrorKind": {
         "type": "string",
-        "enum": ["transport", "agent", "usage_limit"]
+        "enum": [
+          "transport",
+          "agent",
+          "usage_limit"
+        ]
       },
       ".resultSubtype": {
         "type": "string"
@@ -1729,7 +1884,10 @@
         "type": "number"
       },
       ".skillCommit": {
-        "type": ["string", "null"]
+        "type": [
+          "string",
+          "null"
+        ]
       },
       ".skillToolAvailable": {
         "type": "boolean"
@@ -1833,7 +1991,10 @@
       },
       ".subagents[].reasoning[].kind": {
         "type": "string",
-        "enum": ["thinking", "text"],
+        "enum": [
+          "thinking",
+          "text"
+        ],
         "required": true
       },
       ".subagents[].reasoning[].redacted": {
@@ -2021,7 +2182,10 @@
       },
       ".verdict.exitCode": {
         "type": "integer",
-        "enum": [0, 1],
+        "enum": [
+          0,
+          1
+        ],
         "required": true
       },
       ".verdict.failures": {
@@ -2051,7 +2215,12 @@
       },
       ".verdict.guards[].status": {
         "type": "string",
-        "enum": ["ok", "fired", "na", "unverified"],
+        "enum": [
+          "ok",
+          "fired",
+          "na",
+          "unverified"
+        ],
         "required": true
       },
       ".verdict.pass": {
@@ -2093,7 +2262,10 @@
       },
       ".verdict.signals[].severity": {
         "type": "string",
-        "enum": ["fail", "warn"],
+        "enum": [
+          "fail",
+          "warn"
+        ],
         "required": true
       },
       ".webSearches": {
@@ -2141,7 +2313,12 @@
       },
       ".workspaceFiles[].class": {
         "type": "string",
-        "enum": ["output", "mount", "input"],
+        "enum": [
+          "output",
+          "mount",
+          "input",
+          "scratchpad"
+        ],
         "required": true
       },
       ".workspaceFiles[].hashError": {
@@ -2187,15 +2364,24 @@
       },
       ".answers[].decide": {
         "type": "string",
-        "enum": ["allow", "deny"]
+        "enum": [
+          "allow",
+          "deny"
+        ]
       },
       ".answers[].else": {
         "type": "string",
-        "enum": ["allow", "deny"]
+        "enum": [
+          "allow",
+          "deny"
+        ]
       },
       ".answers[].grant": {
         "type": "string",
-        "enum": ["once", "domain"]
+        "enum": [
+          "once",
+          "domain"
+        ]
       },
       ".answers[].when_question": {
         "type": "string"
@@ -2362,14 +2548,22 @@
       },
       ".assert[].path_denied.agent_scope": {
         "type": "string",
-        "enum": ["main", "subagent", "any"]
+        "enum": [
+          "main",
+          "subagent",
+          "any"
+        ]
       },
       ".assert[].path_denied.path_matches": {
         "type": "string"
       },
       ".assert[].path_denied.source": {
         "type": "string",
-        "enum": ["pretooluse", "can_use_tool", "permission_denied"]
+        "enum": [
+          "pretooluse",
+          "can_use_tool",
+          "permission_denied"
+        ]
       },
       ".assert[].path_denied.tool": {
         "type": "string"
@@ -2389,7 +2583,10 @@
       },
       ".assert[].result": {
         "type": "string",
-        "enum": ["success", "error"]
+        "enum": [
+          "success",
+          "error"
+        ]
       },
       ".assert[].self_heal_ran": {
         "type": "boolean"
@@ -2561,7 +2758,10 @@
       },
       ".execution": {
         "type": "string",
-        "enum": ["local", "cloud-describe"]
+        "enum": [
+          "local",
+          "cloud-describe"
+        ]
       },
       ".expect_denied": {
         "type": "array"
@@ -2571,14 +2771,25 @@
       },
       ".fidelity": {
         "type": "string",
-        "enum": ["protocol", "container", "microvm", "hostloop", "cowork"]
+        "enum": [
+          "protocol",
+          "container",
+          "microvm",
+          "hostloop",
+          "cowork"
+        ]
       },
       ".name": {
         "type": "string"
       },
       ".on_unanswered": {
         "type": "string",
-        "enum": ["fail", "prompt", "llm", "first"]
+        "enum": [
+          "fail",
+          "prompt",
+          "llm",
+          "first"
+        ]
       },
       ".prompt": {
         "type": "string",
@@ -2623,7 +2834,10 @@
       },
       ".agent_env.tool_search": {
         "type": "string",
-        "enum": ["auto", "off"]
+        "enum": [
+          "auto",
+          "off"
+        ]
       },
       ".agent_max_turns": {
         "type": "integer"
@@ -2640,11 +2854,21 @@
       },
       ".debug.thinking_display": {
         "type": "string",
-        "enum": ["summarized", "omitted"]
+        "enum": [
+          "summarized",
+          "omitted"
+        ]
       },
       ".effort": {
         "type": "string",
-        "enum": ["low", "medium", "high", "xhigh", "max", "extra"]
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "extra"
+        ]
       },
       ".egress": {
         "type": "object",
@@ -2675,7 +2899,11 @@
       },
       ".folders[].mode": {
         "type": "string",
-        "enum": ["r", "rw", "rwd"]
+        "enum": [
+          "r",
+          "rw",
+          "rwd"
+        ]
       },
       ".mcp": {
         "type": "object",
@@ -2698,11 +2926,19 @@
       },
       ".permission_mode": {
         "type": "string",
-        "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]
+        "enum": [
+          "default",
+          "acceptEdits",
+          "plan",
+          "bypassPermissions"
+        ]
       },
       ".permission_parity": {
         "type": "string",
-        "enum": ["cowork", "strict"]
+        "enum": [
+          "cowork",
+          "strict"
+        ]
       },
       ".plugins": {
         "type": "object",
@@ -2818,7 +3054,10 @@
         "required": true
       },
       ".error": {
-        "type": ["object", "null"],
+        "type": [
+          "object",
+          "null"
+        ],
         "required": true
       },
       ".ok": {
@@ -2848,7 +3087,14 @@
       },
       ".results[].findings[].cls": {
         "type": "string",
-        "enum": ["email", "currency", "domain", "path", "machine-inventory", "unscanned"],
+        "enum": [
+          "email",
+          "currency",
+          "domain",
+          "path",
+          "machine-inventory",
+          "unscanned"
+        ],
         "required": true
       },
       ".results[].findings[].sample": {
@@ -2939,7 +3185,11 @@
         "default": "latest"
       }
     },
-    "outputs": ["envelope-path", "ok", "summary-md"]
+    "outputs": [
+      "envelope-path",
+      "ok",
+      "summary-md"
+    ]
   },
   "env": {
     "coworkVars": [

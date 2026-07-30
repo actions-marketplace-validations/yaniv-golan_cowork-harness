@@ -1327,7 +1327,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
     // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
     // excluded outright.
-    const wfHealth = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots);
+    const wfHealth = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, {
+      // Same derivation authored-file capture uses (above): the session root is the PARENT of `mnt`.
+      // Undefined on a tier with no such layout (protocol) — then `scratchpadScanned` is false and the
+      // absence of scratchpad entries means UNKNOWN, not none.
+      scratchpadRoot: workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined,
+    });
     if (wfHealth.rootAbsent)
       warn(
         `::warning:: [artifacts] workspace root not found (${workRoot}) — the run's outputs were not staged into the run dir ` +
@@ -1761,7 +1766,9 @@ export function buildPartialResult(args: {
   // workspace root (microvm partial: outputs stage into the VM work tree, not outDir) OR a nested unreadable
   // subtree records UNAVAILABLE (undefined) via the shared `trustedWorkspaceFiles` gate — never a false
   // empty/partial [] — same honest marker as the success path above.
-  const wfHealth = classifyWorkspaceFilesWithHealth(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  const wfHealth = classifyWorkspaceFilesWithHealth(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots, {
+    scratchpadRoot: args.workRoot.endsWith(`${sep}mnt`) ? dirname(args.workRoot) : undefined,
+  });
   if (!wfHealth.rootAbsent && !wfHealth.walkComplete)
     warn(
       `::warning:: [artifacts] workspace walk incomplete — ${wfHealth.walkErrors.length} unreadable subtree(s) ` +

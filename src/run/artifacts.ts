@@ -211,7 +211,10 @@ function walkPaths(
   walk(startAbs, startRel);
 }
 
-type WorkspaceFileClass = "output" | "mount" | "input";
+/** `scratchpad` = the agent's working area OUTSIDE every user-visible root — files it produced that the
+ *  user never sees unless they are explicitly delivered. Added so the canonical file model can answer
+ *  "was this deliverable actually delivered?", which needs the undelivered side of the ledger. */
+type WorkspaceFileClass = "output" | "mount" | "input" | "scratchpad";
 
 export interface WorkspaceFile {
   path: string;
@@ -225,8 +228,11 @@ export interface WorkspaceFile {
 }
 
 /**
- * The Working folder panel's canonical file model (the Scratch pad's `"scratchpad"` class
- * is deliberately NOT implemented here; that remains out of scope).
+ * The Working folder panel's canonical file model, INCLUDING the `"scratchpad"` class — files the agent
+ * wrote outside every user-visible root. Those are enumerated by a second, separate walk
+ * (`walkScratchpadFiles`) shared with authored-file capture, never by widening the visible-root walk:
+ * `no_unexpected_files` runs its own walk over the same visible prefixes, and widening this one would
+ * have changed that assertion's verdict as a side effect.
  * Classifies every file under the user-visible roots, reusing the SAME `collectArtifacts` walk
  * `artifacts` already used before this view existed — no second directory-walk implementation. Fingerprints mirror
  * `cassette.ts`'s `buildManifest`'s sha256 approach; this file does its OWN read+hash rather than
@@ -250,10 +256,23 @@ const DEFAULT_WORKSPACE_HASH_CAP = 50 * 1024 * 1024;
 export interface ClassifyWorkspaceFilesOpts {
   /** Override the per-file hash cap (bytes). Defaults to `DEFAULT_WORKSPACE_HASH_CAP`. */
   hashCapBytes?: number;
+  /** The session root (PARENT of the `mnt` workspace). Supplied ⇒ files the agent wrote outside every
+   *  user-visible root are enumerated as `class:"scratchpad"`. Omitted ⇒ they are not enumerated at all,
+   *  which is evidence-UNAVAILABLE rather than "none existed" — a caller that needs to tell those apart
+   *  must check `scratchpadScanned`. */
+  scratchpadRoot?: string;
 }
 
 export interface ClassifyWorkspaceFilesResult {
   files: WorkspaceFile[];
+  /** False ⇒ no scratchpad walk ran (no `scratchpadRoot` supplied — e.g. a tier with no such layout), so
+   *  the ABSENCE of `class:"scratchpad"` entries proves nothing. Distinguishing this from a genuine
+   *  "nothing left behind" is the difference between an honest signal and a vacuous green. */
+  scratchpadScanned: boolean;
+  /** Walk errors / skipped links from the scratchpad pass — an incomplete walk can HIDE an undelivered
+   *  file, so a consumer asserting absence must degrade on these. */
+  scratchpadWalkErrors: Array<{ path: string; error: string }>;
+  scratchpadSkippedLinks: string[];
   /** True when the workspace ROOT ITSELF could not be resolved (`realpathSync(workRoot)` threw) — the walk
    *  observed nothing, so an empty `files` here means "unavailable", NOT "the agent wrote nothing". The
    *  canonical case is a microvm run whose outputs stage into the VM work tree, never into
@@ -307,8 +326,23 @@ export function classifyWorkspaceFilesWithHealth(
       root !== undefined && readonlyFolderRoots.includes(root) ? "input" : root === "outputs" ? "output" : "mount";
     out.push({ path, bytes, ...hashFile(path), class: cls });
   }
+  // Second, SEPARATE walk — never a widening of the visible-root walk above (see this function's doc).
+  const scratch = opts.scratchpadRoot ? walkScratchpadFiles(opts.scratchpadRoot) : undefined;
+  if (scratch)
+    for (const { absPath, relPath } of scratch.files) {
+      let bytes = 0;
+      try {
+        bytes = statSync(absPath).size;
+      } catch {
+        /* hashFile below records the read failure; bytes stays 0 */
+      }
+      out.push({ path: relPath, bytes, ...hashFile(absPath), class: "scratchpad" });
+    }
   return {
     files: out,
+    scratchpadScanned: scratch !== undefined,
+    scratchpadWalkErrors: scratch?.errors ?? [],
+    scratchpadSkippedLinks: scratch?.skippedLinks ?? [],
     rootAbsent: walk.errors.some((e) => e.path === ""),
     walkComplete: walk.complete,
     // the nested (non-root) errors — a caller diffing against this list (authored-file capture) can now
@@ -668,6 +702,30 @@ export function captureAuthoredFilesWithHealth(
   // health so a consumer knows scratchpad deliverables are absent-by-policy (not absent-in-fact).
   if (opts.scratchpadRoot && opts.resume) health.scratchpadSkippedOnResume = true;
   if (opts.scratchpadRoot && !opts.resume) {
+    const found = walkScratchpadFiles(opts.scratchpadRoot);
+    health.scratchpadWalkErrors.push(...found.errors);
+    health.scratchpadSkippedLinks.push(...found.skippedLinks);
+    for (const f of found.files) pushFile(f.absPath, f.relPath);
+  }
+  return { files: out, health };
+}
+
+/** ONE traversal of the scratchpad (the session root outside `mnt`), shared by authored-file capture
+ *  (which reads content) and workspace classification (which hashes metadata). Extracted rather than
+ *  duplicated: the dotfile skip, the `mnt` exclusion, and the symlink/hardlink escape guards are the
+ *  security-relevant part, and two copies would drift.
+ *
+ *  Emits `scratchpad/<rel>` paths — the same synthetic prefix authored-file capture has always used, so
+ *  a path means the same thing in both places. */
+export function walkScratchpadFiles(scratchpadRoot: string): {
+  files: Array<{ absPath: string; relPath: string }>;
+  errors: Array<{ path: string; error: string }>;
+  skippedLinks: string[];
+} {
+  const files: Array<{ absPath: string; relPath: string }> = [];
+  const errors: Array<{ path: string; error: string }> = [];
+  const skippedLinks: string[] = [];
+  {
     const visited = new Set<string>();
     const walk = (absDir: string, relDir: string): void => {
       let real: string;
@@ -676,7 +734,7 @@ export function captureAuthoredFilesWithHealth(
       } catch (err) {
         // a directory that exists but can't be resolved (EACCES, EIO) is an evidence gap, not "empty".
         // ENOENT (the scratchpad root simply has nothing) is a legitimate empty case — don't record it.
-        if (!isMissingErr(err)) health.scratchpadWalkErrors.push({ path: relDir || ".", error: errMsg(err) });
+        if (!isMissingErr(err)) errors.push({ path: relDir || ".", error: errMsg(err) });
         return;
       }
       if (visited.has(real)) return;
@@ -685,7 +743,7 @@ export function captureAuthoredFilesWithHealth(
       try {
         entries = readdirSync(absDir).sort();
       } catch (err) {
-        if (!isMissingErr(err)) health.scratchpadWalkErrors.push({ path: relDir || ".", error: errMsg(err) });
+        if (!isMissingErr(err)) errors.push({ path: relDir || ".", error: errMsg(err) });
         return;
       }
       for (const name of entries) {
@@ -697,24 +755,24 @@ export function captureAuthoredFilesWithHealth(
         try {
           st = lstatSync(childAbs);
         } catch (err) {
-          if (!isMissingErr(err)) health.scratchpadWalkErrors.push({ path: childRel, error: errMsg(err) });
+          if (!isMissingErr(err)) errors.push({ path: childRel, error: errMsg(err) });
           continue;
         }
         if (st.isSymbolicLink()) {
-          health.scratchpadSkippedLinks.push(`scratchpad/${childRel}`); // not followed (may escape/cycle) — but recorded
+          skippedLinks.push(`scratchpad/${childRel}`); // not followed (may escape/cycle) — but recorded
           continue;
         }
         if (st.isDirectory()) walk(childAbs, childRel);
         else if (st.isFile()) {
           if (st.nlink > 1) {
-            health.scratchpadSkippedLinks.push(`scratchpad/${childRel}`); // hardlink → may reference out-of-root content
+            skippedLinks.push(`scratchpad/${childRel}`); // hardlink → may reference out-of-root content
             continue;
           }
-          pushFile(childAbs, `scratchpad/${childRel}`);
+          files.push({ absPath: childAbs, relPath: `scratchpad/${childRel}` });
         }
       }
     };
-    walk(opts.scratchpadRoot, "");
+    walk(scratchpadRoot, "");
   }
-  return { files: out, health };
+  return { files, errors, skippedLinks };
 }

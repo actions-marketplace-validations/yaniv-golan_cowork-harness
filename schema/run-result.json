@@ -1068,8 +1068,10 @@
             "enum": [
               "output",
               "mount",
-              "input"
-            ]
+              "input",
+              "scratchpad"
+            ],
+            "description": "output/mount/input = under a user-visible root. scratchpad = written OUTSIDE every user-visible root, i.e. produced but not delivered by location. Scratchpad entries are absent on tiers where that walk cannot run, which is evidence-unavailable rather than 'none existed'."
           }
         }
       }

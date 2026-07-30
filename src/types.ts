@@ -1407,12 +1407,23 @@ export interface RunResult {
     mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
     availableSkills?: Array<{ id: string; whenToUse?: string }>;
   };
-  // Working folder panel's canonical file model (Scratch pad's "scratchpad" class
-  // deliberately not implemented). `artifacts` (unchanged type, {path,bytes}[])
+  // Working folder panel's canonical file model. `artifacts` (unchanged type, {path,bytes}[])
   // becomes a DERIVED accessor of this — the class∈{output,mount} subset, computed in the
   // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
   // live lane; replay is unaffected).
-  workspaceFiles?: Array<{ path: string; bytes: number; sha256?: string; hashError?: string; class: "output" | "mount" | "input" }>;
+  //
+  // `scratchpad` = written OUTSIDE every user-visible root, i.e. produced but not (by location)
+  // delivered. Enumerated by a second walk shared with authored-file capture; the visible-root walk is
+  // deliberately NOT widened, because `no_unexpected_files` walks the same prefixes and would change
+  // verdict as a side effect. Absent on tiers where scratchpad capture cannot run (see
+  // `authoredFilesHealth`) — absence there is evidence-unavailable, NOT "nothing was left behind".
+  workspaceFiles?: Array<{
+    path: string;
+    bytes: number;
+    sha256?: string;
+    hashError?: string;
+    class: "output" | "mount" | "input" | "scratchpad";
+  }>;
   /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
    *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
   contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;
