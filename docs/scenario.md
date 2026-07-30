@@ -384,7 +384,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only five codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only six codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -406,6 +406,15 @@ pass/fail):
   post-gate tool work); this covers the residual (mid-message `?`, or tool work after the last gate that
   still ended asking). Heuristic — read the final message before acting; a question-posing answer that
   wrote a file never fires. Fix by scripting/steering the answer; assert `allow_stall: true` if intended.
+- `undelivered_deliverables` (**warn**) — the skill produced file(s) outside every user-visible root and
+  never delivered them. On a **remote** Cowork session the workspace is reclaimed at session end, so those
+  files are destroyed; on a **local** one they persist but stay invisible to the user, since the scratchpad
+  is not a surface they see. Either way the user does not get them. This fires without any assertion being
+  written, which is the point: `present_files_called` covers the positive case only when an author thought
+  to ask for it, and the runs that most need this are the ones where nobody did. It is **silent when the
+  evidence cannot answer the question** — no workspace walk (`workspaceFiles` absent), or a tier that runs
+  no scratchpad walk — because "cannot tell" must never read as "clean". No opt-out key: write deliverables
+  under `outputs/` (or a connected folder), or deliver them explicitly.
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 

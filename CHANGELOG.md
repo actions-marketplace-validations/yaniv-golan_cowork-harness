@@ -10,6 +10,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A run now warns when the skill produced deliverables it never delivered.** New `warn`-severity verdict
+  signal `undelivered_deliverables`: files written outside every user-visible root and never presented. It
+  fires without any assertion being written — which is the point, since `present_files_called` covers the
+  positive case only when an author thought to ask for it, and the runs that most need this are the ones
+  where nobody did. Observed motivating case: a real run created 23 files, delivered 3, and reported
+  success. On a remote Cowork session an undelivered file is destroyed with the workspace; on a local one
+  it persists but stays invisible — either way the user does not get it. **Silent when the evidence cannot
+  answer the question** (no workspace walk, or a tier that runs no scratchpad walk), because "cannot tell"
+  must never read as "clean".
+- **`workspaceFiles[].class` gains `scratchpad`** — files the agent wrote outside every user-visible root,
+  the class the field previously left unimplemented. This is what makes the warning above computable: the
+  verdict sees only `RunResult`, and the undelivered side of the ledger reached it from nowhere. Existing
+  consumers filter by class and are unaffected; the visible-root walk is deliberately not widened, so
+  `no_unexpected_files` (which walks the same prefixes itself) cannot change verdict as a side effect.
+
 - **`stats` can query and group by skill generation.** `--skill-hash <prefix>` and `--label <tag>` narrow
   to one generation of the iterate-across-fixes loop, and `--group-by scenario|skill-hash|label` splits a
   scenario per generation instead of aggregating across them — the A/B comparison in one command instead

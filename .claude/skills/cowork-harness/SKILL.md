@@ -411,6 +411,14 @@ Recognize these before "fixing" a non-bug:
   covers the residual (a mid-message `?`, or tool work after the last gate that still ended asking). Read
   the final message before acting — a legitimate question-posing answer that wrote a file never fires.
   Assert `allow_stall: true` if ending on a question is the intended terminal state.
+- **`undelivered_deliverables`** (`WARN`) — the skill produced file(s) **outside every user-visible root**
+  and never delivered them. On a **remote** Cowork session the workspace is reclaimed at session end, so
+  they are destroyed; on a **local** one they persist but stay invisible to the user. Either way the user
+  does not get them. It fires with no assertion written — `present_files_called` covers the positive case
+  only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
+  **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
+  scratchpad walk) — "cannot tell" never reads as "clean". No opt-out: write deliverables under `outputs/`
+  or a connected folder, or deliver them explicitly.
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
@@ -429,7 +437,7 @@ Recognize these before "fixing" a non-bug:
   `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 
-The full 14-code signal table (severity + per-signal opt-out) is in
+The full 17-code signal table (severity + per-signal opt-out) is in
 [`references/scenario-schema.md`](./references/scenario-schema.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 

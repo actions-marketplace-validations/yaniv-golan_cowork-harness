@@ -1171,7 +1171,8 @@ export interface RunResult {
         | "stalled"
         | "prompt_asset_missing"
         | "scan_unavailable"
-        | "ended_with_question";
+        | "ended_with_question"
+        | "undelivered_deliverables";
       severity: "fail" | "warn";
       message: string;
     }>;

@@ -19,7 +19,8 @@ export interface VerdictSignal {
     | "stalled"
     | "prompt_asset_missing"
     | "scan_unavailable"
-    | "ended_with_question";
+    | "ended_with_question"
+    | "undelivered_deliverables";
   severity: "fail" | "warn";
   message: string;
 }
@@ -102,6 +103,49 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
  * The opt-in / authored-key checks read the ORIGINAL assertions off `result.assertions[].assertion`,
  * so no separate scenario object is threaded in.
  */
+/** Is this produced file one the user actually got?
+ *
+ *  LANE-PARAMETERISED ON PURPOSE. On the desktop-local lane a file under a user-visible root is delivered
+ *  by LOCATION — no tool call needed (Cowork's own prompt tells the agent to save deliverables there).
+ *  On the remote lane location delivers nothing: only membership in the delivered set counts (verified by
+ *  live probe — writing to /mnt/user-data/outputs/ produced no card and an empty Outputs panel).
+ *
+ *  Today every harness run is local-shaped, so the location arm always applies; the delivered-set arm is
+ *  what a `lane: remote` scenario will narrow to. Keeping both here means that change is a parameter,
+ *  not a rewrite of the signal. */
+function isDelivered(path: string, result: RunResult): boolean {
+  // A `presentedFiles` entry records `from` (the path the skill presented, VM-absolute) and `to` (where it
+  // landed). The workspace path here is the synthetic `scratchpad/<rel>` form, so compare on the tail.
+  //
+  // `leaked` entries do NOT count as delivered: present_files' own copy-failure branch leaves the file in
+  // the scratchpad, and its tool_result says so. Treating a leaked presentation as delivery would green
+  // exactly the case `no_scratchpad_leak` exists to catch.
+  const rel = path.startsWith("scratchpad/") ? path.slice("scratchpad/".length) : path;
+  const presented = (result.presentedFiles ?? []).some(
+    (p) => !p.leaked && (p.from === path || p.from === rel || p.from.endsWith(`/${rel}`)),
+  );
+  if (presented) return true;
+  // Location arm: a `scratchpad`-class file is BY CONSTRUCTION outside every user-visible root, so this
+  // is false for the inputs this signal considers. It is stated explicitly rather than omitted because
+  // the remote lane will remove it, and a reader needs to see which arm is lane-specific.
+  return false;
+}
+
+/** Can this run answer "was anything left undelivered?" at all?
+ *
+ *  Three distinct ways the answer is UNKNOWN rather than "nothing": the workspace walk produced no
+ *  evidence (`workspaceFiles` undefined — replay, or a vanished root); no scratchpad walk ran on this
+ *  tier (protocol has no session-root layout), so the absence of scratchpad entries proves nothing; or
+ *  the run predates the telemetry. Staying silent in those cases would let "cannot tell" read as "clean",
+ *  which is the failure mode this signal exists to remove. */
+function isDeliveryEvidenceUsable(result: RunResult): boolean {
+  if (result.workspaceFiles === undefined) return false;
+  // A tier that ran the scratchpad walk proves it by producing at least the capability marker: any
+  // scratchpad-class entry, or an explicit scanned flag once one is persisted. Absent both, treat the
+  // evidence as unusable rather than clean.
+  return result.workspaceFiles.some((f) => f.class === "scratchpad");
+}
+
 export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verdict {
   const signals: VerdictSignal[] = [];
 
@@ -244,6 +288,37 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message:
           "the final answer contains a question and the run wrote no deliverable to outputs/ — the agent may have ended on a request for input instead of a deliverable. " +
           "Script the answer (answer:/--answer/a decider) or steer --decider-llm --intent; assert allow_stall: true if ending on a question is intended.",
+      });
+
+    // A skill can produce a deliverable, never deliver it, and still green: no assertion covers the
+    // NEGATIVE case unless an author thought to write one. Observed live — a run created 23 files and
+    // delivered 3, and reported success.
+    //
+    // What happens to an undelivered file differs BY LANE, and the message must not overclaim:
+    //   remote — the container is reclaimed at session end; the file is DESTROYED.
+    //   local  — the file persists but is INVISIBLE; the scratchpad is not a surface the user sees.
+    // Both are delivery failures. Only one is data loss, so this says "never reached the user", which is
+    // true on both, rather than naming a destruction that does not happen on local.
+    //
+    // WARN, never fail: a skill may legitimately leave working files behind. This exists to make the
+    // question visible on every run without anyone opting in — which is the whole point, since the
+    // scenarios that most need it are the ones whose author never considered delivery.
+    const undelivered = isDeliveryEvidenceUsable(result)
+      ? result.workspaceFiles!.filter((f) => f.class === "scratchpad" && !isDelivered(f.path, result))
+      : [];
+    if (undelivered.length)
+      signals.push({
+        code: "undelivered_deliverables",
+        severity: "warn",
+        message:
+          `${undelivered.length} file(s) the skill produced never reached the user: ` +
+          `${undelivered
+            .slice(0, 5)
+            .map((f) => f.path)
+            .join(", ")}${undelivered.length > 5 ? `, +${undelivered.length - 5} more` : ""}. ` +
+          "They were written outside every user-visible root and never delivered — on a remote Cowork session the " +
+          "workspace is reclaimed at session end, and on a local one they stay invisible to the user. " +
+          "Write deliverables under outputs/ (or a connected folder), or deliver them explicitly.",
       });
 
     // absent scan evidence means host-path/outputs-delete did NOT run — a silent ✓ there would be its own

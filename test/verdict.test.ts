@@ -430,3 +430,77 @@ describe("the persisted channel (result.json) and the streamed channel (--output
     expect(streamed.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
   });
 });
+
+/** `undelivered_deliverables` — the negative-case signal. No assertion covers "the skill produced a
+ *  deliverable and never delivered it" unless an author thought to write one, and the scenarios that most
+ *  need it are the ones whose author never considered delivery. Observed live: a run created 23 files,
+ *  delivered 3, and reported success. */
+describe("verdict — undelivered_deliverables", () => {
+  const scratch = (path: string) => ({ path, bytes: 10, class: "scratchpad" as const });
+  const out = (path: string) => ({ path, bytes: 10, class: "output" as const });
+  const codes = (r: RunResult) => computeVerdict(r, "live").signals.map((s) => s.code);
+
+  it("fires when a scratchpad file was never presented", () => {
+    const v = computeVerdict(rr({ workspaceFiles: [scratch("scratchpad/report.html")] }), "live");
+    expect(v.signals.map((s) => s.code)).toContain("undelivered_deliverables");
+    expect(v.signals.find((s) => s.code === "undelivered_deliverables")!.message).toContain("report.html");
+  });
+
+  it("is WARN — it never fails a run on its own", () => {
+    const v = computeVerdict(rr({ workspaceFiles: [scratch("scratchpad/report.html")] }), "live");
+    expect(v.signals.find((s) => s.code === "undelivered_deliverables")!.severity).toBe("warn");
+    expect(v.pass).toBe(true);
+  });
+
+  it("stays silent when the file WAS presented", () => {
+    const r = rr({
+      workspaceFiles: [scratch("scratchpad/report.html")],
+      presentedFiles: [{ from: "/sessions/s/report.html", to: "/sessions/s/mnt/outputs/report.html", promoted: true, leaked: false }],
+    });
+    expect(codes(r)).not.toContain("undelivered_deliverables");
+  });
+
+  // present_files' own copy-failure branch leaves the file in the scratchpad. Counting that as delivery
+  // would green the exact case `no_scratchpad_leak` exists to catch.
+  it("does NOT treat a LEAKED presentation as delivered", () => {
+    const r = rr({
+      workspaceFiles: [scratch("scratchpad/report.html")],
+      presentedFiles: [{ from: "/sessions/s/report.html", to: "", promoted: false, leaked: true }],
+    });
+    expect(codes(r)).toContain("undelivered_deliverables");
+  });
+
+  it("ignores files already in the delivery channel (outputs/ is not scratchpad)", () => {
+    expect(codes(rr({ workspaceFiles: [out("outputs/report.html")] }))).not.toContain("undelivered_deliverables");
+  });
+
+  // The three ways the answer is UNKNOWN rather than "nothing". Silence here would let "cannot tell" read
+  // as "clean" — the precise failure mode this signal exists to remove.
+  it("stays silent when workspace evidence is UNAVAILABLE (workspaceFiles undefined)", () => {
+    expect(codes(rr({ workspaceFiles: undefined }))).not.toContain("undelivered_deliverables");
+  });
+
+  it("stays silent when no scratchpad walk ran on this tier (no scratchpad-class entries at all)", () => {
+    // protocol has no session-root layout, so the walk never runs — the ABSENCE of scratchpad entries
+    // proves nothing, and must not be read as a clean delivery record.
+    expect(codes(rr({ workspaceFiles: [out("outputs/a")] }))).not.toContain("undelivered_deliverables");
+  });
+
+  it("names at most 5 files and counts the rest, so a messy run doesn't produce an unreadable warning", () => {
+    const many = Array.from({ length: 8 }, (_, i) => scratch(`scratchpad/f${i}.txt`));
+    const msg = computeVerdict(rr({ workspaceFiles: many }), "live").signals.find((s) => s.code === "undelivered_deliverables")!.message;
+    expect(msg).toContain("8 file(s)");
+    expect(msg).toContain("+3 more");
+  });
+
+  // The message must be true on BOTH lanes: remote reclaims the container (destroyed), local keeps the
+  // file but never shows it (invisible). Claiming destruction on local would be a false statement shipped
+  // inside a warning whose whole value is being trustworthy.
+  it("does not claim the file was destroyed — that is remote-only", () => {
+    const msg = computeVerdict(rr({ workspaceFiles: [scratch("scratchpad/a.txt")] }), "live").signals.find(
+      (s) => s.code === "undelivered_deliverables",
+    )!.message;
+    expect(msg).toContain("never reached the user");
+    expect(msg).not.toMatch(/\bdestroyed\b(?!.*remote)/);
+  });
+});
