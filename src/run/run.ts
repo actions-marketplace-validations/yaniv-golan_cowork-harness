@@ -390,6 +390,13 @@ export class Run {
   // its parent is positively confirmed here, so an unrecognized parent stays dropped/sub-agent-attributed
   // exactly as before — fail-safe toward undercount, never toward overcount.
   private forkScopedIds = new Set<string>();
+  /** The SESSION root — the directory whose `mnt/` subtree is the user-visible workspace. Supplied by the
+   *  caller because the agent's own `cwd` is only the same thing on SOME tiers: in a VM/container the
+   *  agent runs at the session root, but at hostloop it runs in the outputs dir, several levels inside
+   *  `mnt/`. `notePresentedFiles` needs the real root to decide what "in the scratchpad" means; using cwd
+   *  as a proxy silently inverts that judgement wherever the two differ. Optional so the 90-odd
+   *  construction sites that don't care (tests, chat) keep today's cwd-derived behaviour exactly. */
+  private sessionRoot?: string;
   // TaskCreate's tool_use carries no id (only subject/description) — the real id only appears in the
   // paired tool_result text ("Task #<N> created successfully: <subject>"). Keyed by toolUseId so the
   // eventual tool_result can look up which pending create it resolves, mirroring toolNameByUseId's pattern.
@@ -1084,20 +1091,23 @@ export class Run {
     // mount-passthrough test and record a genuine scratchpad leak as leaked:false (its real resolved
     // location, `<cwd>/leak`, is scratchpad, not a mount).
     const norm = (p: string): string | undefined => (typeof p === "string" && p.startsWith("/") ? posixPath.normalize(p) : undefined);
-    // KNOWN GAP — promoted/leaked are unreliable at the hostloop tier. This predicate assumes `cwd` is the
-    // SESSION root (scratchpad = under it but outside `mnt/`). That holds in a VM/container, where cwd is
-    // `/sessions/<id>`. At hostloop the agent's cwd IS the host outputs dir, so a legitimately presented
-    // file there satisfies both clauses and is recorded `leaked: true` — the exact inverse of the truth,
-    // since hostloop's handler validates and passes through and never promotes at all.
+    // "In the scratchpad" means: under the SESSION ROOT but outside its `mnt/` subtree. Measured against
+    // `sessionRoot` when the caller supplied it, falling back to the agent's `cwd`.
     //
-    // Not papered over with "to === from ⇒ passthrough": the container handler's copy-FAILURE branch can
-    // also leave `to === from`, so that shortcut would silently reclassify a genuine leak as fine. An
-    // over-report is recoverable; a false green is not.
+    // The fallback is a PROXY, and only a correct one where the agent runs at the session root — true in a
+    // VM/container (`/sessions/<id>`), false at hostloop, where cwd is the outputs dir several levels
+    // inside `mnt/`. Measured from there, a legitimately delivered file looks like an un-promoted
+    // scratchpad file and gets recorded `leaked: true` — the exact inverse of the truth, since hostloop's
+    // handler passes paths through and never promotes at all. Supplying `sessionRoot` is what makes the
+    // judgement correct on every tier; the fallback is kept only so callers that never set it (tests,
+    // chat) behave exactly as before.
     //
-    // Contained today: `no_scratchpad_leak` is container-gated so it never reads this at hostloop, and
-    // `present_files_called` only checks for a non-empty list. A correct fix needs `Run` to know its tier,
-    // which it currently does not — do that before any new consumer trusts `leaked` on a hostloop run.
-    const isScratchpad = (p: string): boolean => cwd !== undefined && p.startsWith(`${cwd}/`) && !p.startsWith(`${cwd}/mnt/`);
+    // NOT collapsed to "to === from ⇒ passthrough", which would look simpler: the container handler's
+    // copy-FAILURE branch can also leave `to === from`, so that shortcut would silently reclassify a
+    // genuine leak as fine. This bug over-reports; that one would under-report, and a false green is the
+    // worse failure.
+    const root = this.sessionRoot !== undefined ? posixPath.normalize(this.sessionRoot) : cwd;
+    const isScratchpad = (p: string): boolean => root !== undefined && p.startsWith(`${root}/`) && !p.startsWith(`${root}/mnt/`);
     for (let i = 0; i < froms.length; i++) {
       const rawTo = tos[i];
       if (rawTo === undefined) {
@@ -1328,6 +1338,11 @@ export class Run {
    *  equality (`approvedDomains.has(normalizeHost(domain))` in decideWebFetchDomain), so a `*` /
    *  `*.suffix` WILDCARD is meaningless here and is rejected — provenance approval is per concrete host.
    *  (The IPv6/punycode/wildcard normalization deferrals documented on `normalizeHost` still apply.) */
+  /** Tell this run where its session root is — see `sessionRoot`. Call before `drive()`. */
+  setSessionRoot(root: string): void {
+    this.sessionRoot = root;
+  }
+
   seedApprovedDomains(domains: string[]): void {
     for (const d of domains) {
       const v = validateBareDomain(d); // throws on empty / scheme / path / port / whitespace

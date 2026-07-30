@@ -781,6 +781,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
       const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
+      // The session root — the dir whose `mnt/` IS the user-visible workspace. Given explicitly because
+      // the agent's own cwd only coincides with it on some tiers (at hostloop the agent runs inside
+      // mnt/outputs), and present_files' promoted/leaked classification is measured from it.
+      // `protocol` has no session/mnt layout at all, so it stays unset and keeps the cwd fallback.
+      if (effectiveFidelity !== "protocol") run.setSessionRoot(join(outDir, "work", "session"));
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.

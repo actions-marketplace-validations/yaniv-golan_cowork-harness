@@ -156,3 +156,55 @@ describe("Run derives presentedFiles from present_files tool_use + tool_result",
     expect(rec.evidenceErrors.presentFilesMalformed).toBe(1);
   });
 });
+
+/** The promoted/leaked classification is measured from the SESSION ROOT, not the agent's cwd. Those
+ *  coincide in a VM/container and DIVERGE at hostloop, where the agent runs inside `mnt/outputs` — so a
+ *  cwd-derived judgement recorded every legitimate hostloop delivery as `leaked: true`, the exact inverse
+ *  of the truth (hostloop's handler passes paths through and never promotes). */
+describe("presentedFiles classification is measured from the session root", () => {
+  const SESSION = "/runs/r1/work/session";
+  const driveWithRoot = (events: AgentEvent[], root?: string) => {
+    const run = new Run(new MockSession(events), new ScriptedDecider([]));
+    if (root) run.setSessionRoot(root);
+    return run.drive("go");
+  };
+
+  it("hostloop: a file delivered from the outputs dir is NEITHER promoted nor leaked", async () => {
+    // The agent's cwd IS the outputs dir here — several levels inside mnt/, not the session root.
+    const outputs = `${SESSION}/mnt/outputs`;
+    const file = `${outputs}/report.html`;
+    const r = await driveWithRoot([initEv(outputs), presentFilesUse("t1", [file]), presentFilesResult("t1", [file])], SESSION);
+    expect(r.presentedFiles).toEqual([{ from: file, to: file, promoted: false, leaked: false }]);
+  });
+
+  it("hostloop WITHOUT the session root would invert that verdict — the bug this fixes", async () => {
+    const outputs = `${SESSION}/mnt/outputs`;
+    const file = `${outputs}/report.html`;
+    const r = await driveWithRoot([initEv(outputs), presentFilesUse("t1", [file]), presentFilesResult("t1", [file])]);
+    // cwd-derived: the file is under cwd and not under `${cwd}/mnt/`, so it reads as an unpromoted
+    // scratchpad file. Pinned to document exactly what the fallback still does for callers that never
+    // set a root, and why supplying one matters.
+    expect(r.presentedFiles).toEqual([{ from: file, to: file, promoted: false, leaked: true }]);
+  });
+
+  it("container: a real scratchpad→outputs promotion is still recorded promoted", async () => {
+    const from = `${SESSION}/draft.md`;
+    const to = `${SESSION}/mnt/outputs/draft.md`;
+    const r = await driveWithRoot([initEv(SESSION), presentFilesUse("t1", [from]), presentFilesResult("t1", [to])], SESSION);
+    expect(r.presentedFiles).toEqual([{ from, to, promoted: true, leaked: false }]);
+  });
+
+  // The direction that must never regress: a genuine leak stays visible. An over-report is noisy; an
+  // under-report is a false green on the exact case `no_scratchpad_leak` exists to catch.
+  it("container: a copy-failure that leaves the file in the scratchpad is still LEAKED", async () => {
+    const from = `${SESSION}/draft.md`;
+    const r = await driveWithRoot([initEv(SESSION), presentFilesUse("t1", [from]), presentFilesResult("t1", [from])], SESSION);
+    expect(r.presentedFiles).toEqual([{ from, to: from, promoted: false, leaked: true }]);
+  });
+
+  it("a path under a mount (passthrough) is neither, with or without the root", async () => {
+    const file = `${SESSION}/mnt/myfolder/a.txt`;
+    const r = await driveWithRoot([initEv(SESSION), presentFilesUse("t1", [file]), presentFilesResult("t1", [file])], SESSION);
+    expect(r.presentedFiles).toEqual([{ from: file, to: file, promoted: false, leaked: false }]);
+  });
+});
