@@ -62,7 +62,11 @@ describe("spawnHostLoop source wiring (argv/bundle seam — Docker-gated end-to-
 
   it("combines a cowork-server bundle into the hostloop sdkMcp (McpHandler dispatches by server name)", () => {
     expect(SRC).toMatch(/servers:\s*\["cowork"\]/);
-    expect(SRC).toMatch(/combineSdkMcp\(workspaceBundle,\s*coworkBundle,\s*skillsBundle,\s*pluginsBundle\)/);
+    // Spread conditionally, because `lane: remote` withholds the bundle entirely — a remote Cowork
+    // session has no local MCP servers, so present_files must not be served there.
+    expect(SRC).toMatch(
+      /combineSdkMcp\(workspaceBundle,\s*\.\.\.\(coworkBundle \? \[coworkBundle\] : \[\]\),\s*skillsBundle,\s*pluginsBundle\)/,
+    );
   });
 
   it("builds the cowork handler from makeCoworkHandlerHostLoop, not the container-shaped makeCoworkHandler", () => {

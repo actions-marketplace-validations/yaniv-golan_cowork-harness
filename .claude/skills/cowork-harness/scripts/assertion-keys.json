@@ -80,6 +80,7 @@
     "execution",
     "expect_denied",
     "fidelity",
+    "lane",
     "name",
     "on_unanswered",
     "prompt",

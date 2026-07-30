@@ -3974,6 +3974,7 @@ async function cmdVerifyRun(args: string[]) {
     // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
     // Fall back to the legacy prefix for old result.json that predates the field.
     userVisiblePrefixes: result.userVisibleRoots ?? ["outputs", ".projects"],
+    lane: result.lane,
     // Read-only folder inputs are captured body-less; keep artifact_json's verdict identical to the
     // replay lane (evidence-unavailable) instead of parsing the real on-disk input here.
     readonlyFolderRoots: result.readonlyFolderRoots ?? [],

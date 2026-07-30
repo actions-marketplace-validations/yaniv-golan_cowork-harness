@@ -449,7 +449,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // deliberately at turn START: the post-run path has already let `foldResources` read.
   const turnNumber = beginTurn(outDir);
 
-  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
+  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane);
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
@@ -984,6 +984,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         runLabel: opts.runLabel, // run-identity: a salvaged partial is still a labeled generation
         skillCommit: skillCommit(scenario.session, loadedSession),
         scenarioName: scenario.name,
+        lane: scenario.lane, // a salvaged partial keeps the contract it was run under
         prompt: scenario.prompt,
         fidelity: scenario.fidelity,
         baseline: baseline.appVersion,
@@ -1102,6 +1103,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       result: record.result,
       workRoot,
       userVisiblePrefixes: userVisibleRoots,
+      lane: scenario.lane,
       // Read-only folder inputs are captured body-less; artifact_json must reach the same
       // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
       readonlyFolderRoots,
@@ -1364,6 +1366,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       $schema: RUN_RESULT_SCHEMA_URL,
       generator: "cowork-harness",
       mode: "run",
+      lane: scenario.lane,
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
       runLabel: opts.runLabel, // run-identity: user --label tag (undefined if not passed)
       skillCommit: skillCommit(scenario.session, loadedSession), // best-effort git HEAD of the skill dirs (same set as fingerprint.skillHash)
@@ -1709,6 +1712,8 @@ export function buildPartialResult(args: {
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
+  /** The scenario's declared Cowork lane — see `Scenario.lane`. Absent ⇒ local. */
+  lane?: "local" | "remote";
   prompt: string;
   fidelity: string;
   baseline: string;
@@ -1786,6 +1791,7 @@ export function buildPartialResult(args: {
     generator: "cowork-harness",
     mode: "run",
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
+    lane: args.lane, // the scenario's declared Cowork lane, threaded so a salvaged partial keeps its contract
     runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label
     skillCommit: args.skillCommit,
     turn: args.turn,

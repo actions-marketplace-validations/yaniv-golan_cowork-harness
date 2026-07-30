@@ -10,6 +10,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Scenarios can declare which Cowork lane's delivery contract to test against — `lane: local|remote`.**
+  Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: In the cloud /
+  On your computer"), with cloud the default for new sessions — and they disagree about what *delivered*
+  means. On `remote`: location delivers nothing (a remote container has no auto-delivering outputs
+  directory and is reclaimed at session end), so `user_visible_artifact` fails as unverifiable rather than
+  passing on a file the user never receives; `present_files` is not served at all, because a local MCP
+  server cannot reach a remote session; and the two `present_files`-shaped assertions fail as can't-verify.
+  Default `local` leaves every existing scenario unchanged. Orthogonal to `fidelity` (isolation tier) and
+  `execution` (where the run happens) — a `lane: remote` scenario still runs locally. Scoped to delivery
+  semantics: the remote device bridge (`device_bash`/`device_commit_files`) stays deliberately unmodeled,
+  since emulating it faithfully would mean real command execution and real writes on the operator's
+  machine on behalf of a simulated session.
+
 - **A run now warns when the skill produced deliverables it never delivered.** New `warn`-severity verdict
   signal `undelivered_deliverables`: files written outside every user-visible root and never presented. It
   fires without any assertion being written — which is the point, since `present_files_called` covers the

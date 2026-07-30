@@ -16,6 +16,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     referencesRead: undefined,
     mode: undefined,
     command: undefined,
+    lane: undefined,
     execution: undefined,
     finalMessage: undefined,
     scenario: "test-scenario",

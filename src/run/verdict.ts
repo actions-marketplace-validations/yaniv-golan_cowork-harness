@@ -125,10 +125,25 @@ function isDelivered(path: string, result: RunResult): boolean {
     (p) => !p.leaked && (p.from === path || p.from === rel || p.from.endsWith(`/${rel}`)),
   );
   if (presented) return true;
-  // Location arm: a `scratchpad`-class file is BY CONSTRUCTION outside every user-visible root, so this
-  // is false for the inputs this signal considers. It is stated explicitly rather than omitted because
-  // the remote lane will remove it, and a reader needs to see which arm is lane-specific.
+  // Location arm — LOCAL ONLY. A `scratchpad`-class file is by construction outside every user-visible
+  // root, so this is false for the inputs the undelivered signal feeds it either way; the arm exists for
+  // `user_visible_artifact`, which asks the same question about files that ARE under such a root. On the
+  // remote lane it is removed entirely, because location delivers nothing there.
   return false;
+}
+
+/** Does a file under a user-visible root count as delivered on this run's lane?
+ *
+ *  LOCAL: yes. Cowork's own prompt tells the agent to save deliverables into the workspace folder, and
+ *  they persist there — `mnt/outputs` is a durable host directory.
+ *  REMOTE: no. Verified by live probe — a remote container has no auto-delivering outputs directory
+ *  (writing to `/mnt/user-data/outputs/` produced no card and an empty Outputs panel; the directory did
+ *  not even exist until the agent created it). Only an explicit delivery reaches the user, and the
+ *  workspace is reclaimed at session end.
+ *
+ *  Absent lane ⇒ local, so every result written before this axis existed keeps its meaning. */
+export function locationDelivers(lane: RunResult["lane"]): boolean {
+  return lane !== "remote";
 }
 
 /** Can this run answer "was anything left undelivered?" at all?

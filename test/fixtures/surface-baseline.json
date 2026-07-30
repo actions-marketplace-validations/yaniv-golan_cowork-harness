@@ -1591,6 +1591,13 @@
       ".l0PluginDivergence": {
         "type": "boolean"
       },
+      ".lane": {
+        "type": "string",
+        "enum": [
+          "local",
+          "remote"
+        ]
+      },
       ".mcpErrors": {
         "type": "array"
       },
@@ -2778,6 +2785,13 @@
           "microvm",
           "hostloop",
           "cowork"
+        ]
+      },
+      ".lane": {
+        "type": "string",
+        "enum": [
+          "local",
+          "remote"
         ]
       },
       ".name": {

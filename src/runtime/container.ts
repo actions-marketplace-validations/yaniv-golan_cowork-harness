@@ -112,15 +112,22 @@ export function spawnContainer(
   });
 
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-  const coworkBundle: { servers: string[]; handle: McpHandler } = {
-    servers: ["cowork"],
-    handle: makeCoworkHandler({
-      sessionRootVm: sessionRoot,
-      sessionHostDir: sessionHost,
-      outputsHostDir,
-      folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
-    }),
-  };
+  // `lane: remote` withholds present_files entirely: a local MCP server cannot reach a remote Cowork
+  // session (Anthropic's architecture doc — "local MCP servers don't run in remote sessions"), so a
+  // remote agent genuinely does not have this tool. Serving it would hand the model a capability
+  // production lacks, greening a skill that then fails there — the inverse of this harness's purpose.
+  const coworkBundle: { servers: string[]; handle: McpHandler } | undefined =
+    plan.lane === "remote"
+      ? undefined
+      : {
+          servers: ["cowork"],
+          handle: makeCoworkHandler({
+            sessionRootVm: sessionRoot,
+            sessionHostDir: sessionHost,
+            outputsHostDir,
+            folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
+          }),
+        };
   // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged
   // configDir/skills + plugin mounts (buildLaunchPlan materializes both before spawn), never a live call.
   const mountedSkills = listMountedSkills(plan.configDir, pluginSkillRootsFromPlan(plan));
@@ -138,6 +145,6 @@ export function spawnContainer(
     servers: ["plugins"],
     handle: makePluginsHandler({ mountedPlugins }),
   };
-  const sdkMcp = combineSdkMcp(coworkBundle, skillsBundle, pluginsBundle);
+  const sdkMcp = combineSdkMcp(...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
   return { child, containerName, sdkMcp };
 }

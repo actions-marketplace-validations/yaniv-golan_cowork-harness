@@ -38,6 +38,15 @@
         "cloud-describe"
       ]
     },
+    "lane": {
+      "default": "local",
+      "description": "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
+      "type": "string",
+      "enum": [
+        "local",
+        "remote"
+      ]
+    },
     "prompt": {
       "type": "string",
       "description": "the user turn sent to the agent"

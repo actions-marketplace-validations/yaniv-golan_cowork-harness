@@ -699,6 +699,22 @@ export const ScenarioObject = z.strictObject({
     .describe(
       "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is a load-time error, not a silent no-op)",
     ),
+  // THE PRODUCT-LANE axis. Three orthogonal things, do NOT collapse them:
+  //   fidelity  — the isolation tier the harness runs in (protocol/container/microvm/hostloop)
+  //   execution — WHERE the run happens (local; cloud-describe reserved)
+  //   lane      — WHICH Cowork product lane's contract the run is held to
+  // Cowork offers the choice per session ("Run this task: In the cloud / On your computer"), with cloud
+  // the default for new sessions, and the two lanes disagree about what "delivered" means. `local` keeps
+  // every existing scenario's meaning unchanged.
+  lane: z
+    .enum(["local", "remote"])
+    .default("local")
+    .describe(
+      "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): " +
+        "local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | " +
+        "remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. " +
+        "Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
+    ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
     .number()
@@ -938,6 +954,11 @@ export interface RunResult {
    *  field existed (pre-taxonomy) OR the error-replay lane (an unreadable cassette, where no environment
    *  could be recovered). Do not read absence as "local"; read a present `location:"local"` as local. */
   execution?: { location: "local" | "cloud"; environmentId?: string; taskKind?: "interactive" | "scheduled" };
+  /** The scenario's declared Cowork product lane — which delivery contract this run was held to. Distinct
+   *  from `execution.location` (where the run PHYSICALLY happened, always local in this harness): the lane
+   *  is DECLARED intent, because Cowork's lane is a per-session human choice that leaves no trace in a
+   *  run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
+  lane?: "local" | "remote";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;

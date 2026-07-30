@@ -69,6 +69,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     $schema: RUN_RESULT_SCHEMA_URL,
     generator: "cowork-harness",
     mode: "chat",
+    lane: "local", // the chat lane is a local interactive session by construction
     command: "chat", // #48
     // RunResult.turn documents "absent on replay/chat lanes" (types.ts) — kept undefined even though
     // chat's own artifacts now live under turns/1/ (opts.turn above): that addressing is an internal

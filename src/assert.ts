@@ -416,6 +416,9 @@ export interface AssertContext {
    *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
    *  old result/cassette that predates the field; the message just omits the tier then. */
   effectiveFidelity?: string;
+  /** The scenario's declared Cowork lane — which delivery contract this run is held to. Absent ⇒ local,
+   *  so every pre-existing scenario keeps its meaning. See `Scenario.lane`. */
+  lane?: "local" | "remote";
   /** `computer_links_resolve` resolution context — see `src/run/computer-links.ts`. Undefined
    *  means the calling lane hasn't wired this: any `computer://` link found then fails as
    *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
@@ -1057,6 +1060,16 @@ function check(
             ? ok()
             : fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
         );
+      } else if (ctx.lane === "remote") {
+        // REMOTE LANE: location delivers nothing. A remote Cowork container has no auto-delivering
+        // outputs directory (live-verified), and it is reclaimed at session end — so "the file is under a
+        // user-visible root" says nothing about whether the user got it. Passing here would be a false
+        // green on the exact class this harness exists to catch. Assert the delivery instead.
+        results.push(
+          fail(
+            `user_visible_artifact asserts LOCATION, which delivers nothing on \`lane: remote\` — a remote container has no auto-delivering outputs dir and is reclaimed at session end. Assert the delivery itself, or use \`lane: local\` if this scenario models the desktop lane`,
+          ),
+        );
       } else {
         const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
         if (!visible)
@@ -1392,7 +1405,13 @@ function check(
     // is container-shaped: it asserts the harness-side delivery record, which is equally meaningful at
     // hostloop now that present_files is served there too (closing the prior coverage gap). A missing
     // delivery on any OTHER tier is still "cannot verify," never a false negative.
-    if (ctx.effectiveFidelity !== "container" && ctx.effectiveFidelity !== "hostloop")
+    if (ctx.lane === "remote")
+      results.push(
+        fail(
+          "present_files_called: present_files is not served on `lane: remote` — a local MCP server cannot reach a remote Cowork session, which delivers via the agent-native SendUserFile instead (not modeled; see docs/fidelity-gaps.md) — cannot verify",
+        ),
+      );
+    else if (ctx.effectiveFidelity !== "container" && ctx.effectiveFidelity !== "hostloop")
       results.push(
         fail(
           `present_files_called: present_files is served only on the container/hostloop tiers (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container or hostloop for present_files-based delivery`,

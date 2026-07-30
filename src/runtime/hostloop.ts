@@ -349,10 +349,16 @@ export function spawnHostLoop(
   // bundle (`spawnContainer`) so the tool's full name is the SAME `mcp__cowork__present_files` on both
   // tiers — required for the shared `present_files_called`/`no_scratchpad_leak` telemetry pipeline
   // (`Run.notePresentedFiles`, `src/run/run.ts`) to recognize the call at all.
-  const coworkBundle: { servers: string[]; handle: McpHandler } = {
-    servers: ["cowork"],
-    handle: makeCoworkHandlerHostLoop({ allowedRoots: hostLoopPresentFilesRoots(hostOutputsDir, plan) }),
-  };
+  // `lane: remote` withholds present_files entirely — a local MCP server cannot reach a remote Cowork
+  // session, so a remote agent genuinely does not have this tool. Serving it would hand the model a
+  // capability production lacks, greening a skill that then fails there.
+  const coworkBundle: { servers: string[]; handle: McpHandler } | undefined =
+    plan.lane === "remote"
+      ? undefined
+      : {
+          servers: ["cowork"],
+          handle: makeCoworkHandlerHostLoop({ allowedRoots: hostLoopPresentFilesRoots(hostOutputsDir, plan) }),
+        };
   // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged
   // configDir/skills + plugin mounts (buildLaunchPlan materializes both before spawn), never a live call.
   const mountedSkills = listMountedSkills(plan.configDir, pluginSkillRootsFromPlan(plan));
@@ -370,7 +376,7 @@ export function spawnHostLoop(
     servers: ["plugins"],
     handle: makePluginsHandler({ mountedPlugins }),
   };
-  const sdkMcp = combineSdkMcp(workspaceBundle, coworkBundle, skillsBundle, pluginsBundle);
+  const sdkMcp = combineSdkMcp(workspaceBundle, ...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
   return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown };
 }
 

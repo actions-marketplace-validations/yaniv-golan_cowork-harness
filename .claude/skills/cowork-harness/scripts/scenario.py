@@ -192,6 +192,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "session",
     "fidelity",
     "execution",  # execution-location axis, orthogonal to fidelity; "cloud-describe" is reserved (load-time error)
+    "lane",  # Cowork product-lane axis: which delivery contract the run is held to (local | remote)
     "on_unanswered",
     "prompt",
     "timeout_ms",  # wall-clock budget → kill + errorSource:timeout on expiry

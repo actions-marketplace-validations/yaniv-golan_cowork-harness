@@ -202,6 +202,11 @@
         "error"
       ]
     },
+    "lane": {
+      "type": "string",
+      "enum": ["local", "remote"],
+      "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because Cowork's lane is a per-session human choice that leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
+    },
     "execution": {
       "type": "object",
       "properties": {

@@ -25,6 +25,10 @@ execution: local                         # OPTIONAL — orthogonal to fidelity (
                                          # local today): local (default) | cloud-describe (RESERVED — no
                                          # runner exists yet; authoring it is a load-time error, not a
                                          # silent no-op)
+lane: local                              # OPTIONAL — which Cowork lane's DELIVERY CONTRACT to hold the run
+                                         # to: local (default) | remote (location delivers nothing;
+                                         # present_files not served). Orthogonal to fidelity and execution
+                                         # (see Lanes below)
 on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm — run rejects prompt; see Scripted answers below)
                                          # ("agent" is retired — no longer a valid value)
 
@@ -71,6 +75,32 @@ assert:                                  # pass/fail checks (see below)
 
 > **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; it is retired —
 > a scenario carrying `profile:` now errors as an unknown key, so write `baseline:`.
+
+## Lanes (`lane:`) — which delivery contract the run is held to
+
+Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: **In the
+cloud** / **On your computer**"), with cloud the default for new sessions. They disagree about what
+*delivered* means, so a scenario declares which contract it is testing against.
+
+| | `lane: local` (default) | `lane: remote` |
+|---|---|---|
+| A file under a user-visible root | **is delivered** — `outputs/` is durable, and Cowork's own prompt tells the agent to save deliverables there | **is not delivered** — a remote container has no auto-delivering outputs directory, and it is reclaimed at session end |
+| `present_files` | served | **not served** — a local MCP server cannot reach a remote session |
+| `user_visible_artifact` | asserts location, as always | **fails as unverifiable** — location proves nothing there; assert the delivery itself |
+| `present_files_called` / `no_scratchpad_leak` | as documented per tier | fail as can't-verify — the tool does not exist on that lane |
+
+`lane` is orthogonal to **`fidelity`** (which isolation tier the harness runs in) and to **`execution`**
+(where the run happens). A `lane: remote` scenario still executes locally, in whichever tier you chose —
+what changes is the contract its assertions are held to.
+
+**Scoped to delivery semantics.** The remote lane's device bridge (`device_bash`, `device_commit_files`,
+and the rest of `internal__remote-devices__*`) is deliberately not modeled: emulating it faithfully would
+mean real command execution and real writes on the operator's machine on behalf of a simulated session.
+See [fidelity-gaps.md](./fidelity-gaps.md).
+
+**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the lane most
+new Cowork sessions get. A skill that delivers by writing into `outputs/` and nothing else will fail
+there — that is the finding, not a harness bug.
 
 ## Fidelity tiers (`fidelity:`)
 

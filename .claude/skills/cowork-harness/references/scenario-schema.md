@@ -37,6 +37,15 @@ fidelity: container                 # protocol | container | microvm | hostloop 
 execution: local                    # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                     # local): local (default) | cloud-describe (RESERVED — no runner
                                     # exists yet; authoring it is a load-time error, not a silent no-op)
+lane: local                         # OPTIONAL — which Cowork lane's DELIVERY CONTRACT the run is held to:
+                                    # local (default) | remote. On `remote`, location delivers NOTHING (a
+                                    # remote container has no auto-delivering outputs dir and is reclaimed
+                                    # at session end), `present_files` is NOT served (a local MCP server
+                                    # can't reach a remote session), `user_visible_artifact` fails as
+                                    # unverifiable, and present_files_called/no_scratchpad_leak fail as
+                                    # can't-verify. Orthogonal to fidelity and execution — a `lane: remote`
+                                    # scenario still runs locally. Delivery semantics only; the remote
+                                    # device bridge is deliberately unmodeled.
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 
