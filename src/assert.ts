@@ -1356,22 +1356,21 @@ function check(
     }
   }
   if (a.no_scratchpad_leak !== undefined) {
-    // THE HARNESS serves present_files only on the container tier — a scoping choice (commit 694b7b1: the
-    // container handler's `/sessions/`-prefix path model rejects hostloop's real-host paths), NOT a Cowork
-    // fact. Real Cowork registers the tool unconditionally and `alwaysLoad`, and its handler has BOTH a VM
-    // branch and an `isHostLoopMode` branch — and production runs host-loop mode (the `hostLoop` gate is
-    // force-ON in the pinned baseline). So at hostloop this is a harness COVERAGE GAP, not absence in the
-    // emulated target; see docs/fidelity-gaps.md, "File delivery".
+    // THE HARNESS now serves present_files at BOTH container and hostloop (closing the prior coverage
+    // gap — see present_files_called below). But this key's promotion/leak semantics stay genuinely
+    // container-shaped, not a harness gap: production's own
+    // `isHostLoopMode` branch validates a path and passes it through WITHOUT promoting — the agent's cwd
+    // at hostloop already IS the outputs dir, so there is no scratch→outputs copy that could ever leak.
+    // So a hostloop run reports cannot-verify here, never a false claim that the tool is absent or that
+    // nothing leaked.
     //
     // Gate anyway, because `presentedFiles` is always [] where the harness doesn't serve the tool and the
-    // leak check below would then pass VACUOUSLY. Note the promotion semantics this key asserts are
-    // genuinely container-shaped: production's host-loop branch validates and passes paths through without
-    // promoting, so there is no scratch→outputs copy to leak. `effectiveFidelity` is populated on every
-    // lane's ctx (live/replay/verify-run).
+    // leak check below would then pass VACUOUSLY. `effectiveFidelity` is populated on every lane's ctx
+    // (live/replay/verify-run).
     if (ctx.effectiveFidelity !== "container")
       results.push(
         fail(
-          `no_scratchpad_leak: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+          `no_scratchpad_leak: promotion/leak semantics apply only at the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — hostloop's present_files never promotes (production's host-loop branch passes a validated path through without copying, so there is no scratch→outputs copy to leak) — cannot verify; use fidelity: container for present_files-based delivery`,
         ),
       );
     else if (ctx.evidenceErrors?.presentFilesMalformed)
@@ -1388,15 +1387,15 @@ function check(
     }
   }
   if (a.present_files_called !== undefined) {
-    // The presence companion to no_scratchpad_leak (which is a vacuous pass when nothing was presented).
-    // Same container-tier gate: the HARNESS serves present_files only there (a scoping choice — see the
-    // note on no_scratchpad_leak above; real Cowork advertises it in both its modes), so a missing delivery
-    // on another tier is "cannot verify," never a false negative. Unlike no_scratchpad_leak, nothing about
-    // THIS key is container-shaped — it would work at hostloop the moment the tool is served there.
-    if (ctx.effectiveFidelity !== "container")
+    // The presence companion to no_scratchpad_leak (which is a vacuous pass when nothing was presented,
+    // and stays container-only — see the note there). Unlike no_scratchpad_leak, nothing about THIS key
+    // is container-shaped: it asserts the harness-side delivery record, which is equally meaningful at
+    // hostloop now that present_files is served there too (closing the prior coverage gap). A missing
+    // delivery on any OTHER tier is still "cannot verify," never a false negative.
+    if (ctx.effectiveFidelity !== "container" && ctx.effectiveFidelity !== "hostloop")
       results.push(
         fail(
-          `present_files_called: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+          `present_files_called: present_files is served only on the container/hostloop tiers (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container or hostloop for present_files-based delivery`,
         ),
       );
     else if (ctx.presentedFiles === undefined || ctx.presentedFiles.length === 0)

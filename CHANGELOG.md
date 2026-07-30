@@ -19,6 +19,17 @@ All notable changes to this project are documented here. The format is based on
   it persists but stays invisible — either way the user does not get it. **Silent when the evidence cannot
   answer the question** (no workspace walk, or a tier that runs no scratchpad walk), because "cannot tell"
   must never read as "clean".
+- **`present_files` is served at the `hostloop` tier.** Real Cowork registers the tool unconditionally and
+  `alwaysLoad`, and its handler has both a VM branch and a host-loop branch — and production runs host-loop
+  mode. The harness served it only at `container`, so its parity-claiming tier was one `alwaysLoad` tool
+  short of production's toolset, which can change how a model interprets "deliver this". The hostloop
+  handler mirrors production's own host-loop branch: it validates and **passes the path through without
+  promoting** (there is no scratch→outputs copy at that tier). Every path is checked with `lstatSync`
+  (symlinks and non-regular files rejected outright) then `realpathSync` + containment under the session's
+  outputs dir or a connected folder; one rejected path aborts the whole call, as production does, rather
+  than partially succeeding. `present_files_called` now works at `container|hostloop`.
+  `no_scratchpad_leak` stays container-only on the merits — hostloop never promotes, so there is no copy
+  to leak — and its message now says that instead of implying the tool is missing.
 - **`workspaceFiles[].class` gains `scratchpad`** — files the agent wrote outside every user-visible root,
   the class the field previously left unimplemented. This is what makes the warning above computable: the
   verdict sees only `RunResult`, and the undelivered side of the ledger reached it from nowhere. Existing

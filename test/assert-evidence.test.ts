@@ -154,10 +154,24 @@ describe("present_files presence + skill/artifact evidence (#15/#16/#38)", () =>
     expect(r.pass).toBe(true);
   });
 
-  it("present_files_called is cannot-verify off the container tier (#15)", () => {
+  it("present_files_called is cannot-verify off the container/hostloop tiers (#15)", () => {
+    const [r] = evaluate([{ present_files_called: true }], ctx({ effectiveFidelity: "microvm", presentedFiles: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/container\/hostloop tiers/);
+  });
+
+  it("present_files_called also passes at hostloop, now that present_files is served there (Part 2)", () => {
+    const [r] = evaluate(
+      [{ present_files_called: true }],
+      ctx({ effectiveFidelity: "hostloop", presentedFiles: [{ from: "/outputs/x", to: "/outputs/x", promoted: false, leaked: false }] }),
+    );
+    expect(r.pass).toBe(true);
+  });
+
+  it("present_files_called still fails at hostloop when nothing was presented (#15, Part 2)", () => {
     const [r] = evaluate([{ present_files_called: true }], ctx({ effectiveFidelity: "hostloop", presentedFiles: [] }));
     expect(r.pass).toBe(false);
-    expect(r.message).toMatch(/container tier/);
+    expect(r.message).toMatch(/never called|no file was delivered/);
   });
 
   it("skill_available is evidence-unavailable when availableSkills is undefined — a missing init inventory (#16)", () => {

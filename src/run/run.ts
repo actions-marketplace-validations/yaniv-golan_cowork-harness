@@ -1084,6 +1084,19 @@ export class Run {
     // mount-passthrough test and record a genuine scratchpad leak as leaked:false (its real resolved
     // location, `<cwd>/leak`, is scratchpad, not a mount).
     const norm = (p: string): string | undefined => (typeof p === "string" && p.startsWith("/") ? posixPath.normalize(p) : undefined);
+    // KNOWN GAP — promoted/leaked are unreliable at the hostloop tier. This predicate assumes `cwd` is the
+    // SESSION root (scratchpad = under it but outside `mnt/`). That holds in a VM/container, where cwd is
+    // `/sessions/<id>`. At hostloop the agent's cwd IS the host outputs dir, so a legitimately presented
+    // file there satisfies both clauses and is recorded `leaked: true` — the exact inverse of the truth,
+    // since hostloop's handler validates and passes through and never promotes at all.
+    //
+    // Not papered over with "to === from ⇒ passthrough": the container handler's copy-FAILURE branch can
+    // also leave `to === from`, so that shortcut would silently reclassify a genuine leak as fine. An
+    // over-report is recoverable; a false green is not.
+    //
+    // Contained today: `no_scratchpad_leak` is container-gated so it never reads this at hostloop, and
+    // `present_files_called` only checks for a non-empty list. A correct fix needs `Run` to know its tier,
+    // which it currently does not — do that before any new consumer trusts `leaked` on a hostloop run.
     const isScratchpad = (p: string): boolean => cwd !== undefined && p.startsWith(`${cwd}/`) && !p.startsWith(`${cwd}/mnt/`);
     for (let i = 0; i < froms.length; i++) {
       const rawTo = tos[i];
