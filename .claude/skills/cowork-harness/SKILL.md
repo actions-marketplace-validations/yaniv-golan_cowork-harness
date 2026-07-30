@@ -794,6 +794,18 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     `mcp__skills__*`/`mcp__plugins__*`; then re-record. It stays silent at `microvm`/`protocol`, where
     re-recording would never produce those tools anyway.
 
+24. **Never name the file-delivery tool in a `SKILL.md`.** *Why:* Cowork has **two**, one per product
+    lane, and an agent only sees the one for the surface it is on. The desktop-local sandbox this harness
+    emulates is served `mcp__cowork__present_files` (`{files:[{file_path}]}`); **remote** cloud-container
+    Cowork instead gives the agent the native `SendUserFile` (`files: string[]`, required `status`,
+    optional `caption`/`display`). A skill that hardcodes either name works on one lane and fails on the
+    other — and probing a remote session makes this harness look like it emulates the wrong tool under the
+    wrong schema. It doesn't; the lanes genuinely disagree. *Fix:* describe the **outcome** ("deliver the
+    file to the user") and let the model pick its surface's tool. The `no_scratchpad_leak` /
+    `present_files_called` assertion keys are harness-side names and stay valid either way.
+    ([`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)
+    → "File delivery" has the binary-verified detail; repo-only.)
+
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the
 assertion/replay-relevant ones).

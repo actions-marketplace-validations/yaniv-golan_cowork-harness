@@ -466,12 +466,12 @@
             "const": true
           },
           "no_scratchpad_leak": {
-            "description": "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery); only `true` is valid",
+            "description": "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery). present_files is the DESKTOP-LOCAL lane's tool; remote Cowork delivers via the agent-native SendUserFile instead, so a skill should describe the delivery outcome rather than naming either tool (docs/fidelity-gaps.md, 'File delivery'); only `true` is valid",
             "type": "boolean",
             "const": true
           },
           "present_files_called": {
-            "description": "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented) — pair them to require a delivery AND require it not to leak; CONTAINER TIER ONLY — present_files is not served on hostloop/microvm; only `true` is valid",
+            "description": "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented) — pair them to require a delivery AND require it not to leak; CONTAINER TIER ONLY — present_files is not served on hostloop/microvm. present_files is the DESKTOP-LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
             "type": "boolean",
             "const": true
           },

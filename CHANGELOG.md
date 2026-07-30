@@ -77,7 +77,11 @@ All notable changes to this project are documented here. The format is based on
   real desktop-local Cowork. Verified against the pinned baseline's spawn allowlist and `present_files`
   handler, the agent binary's `SendUserFileTool` schema and enablement gate, and a live-recorded init
   toolset. The entry names the discriminator (`CLAUDE_CODE_ENTRYPOINT`) and the guidance that holds on
-  both lanes: never hardcode a delivery tool name in a `SKILL.md`.
+  both lanes: never hardcode a delivery tool name in a `SKILL.md`. The rule is stated where an author
+  actually forms the belief, not only in that one page: **SKILL.md Gotcha 24** (the installed payload —
+  `docs/` is repo-only), both assertion catalogs, `references/fidelity-and-answers.md`'s tier discussion,
+  and the `no_scratchpad_leak`/`present_files_called` descriptions themselves, so `assertions --list` and
+  `schema/scenario.schema.json` carry it too.
 
 ### Fixed
 
