@@ -467,10 +467,18 @@ surface it runs on:
   absent from the local toolset even though the agent binary contains it and its own enablement gate
   (`tengu_send_user_file`) would otherwise pass on the `local-agent` entrypoint. The host allowlist is the
   load-bearing exclusion, not the binary's gate.
-- **Remote (cloud-container) Cowork**: the agent has the native `SendUserFile` —
+- **Remote (cloud-container) Cowork**: delivery goes through the agent-native `SendUserFile` —
   `{files: string[], caption?: string, status: "normal"|"proactive"` (**required**)`, display?:
   "render"|"attach"}` — which *uploads* files and returns a `file_uuid` that Desktop's remote-lane
   companion tools consume (device commit, remote `create_artifact`/`update_artifact`).
+
+  **`SendUserFile` is not "remote Cowork's tool".** It is broadly native to Claude Code surfaces — its
+  own enablement gate passes on the `local-agent` entrypoint too. What keeps it out of a Cowork-local
+  session is the **host spawn allowlist**, which conditionally adds `SendUserMessage` and never
+  `SendUserFile`. The accurate statement is: *`present_files` is Cowork-local-only; `SendUserFile` is
+  broadly native but absent from Cowork-local.* Either name still strands a lane, which is why the
+  guidance below names no tool at all. (Mechanism, per Anthropic's Cowork architecture overview: local
+  MCP servers don't run in remote sessions — so an `mcp__`-namespaced tool cannot cross the boundary.)
 
 The agent's own prompt states the rule: *"If the `SendUserFile` tool is in your toolset, you're on a remote
 surface where they can't [open a file path] — send the screenshots and recordings with it."*
@@ -536,7 +544,28 @@ this harness disagree about file delivery, establish which lane the probe ran on
 
 ### Workarounds
 
-- **Never hardcode either tool name in a `SKILL.md`.** Describe the outcome ("deliver the file to the
-  user") and let the model pick the tool its surface provides — that phrasing is correct on both lanes.
+- **Write the deliverable to a stated path — but do not stop there on remote.** On the local lane the
+  directory *is* the channel: Cowork's own system prompt tells the agent to save final deliverables into
+  the workspace folder, and `present_files` layers on top of that. **On the remote lane location delivers
+  nothing.** Verified by live probe in a `CLAUDE_CODE_ENTRYPOINT=remote_cowork` session: both
+  `/mnt/user-data/outputs/` and a cwd-relative `outputs/` had to be created — **neither existed**, where a
+  provisioned channel would (the local lane's `mnt/outputs` pre-exists as a mounted host directory) — and
+  files written into them produced no card and an empty Outputs panel. An undelivered file dies with the
+  container.
+- **Follow Anthropic's own deployed pattern**, from the first-party `skill-creator` skill: write the file
+  and state its path, then *check whether a file-presenting tool is available — `present_files`, or
+  `SendUserFile` on remote surfaces — and if so send the deliverable with it; if neither is available,
+  the stated path is the delivery.* Capability-conditional, not surface-enumerated: it stays correct as
+  surfaces change, and it degrades to the path when no tool exists.
+- **Most skills say nothing about delivery at all.** Across the first-party skills bundled with Cowork,
+  the only one that names a delivery tool in its body is `skill-creator` — the one whose entire output is
+  a file the user must install elsewhere. Reach for an explicit send when the artifact is the point and
+  must leave the session; otherwise writing it where the user can see it is the whole job. (Counter-example
+  worth knowing: the `cowork-plugin` skill bundled inside the agent binary names `SendUserFile`
+  *unconditionally* — so the capability-conditional form above is the safer pattern, not a universal one.)
+- **Never name `device_commit_files` in a skill.** It writes to the user's real disk, only inside folders
+  they explicitly connected, and it is Desktop-advertised infrastructure the agent assembles when a user
+  asks for files on disk — not a skill-authoring API. No first-party skill, prompt, or doc instructs a
+  skill to call it.
 - **Assert on delivery, not on the tool.** `present_files_called` / `no_scratchpad_leak` keep working as
   container-tier assertions; they name the harness's assertion keys, not a production tool name.
