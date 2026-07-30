@@ -2732,6 +2732,7 @@ function replayErrorResult(file: string): RunResult {
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     command: "replay", // #48
     lane: undefined, // unreadable cassette — no scenario to read a lane from
+    scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
     ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
     runLabel: undefined, // run-identity metadata is a LIVE-run property; a replay has no record-time label
@@ -4637,6 +4638,9 @@ export async function replayCassette(
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,
+      // A replay materializes a recorded tree; it runs no scratchpad walk of its own, so it cannot answer
+      // the undelivered question — cannot-tell, never a clean read.
+      scratchpadEvidenceComplete: false,
       referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
       ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
       runLabel: undefined, // run-identity metadata is a LIVE-run property; a replay has no record-time label

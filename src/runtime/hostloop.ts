@@ -191,6 +191,9 @@ export function spawnHostLoop(
   // faithful set. Adding PowerShell here would be a no-op today — and would need revisiting only if
   // this harness ever grows a Windows runtime (the sync extractor's Windows paths are still TODO).
   const hostOutputsDir = join(mntHost, "outputs");
+  // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
+  // a registered tool with no backing server is a phantom capability the model can try and fail to use.
+  const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
   // Hoisted from the path-gate config below: the SAME staged dir is both the Read-allowed uploads root
   // and the uploads bullet's file-tool path — one value, so the prompt and the gate can never disagree.
   const uploadsRoot = join(mntHost, "uploads");
@@ -217,12 +220,12 @@ export function spawnHostLoop(
     // `alwaysLoad` with no session-type/connected-folder gate (F2 in the closure plan) — and it MUST also
     // be in extraAllowedTools: alwaysLoad alone is not sufficient pre-approval (the same off-registry
     // auto-allow reasoning `spawnContainer` already documents for its own present_files pre-approval).
-    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch", "mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
     extraAllowedTools: opts.webFetchViaApi
       ? // web_fetch is gated via can_use_tool (production shape) — pre-approve bash + present_files + the discovery tools only
-        ["mcp__workspace__bash", "mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES]
+        ["mcp__workspace__bash", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES]
       : // gate off (allowlist fallback) — keep web_fetch pre-approved alongside bash + present_files + the discovery tools
-        ["mcp__workspace__bash", "mcp__workspace__web_fetch", "mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
+        ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const nativeEnv = buildHostLoopNativeEnv(baseline, {
     configDir: plan.configDir,

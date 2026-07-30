@@ -595,6 +595,12 @@ export const Assertion = z.strictObject({
     .describe(
       "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
     ),
+  allow_undelivered_deliverables: z
+    .literal(true)
+    .optional()
+    .describe(
+      "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise",
+    ),
   replay_protocol_fidelity: z
     .boolean()
     .optional()
@@ -655,6 +661,7 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_missing_capability",
   "allow_l0_plugin_divergence",
   "allow_stall",
+  "allow_undelivered_deliverables",
 ] as const satisfies readonly (keyof Assertion)[];
 
 /** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
@@ -954,6 +961,11 @@ export interface RunResult {
    *  field existed (pre-taxonomy) OR the error-replay lane (an unreadable cassette, where no environment
    *  could be recovered). Do not read absence as "local"; read a present `location:"local"` as local. */
   execution?: { location: "local" | "cloud"; environmentId?: string; taskKind?: "interactive" | "scheduled" };
+  /** Did a COMPLETE scratchpad walk observe this run? Persisted because the verdict is computed from
+   *  `RunResult` alone, and "no scratchpad files" must be distinguishable from "no scratchpad walk". False
+   *  ⇒ the undelivered-deliverables signal stays silent because it CANNOT TELL, not because the run was
+   *  clean. Absent on results written before this field existed — also treated as cannot-tell. */
+  scratchpadEvidenceComplete?: boolean;
   /** The scenario's declared Cowork product lane — which delivery contract this run was held to. Distinct
    *  from `execution.location` (where the run PHYSICALLY happened, always local in this harness): the lane
    *  is DECLARED intent, because Cowork's lane is a per-session human choice that leaves no trace in a

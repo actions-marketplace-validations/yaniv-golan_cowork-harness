@@ -113,7 +113,7 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
  *  Today every harness run is local-shaped, so the location arm always applies; the delivered-set arm is
  *  what a `lane: remote` scenario will narrow to. Keeping both here means that change is a parameter,
  *  not a rewrite of the signal. */
-function isDelivered(path: string, result: RunResult): boolean {
+function isDelivered(path: string, result: RunResult, isScratchpadClass: boolean): boolean {
   // A `presentedFiles` entry records `from` (the path the skill presented, VM-absolute) and `to` (where it
   // landed). The workspace path here is the synthetic `scratchpad/<rel>` form, so compare on the tail.
   //
@@ -125,11 +125,11 @@ function isDelivered(path: string, result: RunResult): boolean {
     (p) => !p.leaked && (p.from === path || p.from === rel || p.from.endsWith(`/${rel}`)),
   );
   if (presented) return true;
-  // Location arm — LOCAL ONLY. A `scratchpad`-class file is by construction outside every user-visible
-  // root, so this is false for the inputs the undelivered signal feeds it either way; the arm exists for
-  // `user_visible_artifact`, which asks the same question about files that ARE under such a root. On the
-  // remote lane it is removed entirely, because location delivers nothing there.
-  return false;
+  // Location arm — LOCAL ONLY. A non-scratchpad file sits under a user-visible root by construction, and
+  // on the local lane that IS delivery: `outputs/` is durable and Cowork's own prompt tells the agent to
+  // save deliverables there. On the remote lane the arm disappears — a remote container has no
+  // auto-delivering outputs dir and is reclaimed at session end, so nothing is delivered by location.
+  return !isScratchpadClass && locationDelivers(result.lane);
 }
 
 /** Does a file under a user-visible root count as delivered on this run's lane?
@@ -154,11 +154,21 @@ export function locationDelivers(lane: RunResult["lane"]): boolean {
  *  the run predates the telemetry. Staying silent in those cases would let "cannot tell" read as "clean",
  *  which is the failure mode this signal exists to remove. */
 function isDeliveryEvidenceUsable(result: RunResult): boolean {
-  if (result.workspaceFiles === undefined) return false;
-  // A tier that ran the scratchpad walk proves it by producing at least the capability marker: any
-  // scratchpad-class entry, or an explicit scanned flag once one is persisted. Absent both, treat the
-  // evidence as unusable rather than clean.
-  return result.workspaceFiles.some((f) => f.class === "scratchpad");
+  if (result.workspaceFiles === undefined) return false; // no workspace walk at all
+  // The PERSISTED completeness flag, not an emptiness check on the results. Inferring "the walk ran" from
+  // "a scratchpad entry exists" is self-fulfilling: it cannot distinguish a tier that runs no walk
+  // (protocol has no session-root layout; chat passes no root; replay materializes a tree) from a run that
+  // genuinely left nothing behind. Both then read as clean, which is the vacuous pass this signal exists
+  // to remove. Absent on results written before the flag existed ⇒ cannot tell.
+  if (result.scratchpadEvidenceComplete !== true) return false;
+  // Missing delivery telemetry cannot be read as "nothing was delivered" — that would invent an
+  // undelivered verdict from absence of evidence.
+  if (result.presentedFiles === undefined) return false;
+  // A RESUMED turn re-walks a scratchpad that still holds files DELIVERED ON AN EARLIER TURN — present_files
+  // copies, leaving the source in place — while `presentedFiles` only covers this turn. Warning there would
+  // state something false ("never reached the user") about a file the user already has.
+  if ((result.turn ?? 1) > 1) return false;
+  return true;
 }
 
 export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verdict {
@@ -294,7 +304,11 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       !result.assertions.some((a) => a.assertion.allow_stall === true) &&
       openEnded &&
       result.workspaceFiles !== undefined && // evidence observed (not the #52 rootAbsent/undefined case)
-      !result.workspaceFiles.some((f) => f.class === "output") && // no DELIVERABLE under mnt/outputs
+      // Shares the undelivered signal's location model, so it needs the same lane awareness: on the
+      // remote lane an `output`-class file is NOT evidence of a deliverable reaching anyone, so treating
+      // its presence as "the run produced something" would suppress this warning on the lane where the
+      // question matters most.
+      !result.workspaceFiles.some((f) => f.class === "output" && locationDelivers(result.lane)) &&
       /\?(?![\w=&/#])/.test(result.finalMessage ?? "") // a '?' not followed by a URL-query/path char
     )
       signals.push({
@@ -318,10 +332,16 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // WARN, never fail: a skill may legitimately leave working files behind. This exists to make the
     // question visible on every run without anyone opting in — which is the whole point, since the
     // scenarios that most need it are the ones whose author never considered delivery.
+    // On LOCAL only scratchpad files can be undelivered (a file under a user-visible root is delivered by
+    // location). On REMOTE nothing is delivered by location, so every produced file is a candidate — which
+    // is what makes the motivating case (23 produced, 3 delivered) visible on the lane it was observed on.
+    const candidates = locationDelivers(result.lane)
+      ? (result.workspaceFiles ?? []).filter((f) => f.class === "scratchpad")
+      : (result.workspaceFiles ?? []).filter((f) => f.class !== "input");
     const undelivered = isDeliveryEvidenceUsable(result)
-      ? result.workspaceFiles!.filter((f) => f.class === "scratchpad" && !isDelivered(f.path, result))
+      ? candidates.filter((f) => !isDelivered(f.path, result, f.class === "scratchpad"))
       : [];
-    if (undelivered.length)
+    if (undelivered.length && !result.assertions.some((a) => a.assertion.allow_undelivered_deliverables === true))
       signals.push({
         code: "undelivered_deliverables",
         severity: "warn",

@@ -1043,7 +1043,16 @@ function check(
       results.push(fail(`unsafe user_visible_artifact path "${p}" — must stay under the work root (no absolute paths or "..")`));
     } else {
       const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
-      if (ctx.linkPaths?.has(rel)) {
+      // LANE CHECK FIRST — before every location-based branch below. Placed after the truncated/link
+      // branches originally, which let a replayed remote cassette green via the truncated path: the one
+      // lane where location proves nothing was the one where the guard could be bypassed.
+      if (ctx.lane === "remote") {
+        results.push(
+          fail(
+            `user_visible_artifact asserts LOCATION, which delivers nothing on \`lane: remote\` — a remote container has no auto-delivering outputs dir and is reclaimed at session end. Assert the delivery itself, or use \`lane: local\` if this scenario models the desktop lane`,
+          ),
+        );
+      } else if (ctx.linkPaths?.has(rel)) {
         // REPLAY: a link entry's placeholder proves existence-of-a-link, not resolution — fail closed
         // (mirror file_exists). Live could RED a dangling/escaping symlink; the cassette didn't capture it.
         results.push(
@@ -1059,16 +1068,6 @@ function check(
           visible
             ? ok()
             : fail(`"${p}" is not under a user-visible prefix (${ctx.userVisiblePrefixes.join(", ")}) — invisible to the user in Cowork`),
-        );
-      } else if (ctx.lane === "remote") {
-        // REMOTE LANE: location delivers nothing. A remote Cowork container has no auto-delivering
-        // outputs directory (live-verified), and it is reclaimed at session end — so "the file is under a
-        // user-visible root" says nothing about whether the user got it. Passing here would be a false
-        // green on the exact class this harness exists to catch. Assert the delivery instead.
-        results.push(
-          fail(
-            `user_visible_artifact asserts LOCATION, which delivers nothing on \`lane: remote\` — a remote container has no auto-delivering outputs dir and is reclaimed at session end. Assert the delivery itself, or use \`lane: local\` if this scenario models the desktop lane`,
-          ),
         );
       } else {
         const visible = ctx.userVisiblePrefixes.some((pre) => rel === pre || rel.startsWith(pre + "/"));
@@ -1380,7 +1379,13 @@ function check(
     // Gate anyway, because `presentedFiles` is always [] where the harness doesn't serve the tool and the
     // leak check below would then pass VACUOUSLY. `effectiveFidelity` is populated on every lane's ctx
     // (live/replay/verify-run).
-    if (ctx.effectiveFidelity !== "container")
+    if (ctx.lane === "remote")
+      results.push(
+        fail(
+          "no_scratchpad_leak: present_files is not served on `lane: remote` (a local MCP server cannot reach a remote Cowork session), so there is no promotion to leak — cannot verify. Without this gate the check would pass VACUOUSLY on an empty presentedFiles list",
+        ),
+      );
+    else if (ctx.effectiveFidelity !== "container")
       results.push(
         fail(
           `no_scratchpad_leak: promotion/leak semantics apply only at the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — hostloop's present_files never promotes (production's host-loop branch passes a validated path through without copying, so there is no scratch→outputs copy to leak) — cannot verify; use fidelity: container for present_files-based delivery`,

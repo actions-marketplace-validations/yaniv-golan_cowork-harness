@@ -1857,6 +1857,9 @@
         "type": "string",
         "required": true
       },
+      ".scratchpadEvidenceComplete": {
+        "type": "boolean"
+      },
       ".skillActivity": {
         "type": "array"
       },
@@ -2421,6 +2424,10 @@
         "const": true
       },
       ".assert[].allow_stall": {
+        "type": "boolean",
+        "const": true
+      },
+      ".assert[].allow_undelivered_deliverables": {
         "type": "boolean",
         "const": true
       },

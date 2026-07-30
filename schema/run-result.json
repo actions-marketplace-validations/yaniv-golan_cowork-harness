@@ -202,6 +202,10 @@
         "error"
       ]
     },
+    "scratchpadEvidenceComplete": {
+      "type": "boolean",
+      "description": "Did a COMPLETE scratchpad walk observe this run? Persisted because the verdict is computed from RunResult alone, and 'no scratchpad files' must be distinguishable from 'no scratchpad walk'. False = the undelivered-deliverables signal stays silent because it cannot tell, not because the run was clean. Absent on results written before this field existed - also cannot-tell."
+    },
     "lane": {
       "type": "string",
       "enum": ["local", "remote"],

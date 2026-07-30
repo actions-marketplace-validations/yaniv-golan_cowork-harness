@@ -6,6 +6,7 @@
     "allow_missing_capability",
     "allow_permissive_auto_allow",
     "allow_stall",
+    "allow_undelivered_deliverables",
     "artifact_json",
     "compaction_occurred",
     "computer_links_resolve",
@@ -93,6 +94,7 @@
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
     "allow_permissive_auto_allow",
-    "allow_stall"
+    "allow_stall",
+    "allow_undelivered_deliverables"
   ]
 }

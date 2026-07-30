@@ -373,6 +373,17 @@ export function trustedWorkspaceFiles(health: ClassifyWorkspaceFilesResult): Wor
   return health.rootAbsent || !health.walkComplete ? undefined : health.files;
 }
 
+/** Did a scratchpad walk actually observe this run, completely?
+ *
+ *  This is the difference between "nothing was left undelivered" and "we cannot tell" — and it must be
+ *  PERSISTED, because the verdict is computed from `RunResult` alone. Without it, a tier that runs no
+ *  scratchpad walk (protocol has no session-root layout; chat passes no root) is indistinguishable from a
+ *  clean run, and silence reads as a pass. False iff the walk never ran, or ran incompletely (an
+ *  unreadable subtree can hide the very file the signal exists to name). */
+export function scratchpadEvidenceComplete(health: ClassifyWorkspaceFilesResult): boolean {
+  return health.scratchpadScanned && health.scratchpadWalkErrors.length === 0;
+}
+
 /** Walk options. `includeHardlinkPaths` lifts the nlink>1 rejection for PATHS-ONLY walks (the
  *  `no_unexpected_files` pre-run baseline): the guard exists to keep hardlinked out-of-root CONTENT out
  *  of committed cassettes, which a path listing never reads. The baseline must include them — the

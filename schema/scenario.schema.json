@@ -594,6 +594,11 @@
             "type": "boolean",
             "const": true
           },
+          "allow_undelivered_deliverables": {
+            "description": "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise",
+            "type": "boolean",
+            "const": true
+          },
           "replay_protocol_fidelity": {
             "description": "(replay-only, NOT authorable) serializeDecision output matched the frozen recording — the token-free re-serialization guard; synthesized by the replay lane and rejected if written in a scenario — listed here only so schema-driven editors can display it in read-only contexts; authoring it in a scenario is a load-time error, see src/run/execute.ts",
             "type": "boolean"

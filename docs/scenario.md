@@ -358,6 +358,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. On `replay` the modifier is a no-op pass — there's no live tier to probe, so it neither suppresses nor triggers anything there. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
+| `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap |
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -538,7 +539,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
 `present_files_called`, `no_vm_path_file_op`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
+`allow_l0_plugin_divergence` / `allow_stall` / `allow_undelivered_deliverables` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**

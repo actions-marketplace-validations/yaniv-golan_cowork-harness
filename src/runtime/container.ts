@@ -82,6 +82,9 @@ export function spawnContainer(
     // needed here: the container's env is a constructed allowlist, never the operator's shell.
     extra: { ...runtimeAuthEnv(), ...plan.agentEnv },
   });
+  // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
+  // a registered tool with no backing server is a phantom capability the model can try and fail to use.
+  const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,
     systemPromptAppend: opts.systemPromptAppend,
@@ -94,8 +97,8 @@ export function spawnContainer(
     // The 5 skills/plugins discovery tools are declared on the SAME cowork lane as present_files (spec
     // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
     // off-registry-auto-allow reason present_files is.
-    extraTools: ["mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
-    extraAllowedTools: ["mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const dockerArgs = dockerRunArgv({
     network,

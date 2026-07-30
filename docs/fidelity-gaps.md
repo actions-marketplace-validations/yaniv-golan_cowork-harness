@@ -492,7 +492,7 @@ Verified against the pinned baseline: the asar's spawn `tools:`/`allowedTools` a
 `container` tier only. Not serving `SendUserFile` is fidelity to the emulated lane, not a gap. **But
 serving `present_files` on `container` alone IS a gap** — see below.
 
-### Open gap: `hostloop` does not serve `present_files`, and production runs host-loop
+### Closed: `hostloop` serves `present_files` (production runs host-loop)
 
 Real Cowork registers `present_files` **unconditionally** and `alwaysLoad`, and its handler carries *two*
 branches — a VM branch and an `isHostLoopMode` branch that validates real host paths against
@@ -501,17 +501,14 @@ promoting**. The `hostLoop` gate is `source: "force", value: true` in the pinned
 production's actual configuration is the split-execution shape this harness's `hostloop` tier claims to
 mirror — and that shape advertises the tool.
 
-The harness serves it at `container` only. That is a scoping choice (the container handler's
-`/sessions/`-prefix path model rejects hostloop's host paths), not absence in the emulated target. The
-consequence at `hostloop`: the init toolset diverges from production by one `alwaysLoad` tool, so a skill
-whose prompt says "deliver the file" exercises a different tool-selection landscape than production; and
-`present_files_called` / `no_scratchpad_leak` are unusable there (they hard-FAIL as can't-verify — loud,
-never a vacuous green, but a mitigation rather than a closure).
+The harness serves it at `container` **and `hostloop`**, the latter via a handler mirroring production's
+own host-loop branch: validate the path and pass it through, with no promotion. `present_files_called`
+works at both tiers. `no_scratchpad_leak` stays container-gated on the merits — production's host-loop
+branch never promotes, so there is no scratch→outputs copy to leak there.
 
-Closing it means a hostloop-shaped handler modeled on production's own `isHostLoopMode` branch
-(validate + pass through, no promotion), merged into the hostloop SDK-MCP bundle, with
-`present_files_called` relaxed to `container|hostloop`. `no_scratchpad_leak` should stay container-gated
-on the merits: production's host-loop branch never promotes, so there is no scratch→outputs copy to leak.
+**Still unmodeled at `microvm` and `protocol`.** `protocol` has no `/sessions/` layout for the handler's
+path model to work against; `microvm` stages into a different tree than the artifact scan walks. Both
+report can't-verify rather than passing vacuously.
 
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 

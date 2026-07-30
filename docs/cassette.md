@@ -301,6 +301,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
+| `allow_undelivered_deliverables` | verdict modifier — kept on replay → no-op pass (suppresses the `undelivered_deliverables` WARN; a replay runs no scratchpad walk of its own, so the signal is evidence-unavailable there regardless) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
 `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity

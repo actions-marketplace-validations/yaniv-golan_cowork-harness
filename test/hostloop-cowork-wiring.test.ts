@@ -51,11 +51,14 @@ describe("spawnHostLoop source wiring (argv/bundle seam — Docker-gated end-to-
   const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "runtime", "hostloop.ts"), "utf8");
 
   it("registers mcp__cowork__present_files in extraTools (toolset parity with production's alwaysLoad registration)", () => {
-    expect(SRC).toMatch(/extraTools:\s*\[[^\]]*"mcp__cowork__present_files"/s);
+    // Via `coworkTools`, which is EMPTY on `lane: remote` — a tool registered with no backing server is a
+    // phantom capability, so the lane gates the registration and the pre-approval, not just the bundle.
+    expect(SRC).toContain('const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];');
+    expect(SRC).toMatch(/extraTools:\s*\[[^\]]*\.\.\.coworkTools/s);
   });
 
   it("pre-approves mcp__cowork__present_files in BOTH extraAllowedTools branches (webFetchViaApi on/off) — alwaysLoad alone is not sufficient pre-approval", () => {
-    const matches = SRC.match(/"mcp__cowork__present_files"/g) ?? [];
+    const matches = SRC.match(/\.\.\.coworkTools/g) ?? [];
     // 1 in extraTools + 2 in the ternary's two extraAllowedTools branches = 3 occurrences.
     expect(matches.length).toBeGreaterThanOrEqual(3);
   });

@@ -70,6 +70,7 @@ import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import {
   classifyWorkspaceFilesWithHealth,
   trustedWorkspaceFiles,
+  scratchpadEvidenceComplete,
   collectArtifactPaths,
   captureAuthoredFilesWithHealth,
   authoredFilesHealthNonEmpty,
@@ -1367,6 +1368,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       generator: "cowork-harness",
       mode: "run",
       lane: scenario.lane,
+      scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
       runLabel: opts.runLabel, // run-identity: user --label tag (undefined if not passed)
       skillCommit: skillCommit(scenario.session, loadedSession), // best-effort git HEAD of the skill dirs (same set as fingerprint.skillHash)
@@ -1574,6 +1576,19 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
     throw new Error(
       `${context}: \`execution: cloud-describe\` is reserved — no runner exists yet, so authoring it is a load-time error rather than a silent no-op. Remove it (or use the default \`execution: local\`) until a cloud runner ships.`,
     );
+  // `lane: remote` + a present_files-shaped assertion is incoherent by construction: that lane serves no
+  // cowork MCP server, so those keys can only ever report can't-verify. Rejecting at LOAD time follows the
+  // `cloud-describe` precedent above — an authored assertion that CANNOT pass should cost a config error,
+  // not a paid run that fails at assertion time.
+  if (scenario.lane === "remote") {
+    const LANE_INCOMPATIBLE = ["present_files_called", "no_scratchpad_leak", "user_visible_artifact"] as const;
+    for (const a of scenario.assert)
+      for (const key of LANE_INCOMPATIBLE)
+        if (a[key] !== undefined)
+          throw new Error(
+            `${context}: \`${key}\` cannot pass on \`lane: remote\` — that lane serves no present_files and delivers nothing by location, so the key can only report "cannot verify". Assert the delivery itself, or set \`lane: local\` if this scenario models the desktop lane.`,
+          );
+  }
   // assert[] patterns
   for (const a of scenario.assert) {
     for (const key of [
@@ -1792,6 +1807,7 @@ export function buildPartialResult(args: {
     mode: "run",
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
     lane: args.lane, // the scenario's declared Cowork lane, threaded so a salvaged partial keeps its contract
+    scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
     runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label
     skillCommit: args.skillCommit,
     turn: args.turn,
