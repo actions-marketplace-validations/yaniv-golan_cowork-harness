@@ -774,19 +774,22 @@ function isAggregatable(r: RunIndexRow): boolean {
   return r.critiqueRole !== "rollup";
 }
 
-export function buildStats(
-  rows: RunIndexRow[],
-  filters: {
-    scenario?: string;
-    since?: string;
-    baseline?: string;
-    branch?: string;
-    last?: number;
-    skillHash?: string;
-    label?: string;
-    groupBy?: StatsGroupBy;
-  },
-): StatsResult {
+export interface StatsFilters {
+  scenario?: string;
+  since?: string;
+  baseline?: string;
+  branch?: string;
+  last?: number;
+  skillHash?: string;
+  label?: string;
+  groupBy?: StatsGroupBy;
+}
+
+/** Filter → group → window, shared by the aggregate (`buildStats`) and the per-run listing
+ *  (`listRuns`). Deliberately ONE implementation: two copies of this chain would let `stats --runs` show
+ *  a row set the summary line above it did not actually aggregate — the precise "the tool disagrees with
+ *  itself" failure this whole feature exists to remove. */
+function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Map<string, StatsGroup>; hashlessRuns: number } {
   // Bookkeeping rows are excluded BEFORE any filter or grouping — see `isAggregatable`.
   let filtered = rows.filter(isAggregatable);
   if (filters.scenario) filtered = filtered.filter((r) => r.scenario === filters.scenario);
@@ -839,6 +842,11 @@ export function buildStats(
     }
   }
 
+  return { groups, hashlessRuns };
+}
+
+export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsResult {
+  const { groups, hashlessRuns } = resolveGroups(rows, filters);
   const summaries: StatsSummary[] = [];
   for (const { scenario, skillHash, runLabel, rows: group } of groups.values()) {
     const numbers = (pick: (r: RunIndexRow) => number | undefined) =>
@@ -880,4 +888,53 @@ export function buildStats(
     });
   }
   return { summaries, hashlessRuns };
+}
+
+/** One entry per RUN, for `stats --runs`. The consumer request this answers: "surface `skillHash` in
+ *  whatever lists runs, so the arm is visible without opening `result.json`" — until now no command
+ *  listed individual runs at all (`list` lists baselines; `stats` only aggregates), so telling which
+ *  generation a given run belonged to meant opening each `result.json` by hand. */
+export interface RunListEntry {
+  ts: string;
+  scenario: string;
+  runId: string;
+  command: RunIndexRow["command"];
+  pass: boolean;
+  result: "success" | "error";
+  skillHash?: string;
+  runLabel?: string;
+  turn?: number;
+  critiqueRole?: RunIndexRow["critiqueRole"];
+  costUsd?: number;
+  durationMs?: number;
+  outDir: string;
+  pruned: boolean; // outDir no longer on disk — the row is history, the evidence is gone
+}
+
+/** Newest first, over EXACTLY the rows `buildStats` aggregated for the same filters (same
+ *  `resolveGroups`), so a listing can never disagree with the summary printed beside it. */
+export function listRuns(rows: RunIndexRow[], filters: StatsFilters): { runs: RunListEntry[]; hashlessRuns: number } {
+  const { groups, hashlessRuns } = resolveGroups(rows, filters);
+  const runs = [...groups.values()]
+    .flatMap((g) => g.rows)
+    .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+    .map((r) => ({
+      ts: r.ts,
+      scenario: r.scenario,
+      runId: r.runId,
+      command: r.command,
+      pass: r.pass,
+      result: r.result,
+      // undefined-valued keys drop out of JSON.stringify, so absence stays absence rather than becoming
+      // a null a consumer has to special-case.
+      ...(r.skillHash !== undefined ? { skillHash: r.skillHash } : {}),
+      ...(r.runLabel !== undefined ? { runLabel: r.runLabel } : {}),
+      ...(r.turn !== undefined ? { turn: r.turn } : {}),
+      ...(r.critiqueRole !== undefined ? { critiqueRole: r.critiqueRole } : {}),
+      ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
+      ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      outDir: r.outDir,
+      pruned: !existsSync(r.outDir),
+    }));
+  return { runs, hashlessRuns };
 }

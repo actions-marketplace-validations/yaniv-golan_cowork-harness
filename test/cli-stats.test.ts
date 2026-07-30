@@ -272,6 +272,40 @@ describe.skipIf(!can)("cli: stats — generation queries", () => {
     expect(out).toContain("$3.5000");
   });
 
+  it("--runs lists the individual runs behind each summary, with skillHash visible", () => {
+    const r = run(["stats", "s", "--runs"], seedTwoGenerations());
+    expect(r.code).toBe(0);
+    // both generations' runs listed, newest first, each naming its own arm — the whole ask
+    expect(r.out).toContain(`skillHash=${GEN1}`);
+    expect(r.out).toContain(`skillHash=${GEN2}`);
+    expect(r.out).toContain("label=gen-1");
+    expect(r.out).toMatch(/local_2[\s\S]*local_1/); // newest first
+  });
+
+  it("--runs nests each run under its own group when grouping by generation", () => {
+    const out = run(["stats", "s", "--runs", "--group-by", "skill-hash"], seedTwoGenerations()).out;
+    const gen1Summary = out.indexOf(`s (skillHash=${GEN1})`);
+    const gen2Summary = out.indexOf(`s (skillHash=${GEN2})`);
+    // each group's run row sits between its own summary and the next summary — not pooled at the end
+    const between = out.slice(Math.min(gen1Summary, gen2Summary), Math.max(gen1Summary, gen2Summary));
+    expect(between).toMatch(/local_[12]/);
+  });
+
+  it("--runs rides in the JSON envelope alongside the summaries", () => {
+    const r = run(["stats", "s", "--runs", "--output-format", "json"], seedTwoGenerations());
+    const envelope = JSON.parse(r.out.split("\n").find((l) => l.startsWith("{"))!);
+    expect(envelope.runs).toHaveLength(2);
+    expect(envelope.runs[0]).toMatchObject({ scenario: "s", pass: true });
+    expect(envelope.runs.map((x: { skillHash: string }) => x.skillHash).sort()).toEqual([GEN1, GEN2].sort());
+    // absent without the flag, so an existing consumer sees no new key
+    const plain = JSON.parse(
+      run(["stats", "s", "--output-format", "json"], seedTwoGenerations())
+        .out.split("\n")
+        .find((l) => l.startsWith("{"))!,
+    );
+    expect("runs" in plain).toBe(false);
+  });
+
   // The matrix branch exits before the per-file loop, so a preflight placed only in that loop left the
   // cap SILENTLY ignored on the most expensive invocation shape there is (N paid cells of one scenario).
   it("pre-flights the budget on the --matrix path too, instead of silently ignoring the cap", () => {

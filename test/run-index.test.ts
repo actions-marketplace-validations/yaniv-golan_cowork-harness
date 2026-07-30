@@ -9,6 +9,7 @@ import {
   buildStats,
   reindexFromRunsTree,
   resolveRunsFromIndex,
+  listRuns,
   scenarioCostHistory,
   budgetPreflight,
   type RunIndexRow,
@@ -352,6 +353,58 @@ describe("buildStats — per-scenario aggregation", () => {
     const rows = [row({ scenario: "a", outDir: "/definitely/does/not/exist" })];
     const stats = buildStats(rows, {}).summaries;
     expect(stats.find((s) => s.scenario === "a")?.prunedRuns).toBe(1);
+  });
+});
+
+/** `stats --runs` — the consumer request "surface skillHash in whatever lists runs, so the arm is
+ *  visible without opening result.json". No command listed individual runs before this. */
+describe("listRuns — the per-run listing behind a summary", () => {
+  const GEN1 = "5d2d482d80d3";
+  const GEN2 = "8fc999c77cdf";
+  const rows = [
+    row({ scenario: "a", runId: "r1", ts: "2026-07-01T00:00:00Z", skillHash: GEN1, runLabel: "gen-1", costUsd: 0.1 }),
+    row({ scenario: "a", runId: "r2", ts: "2026-07-03T00:00:00Z", skillHash: GEN2, runLabel: "gen-2", pass: false }),
+    row({ scenario: "b", runId: "r3", ts: "2026-07-02T00:00:00Z", skillHash: GEN1 }),
+  ];
+
+  it("lists every selected run newest-first, carrying the identity fields", () => {
+    const { runs } = listRuns(rows, {});
+    expect(runs.map((r) => r.runId)).toEqual(["r2", "r3", "r1"]);
+    expect(runs.find((r) => r.runId === "r1")).toMatchObject({ skillHash: GEN1, runLabel: "gen-1", costUsd: 0.1, pass: true });
+    expect(runs.find((r) => r.runId === "r2")).toMatchObject({ skillHash: GEN2, pass: false });
+  });
+
+  it("omits absent optional fields rather than emitting nulls", () => {
+    const r3 = listRuns(rows, {}).runs.find((r) => r.runId === "r3")!;
+    expect("runLabel" in r3).toBe(false);
+    expect("costUsd" in r3).toBe(false);
+    expect(r3.skillHash).toBe(GEN1);
+  });
+
+  it("honours every filter the aggregate honours", () => {
+    expect(listRuns(rows, { scenario: "a" }).runs.map((r) => r.runId)).toEqual(["r2", "r1"]);
+    expect(listRuns(rows, { skillHash: GEN1 }).runs.map((r) => r.runId)).toEqual(["r3", "r1"]);
+    expect(listRuns(rows, { label: "gen-2" }).runs.map((r) => r.runId)).toEqual(["r2"]);
+  });
+
+  // The anti-drift property: a listing that showed rows the summary beside it did not aggregate would be
+  // worse than no listing. Both go through resolveGroups, and this pins that they agree.
+  it("selects EXACTLY the rows buildStats aggregated, for the same filters", () => {
+    for (const f of [{}, { scenario: "a" }, { skillHash: GEN1 }, { last: 1 }, { groupBy: "skill-hash" as const }]) {
+      const summedRuns = buildStats(rows, f).summaries.reduce((n, s) => n + s.runs, 0);
+      expect(listRuns(rows, f).runs.length, `filters=${JSON.stringify(f)}`).toBe(summedRuns);
+    }
+  });
+
+  it("reports the same hashless-exclusion count as the aggregate", () => {
+    const withHashless = [...rows, row({ scenario: "a", runId: "r4", skillHash: undefined })];
+    expect(listRuns(withHashless, { groupBy: "skill-hash" }).hashlessRuns).toBe(1);
+    expect(listRuns(withHashless, {}).hashlessRuns).toBe(0);
+  });
+
+  it("flags a run whose evidence has been pruned off disk", () => {
+    const gone = listRuns([row({ scenario: "a", runId: "r1", outDir: "/definitely/does/not/exist" })], {}).runs[0];
+    expect(gone.pruned).toBe(true);
   });
 });
 

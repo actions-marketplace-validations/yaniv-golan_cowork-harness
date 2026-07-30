@@ -520,7 +520,8 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
   plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and
   `--group-by scenario|skill-hash|label` to split per generation instead of aggregating across them (see
-  Gotcha 6). `--last <n>` windows per group.
+  Gotcha 6). `--runs` lists the individual runs behind each summary with their `skillHash`/`runLabel`, so
+  you can tell which arm a run belonged to without opening its `result.json`. `--last <n>` windows per group.
 - **`result.json` carries the raw fields** the assertions read: `verdict`, `cost` (`cost.usd` = the SDK's
   `total_cost_usd` for the run — the authoritative single-run spend; NOT the same source as summing
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),

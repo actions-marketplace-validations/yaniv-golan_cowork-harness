@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format is based on
   a group-by step; until now nothing could query them. `--skill-hash` matches the 12-char prefix the index
   stores or the full hash from `result.json` (6-character floor). `--last <n>` now windows per **group**,
   which is unchanged at the default grouping.
+- **`stats --runs` lists the individual runs behind each summary** — timestamp, verdict, `runId`,
+  `skillHash`, `runLabel`, cost, duration, and `(pruned)` when the run dir is gone — so which generation a
+  run belonged to is visible without opening its `result.json`. No command listed individual runs before
+  (`list` lists platform baselines; `stats` only aggregated). It selects exactly the rows the summary above
+  it aggregated, through the same filter path, and adds a `runs` array to the JSON envelope only when asked.
+
 - **`stats` warns when one aggregate spans more than one skill generation.** Runs from before and after a
   skill change accumulate in the same scenario directory, so a plain `stats <scenario>` could silently
   average pre-fix and post-fix runs into one line. Each summary now carries `distinctSkillHashes`, and a

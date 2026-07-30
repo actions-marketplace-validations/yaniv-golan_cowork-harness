@@ -79,10 +79,12 @@ import {
   readIndex,
   reindexFromRunsTree,
   buildStats,
+  listRuns,
   scenarioCostHistory,
   budgetPreflight,
   type StatsSummary,
   type StatsGroupBy,
+  type RunListEntry,
 } from "./run/run-index.js";
 import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
@@ -515,12 +517,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       exit codes: 0 found · 2 no runs found for the scenario under the runs root (or a usage error)",
   stats:
     "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>]\n" +
-    "              [--skill-hash <prefix>] [--label <tag>] [--group-by scenario|skill-hash|label] [--reindex] [--output-format text|json]\n" +
+    "              [--skill-hash <prefix>] [--label <tag>] [--group-by scenario|skill-hash|label] [--runs] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
     "       --last <n>: the N most recent runs PER GROUP (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
     "       --skill-hash/--label: narrow to ONE generation of the iterate-across-fixes loop. skillHash is the content-exact key (matches a 12-char index prefix or the full hash from result.json); --label is the tag you passed to run/skill.\n" +
     "       --group-by skill-hash: split each scenario per generation instead of aggregating across them — the A/B in one command. A window spanning >1 generation warns (aggregating unlike things); rows with no skillHash/label are EXCLUDED from grouping and counted, never bucketed under a blank key.\n" +
+    "       --runs: also list the individual runs behind each summary (timestamp, verdict, runId, skillHash, label, cost) — which generation a run belonged to, without opening its result.json.\n" +
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
     "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
@@ -2919,6 +2922,25 @@ function cmdList(args: string[] = []) {
   }
 }
 
+/** One line per run for `stats --runs`. Fixed column order, identity first after the timestamp — the
+ *  whole point is to see WHICH generation a run belonged to without opening its `result.json`. */
+function formatRunLine(r: RunListEntry): string {
+  const parts = [
+    r.ts,
+    r.pass ? "pass" : "FAIL",
+    r.scenario,
+    r.runId,
+    r.skillHash ? `skillHash=${r.skillHash}` : "skillHash=—",
+    r.runLabel ? `label=${r.runLabel}` : null,
+    r.turn !== undefined && r.turn > 1 ? `turn=${r.turn}` : null,
+    r.critiqueRole ? `critique=${r.critiqueRole}` : null,
+    r.costUsd !== undefined ? `$${r.costUsd.toFixed(4)}` : null,
+    r.durationMs !== undefined ? `${(r.durationMs / 1000).toFixed(1)}s` : null,
+    r.pruned ? "(pruned)" : null,
+  ].filter(Boolean);
+  return `  ${parts.join("  ")}`;
+}
+
 /** Minimum `--skill-hash` query length. The match is prefix-tolerant in BOTH directions (the index row
  *  holds 12 chars, `result.json` holds 64), so a very short query would pair unrelated generations. */
 const SKILL_HASH_QUERY_MIN = 6;
@@ -3005,6 +3027,7 @@ function cmdStats(args: string[]) {
       "--skill-hash",
       "--label",
       "--group-by",
+      "--runs",
       "--reindex",
       "--output-format",
       "--output-format=json",
@@ -3013,6 +3036,7 @@ function cmdStats(args: string[]) {
     json,
   );
   const reindex = args.includes("--reindex");
+  const perRun = args.includes("--runs");
   const since = readValueFlag("stats", args, "--since", json);
   const baseline = readValueFlag("stats", args, "--baseline", json);
   const branch = readValueFlag("stats", args, "--branch", json);
@@ -3077,16 +3101,9 @@ function cmdStats(args: string[]) {
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
   const rows = readIndex(root);
-  const { summaries: stats, hashlessRuns } = buildStats(rows, {
-    scenario,
-    since,
-    baseline,
-    branch,
-    last,
-    skillHash,
-    label,
-    groupBy: groupBy as StatsGroupBy | undefined,
-  });
+  // ONE filter object feeding both views — not two literals that could drift apart.
+  const statsFilters = { scenario, since, baseline, branch, last, skillHash, label, groupBy: groupBy as StatsGroupBy | undefined };
+  const { summaries: stats, hashlessRuns } = buildStats(rows, statsFilters);
   // stderr (`log`), so every diagnostic below coexists with a `--output-format json` stdout envelope.
   // `distinctSkillHashes` rides IN the envelope too, so CI gates on the field, not on scraped text.
   for (const s of stats)
@@ -3099,9 +3116,19 @@ function cmdStats(args: string[]) {
           // warning cannot see it. Better to say so than to let silence read as "checked, and fine".
           `(Counts only runs that recorded a skillHash — runs without one are not compared.)`,
       );
-  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats, hashlessRuns }));
+  // `--runs` swaps the AGGREGATE for the per-run detail behind it — same filters, same
+  // `resolveGroups`, so the two views can never describe different row sets.
+  const runs = perRun ? listRuns(rows, statsFilters).runs : undefined;
+  if (json)
+    return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats, hashlessRuns, ...(runs ? { runs } : {}) }));
   if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
-  for (const s of stats) log(formatStatsLine(s, metric));
+  for (const s of stats) {
+    log(formatStatsLine(s, metric));
+    // Nested under their summary when a listing was asked for: the run rows ARE that line's evidence.
+    if (runs)
+      for (const r of runs.filter((x) => x.scenario === s.scenario && (s.skillHash === undefined || x.skillHash === s.skillHash)))
+        log(formatRunLine(r));
+  }
   if (hashlessRuns > 0)
     log(
       `stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded ` +

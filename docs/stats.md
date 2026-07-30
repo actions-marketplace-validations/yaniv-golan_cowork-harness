@@ -75,6 +75,7 @@ cowork-harness stats csv-metrics                   # one scenario
 cowork-harness stats --since 2026-07-01 --branch feature-x
 cowork-harness stats --metric cost --last 20        # last 20 runs per group, cost view only
 cowork-harness stats csv-metrics --group-by skill-hash   # one row per skill generation
+cowork-harness stats csv-metrics --runs                   # + the individual runs behind each summary
 ```
 
 Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, and the
@@ -108,6 +109,12 @@ cowork-harness stats my-scenario --group-by skill-hash   # one row per generatio
 cowork-harness stats my-scenario --skill-hash 8fc999c77cdf   # or narrow to one generation
 cowork-harness stats my-scenario --label gen-2               # …by the human tag instead
 ```
+
+`--runs` additionally lists the runs behind each summary — timestamp, verdict, `runId`, `skillHash`,
+`runLabel`, cost, duration, and `(pruned)` when the evidence is gone from disk — so you can see which
+generation a given run belonged to without opening its `result.json`. It selects **exactly** the rows the
+summary above it aggregated (same filter path), and adds a `runs` array to the JSON envelope; without the
+flag that key is absent.
 
 `--group-by` accepts `scenario` (default) | `skill-hash` | `label`. When a window you did NOT narrow
 spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill generations`) and
