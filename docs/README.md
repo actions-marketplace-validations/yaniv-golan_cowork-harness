@@ -11,7 +11,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 > - Run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token in one pass.
 > - `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`.
 > - **Replay-only usage** (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches.
-> - **Every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model. A further reason replay-only users simply skip `doctor`: a token ✗ there is expected, not a blocker for replay.
+> - **Every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model. (At `protocol` specifically, a Keychain-only login downgrades this to a **`!` warn** rather than a `✗`: that tier keeps your real `CLAUDE_CONFIG_DIR`, so the agent can self-source local login state. Every other tier uses a managed config dir and genuinely needs the token in env / `.env`.) A further reason replay-only users simply skip `doctor`: a token ✗ there is expected, not a blocker for replay.
 
 ## Common tasks (I want to…)
 
@@ -37,7 +37,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | [scenario.md](./scenario.md) | **Author** — reference for `scenarios/*.yaml`: prompt, scripted answers, assertions. |
 | [subagents.md](./subagents.md) | **Author/debug** — the sub-agent capability/path model: the tier-qualified outputs-addressing contract (host-loop vs. VM-loop), the tool-composition rules, the type-less dispatch trap, and model-resolution precedence. |
 | [cassette.md](./cassette.md) | **Run, record & lock** — cassette `record`/`replay`: file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` — the recorded driver→child control responses — plus the O7 guard, which re-exercises the decision-serialization logic on replay), backward compat, and the committed CI fixture. |
-| [stats.md](./stats.md) | **Run** — the `stats` command + `index.jsonl`: querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario. |
+| [stats.md](./stats.md) | **Run** — the `stats` command + `index.jsonl`: querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run, filtered/windowed per scenario — or per skill generation, to compare an A/B across fixes instead of averaging over it. |
 | [run-status.md](./run-status.md) | **Run** — checking whether a background run is alive without `ps aux`: the `status.json` file + `cowork-harness status [--follow]`. |
 | [critique.md](./critique.md) | **EXPERIMENTAL** — `critique`: run a skill, ask the agent what confused it, then grade that self-report against a frozen record. Its verdict is an advisory lead, not an attestation. Confabulation resistance, cost, exit codes, and the limits when the skill is not yours. |
 | [debugging.md](./debugging.md) | **Debug** — the post-hoc loop (`inspect` → `trace` → `verify-run` → `diff` → `chat`) for a misbehaving skill, how to hunt a false-green (Gotchas, `lint`, `verify-cassettes`), and the **iterate-across-fixes verification loop** (ground findings in run evidence; pair generations by `fingerprint.skillHash`). A router into the tools, not a re-doc. |

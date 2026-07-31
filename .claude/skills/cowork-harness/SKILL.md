@@ -284,8 +284,10 @@ quoting, an egress assert on `protocol` fidelity, `transcript_no_host_path` on `
 (ERROR — fails by design at those tiers; WARN on `fidelity: cowork`, whose tier resolves per the
 baseline's host-loop gate), non-empty `requires_capabilities` on `protocol` without
 `allow_missing_capability` (ERROR — the capability probe can't run there, so the run hard-fails as
-unverifiable), a container-only assertion key (`no_scratchpad_leak`/`present_files_called`) off the
-`container` tier (ERROR on `protocol`/`microvm`/`hostloop`, WARN on `cowork`), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
+unverifiable), `no_scratchpad_leak` off `container` (ERROR on `protocol`/`microvm`/`hostloop` — hostloop's
+`present_files` passes a validated path through without promoting, so there is no scratch→outputs copy
+to leak; WARN on `cowork`, whose tier resolves per the baseline gate) or `present_files_called` on
+`protocol`/`microvm` (ERROR — served only at `container`/`hostloop`), or `present_files_called`/`no_scratchpad_leak`/`user_visible_artifact` on `lane: remote` (ERROR — the runtime rejects those at scenario load time, so the tier rules are suppressed there), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
 and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is non-zero on errors
 (CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
 emits a scenario `lint` would reject.
@@ -368,7 +370,12 @@ cassette — has its own recipe:
    input + result are captured, not just errored ones. When iterating, tag generations with `--label` and
    pair a critique only with a `result.json` whose `fingerprint.skillHash` **matches** the skill that
    produced it (`inspect`/the run-index row surface a short `skillHash` prefix; `verify-run` warns when a
-   kept run predates the current skill). **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
+   kept run predates the current skill). **The hazard is general, not critique-specific:** repeated
+   `run`/`skill` invocations of one scenario accumulate in the SAME scenario directory regardless of skill
+   version, so a plain `stats <scenario>` silently averages pre-fix and post-fix runs together. Compare
+   generations with **`stats <scenario> --group-by skill-hash`** (or narrow with `--skill-hash <prefix>` /
+   `--label <tag>`); an un-split window spanning more than one generation now warns.
+   **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
    skillHash keys the whole MOUNTED plugin, so on a multi-skill plugin the hash alone cross-pairs
    critiques of DIFFERENT skills — pair by the report's `(gradedSkillHash, gradedSkill)` pair. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
    pairing step there silently groups on an absent key instead of erroring — check the field is present, or
@@ -406,6 +413,16 @@ Recognize these before "fixing" a non-bug:
   covers the residual (a mid-message `?`, or tool work after the last gate that still ended asking). Read
   the final message before acting — a legitimate question-posing answer that wrote a file never fires.
   Assert `allow_stall: true` if ending on a question is the intended terminal state.
+- **`undelivered_deliverables`** (`WARN`) — the skill produced file(s) **outside every user-visible root**
+  and never delivered them. On a **remote** Cowork session the workspace is reclaimed at session end, so
+  they are destroyed; on a **local** one they persist but stay invisible to the user. Either way the user
+  does not get them. It fires with no assertion written — `present_files_called` covers the positive case
+  only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
+  **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
+  scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
+  Fix by writing deliverables under `outputs/` or a connected folder, or delivering them explicitly; assert
+  **`allow_undelivered_deliverables: true`** when the leftovers are intentional (intermediates, caches,
+  downloaded inputs) rather than a delivery gap.
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
@@ -424,7 +441,7 @@ Recognize these before "fixing" a non-bug:
   `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 
-The full 14-code signal table (severity + per-signal opt-out) is in
+The full 17-code signal table (severity + per-signal opt-out) is in
 [`references/scenario-schema.md`](./references/scenario-schema.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 
@@ -440,7 +457,10 @@ harness writes/updates throughout the run's lifecycle (including a crash-safety 
 error/`SIGTERM`, AND staleness detection for a hard `SIGKILL`/OOM-kill that no exit handler can catch —
 either way you get `"error"`/`stale` instead of a permanently-trusted `"running"`), so liveness is
 checkable regardless of PID namespace. The harness prints `[status] <outDir>` to stderr as soon as the
-run starts, so capture stderr to get the exact directory — but `<dir>` also accepts the run-dir root
+run starts, so capture stderr to get the exact directory — **unless you passed `--compact` (or `--demo`,
+which implies it), which suppress that line** (it is a raw, un-tildeified host path, exactly what those shareable-output
+modes exist to withhold; `status.json` is still written either way, so `status` still works) — but
+`<dir>` also accepts the run-dir root
 passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
 newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
@@ -508,9 +528,28 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   call-count/timing table, the sub-agent dispatch tree, the gate lifecycle, the tool/error rollups, …);
   bare `trace` digests the whole run. The view set is actively being extended — run `trace --help` for
   the current list rather than relying on a fixed enumeration here.
+- **`lane: local|remote`** (scenario key, default `local`) — which Cowork lane's DELIVERY CONTRACT the run
+  is held to. Cowork picks the lane per session ("Run this task: In the cloud / On your computer") and
+  cloud is the default for new sessions; the lanes disagree about what *delivered* means. On `remote`,
+  location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at
+  session end), `present_files` is NOT served, and `user_visible_artifact` /
+  `present_files_called` / `no_scratchpad_leak` are rejected at LOAD time as unable to pass. Reach for it
+  to check a skill's delivery survives the lane most new sessions get. Orthogonal to `fidelity` — a
+  `lane: remote` scenario still runs locally.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
-  `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`.
-- **`result.json` carries the raw fields** the assertions read: `verdict`, `toolDurations`, `models`, `toolErrors`,
+  `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
+  plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and
+  `--group-by scenario|skill-hash|label|fidelity` to split per generation — or per effective fidelity
+  tier — instead of aggregating across them (a window spanning >1 generation warns — see Gotcha 6;
+  >1 tier warns too, independently, with `--group-by fidelity` as its own remedy). `--runs` lists the
+  individual runs behind each summary with their `skillHash`/`runLabel`, so
+  you can tell which arm a run belonged to without opening its `result.json`. `--last <n>` windows per group.
+- **`result.json` carries the raw fields** the assertions read: `verdict`, `lane` (which Cowork delivery
+  contract the run was held to — see Gotcha 24), `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
+  walk observe this run — what distinguishes "nothing was left undelivered" from "cannot tell"), `cost` (`cost.usd` = the SDK's
+  `total_cost_usd` for the run — the authoritative single-run spend; NOT the same source as summing
+  `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
+  `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations`, `models`, `toolErrors`,
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
   `resolvedModel`/output/`attributedSkillId`, `outputTruncated`, `referencesRead`, `reasoning`/`reasoningElided`),
   `context` (tools/mcpServers/availableSkills), `tasks`,
@@ -539,7 +578,7 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   cost spike from fan-out reads as `trace --view dispatches` (how many, which agent) against that model's
   per-model usage — the harness doesn't line-item each sub-agent's tokens.
 - **Debugging a wrong Cowork UI panel.** Each panel is reconstructed in `result.json`: **Progress** =
-  `tasks[]`, **Working folder** = `workspaceFiles[]` (classified output/mount/input, with a
+  `tasks[]`, **Working folder** = `workspaceFiles[]` (classified output/mount/input/scratchpad — the last being the agent's working area outside every user-visible root, with a
   `trace --view files` diff), **Context / Connectors** = `context` (tools / mcpServers / availableSkills),
   **Scratch-pad → outputs** = `presentedFiles[]`. If a panel looks wrong in a run, read its field. An
   **absent** `workspaceFiles`/`artifacts` (a replay result, or a run whose workspace root was missing at
@@ -767,17 +806,32 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 
 22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —
     `manifest-needs-snapshot` and `gate-needs-controlout` — fire on the mere presence of manifest/gate
-    assertion keys, unconditionally. The linter is **static**: it never reads your cassettes, so it cannot
-    know whether yours already carry an `artifacts` manifest and `controlOut` (a current cassette does).
-    On a healthy fleet every one of those lines is a false alarm. *Fix:* `lint --min-severity WARN` in CI
-    (≥1.11.0) — the INFO advisories stay one flag away for interactive use. `--strict --min-severity ERROR`
-    behaves as a plain lint, not a contradiction.
+    assertion keys. The linter is **static**: it never reads your cassettes, so it cannot know whether
+    yours already carry an `artifacts` manifest and `controlOut` (a current cassette does). On a healthy
+    fleet every one of those lines is a false alarm. One exception: `manifest-needs-snapshot` is
+    suppressed for `user_visible_artifact` on `lane: remote` — the only manifest-backed key that lane also
+    rejects outright (`lane-remote-incompatible-key`, an ERROR), so the INFO would be redundant advice
+    about a key the scenario can never even load with. `gate-needs-controlout` has no such exception. *Fix:*
+    `lint --min-severity WARN` in CI (≥1.11.0) — the INFO advisories stay one flag away for interactive use.
+    `--strict --min-severity ERROR` behaves as a plain lint, not a contradiction.
 23. **`verify-cassettes`/`replay` report a `discovery-surface` note on cassettes you just recorded fine.**
     *Why:* the cassette froze its `system/init` tool inventory from before the skills/plugins discovery
     servers existed at that tier (added 1.10.0). It is a non-gating **note**, never a finding — it cannot
     fail your gate. *Fix:* nothing, unless the scenario asserts `tool_available` on
     `mcp__skills__*`/`mcp__plugins__*`; then re-record. It stays silent at `microvm`/`protocol`, where
     re-recording would never produce those tools anyway.
+
+24. **Never name the file-delivery tool in a `SKILL.md`.** *Why:* Cowork has **two**, one per product
+    lane, and an agent only sees the one for the surface it is on. The desktop-local sandbox this harness
+    emulates is served `mcp__cowork__present_files` (`{files:[{file_path}]}`); **remote** cloud-container
+    Cowork instead gives the agent the native `SendUserFile` (`files: string[]`, required `status`,
+    optional `caption`/`display`). A skill that hardcodes either name works on one lane and fails on the
+    other — and probing a remote session makes this harness look like it emulates the wrong tool under the
+    wrong schema. It doesn't; the lanes genuinely disagree. *Fix:* describe the **outcome** ("deliver the
+    file to the user") and let the model pick its surface's tool. The `no_scratchpad_leak` /
+    `present_files_called` assertion keys are harness-side names and stay valid either way.
+    ([`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)
+    → "File delivery" has the binary-verified detail; repo-only.)
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

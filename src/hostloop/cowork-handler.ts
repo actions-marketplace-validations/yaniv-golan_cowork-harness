@@ -12,11 +12,33 @@ import type { McpHandler, McpResult } from "./workspace-handler.js";
  * The tool description below is harness-authored — the exact wire string wasn't captured in the
  * binary research that pinned the schema, `alwaysLoad` registration, and notify templates. Everything
  * else in this file (schema, algorithm, notify wording) is the pinned contract.
+ *
+ * Exported (alongside `PRESENT_FILES_INPUT_SCHEMA` below) so the hostloop-shaped handler
+ * (`cowork-handler-hostloop.ts`) can serve the byte-identical tool name/schema/description — a skill
+ * sees the same `present_files` contract regardless of which tier served it; only the internal
+ * promotion behaviour differs, matching production's own container/host-loop split.
  */
-const PRESENT_FILES_DESC =
+export const PRESENT_FILES_DESC =
   "Deliver a file to the user so they can open it on their own computer. If the file is in your " +
   "scratchpad (not under a mounted folder), it is copied into mnt/outputs first and the new path is " +
   "returned — keep working against that returned path, not the scratchpad original.";
+
+/** `present_files`' input schema — `{files: [{file_path: string}]}`. Shared verbatim with the
+ *  hostloop-shaped handler (see the export note above). */
+export const PRESENT_FILES_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    files: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { file_path: { type: "string" } },
+        required: ["file_path"],
+      },
+    },
+  },
+  required: ["files"],
+} as const;
 
 // Exec/script extensions a presented file must never carry through untouched — a copy into
 // mnt/outputs is a copy onto the user's real disk. `.skill` is deliberately NOT in this set.
@@ -156,20 +178,7 @@ export function makeCoworkHandler(opts: {
     {
       name: "present_files",
       description: PRESENT_FILES_DESC,
-      inputSchema: {
-        type: "object",
-        properties: {
-          files: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { file_path: { type: "string" } },
-              required: ["file_path"],
-            },
-          },
-        },
-        required: ["files"],
-      },
+      inputSchema: PRESENT_FILES_INPUT_SCHEMA,
       // NOT deferred behind ToolSearch — the tool must be visible from the first turn, exactly like
       // real Cowork, or a skill that writes-then-presents can never find it.
       _meta: { "anthropic/alwaysLoad": true },

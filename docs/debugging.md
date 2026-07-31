@@ -174,11 +174,12 @@ cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-1
 cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-2
 #    `fingerprint.skillHash` changes on any tracked edit. If it didn't change, you tested the old skill.
 
-# 5. COMPARE generations — pass rate, cost, and which verdict signals fired per generation:
-#    (recipes in stats.md; they group on skillHash — the index stores a 12-CHAR PREFIX of it, which is
-#     enough to pair within one project; the full hash is in each run's result.json)
-jq -s 'map(select(.skillHash)) | group_by(.skillHash) | map({gen: .[0].runLabel, runs: length,
-       passRate: ((map(select(.pass)) | length) / length)})' ~/.cowork-harness/runs/index.jsonl
+# 5. COMPARE generations — pass rate and cost percentiles, one row per generation:
+#    The index key is `skill-<folder BASENAME>` (non-alphanumerics → `-`), not the path you passed:
+cowork-harness stats "skill-$(basename "$SKILL")" --group-by skill-hash
+#    A window you did NOT split warns when it spans >1 generation, so a cross-generation aggregate
+#    never passes silently. For per-generation TOTAL spend including critique's evaluator passes, use
+#    stats.md's jq recipes — `stats` reports percentiles over aggregatable rows.
 
 # 6. Repeat from 1. Stop when critique stops producing ACTIONABLE findings you agree with.
 ```
@@ -226,7 +227,8 @@ a *pre-fix* `result.json` with a *post-fix* critique. The authoritative key is
 **`fingerprint.skillHash`** — content-exact, recorded on every live `run`/`skill` run that mounts a skill
 or plugin, and it changes on any tracked edit (an un-`git add`-ed new file changes neither the hash nor the
 mounted skill). A run that mounts nothing has nothing to hash and records no `skillHash`; the `chat` lane
-records no fingerprint at all. Group and pair on it;
+records no fingerprint at all. Group and pair on it — `cowork-harness stats <scenario> --group-by
+skill-hash` does exactly that (and `--skill-hash <prefix>` narrows to one generation);
 `inspect` and the run-index row surface a short prefix so you needn't open each `result.json`.
 `--label <tag>` adds a human-readable, orderable generation name on top (skillHash is the correctness
 key; the label is ergonomics). And `verify-run <run-dir> <scenario.yaml>` is the native staleness guard:

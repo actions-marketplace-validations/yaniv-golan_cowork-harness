@@ -82,6 +82,9 @@ export function spawnContainer(
     // needed here: the container's env is a constructed allowlist, never the operator's shell.
     extra: { ...runtimeAuthEnv(), ...plan.agentEnv },
   });
+  // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
+  // a registered tool with no backing server is a phantom capability the model can try and fail to use.
+  const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,
     systemPromptAppend: opts.systemPromptAppend,
@@ -94,8 +97,8 @@ export function spawnContainer(
     // The 5 skills/plugins discovery tools are declared on the SAME cowork lane as present_files (spec
     // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
     // off-registry-auto-allow reason present_files is.
-    extraTools: ["mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
-    extraAllowedTools: ["mcp__cowork__present_files", ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const dockerArgs = dockerRunArgv({
     network,
@@ -112,15 +115,22 @@ export function spawnContainer(
   });
 
   const child = spawn(runner, dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-  const coworkBundle: { servers: string[]; handle: McpHandler } = {
-    servers: ["cowork"],
-    handle: makeCoworkHandler({
-      sessionRootVm: sessionRoot,
-      sessionHostDir: sessionHost,
-      outputsHostDir,
-      folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
-    }),
-  };
+  // `lane: remote` withholds present_files entirely: a local MCP server cannot reach a remote Cowork
+  // session (Anthropic's architecture doc — "local MCP servers don't run in remote sessions"), so a
+  // remote agent genuinely does not have this tool. Serving it would hand the model a capability
+  // production lacks, greening a skill that then fails there — the inverse of this harness's purpose.
+  const coworkBundle: { servers: string[]; handle: McpHandler } | undefined =
+    plan.lane === "remote"
+      ? undefined
+      : {
+          servers: ["cowork"],
+          handle: makeCoworkHandler({
+            sessionRootVm: sessionRoot,
+            sessionHostDir: sessionHost,
+            outputsHostDir,
+            folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
+          }),
+        };
   // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged
   // configDir/skills + plugin mounts (buildLaunchPlan materializes both before spawn), never a live call.
   const mountedSkills = listMountedSkills(plan.configDir, pluginSkillRootsFromPlan(plan));
@@ -138,6 +148,6 @@ export function spawnContainer(
     servers: ["plugins"],
     handle: makePluginsHandler({ mountedPlugins }),
   };
-  const sdkMcp = combineSdkMcp(coworkBundle, skillsBundle, pluginsBundle);
+  const sdkMcp = combineSdkMcp(...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
   return { child, containerName, sdkMcp };
 }

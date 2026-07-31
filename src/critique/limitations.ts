@@ -82,16 +82,6 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     docsAnchor: "protocol tier is refused",
   },
   {
-    id: "cowork-tier-refused",
-    summary: "the cowork tier is refused — pass the resolved tier (container|hostloop) explicitly",
-    provenance: {
-      kind: "deliberate",
-      rationale:
-        "cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons",
-    },
-    docsAnchor: "cowork tier is refused",
-  },
-  {
     id: "skill-corpus-ceiling",
     summary:
       "skill-authored content (SKILL.md, references/** and agents/<skill>.md) ships WHOLE up to a 512 KiB combined corpus ceiling; the transcript is bounded separately at 128 KiB with a head+tail cut and an elided middle",

@@ -9,7 +9,9 @@
 // error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked or threw) .
 // Container OR hostloop tier: the reflection turn RESUMES the task turn's mounted skill + conversation, and
 // that resume-continuity is proven for BOTH — container (Linux ELF) and hostloop (native binary; see
-// test/live-contract.test.ts). microvm/protocol/cowork stay refused (see ./limitations.ts for why each).
+// test/live-contract.test.ts). `--fidelity cowork` is accepted too, but is not a third environment: it
+// resolves to one of those two at parse time, once, and both turns get the resolved literal.
+// microvm/protocol stay refused (see ./limitations.ts for why each).
 // A cross-tier resume is blocked fail-loud by the session-manifest fidelity stamp (src/run/execute.ts),
 // and at hostloop a writable connected folder requires --allow-host-writes (forwarded to both turns).
 import { spawn } from "node:child_process";
@@ -27,6 +29,10 @@ import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
+import { loadBaseline } from "../baseline.js";
+import type { PlatformBaseline } from "../types.js";
+import { decideLoopFromBaseline } from "../loop-decision.js";
+import { parseDotenv } from "../dotenv.js";
 import type { CritiqueItem } from "./evidence.js";
 
 const REFLECTION_PROMPT_VERSION = 2;
@@ -64,7 +70,12 @@ interface ParsedArgs {
   skillFolder: string;
   prompt: string;
   dotenv?: string;
+  /** The tier BOTH turns run at. Always a concrete tier — `--fidelity cowork` is resolved at parse time,
+   *  never forwarded as-is. */
   fidelity: "container" | "hostloop";
+  /** What the caller ASKED for, when that differs from what they got — i.e. `"cowork"`, or absent. Kept
+   *  separate so the report never claims the user named the tier that ran. */
+  requestedFidelity?: "cowork";
   evaluatorModel?: string;
   outputFormat: "json" | "text";
   /** ALSO write the selected-format report to this file (stdout unchanged). */
@@ -115,7 +126,8 @@ Critique's own:
                             folder is still what both turns mount, and fingerprint.skillHash is unchanged
                             (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
                             with no --skill is REFUSED before any model spend.
-  --fidelity <tier>         container (default) or hostloop; microvm/protocol/cowork refused with a reason
+  --fidelity <tier>         container (default), hostloop, or cowork — which resolves via the baseline's
+                            loop gate to one of the two and pins BOTH turns to it; microvm/protocol refused
   --keep                    accepted as a no-op — runs are always kept
   --dotenv <path>           credentials
   Global --run-dir <path>   must PRECEDE the subcommand
@@ -194,7 +206,55 @@ function flagVal(argv: string[], i: number, flag: string): { value: string; adv:
   return { value, adv: 1, equalsForm: false };
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
+/** The effective `CLAUDE_FORCE_HOST_LOOP` a CHILD turn will see: the ambient env if it defines the var,
+ *  else whatever `--dotenv` contributes (the child loads that file, and `loadDotenv` lets an existing
+ *  env value win — so this mirrors the child's own precedence). Read WITHOUT applying the file: pulling
+ *  the whole `.env` into critique's env would also hand it to the evaluator's spawned CLI, a side effect
+ *  far outside a tier decision. Unreadable/absent file ⇒ `false`, matching `loadDotenv`'s best-effort
+ *  posture; `parseArgs` has already failed loud on a missing path by this point. Exported for unit
+ *  tests. */
+export function childForcesHostLoop(dotenvPath: string | undefined): boolean {
+  if (process.env.CLAUDE_FORCE_HOST_LOOP !== undefined) return process.env.CLAUDE_FORCE_HOST_LOOP === "1";
+  if (dotenvPath === undefined) return false;
+  try {
+    return parseDotenv(readFileSync(dotenvPath, "utf8")).get("CLAUDE_FORCE_HOST_LOOP") === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve `--fidelity cowork` to the tier real Cowork would use, exactly as `executeScenario` does:
+ *  the pinned baseline's loop gate, with the same dev override honoured. The child `skill` turns
+ *  synthesize their scenario with `baseline: "latest"` and are spawned from this same install with an
+ *  inherited env, so resolving here yields the tier the child would have computed for itself.
+ *
+ *  A baseline that cannot be read is rewrapped: the bare `readFileSync` ENOENT underneath would be a
+ *  WORSE diagnostic than the blanket refusal this replaced, which is the one way this change could be a
+ *  net regression for the person hitting it.
+ *
+ *  Exported for unit tests — `parseArgs` takes this as an injectable default, and a suite that only ever
+ *  passes a fake would be testing the fake. */
+export function resolveCoworkTier(
+  dotenvPath: string | undefined,
+  load: () => PlatformBaseline = () => loadBaseline("latest"),
+): "container" | "hostloop" {
+  let baseline: PlatformBaseline;
+  try {
+    baseline = load();
+  } catch (e) {
+    throw new Error(
+      `--fidelity cowork could not be resolved: no readable platform baseline (${e instanceof Error ? e.message : String(e)}). ` +
+        `cowork means "whichever tier real Cowork would use here", which is read from the baseline's loop gate — ` +
+        `run \`cowork-harness sync\`, or pass --fidelity container|hostloop explicitly.`,
+    );
+  }
+  return decideLoopFromBaseline(baseline, { devForceHostLoop: childForcesHostLoop(dotenvPath) }) === "host" ? "hostloop" : "container";
+}
+
+function parseArgs(
+  argv: string[],
+  resolveCowork: (dotenvPath: string | undefined) => "container" | "hostloop" = resolveCoworkTier,
+): ParsedArgs {
   const positional: string[] = [];
   let prompt: string | undefined;
   let dotenv: string | undefined;
@@ -318,18 +378,17 @@ function parseArgs(argv: string[]): ParsedArgs {
     prompt = readFileSync(promptFile, "utf8");
   }
   if (!prompt || !prompt.trim()) throw new Error(`--prompt "<probe>" or --prompt-file <path> is required\n${usage()}`);
-  if (fidelity !== "container" && fidelity !== "hostloop") {
-    // Two proven tiers. Each refusal states its OWN reason rather than a generic "unknown tier": the
-    // reflection turn RESUMES the task turn's mounted skill + conversation, and that continuity is proven
-    // only for container (Linux ELF) and hostloop (native binary).
+  if (fidelity !== "container" && fidelity !== "hostloop" && fidelity !== "cowork") {
+    // Two proven tiers, plus `cowork` which RESOLVES to one of them below. Each refusal states its OWN
+    // reason rather than a generic "unknown tier": the reflection turn RESUMES the task turn's mounted
+    // skill + conversation, and that continuity is proven only for container (Linux ELF) and hostloop
+    // (native binary).
     const reason =
       fidelity === "microvm"
         ? "resume-continuity is unproven for the microVM guest (a different guest and session-store location than container/hostloop)"
         : fidelity === "protocol"
           ? "the protocol tier never plumbs a session id or --resume, so the reflection turn cannot resume the task turn at all"
-          : fidelity === "cowork"
-            ? "cowork resolves dynamically to hostloop|container via the loop gate, which would make the graded tier baseline-dependent; pass the resolved tier (container or hostloop) explicitly"
-            : "it is not a fidelity tier";
+          : "it is not a fidelity tier";
     throw new Error(`skill-critique runs at the container or hostloop tier only; --fidelity ${fidelity} is refused: ${reason}`);
   }
   if (outputFormat !== "json" && outputFormat !== "text")
@@ -338,6 +397,16 @@ function parseArgs(argv: string[]): ParsedArgs {
   // ~line 627) rather than letting an absent file surface later as a generic instrument-failure
   // diagnostic from the child `skill` invocation's own (differently-worded) rejection.
   if (dotenv !== undefined && !existsSync(dotenv)) throw new Error(`--dotenv file not found: ${dotenv}\n${usage()}`);
+  // `cowork` names "whatever real Cowork does here" rather than a tier, so resolve it ONCE, now — before
+  // either turn is spawned — and hand both turns the resolved literal. That is what makes it safe: the
+  // refusal this replaces existed to protect a within-critique invariant (both turns at the SAME tier,
+  // because a cross-tier resume fails loud on the session-manifest fidelity stamp), and one resolution
+  // shared by both spawns preserves it exactly. Resolving per-turn would not.
+  //
+  // AFTER the --dotenv existence check on purpose: the child CLI loads that file into its own env before
+  // deciding, so the file is part of the input to a decision we are making on the child's behalf.
+  const requestedFidelity = fidelity === "cowork" ? "cowork" : undefined;
+  if (fidelity === "cowork") fidelity = resolveCowork(dotenv);
   // The allowlist guard above proves fidelity is one of the two members; TS can't narrow a `let string`
   // across a throwing branch, so assert the type the guard guarantees.
   return {
@@ -345,6 +414,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     prompt,
     dotenv,
     fidelity: fidelity as ParsedArgs["fidelity"],
+    requestedFidelity,
     evaluatorModel,
     outputFormat,
     out,
@@ -617,8 +687,13 @@ function parseEnvelope(stdout: string): SkillEnvelope | null {
 }
 
 /** The run dir, preferring the envelope's `outDir` and falling back to the `[status] <path>` stderr line
- *  (written unconditionally by the harness regardless of `--output-format`) — so a run whose stdout
- *  envelope didn't parse (e.g. it crashed before ever writing one) can still be located via `--keep`. */
+ *  — so a run whose stdout envelope didn't parse (e.g. it crashed before ever writing one) can still be
+ *  located via `--keep`.
+ *
+ *  The fallback is sound here because the `[status]` line is written regardless of `--output-format` AND
+ *  the only thing that suppresses it — `--compact`/`--demo` (see `statusLine`, run/run-status.ts) —
+ *  `critique` REJECTS outright (run/skill-flag-surface.ts). If that rejection is ever relaxed, this
+ *  fallback silently stops finding killed task turns. */
 function extractOutDir(turn: TurnOutcome): string | undefined {
   const env = parseEnvelope(turn.stdout);
   const fromEnvelope = env?.results?.[0]?.outDir;
@@ -814,8 +889,12 @@ interface ReportState {
   prompt: string;
   sessionId: string;
   outDir: string;
-  /** The tier critique pinned for BOTH turns (cowork is refused, so requested == resolved). */
+  /** The tier critique pinned for BOTH turns. */
   fidelity: string;
+  /** Set only when the caller passed `--fidelity cowork` and this is what it resolved to — so the report
+   *  distinguishes "you asked for hostloop" from "you asked for cowork and got hostloop". Absent when the
+   *  caller named a concrete tier, which is the common case. */
+  requestedFidelity?: string;
   /** Best-effort from the graded turn's own result.json — which tier/baseline that run RECORDS itself
    *  as (should equal `fidelity`; surfacing both makes a mismatch visible instead of assumed away). */
   gradedEffectiveFidelity?: string;
@@ -945,6 +1024,7 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  run dir: ${tildeify(outDir)}`);
   out.push(
     `  fidelity: ${state.fidelity}` +
+      (state.requestedFidelity ? ` (resolved from --fidelity ${state.requestedFidelity})` : "") +
       (state.gradedEffectiveFidelity
         ? ` (graded turn recorded ${state.gradedEffectiveFidelity}${state.gradedBaseline ? `, baseline ${state.gradedBaseline}` : ""})`
         : ""),
@@ -1150,6 +1230,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     sessionId,
     outDir,
     fidelity: state.fidelity,
+    requestedFidelity: state.requestedFidelity,
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
     gradedBaseline: state.gradedBaseline,
     costUsd: state.costUsd,
@@ -1334,6 +1415,12 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     process.exit(2);
     return;
   }
+  // Announce a resolved `cowork` the same way `executeScenario` does, in the same shape and to the same
+  // stream, so an operator reading a critique's stderr sees the tier decision in the form they already
+  // know from a plain run — and so the resolution is on the record when the report is read later.
+  // A bare stderr line, NOT `warn()`: that helper prefixes `::warning::`, which would annotate every
+  // cowork critique in CI as a problem. This is a routine resolution, not a fault.
+  if (opts.requestedFidelity === "cowork") process.stderr.write(`[loop] cowork → ${opts.fidelity} (per gate 1143815894)\n`);
 
   // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
   // a multi-skill plugin root with no --skill would burn four workloads to produce a critique whose every
@@ -1394,6 +1481,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         sessionId,
         outDir,
         fidelity: opts.fidelity,
+        requestedFidelity: opts.requestedFidelity,
         taskResult: undefined,
         selfReportStatus: "unavailable",
         items: [],
@@ -1646,6 +1734,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       sessionId,
       outDir,
       fidelity: opts.fidelity,
+      requestedFidelity: opts.requestedFidelity,
       gradedEffectiveFidelity,
       gradedBaseline,
       costUsd,

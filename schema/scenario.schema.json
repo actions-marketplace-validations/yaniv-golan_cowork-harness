@@ -38,6 +38,15 @@
         "cloud-describe"
       ]
     },
+    "lane": {
+      "default": "local",
+      "description": "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
+      "type": "string",
+      "enum": [
+        "local",
+        "remote"
+      ]
+    },
     "prompt": {
       "type": "string",
       "description": "the user turn sent to the agent"
@@ -466,12 +475,12 @@
             "const": true
           },
           "no_scratchpad_leak": {
-            "description": "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery); only `true` is valid",
+            "description": "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files itself is now served at BOTH container and hostloop, but this key's promotion/leak semantics apply only at container: production's own host-loop branch validates a path and passes it through WITHOUT promoting (the agent's cwd there already IS the outputs dir), so there is no scratch→outputs copy to leak, and at hostloop this key is cannot-verify rather than a claim the tool is absent (use fidelity: container for present_files-based delivery; microvm still doesn't serve the tool at all). present_files is the DESKTOP-LOCAL lane's tool; remote Cowork delivers via the agent-native SendUserFile instead, so a skill should describe the delivery outcome rather than naming either tool (docs/fidelity-gaps.md, 'File delivery'); only `true` is valid",
             "type": "boolean",
             "const": true
           },
           "present_files_called": {
-            "description": "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented) — pair them to require a delivery AND require it not to leak; CONTAINER TIER ONLY — present_files is not served on hostloop/microvm; only `true` is valid",
+            "description": "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented, and stays container-only) — pair them to require a delivery AND require it not to leak; CONTAINER + HOSTLOOP TIERS — the harness serves present_files at both, mirroring real Cowork advertising the tool in both its VM and host-loop modes; every other tier is still a harness coverage gap (see docs/fidelity-gaps.md, 'File delivery'). present_files is the DESKTOP-LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
             "type": "boolean",
             "const": true
           },
@@ -582,6 +591,11 @@
           },
           "allow_stall": {
             "description": "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
+            "type": "boolean",
+            "const": true
+          },
+          "allow_undelivered_deliverables": {
+            "description": "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise",
             "type": "boolean",
             "const": true
           },

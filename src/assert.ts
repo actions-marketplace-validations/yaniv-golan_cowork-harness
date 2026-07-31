@@ -416,6 +416,9 @@ export interface AssertContext {
    *  `check()` reads this directly (the mode split lives in `linkResolution.mode`). Undefined on an
    *  old result/cassette that predates the field; the message just omits the tier then. */
   effectiveFidelity?: string;
+  /** The scenario's declared Cowork lane — which delivery contract this run is held to. Absent ⇒ local,
+   *  so every pre-existing scenario keeps its meaning. See `Scenario.lane`. */
+  lane?: "local" | "remote";
   /** `computer_links_resolve` resolution context — see `src/run/computer-links.ts`. Undefined
    *  means the calling lane hasn't wired this: any `computer://` link found then fails as
    *  evidence-unavailable rather than silently passing (the evidence-missing convention this file
@@ -602,10 +605,10 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
 // scenario can GATE on "the agent didn't emit an interactive artifact whose Submit is lost under Cowork".
 // ------------------------------------------------------------------------------------------------- //
 
-/** Tier A source extensions — mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` (HTML + code/generator
- *  extensions), duplicated here (not exported there) only to PRE-filter the authored set before handing the
- *  real on-disk absolute paths to `analyzeArtifacts` (which re-filters internally). Pre-filtering keeps the
- *  candidate set honest so could-not-verify reasoning is per-source. */
+/** Tier A source extensions — a **superset** of `analyze-artifact.ts`'s `SOURCE_EXTS`, deliberately: this
+ *  set PRE-filters the authored candidate set (so could-not-verify reasoning stays per-source), while
+ *  `analyzeArtifacts` re-filters internally and drops `.ts`/`.jsx`/`.tsx` as out of scope (acorn cannot
+ *  parse TS/JSX — see the note on `CODE_EXTS` there). Do **not** "sync" the two sets; they differ on purpose. */
 const WRITE_BACK_SOURCE_EXTS = new Set([".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".py"]);
 const SCRATCHPAD_PREFIX = "scratchpad/";
 
@@ -1040,7 +1043,16 @@ function check(
       results.push(fail(`unsafe user_visible_artifact path "${p}" — must stay under the work root (no absolute paths or "..")`));
     } else {
       const rel = relative(resolve(ctx.workRoot), abs); // normalized, guaranteed under workRoot
-      if (ctx.linkPaths?.has(rel)) {
+      // LANE CHECK FIRST — before every location-based branch below. Placed after the truncated/link
+      // branches originally, which let a replayed remote cassette green via the truncated path: the one
+      // lane where location proves nothing was the one where the guard could be bypassed.
+      if (ctx.lane === "remote") {
+        results.push(
+          fail(
+            `user_visible_artifact asserts LOCATION, which delivers nothing on \`lane: remote\` — a remote container has no auto-delivering outputs dir and is reclaimed at session end. Assert the delivery itself, or use \`lane: local\` if this scenario models the desktop lane`,
+          ),
+        );
+      } else if (ctx.linkPaths?.has(rel)) {
         // REPLAY: a link entry's placeholder proves existence-of-a-link, not resolution — fail closed
         // (mirror file_exists). Live could RED a dangling/escaping symlink; the cassette didn't capture it.
         results.push(
@@ -1356,14 +1368,27 @@ function check(
     }
   }
   if (a.no_scratchpad_leak !== undefined) {
-    // present_files is served ONLY on the container tier (binary-verified against real Cowork: hostloop/
-    // microvm/protocol don't advertise the tool, so `presentedFiles` is always [] there and the leak check
-    // below would pass VACUOUSLY). Gate on the tier: anything but container is unsupported → can't-verify,
-    // never a silent green. `effectiveFidelity` is populated on every lane's ctx (live/replay/verify-run).
-    if (ctx.effectiveFidelity !== "container")
+    // THE HARNESS now serves present_files at BOTH container and hostloop (closing the prior coverage
+    // gap — see present_files_called below). But this key's promotion/leak semantics stay genuinely
+    // container-shaped, not a harness gap: production's own
+    // `isHostLoopMode` branch validates a path and passes it through WITHOUT promoting — the agent's cwd
+    // at hostloop already IS the outputs dir, so there is no scratch→outputs copy that could ever leak.
+    // So a hostloop run reports cannot-verify here, never a false claim that the tool is absent or that
+    // nothing leaked.
+    //
+    // Gate anyway, because `presentedFiles` is always [] where the harness doesn't serve the tool and the
+    // leak check below would then pass VACUOUSLY. `effectiveFidelity` is populated on every lane's ctx
+    // (live/replay/verify-run).
+    if (ctx.lane === "remote")
       results.push(
         fail(
-          `no_scratchpad_leak: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+          "no_scratchpad_leak: present_files is not served on `lane: remote` (a local MCP server cannot reach a remote Cowork session), so there is no promotion to leak — cannot verify. Without this gate the check would pass VACUOUSLY on an empty presentedFiles list",
+        ),
+      );
+    else if (ctx.effectiveFidelity !== "container")
+      results.push(
+        fail(
+          `no_scratchpad_leak: promotion/leak semantics apply only at the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — hostloop's present_files never promotes (production's host-loop branch passes a validated path through without copying, so there is no scratch→outputs copy to leak) — cannot verify; use fidelity: container for present_files-based delivery`,
         ),
       );
     else if (ctx.evidenceErrors?.presentFilesMalformed)
@@ -1380,13 +1405,21 @@ function check(
     }
   }
   if (a.present_files_called !== undefined) {
-    // The presence companion to no_scratchpad_leak (which is a vacuous pass when nothing was presented).
-    // Same container-tier gate: present_files is only served there, so a missing delivery on another tier
-    // is "cannot verify," never a false negative.
-    if (ctx.effectiveFidelity !== "container")
+    // The presence companion to no_scratchpad_leak (which is a vacuous pass when nothing was presented,
+    // and stays container-only — see the note there). Unlike no_scratchpad_leak, nothing about THIS key
+    // is container-shaped: it asserts the harness-side delivery record, which is equally meaningful at
+    // hostloop now that present_files is served there too (closing the prior coverage gap). A missing
+    // delivery on any OTHER tier is still "cannot verify," never a false negative.
+    if (ctx.lane === "remote")
       results.push(
         fail(
-          `present_files_called: present_files is served only on the container tier (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container for present_files-based delivery`,
+          "present_files_called: present_files is not served on `lane: remote` — a local MCP server cannot reach a remote Cowork session, which delivers via the agent-native SendUserFile instead (not modeled; see docs/fidelity-gaps.md) — cannot verify",
+        ),
+      );
+    else if (ctx.effectiveFidelity !== "container" && ctx.effectiveFidelity !== "hostloop")
+      results.push(
+        fail(
+          `present_files_called: present_files is served only on the container/hostloop tiers (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container or hostloop for present_files-based delivery`,
         ),
       );
     else if (ctx.presentedFiles === undefined || ctx.presentedFiles.length === 0)

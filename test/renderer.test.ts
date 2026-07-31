@@ -200,6 +200,49 @@ describe("renderer — renderFooter", () => {
     expect(s.text()).toContain("1.5s");
   });
 
+  // A `warn` signal fires with no assertion authored — that is what the severity is FOR. The footer used
+  // to print fail-severity signals only, and only in the fail branch, so on a green run a warn reached
+  // result.json and nothing a human would look at. Caught by a live run: `undelivered_deliverables`
+  // (2 files never delivered) was in result.json and absent from the terminal.
+  const undelivered: RunResult = {
+    ...base,
+    assertions: [{ assertion: {}, pass: true }],
+    scratchpadEvidenceComplete: true,
+    presentedFiles: [],
+    workspaceFiles: [{ path: "scratchpad/report.html", bytes: 10, class: "scratchpad" }],
+  };
+
+  it("pass footer surfaces a warn-severity signal (it fires without any assertion)", () => {
+    const s = sink();
+    renderFooter(undelivered, plan({ color: false }), { write: s.write });
+    expect(s.text()).toContain("✓ success"); // a warn never changes the verdict
+    expect(s.text()).toContain("undelivered_deliverables");
+    expect(s.text()).toContain("scratchpad/report.html"); // the finding itself, not just the code
+  });
+
+  it("fail footer surfaces warns too — a failing run is where they matter most", () => {
+    const s = sink();
+    renderFooter(
+      { ...undelivered, assertions: [{ assertion: { file_exists: "x" }, pass: false, message: "missing" }] },
+      plan({ color: false }),
+      {
+        write: s.write,
+      },
+    );
+    expect(s.text()).toContain("✗ FAIL");
+    expect(s.text()).toContain("undelivered_deliverables");
+  });
+
+  it("does not print non_deterministic twice — the meta line already carries it", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], nonDeterministic: true }, plan({ color: false }), {
+      write: s.write,
+    });
+    const t = s.text();
+    expect(t).toContain("non-deterministic (LLM-decided)");
+    expect(t).not.toContain("non_deterministic:");
+  });
+
   it("fail footer: ✗ + failing assertion + the failing transcript (the debug win)", () => {
     const s = sink();
     const r = makeRenderer(plan({ live: false }), () => {});
@@ -294,6 +337,47 @@ describe("renderer — renderFooter", () => {
       lane: "replay",
     });
     expect(s.text()).not.toContain("→ result:");
+  });
+
+  it("shows the run's cost in the footer on a passing run", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], cost: { usd: 1.23456 } }, plan({ color: false }), {
+      write: s.write,
+    });
+    expect(s.text()).toContain("$1.2346");
+  });
+
+  it("shows the run's cost in the footer on a FAILING run too (a failing paid run is when you most want the number)", () => {
+    const s = sink();
+    renderFooter(
+      { ...base, assertions: [{ assertion: { file_exists: "x" }, pass: false, message: "missing" }], cost: { usd: 0.5 } },
+      plan({ color: false }),
+      { write: s.write },
+    );
+    expect(s.text()).toContain("$0.5000");
+  });
+
+  it("omits the cost segment entirely when cost is absent (no $0.0000, no placeholder)", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }] }, plan({ color: false }), { write: s.write });
+    expect(s.text()).not.toContain("$");
+  });
+
+  it("suppresses the cost on the replay lane even when a recorded cost is present (regression guard)", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], outDir: "(replay)", cost: { usd: 2.5 } }, plan({ color: false }), {
+      write: s.write,
+      lane: "replay",
+    });
+    expect(s.text()).not.toContain("$");
+  });
+
+  it("prints the cost when lane is omitted (undefined means live)", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], cost: { usd: 3.1 } }, plan({ color: false }), {
+      write: s.write,
+    });
+    expect(s.text()).toContain("$3.1000");
   });
 });
 

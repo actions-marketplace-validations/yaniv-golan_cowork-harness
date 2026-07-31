@@ -12,6 +12,8 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 
 ## Authoring tests
 - [docs/scenario.md](docs/scenario.md): scenario YAML — prompt + scripted answers + assert:
+- Scenario `lane: local|remote` — which Cowork lane's DELIVERY CONTRACT a run is held to (default `local`). On `remote`, location delivers nothing (no auto-delivering outputs dir; the container is reclaimed at session end) and `present_files` is not served. Orthogonal to `fidelity` (isolation tier) and `execution` (where the run happens).
+- Assertion tier scope — `present_files_called` is served at `fidelity: container|hostloop`; `no_scratchpad_leak` is `container`-only (hostloop passes a validated path through without promoting, so there is no promotion to leak). Both are rejected at scenario-LOAD time as unable to pass on `lane: remote` — that lane serves no `present_files`, so the scenario never runs.
 - [docs/session.md](docs/session.md): session YAML — pre-prompt setup (model, mounts, discovery)
 - Greenfield scaffold: `python3 .claude/skills/cowork-harness/scripts/scenario.py scaffold --name <name> --skill <dir>` — generates a valid scenario skeleton from scratch (distinct from `cowork-harness scaffold <run-id | run-dir>`, which requires a prior kept run)
 - [examples/README.md](examples/README.md): worked, copyable example scenarios + sessions + skills (from a source checkout — the npm package ships only examples/replays/; protocol/container tiers, token-free replay, prerequisites)
@@ -37,7 +39,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork
 - [docs/invariants.md](docs/invariants.md): consolidated index of every "do not break" invariant, each with a pointer to its enforcement code and its test
 - [docs/run-status.md](docs/run-status.md): checking whether a background run is alive without `ps aux` — `status.json` + `cowork-harness status [--follow]`
-- [docs/stats.md](docs/stats.md): the `stats` command + `index.jsonl` — pass rate, cost/duration/token/turn percentiles, last-green, filtered/windowed per scenario
+- [docs/stats.md](docs/stats.md): the `stats` command + `index.jsonl` — pass rate, cost/duration/token/turn percentiles, last-green, filtered/windowed per scenario, per skill generation, or per **fidelity tier** (`--skill-hash`/`--label`/`--group-by scenario|skill-hash|label|fidelity`) — an aggregate spanning >1 generation or >1 tier warns instead of averaging unlike runs silently; with `--runs` for the per-run detail behind a summary
 - [docs/protocol.md](docs/protocol.md): the hand-authored control-channel wire-protocol schema (`schema/protocol.v1.json`) — versioning policy, golden vector pack
 - [docs/decisions/](docs/decisions/): architecture decision records — the "why" behind a cross-cutting default
 - [SECURITY.md](SECURITY.md): threat model — the sandbox is a fidelity fixture, not a security boundary

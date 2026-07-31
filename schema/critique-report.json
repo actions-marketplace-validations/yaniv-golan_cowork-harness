@@ -23,8 +23,13 @@
     },
     "fidelity": {
       "type": "string",
-      "description": "the tier critique pinned for both turns (cowork is refused, so requested == resolved)",
+      "description": "the tier critique pinned for both turns; always concrete (--fidelity cowork is resolved at parse time, never forwarded as-is)",
       "enum": ["container", "hostloop"]
+    },
+    "requestedFidelity": {
+      "type": "string",
+      "description": "what the caller asked for when it differs from what ran — present only for --fidelity cowork, naming the tier it resolved to in `fidelity`",
+      "enum": ["cowork"]
     },
     "gradedEffectiveFidelity": {
       "type": "string",

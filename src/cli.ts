@@ -75,7 +75,17 @@ import {
 } from "./run/trace-view.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
-import { readIndex, reindexFromRunsTree, buildStats, type StatsSummary } from "./run/run-index.js";
+import {
+  readIndex,
+  reindexFromRunsTree,
+  buildStats,
+  listRuns,
+  scenarioCostHistory,
+  budgetPreflight,
+  type StatsSummary,
+  type StatsGroupBy,
+  type RunListEntry,
+} from "./run/run-index.js";
 import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
   canonicalizeInput,
@@ -126,6 +136,15 @@ const log = (s: string) => writeAllSync(2, s + "\n"); // human (stderr)
 // Matrix runner concurrency bound — mirrors record's own MAX_RECORD_CONCURRENCY bound (cassette.ts): above
 // a handful, concurrent runs exhaust Docker's default address pool / model API rate limits.
 const MAX_MATRIX_CONCURRENCY = 8;
+
+/** The `trace --view` catalog — module-scope so `SUBCOMMAND_USAGE.trace`, the top-level `HELP`
+ *  catalog, the no-target `fail()` usage string, and the runtime validator in `cmdTrace` all
+ *  interpolate this one literal and cannot drift from each other. Declared above `HELP` (a
+ *  top-level template literal evaluated at module load) so interpolating it there does not throw
+ *  a temporal-dead-zone `ReferenceError` at import time. `test/cli-help.test.ts` and
+ *  `test/trace-view-doc-sync.test.ts` locate this literal by reading the source text (cli.ts is
+ *  an entry module: importing it would run `main()`). */
+const TRACE_VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage", "subagent-research"] as const;
 
 const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
@@ -205,7 +224,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                fidelity: hostloop) and prints ONE Task dispatch's {resolvedAgentType,
                                pathDenials, delivered} — a thin wrapper over 'skill' (see 'probe-dispatch --help')
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
-      [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results]   focus on one view (default: all); see 'trace --help'
+      [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results]   focus on one view (default: all); see 'trace --help'
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
       [--output-format json]
@@ -328,16 +347,22 @@ Questions:
 Output:
   --output-format text|json        text = live stream + footer (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
-  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
-  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
+  --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
+                                   line (a raw host path). The probe + hard-fail stay; status.json is still
+                                   written, so 'status <run-dir-root>' / --session-id still locate the run
+  --demo                           shareable output: --compact (incl. its [status] suppression) + suppress the
+                                   "runs →" header (runs stay durable)
   --keep                           print the run dir + deliverable path (runs are always kept on disk)
   --repeat <N>                     run the SAME skill+prompt N times (2-100) and aggregate a variance
                                    rollup instead of a single pass/fail — "did this finding reproduce, or
                                    did it pass once?". Every run is still kept and indexed.
   --min-pass-rate <0..1>           batch verdict threshold (default 1.0 = every run must pass). Needs --repeat.
   --stop-on-diverge                stop the batch as soon as one run passes and another fails. Needs --repeat.
-  --max-budget-usd <x>             stop the batch once cumulative cost reaches x (degrades LOUDLY if a run
-                                   reports no cost telemetry). Needs --repeat.
+  --max-budget-usd <x>             with --repeat: stop the batch once cumulative cost reaches x (degrades
+                                   LOUDLY if a run reports no cost telemetry). WITHOUT --repeat: refuse the
+                                   run up front if this scenario's own cost history exceeds x — a PRE-flight
+                                   estimate (a single run has no live cost signal to abort on); with no
+                                   priced history it warns and proceeds uncapped.
   --allow-budget-stop              treat a budget-stopped batch as a pass rather than incomplete. Needs --repeat.
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> skill …);
                                    relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
@@ -395,10 +420,12 @@ Repeat / flakiness measurement:
   --stop-on-diverge                stop the repeat loop as soon as BOTH a pass and a fail have been observed
                                    (saves paid runs once flakiness is proven) — that batch always FAILS
                                    (divergence observed = flaky = what this flag exists to catch). Requires --repeat.
-  --max-budget-usd <x>             stop the repeat loop once cumulative cost would exceed x. A budget-stopped
-                                   batch fails by default (incomplete is not green; opt out with
-                                   --allow-budget-stop); degrades LOUDLY (never silently runs all N) if a run
-                                   reports no cost telemetry. Requires --repeat.
+  --max-budget-usd <x>             with --repeat: stop the repeat loop once cumulative cost would exceed x. A
+                                   budget-stopped batch fails by default (incomplete is not green; opt out
+                                   with --allow-budget-stop); degrades LOUDLY (never silently runs all N) if a
+                                   run reports no cost telemetry. WITHOUT --repeat: a PRE-flight refusal from
+                                   this scenario's cost history (no live signal exists to abort a run
+                                   mid-flight); warns and proceeds uncapped when there is no priced history.
   --allow-budget-stop             opt back into a PASS verdict for a batch that --max-budget-usd stopped
                                    early (default: a budget-stopped batch always fails — incomplete is not
                                    green). Requires --repeat.
@@ -430,8 +457,11 @@ Matrix testing — one scenario × a cross-product of axes, in one run:
 Output:
   --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
-  --compact                        drop the informational capability ::notice:: lines (the probe + hard-fail stay)
-  --demo                           shareable output: --compact + suppress the "runs →" header (runs stay durable)
+  --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
+                                   line (a raw host path). The probe + hard-fail stay; status.json is still
+                                   written, so 'status <run-dir-root>' / --session-id still locate the run
+  --demo                           shareable output: --compact (incl. its [status] suppression) + suppress the
+                                   "runs →" header (runs stay durable)
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
   --run-dir <path>                 GLOBAL flag — must PRECEDE the subcommand (cowork-harness --run-dir <path> run …);
@@ -459,6 +489,7 @@ function hasHelp(args: string[]): boolean {
 // where `--help` was an "unknown flag" error — so you could only discover flags by triggering a bad
 // invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
+
 const SUBCOMMAND_USAGE: Record<string, string> = {
   sync: "usage: sync [--diff] [--allow-empty|--force]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
@@ -481,8 +512,23 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
     "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.",
-  trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --view tool-errors     one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars\n       --view files           workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)\n       --view usage           per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+  // A real multi-line template literal (not one giant line with embedded \n): keeping the interpolated
+  // ${TRACE_VIEWS.join("|")} call on its own physical line, apart from the per-view rows below that
+  // mention "result.json", keeps this out of the per-turn-artifact-addressing scan's blind spot (it
+  // flags any physical line naming an artifact next to something that looks like a path-join call).
+  trace: `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--output-format json]
+       --view tools              tool call / result rows
+       --view questions          gate lifecycle (question → answer → delivered)
+       --view dispatches         sub-agent dispatch tree + dispatch_count_max
+       --view tool-durations     per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)
+       --view tool-errors        one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars
+       --view files              workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)
+       --view usage              per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)
+       --view subagent-research  each dispatch's own WebSearch query + result; needs a run dir (reads result.json's subagents[].webSearches) (live/record lane capture only); UNAVAILABLE on replay, never rendered as zero research
+       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)
+       --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)
+       (default: all views)
+       (for what the run PRODUCED — artifacts — use \`inspect\`)`,
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -495,10 +541,15 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       cannot be combined with a positional <run-id | run-dir> or --follow\n" +
     "       exit codes: 0 found · 2 no runs found for the scenario under the runs root (or a usage error)",
   stats:
-    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>] [--reindex] [--output-format text|json]\n" +
+    "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>]\n" +
+    "              [--skill-hash <prefix>] [--label <tag>] [--group-by scenario|skill-hash|label|fidelity] [--runs] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
-    "       --last <n>: the N most recent runs PER SCENARIO (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       --last <n>: the N most recent runs PER GROUP (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
+    "       --skill-hash/--label: narrow to ONE generation of the iterate-across-fixes loop. skillHash is the content-exact key (matches a 12-char index prefix or the full hash from result.json); --label is the tag you passed to run/skill.\n" +
+    "       --group-by skill-hash: split each scenario per generation instead of aggregating across them — the A/B in one command. A window spanning >1 generation warns (aggregating unlike things); rows with no skillHash/label are EXCLUDED from grouping and counted, never bucketed under a blank key.\n" +
+    "       --group-by fidelity: split each scenario per effective tier (what actually RAN — a cowork request counts as the tier it resolved to). A window spanning >1 tier warns; every row has a tier, so nothing is excluded from this grouping.\n" +
+    "       --runs: also list the individual runs behind each summary (timestamp, verdict, runId, skillHash, label, cost) — which generation a run belonged to, without opening its result.json.\n" +
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
     "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
@@ -1497,6 +1548,10 @@ async function cmdRun(rawArgs: string[]) {
     const { cells, totalBeforeCap, truncated } = expandMatrix(matrixDoc!, maxCells);
     if (truncated)
       log(`::warning:: matrix: ${totalBeforeCap} cells before capping — only the first ${maxCells} ran (raise with --max-cells)`);
+    // The matrix branch exits before the per-file loop below, so without this the cap would be SILENTLY
+    // ignored on the single most expensive invocation shape the flag exists to bound (N paid cells of one
+    // scenario). With --repeat the cumulative cap in runRepeatBatch already applies per cell.
+    if (maxBudgetUsd !== undefined && repeatN === undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
     let baseSession: ReturnType<typeof loadSessionFromFile>;
     try {
       baseSession = loadSessionFromFile(scenario.session);
@@ -1638,6 +1693,13 @@ async function cmdRun(rawArgs: string[]) {
     else for (const line of formatMatrixRollup(matrix)) log(line);
     process.exit(matrix.anyFail ? 1 : 0);
   }
+
+  // Budget pre-flight for EVERY resolved scenario, before any of them runs. Deliberately not inside the
+  // loop: a refusal on scenario 3 of 10 would fire only after 1 and 2 had already been paid for, and
+  // `fail()` exits — so those completed results would never reach the JSON envelope either. A pre-flight
+  // that spends money before refusing is not a pre-flight.
+  if (maxBudgetUsd !== undefined && repeatN === undefined)
+    for (const f of files) preflightBudget("run", parseScenarioFile(f).name, maxBudgetUsd, o.json);
 
   const results: RunResult[] = [];
   const rollups: RepeatRollup[] = [];
@@ -2029,6 +2091,9 @@ async function cmdSkill(rawArgs: string[]) {
       undefined,
       o.json,
     );
+  // Single-run budget ceiling. The batch path enforces its own cumulative cap between iterations, so this
+  // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
+  if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
   const runSkillOnce = (label: string, rethrowUnanswered = false) =>
     runOneScenario({
       command: "skill",
@@ -2883,14 +2948,86 @@ function cmdList(args: string[] = []) {
   }
 }
 
-/** One text-mode line per scenario. `--metric` narrows to a single focused view; omitted shows
- *  everything the row has (a metric with no telemetry in the group is simply absent, not "0"). */
+/** One line per run for `stats --runs`. Fixed column order, identity first after the timestamp — the
+ *  whole point is to see WHICH generation a run belonged to without opening its `result.json`. */
+function formatRunLine(r: RunListEntry): string {
+  const parts = [
+    r.ts,
+    r.pass ? "pass" : "FAIL",
+    r.scenario,
+    r.runId,
+    r.skillHash ? `skillHash=${r.skillHash}` : "skillHash=—",
+    r.runLabel ? `label=${r.runLabel}` : null,
+    r.turn !== undefined && r.turn > 1 ? `turn=${r.turn}` : null,
+    r.critiqueRole ? `critique=${r.critiqueRole}` : null,
+    r.costUsd !== undefined ? `$${r.costUsd.toFixed(4)}` : null,
+    r.durationMs !== undefined ? `${(r.durationMs / 1000).toFixed(1)}s` : null,
+    r.pruned ? "(pruned)" : null,
+  ].filter(Boolean);
+  return `  ${parts.join("  ")}`;
+}
+
+/** Minimum `--skill-hash` query length. The match is prefix-tolerant in BOTH directions (the index row
+ *  holds 12 chars, `result.json` holds 64), so a very short query would pair unrelated generations. */
+const SKILL_HASH_QUERY_MIN = 6;
+
+/**
+ * `--max-budget-usd` on a SINGLE run (no `--repeat`): refuse BEFORE spending if this scenario's own
+ * history says the run is likely to exceed the cap.
+ *
+ * Why pre-flight and not a mid-run kill: there is no live cost signal to abort on. `cost.usd` arrives
+ * only with the SDK result message (by which point the run is paid for), and `api_metrics` — the one
+ * mid-stream cost-adjacent event — is TTFT/output-token metering that carries no USD at all (verified
+ * against the staged agent binary; see `CostInfo.raw` in types.ts). History is the only thing available
+ * before the spend, so history is what this uses.
+ *
+ * Degrades LOUDLY, never silently: with no priced history there is nothing to compare against, so it
+ * says so and proceeds rather than either blocking a first run or pretending the cap is enforced. That
+ * mirrors the batch lane's own missing-telemetry degradation in `runRepeatBatch`.
+ */
+function preflightBudget(command: string, scenario: string, maxBudgetUsd: number, json: boolean): void {
+  const history = scenarioCostHistory(readIndex(runsRoot()), scenario);
+  if (history.length === 0) {
+    log(
+      `::warning:: --max-budget-usd: no priced run history for "${scenario}" — cannot pre-flight this run, proceeding UNCAPPED. ` +
+        `(A single run has no mid-run cost signal to abort on; the cap becomes enforceable once this scenario has run once.)`,
+    );
+    return;
+  }
+  // The WORST observed cost, not the median: this is a refusal gate, and an estimate that under-predicts
+  // lets through exactly the expensive run the flag was reached for.
+  const worst = Math.max(...history);
+  if (worst > maxBudgetUsd)
+    fail(
+      command,
+      "runtime",
+      `--max-budget-usd $${maxBudgetUsd.toFixed(4)} refused before spending: "${scenario}" has cost up to $${worst.toFixed(4)} across ${history.length} prior run(s).`,
+      `Raise the cap, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history — a single run cannot be aborted mid-flight on cost (no live cost signal exists).`,
+      json,
+    );
+}
+
+/** One text-mode line per group. `--metric` narrows to a single focused view; omitted shows
+ *  everything the row has (a metric with no telemetry in the group is simply absent, not "0").
+ *  The identity suffix appears only under a non-default `--group-by`, so it composes with EVERY metric
+ *  branch below (each builds on `base`) without changing the default line at all. */
 function formatStatsLine(s: StatsSummary, metric?: string): string {
-  const base = `${s.scenario}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const identity = [
+    s.skillHash ? `skillHash=${s.skillHash}` : null,
+    s.runLabel ? `label=${s.runLabel}` : null,
+    s.fidelity ? `fidelity=${s.fidelity}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const base = `${s.scenario}${identity ? ` (${identity})` : ""}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
   if (metric === "pass-rate") return base;
-  if (metric === "cost") return `${base} — cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}`;
+  // `total` is the whole group's spend, roll-ups included; the percentiles beside it are per-RUN and
+  // exclude them. Appended rather than inserted, so a consumer scraping the existing text keeps matching.
+  const totalPart =
+    s.totalUsd !== undefined ? ` total=${fmtCost(s.totalUsd)}${s.unpricedRuns > 0 ? ` (${s.unpricedRuns} unpriced)` : ""}` : "";
+  if (metric === "cost") return `${base} — cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}${totalPart}`;
   if (metric === "duration") return `${base} — duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}`;
   if (metric === "tokens") return `${base} — tokens p50=${s.p50Tokens ?? "n/a"} p95=${s.p95Tokens ?? "n/a"}`;
   if (metric === "turns") return `${base} — turns p50=${s.p50Turns ?? "n/a"} p95=${s.p95Turns ?? "n/a"}`;
@@ -2898,7 +3035,10 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
     return `${base} — cache-read-tokens p50=${s.p50CacheReadTokens ?? "n/a"} p95=${s.p95CacheReadTokens ?? "n/a"}`;
   if (metric === "model-cost") return `${base} — model-cost p50=${fmtCost(s.p50ModelCostUsd)} p95=${fmtCost(s.p95ModelCostUsd)}`;
   const parts = [
-    s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}` : null,
+    // `|| totalPart.trim()`: a group whose only PRICED row is a roll-up has no cost percentiles (those are
+    // run-only) but does have a total — dropping it there would hide the whole cost of exactly the case
+    // this feature exists for.
+    s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}${totalPart}` : totalPart.trim() || null,
     s.p50DurationMs !== undefined ? `duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}` : null,
     s.lastGreenTs ? `last green ${s.lastGreenTs}` : "never green",
     s.prunedRuns > 0 ? `${s.prunedRuns} pruned` : null,
@@ -2923,6 +3063,10 @@ function cmdStats(args: string[]) {
       "--branch",
       "--metric",
       "--last",
+      "--skill-hash",
+      "--label",
+      "--group-by",
+      "--runs",
       "--reindex",
       "--output-format",
       "--output-format=json",
@@ -2931,10 +3075,26 @@ function cmdStats(args: string[]) {
     json,
   );
   const reindex = args.includes("--reindex");
+  const perRun = args.includes("--runs");
   const since = readValueFlag("stats", args, "--since", json);
   const baseline = readValueFlag("stats", args, "--baseline", json);
   const branch = readValueFlag("stats", args, "--branch", json);
   const metric = readValueFlag("stats", args, "--metric", json);
+  const label = readValueFlag("stats", args, "--label", json);
+  const skillHash = readValueFlag("stats", args, "--skill-hash", json);
+  // A 1-2 char "prefix" would pair unrelated generations under the both-ways prefix rule. The index
+  // stores 12 chars, so 6 is a floor with real discriminating power and still short enough to type.
+  if (skillHash !== undefined && skillHash.length < SKILL_HASH_QUERY_MIN)
+    return void fail(
+      "stats",
+      "usage",
+      `--skill-hash needs at least ${SKILL_HASH_QUERY_MIN} characters to identify a generation (got "${skillHash}")`,
+      undefined,
+      json,
+    );
+  const groupBy = readValueFlag("stats", args, "--group-by", json);
+  if (groupBy !== undefined && !["scenario", "skill-hash", "label", "fidelity"].includes(groupBy))
+    return void fail("stats", "usage", `--group-by must be one of scenario|skill-hash|label|fidelity (got "${groupBy}")`, undefined, json);
   if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns", "cache-tokens", "model-cost"].includes(metric))
     return void fail(
       "stats",
@@ -2951,7 +3111,19 @@ function cmdStats(args: string[]) {
       return void fail("stats", "usage", `--last requires a positive integer (got "${lastRaw}")`, undefined, json);
     last = n;
   }
-  const allPositionals = positionals(args, ["--output-format", "--since", "--baseline", "--branch", "--metric", "--last"]);
+  // EVERY value-taking flag must be listed, or `positionals` treats that flag's VALUE as the scenario
+  // positional — `stats --skill-hash abc` would silently become `stats abc` and match nothing.
+  const allPositionals = positionals(args, [
+    "--output-format",
+    "--since",
+    "--baseline",
+    "--branch",
+    "--metric",
+    "--last",
+    "--skill-hash",
+    "--label",
+    "--group-by",
+  ]);
   if (allPositionals.length > 1) return void fail("stats", "usage", SUBCOMMAND_USAGE.stats, undefined, json);
   const scenario = allPositionals[0];
 
@@ -2968,10 +3140,56 @@ function cmdStats(args: string[]) {
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
   const rows = readIndex(root);
-  const stats = buildStats(rows, { scenario, since, baseline, branch, last });
-  if (json) return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats }));
+  // ONE filter object feeding both views — not two literals that could drift apart.
+  const statsFilters = { scenario, since, baseline, branch, last, skillHash, label, groupBy: groupBy as StatsGroupBy | undefined };
+  const { summaries: stats, hashlessRuns } = buildStats(rows, statsFilters);
+  // stderr (`log`), so every diagnostic below coexists with a `--output-format json` stdout envelope.
+  // `distinctSkillHashes` rides IN the envelope too, so CI gates on the field, not on scraped text.
+  for (const s of stats)
+    if (s.distinctSkillHashes > 1)
+      log(
+        `::warning:: stats: "${s.scenario}" spans ${s.distinctSkillHashes} skill generations — this aggregate compares unlike things. ` +
+          `Narrow with --skill-hash <prefix>, or split with --group-by skill-hash. ` +
+          // Naming the blind spot: the count is over rows that HAVE a hash, so a window mixing hashed runs
+          // with hashless ones (chat lane, a run that mounted no skill) is also unlike-vs-unlike and this
+          // warning cannot see it. Better to say so than to let silence read as "checked, and fine".
+          `(Counts only runs that recorded a skillHash — runs without one are not compared.)`,
+      );
+  // The OTHER unlike-things axis. Deliberately no hashless-style caveat: the tier key is total (every
+  // row has one), so there is no "rows this warning cannot see" case to disclose. Fires independently of
+  // the generation warning — 2 generations AND 2 tiers is unlike-vs-unlike twice over, and each warning
+  // names a different remedy.
+  for (const s of stats)
+    if (s.distinctTiers > 1)
+      log(
+        `::warning:: stats: "${s.scenario}" spans ${s.distinctTiers} fidelity tiers (${s.tiers.join(", ")}) — ` +
+          `this aggregate compares unlike things. Split with --group-by fidelity, or — if you're already ` +
+          `narrowed to one skill generation and want to keep that split — --skill-hash <prefix> --group-by fidelity.`,
+      );
+  // `--runs` swaps the AGGREGATE for the per-run detail behind it — same filters, same
+  // `resolveGroups`, so the two views can never describe different row sets.
+  const runs = perRun ? listRuns(rows, statsFilters).runs : undefined;
+  if (json)
+    return void out(JSON.stringify({ tool: "cowork-harness", command: "stats", ok: true, stats, hashlessRuns, ...(runs ? { runs } : {}) }));
   if (stats.length === 0) return void log("stats: no indexed runs match the given filters.");
-  for (const s of stats) log(formatStatsLine(s, metric));
+  for (const s of stats) {
+    log(formatStatsLine(s, metric));
+    // Nested under their summary when a listing was asked for: the run rows ARE that line's evidence.
+    if (runs)
+      for (const r of runs.filter(
+        (x) =>
+          x.scenario === s.scenario &&
+          (s.skillHash === undefined || x.skillHash === s.skillHash) &&
+          (s.fidelity === undefined || x.fidelity === s.fidelity) &&
+          (s.runLabel === undefined || x.runLabel === s.runLabel),
+      ))
+        log(formatRunLine(r));
+  }
+  if (hashlessRuns > 0)
+    log(
+      `stats: ${hashlessRuns} run(s) excluded from grouping — no ${groupBy === "label" ? "--label" : "skillHash"} recorded ` +
+        `(the chat lane records no fingerprint, and a run that mounted no skill has nothing to hash).`,
+    );
 }
 
 /** `decide` — validate a decider (helper OR policy) against a sample question in ~2s, so you don't
@@ -3812,6 +4030,7 @@ async function cmdVerifyRun(args: string[]) {
     // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
     // Fall back to the legacy prefix for old result.json that predates the field.
     userVisiblePrefixes: result.userVisibleRoots ?? ["outputs", ".projects"],
+    lane: result.lane,
     // Read-only folder inputs are captured body-less; keep artifact_json's verdict identical to the
     // replay lane (evidence-unavailable) instead of parsing the real on-disk input here.
     readonlyFolderRoots: result.readonlyFolderRoots ?? [],
@@ -4077,7 +4296,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage", "subagent-research"] as const;
+  const VIEWS = TRACE_VIEWS;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);
@@ -4118,7 +4337,7 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results] [--output-format json]",
+      `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--output-format json]`,
       undefined,
       json,
     );

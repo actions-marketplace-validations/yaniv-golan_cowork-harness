@@ -1,6 +1,6 @@
 # DESIGN — parity model, deltas, and the maintenance contract
 
-This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.19367.0 — volatile fields tracked in `baselines/desktop-1.19367.0.json`) and the on-disk runtime state on macOS.
+This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through the newest baseline in `baselines/` (see `baselines/desktop-*.json`; `cowork-harness sync --diff` adds the next one)) and the on-disk runtime state on macOS.
 
 > **Just want to pick a tier or write a scenario?** This doc is the *why*. For the *how*, start at the
 > [README](./README.md) (tiers, quick start) and [docs/](./docs/README.md) (scenario/session reference).
@@ -24,7 +24,7 @@ flowchart TB
     subgraph AGENT["Agent · claude -p · CLAUDE_CODE_IS_COWORK=1"]
         direction TB
         IO["--input-format / --output-format stream-json"]
-        FS["cwd = /sessions/&lt;id&gt;/mnt<br/>mnt/uploads · mnt/&lt;folder-name&gt; · plugins"]
+        FS["cwd = /sessions/&lt;id&gt;<br/>mnt/uploads · mnt/&lt;folder-name&gt; · plugins"]
     end
 
     AGENT -->|"decision control request<br/>(tool · question · dialog · elicitation)"| DRV["AgentSession → Decider → Run<br/>protocol seam · policy seam · turn loop + RunRecord"]
@@ -35,7 +35,13 @@ flowchart TB
 
 ## 1. What "real Cowork" actually is (and why scripting it is closed)
 
-A Cowork session is the Desktop app driving an agent that runs **inside an Apple Virtualization.framework microVM**:
+Cowork runs a session in one of two lanes. This section describes the **local** lane — the Desktop app driving an
+agent that runs **inside an Apple Virtualization.framework microVM** on the user's own machine — which is the lane
+this harness emulates. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead, and is
+the default for new sessions from 2026-07-07 (local stays available, and both are in active use). The lanes differ
+in how a file reaches the user, which is what changes skill behaviour: see
+[docs/fidelity-gaps.md](./docs/fidelity-gaps.md) → "File delivery" for the split and
+[docs/scenario.md](./docs/scenario.md)'s `lane:` key for holding a run to either contract. The local lane:
 
 - VM bundle: `~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/` (`rootfs.img`, `sessiondata.img`, `efivars.fd`, `machineIdentifier`, `gvisorMacAddress`, `vmIP`); a warm pool at `vm_bundles/warm/<sha>/`.
 - In-VM agent: `~/Library/Application Support/Claude/claude-code-vm/<ver>/claude` (currently **2.1.219**, per `baselines/desktop-1.24012.9.json`, an **ELF aarch64** binary), spawned by the host **in cowork mode via the `CLAUDE_CODE_IS_COWORK=1` env var** — *not* a `--cowork` flag (that flag is plugin-scope and the staged agent rejects it; see the control-protocol note below). Each baseline records this ELF's `sha256` (`agentBinary.sha256`/`shaProvenance`), and the resolver integrity-checks the binary it's about to run against that hash by default (opt out `COWORK_HARNESS_VERIFY_AGENT_SHA=0`), so "the same pinned agent" is enforced, not just asserted. Old versions are re-downloadable + verifiable from the official release channel (see `docs/maintenance.md`).
@@ -105,7 +111,7 @@ HAND-AUTHORED (in baselines/*.json, drift-guarded — sync does NOT extract thes
   - spawn.env.CLAUDE_CODE_IS_COWORK + bgEnvStrip.knownVars (BG env-strip list)
 ```
 
-`cowork-sync`:
+The sync extractor (`src/sync/cowork-sync.ts`, driven by `cowork-harness sync`):
 1. reads the live install (`claude-code-vm/.sdk-version`, `config.json`) and the `app.asar` main bundle,
 2. re-derives every VOLATILE field,
 3. computes an `asarFingerprint` over the cowork-relevant code regions,

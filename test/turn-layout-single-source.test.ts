@@ -49,7 +49,7 @@ const NAMES_ARTIFACT = new RegExp([...PER_TURN_ARTIFACTS.map((a) => a.replace(".
 /** Actually BUILDS or TOUCHES a path, as opposed to naming a file in prose. Without this the scan flags
  *  every user-facing message and doc comment that mentions an artifact by name — which is most of
  *  `critique`, and which would make the guard noise everyone learns to allowlist around. */
-const BUILDS_A_PATH = /join\(|`[^`]*\$\{[^}]*\}\/|existsSync\(|readFileSync\(|renameSync\(|writeFileSync\(/;
+const BUILDS_A_PATH = /(?<![.\w])join\(|`[^`]*\$\{[^}]*\}\/|existsSync\(|readFileSync\(|renameSync\(|writeFileSync\(/;
 
 /** Hands that name to the seam — the only correct way to address a turn's artifact. */
 const USES_SEAM = /turnArtifactPath\(|resolveGraded\(|turnWriteDir\(|PER_TURN_ARTIFACTS/;
@@ -85,6 +85,11 @@ describe("per-turn artifacts are addressed only through the seam", () => {
     for (const prose of [
       'reason: "turn-1 result: DEGRADED (result.turn-1.json was never archived)",',
       " *  Read the ARCHIVED turn-1 transcript out of `run.turn-1.jsonl`.",
+      // The real false positive this guard shipped: an Array.prototype.join() call sharing a physical
+      // line with an artifact name. `join\(` alone can't tell `TRACE_VIEWS.join("|")` (a display-string
+      // array join) apart from `join(outDir, "result.json")` (a real path build) — only the receiver
+      // does. A bare `join(` (no receiver) is real path-building; `<receiver>.join(` never is here.
+      'const s = `[--view ${TRACE_VIEWS.join("|")}] … reads result.json`;',
     ]) {
       expect(BUILDS_A_PATH.test(prose), `prose would be flagged: ${prose}`).toBe(false);
     }

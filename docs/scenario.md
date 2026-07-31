@@ -25,6 +25,10 @@ execution: local                         # OPTIONAL — orthogonal to fidelity (
                                          # local today): local (default) | cloud-describe (RESERVED — no
                                          # runner exists yet; authoring it is a load-time error, not a
                                          # silent no-op)
+lane: local                              # OPTIONAL — which Cowork lane's DELIVERY CONTRACT to hold the run
+                                         # to: local (default) | remote (location delivers nothing;
+                                         # present_files not served). Orthogonal to fidelity and execution
+                                         # (see Lanes below)
 on_unanswered: fail                      # optional: policy for unscripted questions (fail | prompt | first | llm — run rejects prompt; see Scripted answers below)
                                          # ("agent" is retired — no longer a valid value)
 
@@ -71,6 +75,32 @@ assert:                                  # pass/fail checks (see below)
 
 > **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; it is retired —
 > a scenario carrying `profile:` now errors as an unknown key, so write `baseline:`.
+
+## Lanes (`lane:`) — which delivery contract the run is held to
+
+Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: **In the
+cloud** / **On your computer**"), with cloud the default for new sessions. They disagree about what
+*delivered* means, so a scenario declares which contract it is testing against.
+
+| | `lane: local` (default) | `lane: remote` |
+|---|---|---|
+| A file under a user-visible root | **is delivered** — `outputs/` is durable, and Cowork's own prompt tells the agent to save deliverables there | **is not delivered** — a remote container has no auto-delivering outputs directory, and it is reclaimed at session end |
+| `present_files` | served | **not served** — a local MCP server cannot reach a remote session |
+| `user_visible_artifact` | asserts location, as always | rejected at scenario-LOAD time — location proves nothing there; assert the delivery itself |
+| `present_files_called` / `no_scratchpad_leak` | as documented per tier | rejected at scenario-LOAD time — the tool does not exist on that lane, so the scenario never runs |
+
+`lane` is orthogonal to **`fidelity`** (which isolation tier the harness runs in) and to **`execution`**
+(where the run happens). A `lane: remote` scenario still executes locally, in whichever tier you chose —
+what changes is the contract its assertions are held to.
+
+**Scoped to delivery semantics.** The remote lane's device bridge (`device_bash`, `device_commit_files`,
+and the rest of `internal__remote-devices__*`) is deliberately not modeled: emulating it faithfully would
+mean real command execution and real writes on the operator's machine on behalf of a simulated session.
+See [fidelity-gaps.md](./fidelity-gaps.md).
+
+**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the lane most
+new Cowork sessions get. A skill that delivers by writing into `outputs/` and nothing else will fail
+there — that is the finding, not a harness bug.
 
 ## Fidelity tiers (`fidelity:`)
 
@@ -270,7 +300,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `transcript_matches: <regex>` | the transcript matches the regex (case-insensitive) — fuzzy content for stochastic prose, e.g. `'SOM:?\s*\$[0-9.]+\s*M'` |
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`) |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
-| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`** — on hostloop/microvm the file stays in the scratchpad and this assertion false-reds. Prefer writing directly to `outputs/`, or run present_files-delivering skills on `container`. |
+| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — the agent's cwd already **is** the outputs dir (`src/run/execute.ts` sets `hostCwd` to `mnt/outputs`), so a file written there is already under a user-visible root and this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. Prefer writing directly to `outputs/`, or run present_files-delivering skills on `container`. Writing directly to `outputs/` also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
 | `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (forbidden in Cowork) — **only `true` is valid**; writing `false` is rejected by the schema (omit the key entirely to allow deletes in the test) |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay-checkable when the cassette carries `artifacts` **and** `preRunPaths`; an **incomplete** post-run filesystem walk (an unreadable subtree — permission/I-O error — not just a missing pre-run manifest) also ⇒ evidence-unavailable, so "no strays" is never trusted from a partial walk |
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. `uploads/**`) whose workRoot-relative path matches has an unchanged content hash after the run (the in-place-mutation detector — the counterpart to `no_unexpected_files`, which only watches for *new* files); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise pass vacuously, verifying nothing); needs the pre-run content-hash manifest (harness ≥0.24 recordings) — same capture caveats as `no_unexpected_files` |
@@ -304,8 +334,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `all_tasks_completed: true` | every task in the run's task list reached status `completed` — **requires ≥1 task** (a zero-task run fails; assert `task_count_min` for presence); **only `true` is valid**; also fails **evidence unavailable** ("malformed") when any TaskCreate result was unparseable (corrupt task telemetry) |
 | `task_count_min: <N>` | at least N tasks were created (`RunResult.tasks.length >= N`) — the presence companion for task assertions; also fails **evidence unavailable** ("malformed") when any TaskCreate result was unparseable (corrupt task telemetry) |
 | `task_status: {match, status}` | a task whose subject or id matches the `match` regex reached `status` — also fails **evidence unavailable** ("malformed") when any TaskCreate result was unparseable (corrupt task telemetry), mirroring `all_tasks_completed`/`task_count_min` |
-| `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so this is meaningfully replay-checkable (the re-drive reproduces it); fails as **evidence unavailable** when `presentedFiles` telemetry is absent (an old run predating this key); **`fidelity: container` only** — `present_files` is not served on hostloop/microvm (a scratchpad-delivered file isn't promoted or detected there; use `container` for present_files-based delivery, or write directly to `outputs/`); **only `true` is valid** |
-| `present_files_called: true` | at least one file was actually delivered via the `present_files` tool (`presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak` (which passes vacuously when nothing was presented). Pair them to require a delivery **and** require it not to leak; **`fidelity: container` only** — `present_files` is not served on hostloop/microvm; **only `true` is valid** |
+| `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so this is meaningfully replay-checkable (the re-drive reproduces it); fails as **evidence unavailable** when `presentedFiles` telemetry is absent (an old run predating this key); **container-only on the merits**: hostloop serves `present_files` but never promotes (its handler passes a validated path through unchanged), so there is no scratch→outputs copy for this key to check — that's not a detection gap, though: hostloop's cwd already *is* the outputs dir, so a delivered file is visible there immediately (see `user_visible_artifact`'s footgun note above). On microvm and protocol, `present_files` isn't served at all, so there's no delivery record for this key to check — cannot-verify. Use `container` for present_files-based delivery you want this key to verify, or write directly to `outputs/`; **the tool name is lane-specific** — `present_files` is the desktop-local lane's tool (the one this harness emulates) while remote Cowork delivers via the agent-native `SendUserFile`, so a skill should describe the delivery outcome rather than naming either tool ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"); this key asserts the harness-side delivery record either way; **only `true` is valid** |
+| `present_files_called: true` | at least one file was actually delivered via the `present_files` tool (`presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak` (which passes vacuously when nothing was presented). Pair them to require a delivery **and** require it not to leak; **`fidelity: container` or `hostloop`** — the harness serves `present_files` at both (hostloop via a handler mirroring production's own host-loop branch: validate the path, pass it through, no promotion). `protocol` and `microvm` report cannot-verify. See the `no_scratchpad_leak` row, which stays container-only for a different reason; and see the lane note above: the tool name differs on remote Cowork; **only `true` is valid** |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — fails as **evidence unavailable** when cost telemetry is absent (an old run predating this key). **Live lane only in spirit**: on replay this asserts the *frozen recording's* cost, not fresh spend — a cost regression is caught by a live run, not a token-free replay |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache-read/creation tokens excluded — priced separately). Same replay caveat as `max_cost_usd`: asserts the recording, not fresh spend |
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`, sub-agent tools excluded) ≤ N — unlike the cost/token keys, this **is** meaningfully replay-checkable (the re-drive recomputes `toolCounts` deterministically from the recorded events) |
@@ -328,6 +358,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. On `replay` the modifier is a no-op pass — there's no live tier to probe, so it neither suppresses nor triggers anything there. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
+| `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap |
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -384,7 +415,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only five codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only six codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -406,6 +437,18 @@ pass/fail):
   post-gate tool work); this covers the residual (mid-message `?`, or tool work after the last gate that
   still ended asking). Heuristic — read the final message before acting; a question-posing answer that
   wrote a file never fires. Fix by scripting/steering the answer; assert `allow_stall: true` if intended.
+- `undelivered_deliverables` (**warn**) — the skill produced file(s) outside every user-visible root and
+  never delivered them. On a **remote** Cowork session the workspace is reclaimed at session end, so those
+  files are destroyed; on a **local** one they persist but stay invisible to the user, since the scratchpad
+  is not a surface they see. Either way the user does not get them. This fires without any assertion being
+  written, which is the point: `present_files_called` covers the positive case only when an author thought
+  to ask for it, and the runs that most need this are the ones where nobody did. It is **silent when the
+  evidence cannot answer the question** — no workspace walk (`workspaceFiles` absent), or a tier that runs
+  no scratchpad walk, absent delivery telemetry, or a resumed turn (the scratchpad still holds files
+  delivered on an earlier turn, since `present_files` copies rather than moves) — because "cannot tell"
+  must never read as "clean". Fix by writing deliverables under `outputs/` (or a connected folder), or
+  delivering them explicitly; opt out with `allow_undelivered_deliverables: true` when the leftovers are
+  intentional.
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 
@@ -499,7 +542,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
 `present_files_called`, `no_vm_path_file_op`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
+`allow_l0_plugin_divergence` / `allow_stall` / `allow_undelivered_deliverables` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**
@@ -735,7 +778,9 @@ cowork-harness run examples/scenarios/csv-metrics.yaml --repeat 10 --min-pass-ra
 - `--stop-on-diverge` stops the loop as soon as **both** a pass and a fail have been observed — saves
   paid runs once flakiness is already proven. That batch always **fails**, regardless of the numeric
   rate reached: divergence *is* the failure this flag exists to catch.
-- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. A budget-stopped batch
+- `--max-budget-usd <x>` stops the loop once cumulative cost would exceed it. (Without `--repeat` the
+  same flag is a PRE-flight refusal on a single run, estimated from that scenario's own cost history —
+  there is no live cost signal to abort a run mid-flight on.) A budget-stopped batch
   **fails by default**, even if every completed run passed — "incomplete is not green" is the same
   principle `--matrix`'s `truncated` applies (see below). It still prints a loud `::warning::` naming the
   stop. Pass `--allow-budget-stop` to opt back into judging the batch on its own completed-runs pass rate

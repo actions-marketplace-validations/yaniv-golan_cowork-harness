@@ -70,6 +70,7 @@ import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import {
   classifyWorkspaceFilesWithHealth,
   trustedWorkspaceFiles,
+  scratchpadEvidenceComplete,
   collectArtifactPaths,
   captureAuthoredFilesWithHealth,
   authoredFilesHealthNonEmpty,
@@ -449,7 +450,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // deliberately at turn START: the post-run path has already let `foldResources` read.
   const turnNumber = beginTurn(outDir);
 
-  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume);
+  const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane);
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
@@ -660,6 +661,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // agent spawns, not before the proxy binds — so proxy-first eliminates the freePort() TOCTOU window.
         hostProxy = startEgressProxy({
           allow: plan.egressAllow,
+          // NON-loopback on purpose: the guest reaches this proxy at `gatewayIp:port` over a real
+          // interface (see spawnMicroVm's vmGatewayIp), so a loopback-only bind would be unreachable.
+          // Everywhere else the default loopback bind applies — see ProxyOptions.host.
+          host: "0.0.0.0",
           port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
           logPath: join(outDir, "egress.log"),
           onDecision: (host, decision) => egress.push({ host, decision }),
@@ -781,6 +786,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
       const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
+      // The session root — the dir whose `mnt/` IS the user-visible workspace. Given explicitly because
+      // the agent's own cwd only coincides with it on some tiers (at hostloop the agent runs inside
+      // mnt/outputs), and present_files' promoted/leaked classification is measured from it.
+      // `protocol` has no session/mnt layout at all, so it stays unset and keeps the cwd fallback.
+      if (effectiveFidelity !== "protocol") run.setSessionRoot(join(outDir, "work", "session"));
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
@@ -979,6 +989,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         runLabel: opts.runLabel, // run-identity: a salvaged partial is still a labeled generation
         skillCommit: skillCommit(scenario.session, loadedSession),
         scenarioName: scenario.name,
+        lane: scenario.lane, // a salvaged partial keeps the contract it was run under
         prompt: scenario.prompt,
         fidelity: scenario.fidelity,
         baseline: baseline.appVersion,
@@ -1097,6 +1108,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       result: record.result,
       workRoot,
       userVisiblePrefixes: userVisibleRoots,
+      lane: scenario.lane,
       // Read-only folder inputs are captured body-less; artifact_json must reach the same
       // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
       readonlyFolderRoots,
@@ -1327,7 +1339,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // user-visible roots (output/mount/input). Reuses the same walk `artifacts` derives from below, over
     // ALL userVisibleRoots — read-only inputs are still enumerated here, just tagged "input" instead of
     // excluded outright.
-    const wfHealth = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots);
+    const wfHealth = classifyWorkspaceFilesWithHealth(workRoot, userVisibleRoots, readonlyFolderRoots, {
+      // Same derivation authored-file capture uses (above): the session root is the PARENT of `mnt`.
+      // Undefined on a tier with no such layout (protocol) — then `scratchpadScanned` is false and the
+      // absence of scratchpad entries means UNKNOWN, not none.
+      scratchpadRoot: workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined,
+    });
     if (wfHealth.rootAbsent)
       warn(
         `::warning:: [artifacts] workspace root not found (${workRoot}) — the run's outputs were not staged into the run dir ` +
@@ -1354,6 +1371,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       $schema: RUN_RESULT_SCHEMA_URL,
       generator: "cowork-harness",
       mode: "run",
+      lane: scenario.lane,
+      scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
       runLabel: opts.runLabel, // run-identity: user --label tag (undefined if not passed)
       skillCommit: skillCommit(scenario.session, loadedSession), // best-effort git HEAD of the skill dirs (same set as fingerprint.skillHash)
@@ -1561,6 +1580,19 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
     throw new Error(
       `${context}: \`execution: cloud-describe\` is reserved — no runner exists yet, so authoring it is a load-time error rather than a silent no-op. Remove it (or use the default \`execution: local\`) until a cloud runner ships.`,
     );
+  // `lane: remote` + a present_files-shaped assertion is incoherent by construction: that lane serves no
+  // cowork MCP server, so those keys can only ever report can't-verify. Rejecting at LOAD time follows the
+  // `cloud-describe` precedent above — an authored assertion that CANNOT pass should cost a config error,
+  // not a paid run that fails at assertion time.
+  if (scenario.lane === "remote") {
+    const LANE_INCOMPATIBLE = ["present_files_called", "no_scratchpad_leak", "user_visible_artifact"] as const;
+    for (const a of scenario.assert)
+      for (const key of LANE_INCOMPATIBLE)
+        if (a[key] !== undefined)
+          throw new Error(
+            `${context}: \`${key}\` cannot pass on \`lane: remote\` — that lane serves no present_files and delivers nothing by location, so the key can only report "cannot verify". Assert the delivery itself, or set \`lane: local\` if this scenario models the desktop lane.`,
+          );
+  }
   // assert[] patterns
   for (const a of scenario.assert) {
     for (const key of [
@@ -1699,6 +1731,8 @@ export function buildPartialResult(args: {
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
+  /** The scenario's declared Cowork lane — see `Scenario.lane`. Absent ⇒ local. */
+  lane?: "local" | "remote";
   prompt: string;
   fidelity: string;
   baseline: string;
@@ -1761,7 +1795,9 @@ export function buildPartialResult(args: {
   // workspace root (microvm partial: outputs stage into the VM work tree, not outDir) OR a nested unreadable
   // subtree records UNAVAILABLE (undefined) via the shared `trustedWorkspaceFiles` gate — never a false
   // empty/partial [] — same honest marker as the success path above.
-  const wfHealth = classifyWorkspaceFilesWithHealth(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots);
+  const wfHealth = classifyWorkspaceFilesWithHealth(args.workRoot, args.userVisibleRoots, args.readonlyFolderRoots, {
+    scratchpadRoot: args.workRoot.endsWith(`${sep}mnt`) ? dirname(args.workRoot) : undefined,
+  });
   if (!wfHealth.rootAbsent && !wfHealth.walkComplete)
     warn(
       `::warning:: [artifacts] workspace walk incomplete — ${wfHealth.walkErrors.length} unreadable subtree(s) ` +
@@ -1774,6 +1810,8 @@ export function buildPartialResult(args: {
     generator: "cowork-harness",
     mode: "run",
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
+    lane: args.lane, // the scenario's declared Cowork lane, threaded so a salvaged partial keeps its contract
+    scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
     runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label
     skillCommit: args.skillCommit,
     turn: args.turn,

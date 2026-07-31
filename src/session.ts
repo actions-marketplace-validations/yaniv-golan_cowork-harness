@@ -277,6 +277,11 @@ export interface Mount {
  * microvm) maps these host paths into its own world and assembles CLI args.
  */
 export interface LaunchPlan {
+  /** The scenario's declared Cowork lane. `remote` withholds `present_files`: a local MCP server cannot
+   *  reach a remote Cowork session (Anthropic's own architecture doc — "local MCP servers don't run in
+   *  remote sessions"), so serving it there would hand the agent a tool production does not have, which is
+   *  the inverse of the failure this harness exists to catch. Absent ⇒ local. */
+  lane?: "local" | "remote";
   configDir: string; // materialized CLAUDE_CONFIG_DIR (host path)
   mcpConfig: string | null; // host path to --mcp-config file, if any
   model?: string;
@@ -519,6 +524,9 @@ export function buildLaunchPlan(
   // and the staged-set notices must not run — the sources may legitimately be gone. The caller threads
   // its resume flag here (set after the plan is built today, so it must be a param, not `plan.resume`).
   resume = false,
+  /** The scenario's declared Cowork lane — see `LaunchPlan.lane`. Defaults to local so every existing
+   *  caller (and every test constructing a plan directly) is unchanged. */
+  lane: "local" | "remote" = "local",
 ): LaunchPlan {
   // Fail loud before any staging side effect: an `effort:` the resolved model doesn't offer (or an
   // explicit `effort:` on a no-picker model) is a load-time config error, not a silent coercion.
@@ -959,6 +967,7 @@ export function buildLaunchPlan(
     .map((m) => m.mountPath);
 
   return {
+    lane,
     configDir,
     mcpConfig: session.mcp.config ? expand(session.mcp.config) : null,
     model: session.model,

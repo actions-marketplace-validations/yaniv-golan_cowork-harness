@@ -202,6 +202,15 @@
         "error"
       ]
     },
+    "scratchpadEvidenceComplete": {
+      "type": "boolean",
+      "description": "Did a COMPLETE scratchpad walk observe this run? Persisted because the verdict is computed from RunResult alone, and 'no scratchpad files' must be distinguishable from 'no scratchpad walk'. False = the undelivered-deliverables signal stays silent because it cannot tell, not because the run was clean. Absent on results written before this field existed - also cannot-tell."
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["local", "remote"],
+      "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because Cowork's lane is a per-session human choice that leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
+    },
     "execution": {
       "type": "object",
       "properties": {
@@ -684,7 +693,8 @@
                   "stalled",
                   "prompt_asset_missing",
                   "scan_unavailable",
-                  "ended_with_question"
+                  "ended_with_question",
+                  "undelivered_deliverables"
                 ]
               },
               "severity": {
@@ -1068,8 +1078,10 @@
             "enum": [
               "output",
               "mount",
-              "input"
-            ]
+              "input",
+              "scratchpad"
+            ],
+            "description": "output/mount/input = under a user-visible root. scratchpad = written OUTSIDE every user-visible root, i.e. produced but not delivered by location. Scratchpad entries are absent on tiers where that walk cannot run, which is evidence-unavailable rather than 'none existed'."
           }
         }
       }

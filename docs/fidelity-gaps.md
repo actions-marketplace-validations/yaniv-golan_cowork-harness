@@ -407,7 +407,8 @@ session's `skillsEnabled`. Three properties matter more than the tool's existenc
 - **It is force-asked.** `save_skill` is one of four tools in Cowork's force-ask set (with
   `request_cowork_directory`, `allow_cowork_file_delete`, `launch_code_session`): a PreToolUse
   hook returns `ask` for it *in every permission mode*, including `bypassPermissions`.
-- **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files`, it does not occupy
+- **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files` (see *File delivery* below
+  for the `present_files`/`SendUserFile` lane split), it does not occupy
   `system/init.tools`; it materialises only when the model looks for it.
 
 The rendered `<available_skills>` block also carries a `canSaveSkill`-dependent sentence: with the
@@ -451,3 +452,118 @@ nothing in context and changes no tool-selection outcome.
   is honest, and it is the part of the workflow the harness can verify.
 - **Keep skill persistence out of the scenario's claim.** State in the scenario name or `expect_denied`
   reasoning that persistence is unverified, so a later reader does not over-read the pass.
+
+---
+
+## File delivery — `present_files` here, `SendUserFile` on remote Cowork
+
+Cowork has **two** file-delivery tools, one per product lane, and an agent only ever sees the one for the
+surface it runs on:
+
+- **Desktop-local sandbox** (the lane this harness emulates): the Desktop host serves
+  `mcp__cowork__present_files` on the `cowork` SDK-MCP server — schema
+  `{files: [{file_path: string}]}`, `alwaysLoad` — which promotes scratchpad files into `mnt/outputs`.
+  The spawn's explicit `tools:` allowlist does **not** include `SendUserFile`, so the agent-native tool is
+  absent from the local toolset even though the agent binary contains it and its own enablement gate
+  (`tengu_send_user_file`) would otherwise pass on the `local-agent` entrypoint. The host allowlist is the
+  load-bearing exclusion, not the binary's gate.
+- **Remote (cloud-container) Cowork**: delivery goes through the agent-native `SendUserFile` —
+  `{files: string[], caption?: string, status: "normal"|"proactive"` (**required**)`, display?:
+  "render"|"attach"}` — which *uploads* files and returns a `file_uuid` that Desktop's remote-lane
+  companion tools consume (device commit, remote `create_artifact`/`update_artifact`).
+
+  **`SendUserFile` is not "remote Cowork's tool".** It is broadly native to Claude Code surfaces — its
+  own enablement gate passes on the `local-agent` entrypoint too. What keeps it out of a Cowork-local
+  session is the **host spawn allowlist**, which conditionally adds `SendUserMessage` and never
+  `SendUserFile`. The accurate statement is: *`present_files` is Cowork-local-only; `SendUserFile` is
+  broadly native but absent from Cowork-local.* Either name still strands a lane, which is why the
+  guidance below names no tool at all. (Mechanism, per Anthropic's Cowork architecture overview: local
+  MCP servers don't run in remote sessions — so an `mcp__`-namespaced tool cannot cross the boundary.)
+
+The agent's own prompt states the rule: *"If the `SendUserFile` tool is in your toolset, you're on a remote
+surface where they can't [open a file path] — send the screenshots and recordings with it."*
+
+Verified against the pinned baseline: the asar's spawn `tools:`/`allowedTools` arrays and its live
+`present_files` handler (1.24012.9), the agent ELF's `SendUserFileTool` schema and `isEnabled()` gate
+(2.1.219), and a live-recorded 2.1.219 init toolset that carries `mcp__cowork__present_files` and no
+`SendUserFile`.
+
+**Harness behaviour (before the fix below):** served `present_files` with the local lane's exact name and
+schema, on the `container` tier only. Not serving `SendUserFile` is fidelity to the emulated lane, not a
+gap. **But serving `present_files` on `container` alone was a gap** — closed next.
+
+### Closed: `hostloop` serves `present_files` (production runs host-loop)
+
+Real Cowork registers `present_files` **unconditionally** and `alwaysLoad`, and its handler carries *two*
+branches — a VM branch and an `isHostLoopMode` branch that validates real host paths against
+`[hostOutputsDir, uploads, autoMemoryDir, ...connectedFolders]` and passes them through **without
+promoting**. The `hostLoop` gate is `source: "force", value: true` in the pinned baseline, so
+production's actual configuration is the split-execution shape this harness's `hostloop` tier claims to
+mirror — and that shape advertises the tool.
+
+The harness serves it at `container` **and `hostloop`**, the latter via a handler mirroring production's
+own host-loop branch: validate the path and pass it through, with no promotion. `present_files_called`
+works at both tiers. `no_scratchpad_leak` stays container-gated on the merits — production's host-loop
+branch never promotes, so there is no scratch→outputs copy to leak there.
+
+**Still unmodeled at `microvm` and `protocol`.** `protocol` has no `/sessions/` layout for the handler's
+path model to work against; `microvm` stages into a different tree than the artifact scan walks. Both
+report can't-verify rather than passing vacuously.
+
+### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
+
+The remote lane also has an internal MCP server the harness does not model at all, wire-named
+`internal__remote-devices__<tool>` (note the `internal__` prefix, not `mcp__`). Agent-facing tools include
+`device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
+`device_request_folder_access`, `get_device_info`, and device-artifact tools; `device_commit_files` is the
+remote lane's write-to-disk leg and consumes a `file_uuid` from a prior `SendUserFile`. Desktop advertises
+these *outward* to a cloud session over a device-OAuth bridge; every handler logs
+`session_type: "cowork-remote"`, and no `internal__*` name appears in the local spawn's tool list.
+
+`device_bash`'s own description states the topology plainly: *"Run a shell command on the user's local
+machine, inside the desktop Cowork workspace (an isolated Linux VM). This is NOT the cloud container — the
+`Bash` tool runs there; device_bash runs on the user's device."* So a remote session reaches back into a
+local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cleanup deliberately skips).
+
+**Deliberately unmodeled.** Emulating it faithfully would mean real command execution and real writes on
+the operator's machine on behalf of a simulated remote session. The exact inventory is also
+feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed against this harness
+is not misfiled as a harness bug — triage the lane first (`CLAUDE_CODE_ENTRYPOINT`).
+
+### Where it bites — it looks like a harness bug
+
+Probing a *remote* Cowork session ("print your file-delivery tool schema") reports `SendUserFile` with a
+required `status`, which diffs against this harness as "wrong name AND wrong schema". It is neither: the
+two lanes genuinely disagree, and a harness that adopted `SendUserFile` would green skills that then fail
+on real desktop-local Cowork — inverting the failure class the harness exists to catch. When a probe and
+this harness disagree about file delivery, establish which lane the probe ran on first:
+`CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one.
+
+### Workarounds
+
+- **Write the deliverable to a stated path — but do not stop there on remote.** On the local lane the
+  directory *is* the channel: Cowork's own system prompt tells the agent to save final deliverables into
+  the workspace folder, and `present_files` layers on top of that. **On the remote lane location delivers
+  nothing.** Verified by live probe in a `CLAUDE_CODE_ENTRYPOINT=remote_cowork` session: both
+  `/mnt/user-data/outputs/` and a cwd-relative `outputs/` had to be created — **neither existed**, where a
+  provisioned channel would (the local lane's `mnt/outputs` pre-exists as a mounted host directory) — and
+  files written into them produced no card and an empty Outputs panel. An undelivered file dies with the
+  container.
+- **Follow Anthropic's own deployed pattern**, from the first-party `skill-creator` skill: write the file
+  and state its path, then *check whether a file-presenting tool is available — `present_files`, or
+  `SendUserFile` on remote surfaces — and if so send the deliverable with it; if neither is available,
+  the stated path is the delivery.* Capability-conditional, not surface-enumerated: it stays correct as
+  surfaces change, and it degrades to the path when no tool exists.
+- **Most skills say nothing about delivery at all.** Across the first-party skills bundled with Cowork,
+  the only one that names a delivery tool in its body is `skill-creator` — the one whose entire output is
+  a file the user must install elsewhere. Reach for an explicit send when the artifact is the point and
+  must leave the session; otherwise writing it where the user can see it is the whole job. (Counter-example
+  worth knowing: the `cowork-plugin` skill bundled inside the agent binary names `SendUserFile`
+  *unconditionally* — so the capability-conditional form above is the safer pattern, not a universal one.)
+- **Never name `device_commit_files` in a skill.** It writes to the user's real disk, only inside folders
+  they explicitly connected, and it is Desktop-advertised infrastructure the agent assembles when a user
+  asks for files on disk — not a skill-authoring API. No first-party skill, prompt, or doc instructs a
+  skill to call it.
+- **Assert on delivery, not on the tool.** `present_files_called` (served at `container`/`hostloop`) and
+  `no_scratchpad_leak` (`container`-only, on the merits — see above) keep working; they name the harness's
+  assertion keys, not a production tool name.

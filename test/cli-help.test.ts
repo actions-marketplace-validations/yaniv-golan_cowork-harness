@@ -300,3 +300,52 @@ describe("cli sync command: platform guard message accuracy", () => {
     expect(m![1]).toMatch(/this harness|sync tooling|not (yet )?support/i);
   });
 });
+
+// Docs guard: `trace --help` must list every view the runtime `--view` validator accepts. The two
+// sides used to drift (`subagent-research` was added to the runtime VIEWS array but never reached the
+// usage string) — this pins them to the same module-scope literal so that can't happen silently again.
+describe("trace --help gives every view an explanation line", () => {
+  const src = readFileSync(resolve("src/cli.ts"), "utf8");
+
+  const views = (/const TRACE_VIEWS = \[([^\]]+)\] as const;/.exec(src)?.[1] ?? "")
+    .split(",")
+    .map((s) => s.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+
+  // The trace entry is a TEMPLATE literal since the view list is interpolated — parse between
+  // backticks, not double quotes. `\s*` (not `\n\s+`) between the key and the opening backtick
+  // because the literal is a real multi-line template (actual newlines, not `\n` escapes — see the
+  // comment above the `trace:` entry in src/cli.ts for why), so Prettier collapses `trace: \`` onto
+  // one line rather than breaking after the colon the way it does for the plain-string entries above.
+  // (The bracket list itself is no longer worth asserting: it IS TRACE_VIEWS, so comparing them
+  // compares the constant to itself. The per-view explanation rows below it are hand-written, which
+  // is why they still need a guard.)
+  const usage = /\n  trace:\s*`((?:[^`\\]|\\.)*)`/.exec(src)?.[1] ?? "";
+
+  it("parsed the usage string", () => {
+    expect(views.length).toBeGreaterThan(5);
+    expect(usage).toContain("--view");
+  });
+
+  it("gives every view its own explanation line", () => {
+    for (const v of views) expect(usage).toContain(`--view ${v} `);
+  });
+});
+
+describe("every trace --view list derives from TRACE_VIEWS", () => {
+  const src = readFileSync(resolve("src/cli.ts"), "utf8");
+
+  // Any literal, hardcoded pipe-list of views left in the source is a drift site waiting to happen.
+  // The three help strings must interpolate TRACE_VIEWS instead. `tools|questions` is the stable
+  // prefix every trace list starts with (diff's list starts `tools|transcript`, so it never matches).
+  it("leaves no hardcoded --view pipe-list in the source", () => {
+    const hardcoded = src.match(/--view tools\|questions[a-z|-]*/g) ?? [];
+    expect(hardcoded).toEqual([]);
+  });
+
+  // …and the interpolating form is actually present at each of the three sites.
+  it("interpolates the catalog at every usage site", () => {
+    const interpolated = src.match(/--view \$\{TRACE_VIEWS\.join\("\|"\)\}/g) ?? [];
+    expect(interpolated.length).toBe(3);
+  });
+});

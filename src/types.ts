@@ -495,13 +495,13 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files is not served on hostloop/microvm, where a scratchpad-delivered file is neither promoted nor detected (use fidelity: container for present_files-based delivery); only `true` is valid",
+      "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files itself is now served at BOTH container and hostloop, but this key's promotion/leak semantics apply only at container: production's own host-loop branch validates a path and passes it through WITHOUT promoting (the agent's cwd there already IS the outputs dir), so there is no scratch→outputs copy to leak, and at hostloop this key is cannot-verify rather than a claim the tool is absent (use fidelity: container for present_files-based delivery; microvm still doesn't serve the tool at all). present_files is the DESKTOP-LOCAL lane's tool; remote Cowork delivers via the agent-native SendUserFile instead, so a skill should describe the delivery outcome rather than naming either tool (docs/fidelity-gaps.md, 'File delivery'); only `true` is valid",
     ),
   present_files_called: z
     .literal(true)
     .optional()
     .describe(
-      "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented) — pair them to require a delivery AND require it not to leak; CONTAINER TIER ONLY — present_files is not served on hostloop/microvm; only `true` is valid",
+      "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented, and stays container-only) — pair them to require a delivery AND require it not to leak; CONTAINER + HOSTLOOP TIERS — the harness serves present_files at both, mirroring real Cowork advertising the tool in both its VM and host-loop modes; every other tier is still a harness coverage gap (see docs/fidelity-gaps.md, 'File delivery'). present_files is the DESKTOP-LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
     ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
@@ -595,6 +595,12 @@ export const Assertion = z.strictObject({
     .describe(
       "(verdict modifier) suppress the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
     ),
+  allow_undelivered_deliverables: z
+    .literal(true)
+    .optional()
+    .describe(
+      "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise",
+    ),
   replay_protocol_fidelity: z
     .boolean()
     .optional()
@@ -655,6 +661,7 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_missing_capability",
   "allow_l0_plugin_divergence",
   "allow_stall",
+  "allow_undelivered_deliverables",
 ] as const satisfies readonly (keyof Assertion)[];
 
 /** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
@@ -698,6 +705,22 @@ export const ScenarioObject = z.strictObject({
     .default("local")
     .describe(
       "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is a load-time error, not a silent no-op)",
+    ),
+  // THE PRODUCT-LANE axis. Three orthogonal things, do NOT collapse them:
+  //   fidelity  — the isolation tier the harness runs in (protocol/container/microvm/hostloop)
+  //   execution — WHERE the run happens (local; cloud-describe reserved)
+  //   lane      — WHICH Cowork product lane's contract the run is held to
+  // Cowork offers the choice per session ("Run this task: In the cloud / On your computer"), with cloud
+  // the default for new sessions, and the two lanes disagree about what "delivered" means. `local` keeps
+  // every existing scenario's meaning unchanged.
+  lane: z
+    .enum(["local", "remote"])
+    .default("local")
+    .describe(
+      "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): " +
+        "local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | " +
+        "remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. " +
+        "Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
@@ -882,9 +905,16 @@ export interface RunStatus {
  *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns`. */
 export type UsageInfo = Record<string, unknown> & { turns?: number };
 
-/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present.
+/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present. THE authoritative
+ *  single-run spend — distinct from summing `modelUsage[].costUSD`, a different SDK-side source that
+ *  `trace --view usage` reports and which can legitimately disagree.
+ *
  *  `raw` = the `api_metrics` event payload (pre-existing; unrelated source, kept alongside `usd` rather
- *  than merged into it since the two are independent SDK signals). */
+ *  than merged into it since the two are independent SDK signals). **Despite living on `CostInfo`, this
+ *  carries no cost**: the SDK's `api_metrics` is a per-API-call OTPS/TTFT lifecycle event
+ *  (`{type:"start",ttftMs}` / `{type:"end",outputTokens}`, subagent-scoped) — verified against the
+ *  staged agent binary. So there is NO live cost signal mid-run; `usd` only lands with the result
+ *  message, which is why a mid-run budget abort is not implementable today. */
 export interface CostInfo {
   usd?: number;
   raw?: Record<string, unknown>;
@@ -931,6 +961,16 @@ export interface RunResult {
    *  field existed (pre-taxonomy) OR the error-replay lane (an unreadable cassette, where no environment
    *  could be recovered). Do not read absence as "local"; read a present `location:"local"` as local. */
   execution?: { location: "local" | "cloud"; environmentId?: string; taskKind?: "interactive" | "scheduled" };
+  /** Did a COMPLETE scratchpad walk observe this run? Persisted because the verdict is computed from
+   *  `RunResult` alone, and "no scratchpad files" must be distinguishable from "no scratchpad walk". False
+   *  ⇒ the undelivered-deliverables signal stays silent because it CANNOT TELL, not because the run was
+   *  clean. Absent on results written before this field existed — also treated as cannot-tell. */
+  scratchpadEvidenceComplete?: boolean;
+  /** The scenario's declared Cowork product lane — which delivery contract this run was held to. Distinct
+   *  from `execution.location` (where the run PHYSICALLY happened, always local in this harness): the lane
+   *  is DECLARED intent, because Cowork's lane is a per-session human choice that leaves no trace in a
+   *  run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
+  lane?: "local" | "remote";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   fidelity: string;
@@ -1164,7 +1204,8 @@ export interface RunResult {
         | "stalled"
         | "prompt_asset_missing"
         | "scan_unavailable"
-        | "ended_with_question";
+        | "ended_with_question"
+        | "undelivered_deliverables";
       severity: "fail" | "warn";
       message: string;
     }>;
@@ -1400,12 +1441,23 @@ export interface RunResult {
     mcpServers?: Array<{ name: string; status?: string; [k: string]: unknown }>;
     availableSkills?: Array<{ id: string; whenToUse?: string }>;
   };
-  // Working folder panel's canonical file model (Scratch pad's "scratchpad" class
-  // deliberately not implemented). `artifacts` (unchanged type, {path,bytes}[])
+  // Working folder panel's canonical file model. `artifacts` (unchanged type, {path,bytes}[])
   // becomes a DERIVED accessor of this — the class∈{output,mount} subset, computed in the
   // assembler at read time (no drift risk: nothing stores `artifacts` independently anymore, on the
   // live lane; replay is unaffected).
-  workspaceFiles?: Array<{ path: string; bytes: number; sha256?: string; hashError?: string; class: "output" | "mount" | "input" }>;
+  //
+  // `scratchpad` = written OUTSIDE every user-visible root, i.e. produced but not (by location)
+  // delivered. Enumerated by a second walk shared with authored-file capture; the visible-root walk is
+  // deliberately NOT widened, because `no_unexpected_files` walks the same prefixes and would change
+  // verdict as a side effect. Absent on tiers where scratchpad capture cannot run (see
+  // `authoredFilesHealth`) — absence there is evidence-unavailable, NOT "nothing was left behind".
+  workspaceFiles?: Array<{
+    path: string;
+    bytes: number;
+    sha256?: string;
+    hashError?: string;
+    class: "output" | "mount" | "input" | "scratchpad";
+  }>;
   /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
    *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
   contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;

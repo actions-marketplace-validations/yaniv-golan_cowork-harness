@@ -83,7 +83,6 @@ describe("critique limitations ↔ docs parity", () => {
         "advisory-self-run-verdict",
         "attached-content-may-enter-evidence",
         "citation-seams",
-        "cowork-tier-refused",
         "english-only",
         "microvm-tier-refused",
         "protocol-tier-refused",

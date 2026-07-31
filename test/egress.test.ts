@@ -442,12 +442,18 @@ describe("CONNECT tunnel close propagation", () => {
     client.write(`CONNECT 127.0.0.1:${upPort} HTTP/1.1\r\nHost: 127.0.0.1:${upPort}\r\n\r\n`);
 
     // Wait for the 200 Connection Established response and upstream to connect.
-    await new Promise<void>((r) => {
+    // The error/close paths are load-bearing, not defensive noise: with only a data handler this await had
+    // no failure path at all, so anything that prevented the 200 hung until vitest's 5s default and
+    // surfaced as an opaque timeout with no evidence. Rejecting with the bytes actually received turns a
+    // future mis-delivery into a millisecond failure that names itself.
+    await new Promise<void>((resolve, reject) => {
       let buf = "";
       client.on("data", (d) => {
         buf += d.toString();
-        if (buf.includes("200 Connection Established")) r();
+        if (buf.includes("200 Connection Established")) resolve();
       });
+      client.on("error", reject);
+      client.on("close", () => reject(new Error(`tunnel closed before 200; received: ${JSON.stringify(buf)}`)));
     });
     await new Promise<void>((r) => setTimeout(r, 20));
     expect(upstreamSocket).toBeDefined();

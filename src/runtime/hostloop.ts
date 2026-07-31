@@ -8,6 +8,7 @@ import type { LaunchPlan, Mount } from "../session.js";
 import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan } from "../session.js";
 import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills-handler.js";
 import { makePluginsHandler } from "../hostloop/plugins-handler.js";
+import { makeCoworkHandlerHostLoop } from "../hostloop/cowork-handler-hostloop.js";
 import { listMountedSkills } from "../run/skill-metadata.js";
 import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
@@ -86,6 +87,22 @@ export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolea
     }
   };
   return canon(wireCwd) !== canon(spawnerCwd);
+}
+
+/**
+ * Pure builder for the hostloop `present_files` containment allowlist — the harness's hostloop
+ * equivalents of production's own allowed set (binary-verified: real Cowork's host-loop branch accepts
+ * `[hostOutputsDir, uploads, autoMemoryDir, ...connectedFolders]`). Deliberately narrower than that full
+ * set: `uploads` and `autoMemoryDir` are left out because — respectively — presenting an uploaded file
+ * back out isn't the pattern this closes (write-then-present targets outputs), and auto-memory has no
+ * real host directory anywhere in this harness (a dormant feature; see `vm-paths.ts`'s
+ * `autoMemoryHostDir` comment) — there is nothing to point a root at. A narrower allowlist can only
+ * reject a path production would accept, never the reverse, so this stays a conservative (safe) fidelity
+ * gap rather than a permissive one. Extracted so the allowlist is testable without spawning a real
+ * process.
+ */
+export function hostLoopPresentFilesRoots(hostOutputsDir: string, plan: LaunchPlan): string[] {
+  return [hostOutputsDir, ...plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath)];
 }
 
 /**
@@ -174,6 +191,9 @@ export function spawnHostLoop(
   // faithful set. Adding PowerShell here would be a no-op today — and would need revisiting only if
   // this harness ever grows a Windows runtime (the sync extractor's Windows paths are still TODO).
   const hostOutputsDir = join(mntHost, "outputs");
+  // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
+  // a registered tool with no backing server is a phantom capability the model can try and fail to use.
+  const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
   // Hoisted from the path-gate config below: the SAME staged dir is both the Read-allowed uploads root
   // and the uploads bullet's file-tool path — one value, so the prompt and the gate can never disagree.
   const uploadsRoot = join(mntHost, "uploads");
@@ -196,13 +216,16 @@ export function spawnHostLoop(
     // The 5 skills/plugins discovery tools declare + pre-approve on the SAME cowork lane as workspace's
     // own bash/web_fetch (spec §3: `isEnabled` = `sessionType==="cowork"`, which hostloop satisfies).
     // bash + web_fetch are both REGISTERED regardless of the webFetchViaApi gate; the 5 discovery tools
-    // are unconditional.
-    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...SKILLS_PLUGINS_TOOL_NAMES],
+    // are unconditional. `present_files` joins them unconditionally too — real Cowork registers it
+    // `alwaysLoad` with no session-type/connected-folder gate (F2 in the closure plan) — and it MUST also
+    // be in extraAllowedTools: alwaysLoad alone is not sufficient pre-approval (the same off-registry
+    // auto-allow reasoning `spawnContainer` already documents for its own present_files pre-approval).
+    extraTools: ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
     extraAllowedTools: opts.webFetchViaApi
-      ? // web_fetch is gated via can_use_tool (production shape) — pre-approve bash + the discovery tools only
-        ["mcp__workspace__bash", ...SKILLS_PLUGINS_TOOL_NAMES]
-      : // gate off (allowlist fallback) — keep web_fetch pre-approved alongside bash + the discovery tools
-        ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...SKILLS_PLUGINS_TOOL_NAMES],
+      ? // web_fetch is gated via can_use_tool (production shape) — pre-approve bash + present_files + the discovery tools only
+        ["mcp__workspace__bash", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES]
+      : // gate off (allowlist fallback) — keep web_fetch pre-approved alongside bash + present_files + the discovery tools
+        ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const nativeEnv = buildHostLoopNativeEnv(baseline, {
     configDir: plan.configDir,
@@ -323,6 +346,22 @@ export function spawnHostLoop(
     execCwd,
   });
   const workspaceBundle: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
+  // Toolset parity with production (F2/F3 in the closure plan: production's `present_files` is
+  // `alwaysLoad` unconditionally, and production RUNS host-loop mode) — see `hostLoopPresentFilesRoots`'s
+  // own doc comment for the allowlist rationale. Server name "cowork" matches the container tier's own
+  // bundle (`spawnContainer`) so the tool's full name is the SAME `mcp__cowork__present_files` on both
+  // tiers — required for the shared `present_files_called`/`no_scratchpad_leak` telemetry pipeline
+  // (`Run.notePresentedFiles`, `src/run/run.ts`) to recognize the call at all.
+  // `lane: remote` withholds present_files entirely — a local MCP server cannot reach a remote Cowork
+  // session, so a remote agent genuinely does not have this tool. Serving it would hand the model a
+  // capability production lacks, greening a skill that then fails there.
+  const coworkBundle: { servers: string[]; handle: McpHandler } | undefined =
+    plan.lane === "remote"
+      ? undefined
+      : {
+          servers: ["cowork"],
+          handle: makeCoworkHandlerHostLoop({ allowedRoots: hostLoopPresentFilesRoots(hostOutputsDir, plan) }),
+        };
   // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged
   // configDir/skills + plugin mounts (buildLaunchPlan materializes both before spawn), never a live call.
   const mountedSkills = listMountedSkills(plan.configDir, pluginSkillRootsFromPlan(plan));
@@ -340,7 +379,7 @@ export function spawnHostLoop(
     servers: ["plugins"],
     handle: makePluginsHandler({ mountedPlugins }),
   };
-  const sdkMcp = combineSdkMcp(workspaceBundle, skillsBundle, pluginsBundle);
+  const sdkMcp = combineSdkMcp(workspaceBundle, ...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
   return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown };
 }
 

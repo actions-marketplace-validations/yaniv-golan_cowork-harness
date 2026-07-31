@@ -30,9 +30,29 @@ four-workload spend) plus the `skill` it graded; the two turn rows carry `critiq
 **`sum(costUsd)` over all rows is correct with no filtering.** The roll-up's `costUsd` is the EVALUATOR
 passes only — the two turns already contribute their own — so nothing double-counts and nothing is missed.
 `critiqueTotalUsd` is the per-critique convenience figure; summing THAT across roll-ups also gives true
-total critique spend. Roll-ups are excluded from `stats` aggregation entirely (they are bookkeeping, carry
-no verdict, and would otherwise add a phantom run and drag `passRate` toward 1). A roll-up with
-`result:"error"` means a workload was unpriced, so its totals UNDERCOUNT.
+total critique spend. A roll-up with `result:"error"` means a workload was unpriced, so its totals
+UNDERCOUNT.
+
+**Which statistics see a roll-up, and which do not.** Three different questions want three different row
+sets, and `stats` keeps them apart deliberately:
+
+| The question | Answered by | Roll-ups |
+|---|---|---|
+| *Is this a run, and did it pass?* | `runs`, `passRate`, `lastGreenTs`, `prunedRuns` | **excluded** — a roll-up has no verdict and no duration; counting it adds a phantom run and drags `passRate` toward 1 |
+| *What does ONE run cost or take?* | every `p50`/`p95` | **excluded** — the p50 of `[task, reflection, evaluators]` is not a typical run cost |
+| *What did all of this cost me?* | **`totalUsd`** | **included** — the only figure that reflects a critique's true spend |
+
+So a critique's real cost is `totalUsd`, never the cost percentiles beside it. On the live example run,
+`p50` reads `$0.1708` (a graded turn) against a `totalUsd` of `$1.0588` (the whole critique). The two are
+answering different questions and are both correct.
+
+`totalUsd` is `undefined` — never `$0.0000` — when nothing in the group carried cost telemetry, and
+**`unpricedRuns`** counts rows in the cost set that had none, so a total that is a floor says so instead
+of looking precise. The same rule as everywhere else here: an unpriced row is skipped, not counted as zero.
+
+**`--max-budget-usd` is deliberately NOT built on `totalUsd`.** Its pre-flight reads per-RUN history, which
+excludes roll-ups: it is asking "will my next run breach this cap", and a run is not a critique. Including
+evaluator spend there would refuse runs costing a fraction of the cap.
 
 `--reindex` reconstructs roll-ups from each run dir's `critique-report.json`, so a lost or corrupted index
 recovers critique costs along with everything else — provided the run dirs survive. Reconstruction is
@@ -73,16 +93,25 @@ re-run `--reindex` to rebuild from `result.json` if you see this warning.
 cowork-harness stats                              # every indexed scenario
 cowork-harness stats csv-metrics                   # one scenario
 cowork-harness stats --since 2026-07-01 --branch feature-x
-cowork-harness stats --metric cost --last 20        # last 20 runs per scenario, cost view only
+cowork-harness stats --metric cost --last 20        # last 20 runs per group, cost view only
+cowork-harness stats csv-metrics --group-by skill-hash   # one row per skill generation
+cowork-harness stats csv-metrics --runs                   # + the individual runs behind each summary
 ```
 
-Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, and the
-most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed).
+Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, the group's
+**`total=` spend** (roll-ups included — see the table above; appended after the cost percentiles, and
+followed by `(N unpriced)` when some row lacked cost telemetry), and the
+most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed). Each
+summary also carries `distinctSkillHashes` (how many skill generations the window folded together — see
+*Grouping by generation*) and `distinctTiers`/`tiers` (how many effective fidelity tiers — see *Grouping
+by tier* below; unlike `distinctSkillHashes`, this key is total so there is no companion counter for rows
+it couldn't see), and the envelope carries `hashlessRuns` alongside `stats`.
 `--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost` narrows the line to just that one
 view (`cache-tokens` shows cache-read-token p50/p95; `model-cost` shows per-model cost p50/p95, distinct
 from the plain `cost` metric's overall run cost). `--last <n>`
-windows to the N most recent runs **per scenario** (not globally — a global cut would starve a
-low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows).
+windows to the N most recent runs **per group** (not globally — a global cut would starve a
+low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows). A
+group is a scenario unless `--group-by` says otherwise; see *Grouping by generation* below.
 
 `--metric` is a text-mode-only view narrower — `--output-format json` always returns every field for every
 scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` already follow elsewhere in
@@ -96,14 +125,64 @@ fields to a server-side narrowing it didn't ask for.
 > comparison step. What you pair is usually a [`critique`](./critique.md) finding set against the runs
 > that produced it.
 
-`stats` aggregates **by scenario**, and its filters are `--scenario`/`--since`/`--baseline`/`--branch`/
-`--last`. There is no built-in group-by for the run-identity fields, so pair generations with `jq` over
-`index.jsonl` directly — the index is the queryable source of truth, and both fields are on the row:
+`stats` groups **by scenario** by default, and aggregating a window that spans two skill versions
+compares unlike things. Two flags query the run-identity fields directly:
+
+```bash
+cowork-harness stats my-scenario --group-by skill-hash   # one row per generation — the A/B in one command
+cowork-harness stats my-scenario --skill-hash 8fc999c77cdf   # or narrow to one generation
+cowork-harness stats my-scenario --label gen-2               # …by the human tag instead
+```
+
+`--runs` additionally lists the runs behind each summary — timestamp, verdict, `runId`, `skillHash`,
+`runLabel`, `fidelity` (the tier the run actually ran at — `effectiveFidelity ?? fidelity`, total by
+construction so it's never conditionally omitted the way `skillHash`/`runLabel` are), cost, duration, and
+`(pruned)` when the evidence is gone from disk — so you can see which generation a given run belonged to
+without opening its `result.json`. It selects **exactly** the rows the summary above it aggregated (same
+filter path), and adds a `runs` array to the JSON envelope; without the flag that key is absent. `fidelity`
+is JSON-only — the text-mode run line (`formatRunLine`) is unchanged.
+
+`--group-by` accepts `scenario` (default) | `skill-hash` | `label` | `fidelity`. When a window you did NOT
+narrow spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill
+generations`) and reports `distinctSkillHashes` in the JSON envelope, so CI can gate on the field rather
+than scraped text.
+`--last <n>` windows per **group**, so `--group-by skill-hash --last 5` means "the last 5 runs of each
+generation".
+
+The two identity fields, on the row and in the summary:
 
 - **`skillHash`** — the correctness key. Content-exact; changes on any tracked edit. **Stored as a 12-char
-  prefix** on the index row (the full hash is in each run's `result.json`), so a recipe groups on the
-  prefix — fine for pairing within one project, but use `result.json` if you need the full value.
+  prefix** on the index row (the full hash is in each run's `result.json`). `--skill-hash` matches either
+  form — it compares prefix-tolerantly in both directions — with a 6-character floor, below which a
+  "prefix" would pair unrelated generations.
 - **`runLabel`** — the `--label <tag>` you passed. Human-readable and orderable; ergonomics, not identity.
+
+A row that has no value for the field you grouped on (a `chat` row, a run that mounted no skill, a
+pre-1.5.0 skill-lane row) is **excluded and counted**, never bucketed under a blank key — `stats` reports
+`N run(s) excluded from grouping`, and the JSON envelope carries `hashlessRuns`.
+
+**One blind spot, stated plainly:** `distinctSkillHashes` counts only runs that *recorded* a hash, so a
+window mixing one generation with hashless runs is also comparing unlike things and the warning cannot
+see it. `hashlessRuns` is reported only when you group, so on a default `stats <scenario>` those rows are
+folded in silently. If a scenario's history mixes `chat`/no-skill runs with real ones, group explicitly.
+
+### Grouping by tier (the environment axis)
+
+`container` and `hostloop` runs of one scenario differ in pass rate, cost, and duration — averaging
+them is the same unlike-things mistake as averaging skill generations. Each summary carries
+`distinctTiers` and `tiers` (computed over `effectiveFidelity ?? fidelity` — what actually **ran**,
+so a `--fidelity cowork` run counts as the tier the gate resolved it to). When a window spans more
+than one tier, `stats` says so on stderr (`::warning:: … spans N fidelity tiers (…)`) and the remedy
+is `--group-by fidelity`, which splits per tier (`fidelity=container` / `fidelity=hostloop` on each
+line) and splits `totalUsd` with it — per-tier cost in one command. Unlike generation grouping,
+every row has a tier, so nothing is ever excluded from this grouping and there is no
+`hashlessRuns`-style counter for it. The generation warning and the tier warning fire
+independently: a window mixing both axes is unlike-vs-unlike twice over, and each warning names a
+different remedy.
+
+**The `jq` recipes below are still worth knowing** — they cover what the flags deliberately do not.
+`stats` reports cost *percentiles* over aggregatable rows only, so a per-generation **total spend** that
+includes critique's evaluator passes still needs the recipe (see the `critiqueRole` note in it).
 
 ```bash
 IDX=~/.cowork-harness/runs/index.jsonl

@@ -216,6 +216,12 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   if (r.critiqueRole !== undefined && !["task", "reflection", "rollup"].includes(r.critiqueRole as string)) return false;
   if (r.skill !== undefined && typeof r.skill !== "string") return false;
   if (r.critiqueTotalUsd !== undefined && typeof r.critiqueTotalUsd !== "number") return false;
+  // Type-checked for the same reason as the three above — because they are CONSUMED. `stats` filters on
+  // `skillHash` with `String.prototype.startsWith` and groups on both, so a corrupt/hand-edited row
+  // carrying `"skillHash": 123` (valid JSON) would otherwise pass quarantine and throw a TypeError out
+  // of `buildStats` — the CLI crashing on exactly the input class this quarantine exists to absorb.
+  if (r.skillHash !== undefined && typeof r.skillHash !== "string") return false;
+  if (r.runLabel !== undefined && typeof r.runLabel !== "string") return false;
   if (typeof r.git !== "object" || r.git === null) return false;
   const git = r.git as Record<string, unknown>;
   if (git.branch !== null && typeof git.branch !== "string") return false;
@@ -659,10 +665,44 @@ export function resolveRunsFromIndex(rows: RunIndexRow[], arg: string): RunIndex
   return resolveRunsFragmentFromIndex(rows, arg);
 }
 
+/** The tier a row actually RAN at. `fidelity` is what was asked for (possibly `cowork`);
+ *  `effectiveFidelity` is what resolved — comparability is about the environment, so effective leads.
+ *  The fallback covers the one writer that can omit it (reindex-from-critique-report with no
+ *  gradedEffectiveFidelity). TOTAL by construction — `fidelity` is a required field — so grouping on it
+ *  excludes nothing and needs no hashlessRuns-style honesty channel. If the fallback ever yields the
+ *  literal "cowork", grouping it separately is CORRECT: we genuinely do not know which tier it resolved
+ *  to, so it is unlike everything else. */
+const tierOf = (r: RunIndexRow): string => r.effectiveFidelity ?? r.fidelity;
+
+/** How `buildStats` buckets rows. `scenario` is the historical (and default) behaviour; `skill-hash` /
+ *  `label` split a scenario by run IDENTITY (the iterate-across-fixes A/B); `fidelity` splits by the
+ *  tier that actually RAN (`effectiveFidelity ?? fidelity`) — the ENVIRONMENT axis, the other thing
+ *  that makes two runs incomparable. */
+export type StatsGroupBy = "scenario" | "skill-hash" | "label" | "fidelity";
+
 export interface StatsSummary {
   scenario: string;
+  /** Set only when grouping by that field — the group's identity, NOT folded into `scenario` (which
+   *  stays exactly what it always was, so a consumer matching on it keeps working). */
+  skillHash?: string;
+  runLabel?: string;
   runs: number;
   passRate: number;
+  /** Distinct non-undefined `skillHash` values among THIS group's post-window rows. > 1 means the
+   *  aggregate compares unlike things; `stats` warns on it. Always 1 under `--group-by skill-hash`.
+   *  Counts only rows that HAVE a hash — see the hashless caveat on `StatsResult.hashlessRuns`. */
+  distinctSkillHashes: number;
+  /** Set only when grouping by fidelity — the group's effective tier (`effectiveFidelity ?? fidelity`),
+   *  NOT folded into `scenario` (which stays exactly what it always was). */
+  fidelity?: string;
+  /** Distinct effective tiers among THIS group's post-window rows. The key is TOTAL — every row has
+   *  one — so unlike `distinctSkillHashes` there is no "rows without one" caveat and deliberately no
+   *  tierless counter. > 1 means the aggregate spans environments; `stats` warns and names them.
+   *  Always 1 under `--group-by fidelity`. */
+  distinctTiers: number;
+  /** The tier names behind `distinctTiers`, sorted — so the warning can name them without every
+   *  consumer re-deriving the fallback. */
+  tiers: string[];
   p50CostUsd?: number;
   p95CostUsd?: number;
   p50DurationMs?: number;
@@ -675,8 +715,90 @@ export interface StatsSummary {
   p95CacheReadTokens?: number;
   p50ModelCostUsd?: number;
   p95ModelCostUsd?: number;
+  /** TOTAL spend across the group — the percentiles above exclude critique roll-up rows (a roll-up is not
+   *  a run, and its cost is a whole critique's evaluator spend), this deliberately includes them. It is
+   *  therefore the only figure that reflects a critique's TRUE cost: before this existed, `stats` priced
+   *  the live example critique at its task turn's $0.1708 against an actual $1.0588. `undefined` when no
+   *  row in the group carried cost telemetry — never 0, which would read as "free". */
+  totalUsd?: number;
+  /** Rows in the cost set (runs AND roll-ups) with no cost telemetry. `totalUsd` is a FLOOR when this is
+   *  > 0 — the honesty channel that keeps "could not tell" from rendering as a smaller number. */
+  unpricedRuns: number;
   lastGreenTs?: string;
   prunedRuns: number; // rows whose outDir no longer exists on disk — still aggregated, just flagged
+}
+
+/** `buildStats`'s full return. The summaries are the answer; `hashlessRuns` is the honesty channel —
+ *  under `--group-by skill-hash`/`label` a row lacking that field is EXCLUDED (never bucketed under a
+ *  blank key: a `chat` row, a run that mounted no skill, or a pre-1.5.0 skill-lane row folded into a
+ *  generation would misattribute it), and a silent exclusion reads as "covered everything". */
+export interface StatsResult {
+  summaries: StatsSummary[];
+  hashlessRuns: number;
+}
+
+/** Historical per-run cost for one scenario, newest first — the only basis a PRE-flight budget check can
+ *  reason from. There is no live cost signal to abort a run mid-flight on: `cost.usd` lands only with the
+ *  SDK result message, and `api_metrics` (the one mid-stream cost-adjacent event) is TTFT/output-token
+ *  metering carrying no USD at all (verified against the staged agent binary). So "will this run blow my
+ *  budget?" is answerable only from what the same scenario has cost before.
+ *
+ *  Rows without cost telemetry are skipped, NOT counted as 0 — a zero would silently pull an estimate
+ *  down and let an over-budget run through, the exact false-green this check exists to prevent. */
+export function scenarioCostHistory(rows: RunIndexRow[], scenario: string): number[] {
+  return (
+    rows
+      // `isRun`, NOT `carriesSpend` — deliberately. This answers "what does ONE run of this scenario cost",
+      // and a roll-up is not a run: its cost is a whole critique's evaluator spend. Summing it in here would
+      // make `worst` wildly unrepresentative and REFUSE runs that are nowhere near the cap. Measured on
+      // skill-csv-metrics: runs-only worst $0.1985 (a $0.50 cap correctly proceeds); with the roll-up,
+      // worst $0.6912 — a false refusal of a run that will cost $0.19. The `stats` TOTAL is the place
+      // roll-ups belong; a per-run history is not.
+      .filter(isRun)
+      .filter((r) => r.scenario === scenario && typeof r.costUsd === "number")
+      .map((r) => r.costUsd!)
+  );
+}
+
+/** The pre-flight verdict itself, as a pure function of history + cap so BOTH outcomes are testable
+ *  without starting a paid run (the refusal path terminates the process; the proceed path does not).
+ *
+ *  `worst`, not a percentile: this is a refusal gate, and an estimator that under-predicts lets through
+ *  exactly the expensive run the flag was reached for. Strict `>` — a history that exactly equals the cap
+ *  has never breached it, and "$1.00 max, cap $1.00" should run. */
+export function budgetPreflight(history: number[], maxBudgetUsd: number): { refuse: boolean; worst?: number; priced: number } {
+  if (history.length === 0) return { refuse: false, priced: 0 };
+  const worst = Math.max(...history);
+  return { refuse: worst > maxBudgetUsd, worst, priced: history.length };
+}
+
+/** Content-exact skill-version keys compare PREFIX-tolerantly in both directions: the index row stores
+ *  a 12-char prefix (see `skillHash` on the row) while `result.json` and every doc recipe hand you the
+ *  full 64-char sha, so a user pasting either must match. Both sides are prefixes of the same hex
+ *  string, so this cannot produce a false pair at any sane length — the CLI enforces the length floor. */
+function skillHashMatches(rowHash: string | undefined, query: string): boolean {
+  if (!rowHash) return false;
+  return rowHash.startsWith(query) || query.startsWith(rowHash);
+}
+
+/** The identity a group is keyed by. Kept as FIELDS, not a joined string: `buildStats` used to
+ *  destructure its map key straight into `StatsSummary.scenario`, so a composite key would have emitted
+ *  `scenario: "my-scenario\0abc123"` into the text line AND the JSON envelope — breaking scenario
+ *  matching for every consumer. A `--label` value is unvalidated freeform and may contain anything, so
+ *  splitting a joined key back apart is not reliably possible either. */
+interface StatsGroup {
+  scenario: string;
+  skillHash?: string;
+  runLabel?: string;
+  fidelity?: string;
+  /** RUN rows — every count, rate, and percentile is computed from exactly these. */
+  rows: RunIndexRow[];
+  /** Rows contributing to `totalUsd` ONLY: `rows` plus the roll-ups, plus any row re-admitted by session
+   *  expansion. Kept separate from `rows` rather than merged, because a spend row must never reach
+   *  `runs`/`passRate`/`durations`/percentiles — an unlabelled reflection turn re-entering a labelled
+   *  group as a near-always-green "run" is precisely the passRate inflation that keeping `--label` off
+   *  turn 2 exists to prevent (src/run/skill-flag-surface.ts:70-74). */
+  spend: RunIndexRow[];
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -691,48 +813,146 @@ function percentile(sorted: number[], p: number): number {
  *  this is safe and avoids a Date-parsing dependency). A row whose `outDir` no longer exists on disk
  *  (deleted by `prune`) still counts toward every stat — the index is the durable history — but is flagged `prunedRuns` so a consumer can tell "no evidence left to
  *  re-inspect" apart from "still on disk". */
-/** Rows that are BOOKKEEPING, not runs. A roll-up has no verdict of its own and no duration, and its
- *  scenario matches the turn rows' — so leaving it in added a phantom run to the count and dragged
- *  `passRate` toward 1. There is no neutral `pass` value in a RATE, only exclusion. */
-function isAggregatable(r: RunIndexRow): boolean {
+/** Rows that are RUNS. A roll-up is BOOKKEEPING: no verdict of its own, no duration, and its scenario
+ *  matches the turn rows' — so leaving it in adds a phantom run to the count and drags `passRate` toward
+ *  1. There is no neutral `pass` value in a RATE, only exclusion.
+ *
+ *  Pairs with {@link carriesSpend}. These were ONE predicate (`isAggregatable`) answering two different
+ *  questions, and the collapse was a bug: "is this a run?" is correctly no for a roll-up, but "does this
+ *  carry spend?" is emphatically yes, and the single gate answered no to both. Every count, rate and
+ *  PERCENTILE uses this one; only the total uses the other. */
+function isRun(r: RunIndexRow): boolean {
   return r.critiqueRole !== "rollup";
 }
 
-export function buildStats(
-  rows: RunIndexRow[],
-  filters: { scenario?: string; since?: string; baseline?: string; branch?: string; last?: number },
-): StatsSummary[] {
-  // Bookkeeping rows are excluded BEFORE any filter or grouping — see `isAggregatable`.
-  let filtered = rows.filter(isAggregatable);
-  if (filters.scenario) filtered = filtered.filter((r) => r.scenario === filters.scenario);
-  if (filters.since) filtered = filtered.filter((r) => r.ts >= filters.since!);
-  if (filters.baseline) filtered = filtered.filter((r) => r.baseline === filters.baseline);
-  if (filters.branch) filtered = filtered.filter((r) => r.git.branch === filters.branch);
+/** Rows that carry SPEND — every row with cost telemetry, roll-ups included.
+ *
+ *  Safe to sum because a critique's rows partition its cost DISJOINTLY: the two graded turns carry their
+ *  own, and the roll-up's `costUsd` is the two evaluator passes ONLY (see `appendCritiqueRollupRow`, which
+ *  sets it that way precisely so this sum is exact and double-counts nothing). Verified live:
+ *  0.1708 + 0.1967 + 0.6912 == 1.0588 == that critique's `critiqueTotalUsd`, to the cent. */
+function carriesSpend(r: RunIndexRow): boolean {
+  return typeof r.costUsd === "number";
+}
 
-  const byScenario = new Map<string, RunIndexRow[]>();
-  for (const r of filtered) {
-    if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, []);
-    byScenario.get(r.scenario)!.push(r);
+export interface StatsFilters {
+  scenario?: string;
+  since?: string;
+  baseline?: string;
+  branch?: string;
+  last?: number;
+  skillHash?: string;
+  label?: string;
+  groupBy?: StatsGroupBy;
+}
+
+/** Filter → group → window, shared by the aggregate (`buildStats`) and the per-run listing
+ *  (`listRuns`). Deliberately ONE implementation: two copies of this chain would let `stats --runs` show
+ *  a row set the summary line above it did not actually aggregate — the precise "the tool disagrees with
+ *  itself" failure this whole feature exists to remove. */
+function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Map<string, StatsGroup>; hashlessRuns: number } {
+  // SCOPE filters first, over ALL rows — roll-ups included. These express "I don't want these rows at
+  // all" (a scenario, a date window, a baseline, a branch), so nothing may re-admit them later.
+  let scoped = rows;
+  if (filters.scenario) scoped = scoped.filter((r) => r.scenario === filters.scenario);
+  if (filters.since) scoped = scoped.filter((r) => r.ts >= filters.since!);
+  if (filters.baseline) scoped = scoped.filter((r) => r.baseline === filters.baseline);
+  if (filters.branch) scoped = scoped.filter((r) => r.git.branch === filters.branch);
+
+  // IDENTITY filters mean something different — "I want THIS generation" — and a generation includes its
+  // own evaluator spend even though that spend sits on a row the filter cannot match.
+  const hasIdentityFilter = filters.skillHash !== undefined || filters.label !== undefined;
+  const matchesIdentity = (r: RunIndexRow) =>
+    (filters.skillHash === undefined || skillHashMatches(r.skillHash, filters.skillHash)) &&
+    (filters.label === undefined || r.runLabel === filters.label);
+  const identityMatched = scoped.filter(matchesIdentity);
+
+  // SESSION EXPANSION — cost only. `--label` is forwarded to a critique's task turn but deliberately NOT
+  // its reflection turn, so a label-filtered set holds turn 1 + the roll-up and silently drops turn 2:
+  // measured $0.862 of a $1.0588 critique, 19% light. A critique is ONE session and `runId` already IS
+  // that session's identity, so re-admit siblings by runId — from `scoped`, never from `rows`, so a row
+  // excluded by scenario/since/baseline/branch stays excluded. (`--skill-hash` needs none of this: the
+  // roll-up and both turns all carry skillHash. Expansion is a no-op there, which T8 pins.)
+  const matchedRunIds = new Set(identityMatched.map((r) => r.runId));
+  const spendScoped = hasIdentityFilter ? scoped.filter((r) => matchedRunIds.has(r.runId)) : scoped;
+
+  const groupBy = filters.groupBy ?? "scenario";
+  const identityOf = (r: RunIndexRow) =>
+    groupBy === "skill-hash" ? r.skillHash : groupBy === "label" ? r.runLabel : groupBy === "fidelity" ? tierOf(r) : undefined;
+  // NUL joins the composite: `--label` is unvalidated freeform (it may contain spaces, `=`, anything a
+  // shell will pass), so any printable separator could collide two distinct generations into one group.
+  const keyOf = (r: RunIndexRow, identity: string | undefined) => (groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`);
+
+  // Rows lacking the grouping field are DROPPED, not bucketed under a blank key — counted so the caller
+  // can say so out loud rather than silently under-reporting. Counted over RUN rows only, which is what
+  // it has always meant (roll-ups were excluded before this loop ever saw them).
+  let hashlessRuns = 0;
+  const groups = new Map<string, StatsGroup>();
+  const keyByRunId = new Map<string, string>();
+  for (const r of identityMatched.filter(isRun)) {
+    const identity = identityOf(r);
+    if (groupBy !== "scenario" && identity === undefined) {
+      hashlessRuns++;
+      continue;
+    }
+    const key = keyOf(r, identity);
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        scenario: r.scenario,
+        ...(groupBy === "skill-hash" ? { skillHash: identity } : {}),
+        ...(groupBy === "label" ? { runLabel: identity } : {}),
+        ...(groupBy === "fidelity" ? { fidelity: identity } : {}),
+        rows: [],
+        spend: [],
+      };
+      groups.set(key, g);
+    }
+    g.rows.push(r);
+    keyByRunId.set(r.runId, key);
   }
-  // `--last` windows to the N most recent rows PER SCENARIO, AFTER since/baseline/branch/scenario have
-  // already narrowed the candidate set — "the last N runs matching these filters", not "of the last N
-  // runs overall, whichever happen to match" (the latter would silently starve a scenario/branch out of
-  // the window entirely once a higher-frequency one dominates the unfiltered recent rows).
+  // Second pass assigns SPEND. A roll-up carries skillHash and runLabel so it keys directly; a row
+  // re-admitted by expansion may not (the unlabelled reflection turn under `--group-by label`), and
+  // inherits its session sibling's group. A spend row with no home group is DROPPED, never used to mint
+  // one — a group with zero run rows would divide by zero in `passRate` and report a phantom.
+  for (const r of spendScoped) {
+    const identity = identityOf(r);
+    const key = groupBy === "scenario" || identity !== undefined ? keyOf(r, identity) : keyByRunId.get(r.runId);
+    if (key === undefined) continue;
+    groups.get(key)?.spend.push(r);
+  }
+  // `--last` windows to the N most recent rows PER GROUP, AFTER since/baseline/branch/scenario/identity
+  // have already narrowed the candidate set — "the last N runs matching these filters", not "of the last
+  // N runs overall, whichever happen to match" (the latter would silently starve a scenario/branch out of
+  // the window entirely once a higher-frequency one dominates the unfiltered recent rows). At the default
+  // `--group-by scenario` a group IS a scenario, so this is bit-identical to the pre-grouping behaviour.
   if (filters.last !== undefined) {
     const n = filters.last;
-    for (const [scenario, group] of byScenario) {
-      byScenario.set(
-        scenario,
-        group
-          .slice()
-          .sort((a, b) => (a.ts < b.ts ? 1 : -1))
-          .slice(0, n),
-      );
+    for (const g of groups.values()) {
+      g.rows = g.rows
+        .slice()
+        .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+        .slice(0, n);
+      // Spend follows the window by SESSION, so the total describes exactly the runs shown above it. A
+      // windowed-out critique must not leave its evaluator cost behind in the total (that would price
+      // runs the summary no longer counts); a surviving one must keep it.
+      const kept = new Set(g.rows.map((r) => r.runId));
+      g.spend = g.spend.filter((r) => kept.has(r.runId));
     }
   }
 
+  return { groups, hashlessRuns };
+}
+
+export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsResult {
+  const { groups, hashlessRuns } = resolveGroups(rows, filters);
   const summaries: StatsSummary[] = [];
-  for (const [scenario, group] of byScenario) {
+  for (const { scenario, skillHash, runLabel, fidelity, rows: group, spend } of groups.values()) {
+    // Roll-ups are IN here and nowhere else above — see `carriesSpend`. `undefined`, not 0, when nothing
+    // in the group was priced: the house rule is that an unpriced row is skipped rather than counted as
+    // zero, and a `$0.0000` total would read as "this was free" instead of "we could not tell".
+    const priced = spend.filter(carriesSpend);
+    const totalUsd = priced.length ? priced.reduce((sum, r) => sum + r.costUsd!, 0) : undefined;
     const numbers = (pick: (r: RunIndexRow) => number | undefined) =>
       group
         .map(pick)
@@ -745,10 +965,20 @@ export function buildStats(
     const cacheReadTokensArr = numbers((r) => r.cacheReadTokens);
     const modelCostArr = numbers((r) => r.modelCostUsd);
     const greens = group.filter((r) => r.pass).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+    const tiers = [...new Set(group.map(tierOf))].sort();
     summaries.push({
       scenario,
+      // undefined-valued keys are dropped by JSON.stringify, so these appear only when grouped on.
+      ...(skillHash !== undefined ? { skillHash } : {}),
+      ...(runLabel !== undefined ? { runLabel } : {}),
       runs: group.length,
       passRate: group.filter((r) => r.pass).length / group.length,
+      // Counted over the POST-window rows — the same set every other number here is computed from, so
+      // the warning can never disagree with the aggregate it annotates.
+      distinctSkillHashes: new Set(group.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,
+      ...(fidelity !== undefined ? { fidelity } : {}),
+      distinctTiers: tiers.length,
+      tiers,
       p50CostUsd: costs.length ? percentile(costs, 0.5) : undefined,
       p95CostUsd: costs.length ? percentile(costs, 0.95) : undefined,
       p50DurationMs: durations.length ? percentile(durations, 0.5) : undefined,
@@ -761,9 +991,66 @@ export function buildStats(
       p95CacheReadTokens: cacheReadTokensArr.length ? percentile(cacheReadTokensArr, 0.95) : undefined,
       p50ModelCostUsd: modelCostArr.length ? percentile(modelCostArr, 0.5) : undefined,
       p95ModelCostUsd: modelCostArr.length ? percentile(modelCostArr, 0.95) : undefined,
+      totalUsd,
+      unpricedRuns: spend.length - priced.length,
       lastGreenTs: greens[0]?.ts,
       prunedRuns: group.filter((r) => !existsSync(r.outDir)).length,
     });
   }
-  return summaries;
+  return { summaries, hashlessRuns };
+}
+
+/** One entry per RUN, for `stats --runs`. The consumer request this answers: "surface `skillHash` in
+ *  whatever lists runs, so the arm is visible without opening `result.json`" — until now no command
+ *  listed individual runs at all (`list` lists baselines; `stats` only aggregates), so telling which
+ *  generation a given run belonged to meant opening each `result.json` by hand. */
+export interface RunListEntry {
+  ts: string;
+  scenario: string;
+  runId: string;
+  command: RunIndexRow["command"];
+  pass: boolean;
+  result: "success" | "error";
+  skillHash?: string;
+  runLabel?: string;
+  /** The tier this run actually ran at (`effectiveFidelity ?? fidelity` — the same `tierOf` helper
+   *  `buildStats`'s fidelity grouping keys on, so a summary's `fidelity` and a listed run's `fidelity`
+   *  can never diverge). TOTAL by construction — every row has one — so unlike `skillHash`/`runLabel`
+   *  this is never conditionally omitted. */
+  fidelity: string;
+  turn?: number;
+  critiqueRole?: RunIndexRow["critiqueRole"];
+  costUsd?: number;
+  durationMs?: number;
+  outDir: string;
+  pruned: boolean; // outDir no longer on disk — the row is history, the evidence is gone
+}
+
+/** Newest first, over EXACTLY the rows `buildStats` aggregated for the same filters (same
+ *  `resolveGroups`), so a listing can never disagree with the summary printed beside it. */
+export function listRuns(rows: RunIndexRow[], filters: StatsFilters): { runs: RunListEntry[]; hashlessRuns: number } {
+  const { groups, hashlessRuns } = resolveGroups(rows, filters);
+  const runs = [...groups.values()]
+    .flatMap((g) => g.rows)
+    .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+    .map((r) => ({
+      ts: r.ts,
+      scenario: r.scenario,
+      runId: r.runId,
+      command: r.command,
+      pass: r.pass,
+      result: r.result,
+      // undefined-valued keys drop out of JSON.stringify, so absence stays absence rather than becoming
+      // a null a consumer has to special-case.
+      ...(r.skillHash !== undefined ? { skillHash: r.skillHash } : {}),
+      ...(r.runLabel !== undefined ? { runLabel: r.runLabel } : {}),
+      fidelity: tierOf(r),
+      ...(r.turn !== undefined ? { turn: r.turn } : {}),
+      ...(r.critiqueRole !== undefined ? { critiqueRole: r.critiqueRole } : {}),
+      ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
+      ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      outDir: r.outDir,
+      pruned: !existsSync(r.outDir),
+    }));
+  return { runs, hashlessRuns };
 }

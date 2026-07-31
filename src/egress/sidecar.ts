@@ -40,8 +40,10 @@ export interface EgressSidecar {
 // alone, so ANY change to Dockerfile.proxy or to the dist/egress code it bakes in reaches nobody who
 // already built the old tag — a stale image keeps serving, and doctor keeps calling it healthy. Bump
 // this whenever a change must actually reach existing installs (a decision-log format change was the
-// original such case; the base-image move to node:22-slim is another). :3 = the node:22-slim base.
-const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:3";
+// original such case; the base-image move to node:22-slim is another). :3 = the node:22-slim base;
+// :4 = the explicit `host:'0.0.0.0'` bind (the proxy now defaults to loopback, so the sidecar — which
+// the agent container reaches ACROSS the docker network — must ask for a non-loopback bind by name).
+const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:4";
 
 // A process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
 // instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).

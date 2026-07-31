@@ -100,11 +100,24 @@ describe("#54: trustedWorkspaceFiles collapses an untrustworthy walk to UNAVAILA
         rootAbsent: false,
         walkComplete: true,
         walkErrors: [],
+        scratchpadScanned: false,
+        scratchpadWalkErrors: [],
+        scratchpadSkippedLinks: [],
       }),
     ).toEqual([{ path: "outputs/a", bytes: 1, class: "output" }]);
   });
   it("returns undefined when the root was unobservable (#52 rootAbsent)", () => {
-    expect(trustedWorkspaceFiles({ files: [], rootAbsent: true, walkComplete: true, walkErrors: [] })).toBeUndefined();
+    expect(
+      trustedWorkspaceFiles({
+        files: [],
+        rootAbsent: true,
+        walkComplete: true,
+        walkErrors: [],
+        scratchpadScanned: false,
+        scratchpadWalkErrors: [],
+        scratchpadSkippedLinks: [],
+      }),
+    ).toBeUndefined();
   });
   it("returns undefined when a nested subtree was unreadable (#54 !walkComplete), NOT the partial list", () => {
     const partial = [{ path: "outputs/visible.txt", bytes: 4, class: "output" as const }];
@@ -114,6 +127,9 @@ describe("#54: trustedWorkspaceFiles collapses an untrustworthy walk to UNAVAILA
         rootAbsent: false,
         walkComplete: false,
         walkErrors: [{ path: "outputs/locked", error: "EACCES" }],
+        scratchpadScanned: false,
+        scratchpadWalkErrors: [],
+        scratchpadSkippedLinks: [],
       }),
     ).toBeUndefined();
   });

@@ -16,6 +16,9 @@ namespace.
 1. As soon as the run's output directory (`outDir`) exists — before the container/VM even spawns — the
    harness writes `<outDir>/status.json` with `"state":"running"` and prints
    `[status] <outDir>` to stderr, so a driving agent capturing that output knows exactly where to look.
+   **`--compact`/`--demo` suppress that line** — it is a raw, un-tildeified host path, which those
+   shareable-output modes exist to withhold. `status.json` is still written, so pass the run-dir root
+   (or `--session-id`) instead; see the `<run-id | run-dir>` note below.
    `status.json`'s `fidelity` field is the scenario's DECLARED tier (`"cowork"` resolves to
    `container`/`hostloop` internally, but `status.json` shows `"cowork"`, matching `result.json`'s own
    convention) — not the resolved/effective one.

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -455,12 +455,42 @@ describe.skipIf(!can)("CLI arg guards — run --repeat (E1)", () => {
     expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir\/--decider-cmd/);
   });
 
-  it("--max-budget-usd without --repeat is a usage error, not a silent no-op", () => {
+  // Was a usage error; now accepted on a single run and pre-flighted against that scenario's own cost
+  // history. Asserted via the REFUSAL path because it is the one that terminates without executing —
+  // the no-history path deliberately proceeds to a real run, which is not what an arg-guard test drives.
+  it("--max-budget-usd without --repeat is accepted, and pre-flights instead of erroring on the flag", () => {
     const d = mkdtempSync(join(tmpdir(), "g-repeat-"));
-    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
-    const r = run(["run", "s.yaml", "--max-budget-usd", "1.0"], d);
+    const runsDir = mkdtempSync(join(tmpdir(), "g-repeat-runs-"));
+    const outDir = join(runsDir, "pricey", "local_1", "turns", "1");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "result.json"),
+      JSON.stringify({
+        scenario: "pricey",
+        fidelity: "container",
+        baseline: "desktop-1.18286.0",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        cost: { usd: 9.5 },
+        outDir: join(runsDir, "pricey", "local_1"),
+      }),
+    );
+    writeFileSync(join(d, "pricey.yaml"), "name: pricey\nprompt: hi\n");
+    const withRuns = (args: string[]) => {
+      const r = spawnSync("node", [CLI, ...args], {
+        encoding: "utf8",
+        cwd: d,
+        env: { ...process.env, COWORK_HARNESS_RUNS_DIR: runsDir },
+      });
+      return { code: r.status, out: r.stdout + r.stderr };
+    };
+    withRuns(["stats", "--reindex"]);
+    const r = withRuns(["run", "pricey.yaml", "--max-budget-usd", "1.0"]);
+    expect(r.out).not.toMatch(/--max-budget-usd requires --repeat/);
+    expect(r.out).toMatch(/refused before spending/);
     expect(r.code).toBe(2);
-    expect(r.out).toMatch(/--max-budget-usd requires --repeat/);
   });
 
   it("--stop-on-diverge without --repeat is a usage error", () => {

@@ -30,11 +30,18 @@ describe("parseRepeatFlags", () => {
     expect(r).toMatchObject({ repeatN: 4, minPassRate: 0.5, stopOnDiverge: true, maxBudgetUsd: 2.5 });
   });
 
-  it("requires --repeat for every companion flag — they are meaningless alone", () => {
+  it("requires --repeat for every companion flag that only modifies a BATCH", () => {
     expect(() => parseRepeatFlags(["--min-pass-rate", "0.5"], "skill")).toThrow(/requires --repeat/);
     expect(() => parseRepeatFlags(["--stop-on-diverge"], "skill")).toThrow(/requires --repeat/);
-    expect(() => parseRepeatFlags(["--max-budget-usd", "1"], "skill")).toThrow(/requires --repeat/);
     expect(() => parseRepeatFlags(["--allow-budget-stop"], "skill")).toThrow(/requires --repeat/);
+  });
+
+  // --max-budget-usd is the exception: a single run is where you know LEAST what you are about to spend,
+  // so it is accepted alone and pre-flighted against the scenario's own cost history (cli.ts).
+  it("accepts --max-budget-usd WITHOUT --repeat — a single run needs a ceiling too", () => {
+    const r = parseRepeatFlags(["--max-budget-usd", "1"], "skill");
+    expect(r.maxBudgetUsd).toBe(1);
+    expect(r.repeatN).toBeUndefined();
   });
 
   it("defaults to no repeat, leaving argv unchanged", () => {

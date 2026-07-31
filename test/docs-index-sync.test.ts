@@ -79,11 +79,14 @@ describe("verdict-signals docs ↔ code", () => {
     expect(scenarioMdText).not.toMatch(/`result\.signals/);
   });
 
-  it('the docs\' "only five warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // The count is pinned so ADDING a warn-severity signal is a conscious act, not drift — a warn signal
+  // fires on every run without anyone opting in, so a careless one becomes noise for every user.
+  // 6 as of `undelivered_deliverables`.
+  it('the docs\' "only six warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(5);
-    expect(scenarioMdText).toMatch(/Only five codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(6);
+    expect(scenarioMdText).toMatch(/Only six codes are \*\*warn\*\*-severity/);
   });
 });
 

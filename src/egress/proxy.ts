@@ -16,6 +16,16 @@ export interface ProxyOptions {
   allow: string[]; // exact hostnames or "*.suffix"
   logPath?: string;
   port?: number;
+  /** Bind address. Defaults to LOOPBACK — the two sites a guest dials over a real interface (the microVM
+   *  host proxy and the Docker sidecar) pass "0.0.0.0" explicitly.
+   *
+   *  Why the default matters: an unqualified `listen(0)` binds the wildcard, and on macOS SO_REUSEADDR
+   *  lets a wildcard `*:P` coexist with an existing `127.0.0.1:P` listener. The ephemeral allocator can
+   *  hand out a port some unrelated long-lived process already holds on loopback — and the kernel then
+   *  routes every `127.0.0.1` connection to the MORE SPECIFIC listener, silently stealing traffic meant
+   *  for this proxy. The victim sees a connection that never gets its `200 Connection Established`.
+   *  Binding loopback by default makes the collision a loud EADDRINUSE instead of a silent steal. */
+  host?: string;
   onDecision?: (host: string, decision: "allow" | "deny") => void;
 }
 
@@ -173,7 +183,7 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
   });
   // port 0 → OS assigns an ephemeral port; actualPort is populated on "listening" above.
   // Dockerfile.proxy passes an explicit port via PORT env; execute.ts passes 0 for the microVM path.
-  server.listen(opts.port ?? 0);
+  server.listen(opts.port ?? 0, opts.host ?? "127.0.0.1");
   (server as EgressProxy).ready = ready;
   return server as EgressProxy;
 }
