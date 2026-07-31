@@ -61,6 +61,34 @@ All notable changes to this project are documented here. The format is based on
 
 ## [1.14.0] — 2026-07-30
 
+### Fixed
+
+- **`stats` under-reported a `critique`'s cost by 65–84%; it now reports a group `total=`.** A critique's
+  three index rows partition its spend disjointly — the two graded turns carry their own, and the roll-up
+  row's `costUsd` is the two evaluator passes *only*, set that way so the sum is exact and double-counts
+  nothing. But `stats` dropped every roll-up row before any filter ran, so the one consumer that sums
+  `costUsd` never saw the partition. A live critique costing **$1.0588** was reported at **$0.368**
+  unfiltered and **$0.1708** under `--label`. `critiqueTotalUsd`, added in 1.13.0 for exactly this, had
+  writers, a type guard and tests — and no reader. Root cause: one predicate answered two different
+  questions. *"Is this a run?"* is correctly **no** for a roll-up (it has no verdict or duration, and
+  counting it drags `passRate` toward 1); *"does this carry spend?"* is **yes**, and the same gate said no.
+  Those are now separate predicates. **Every count, rate and percentile is unchanged** — cost `p50`/`p95`
+  stay per-run, since the median of a graded turn, a reflection turn and an evaluator pair is not a typical
+  run cost. The new **`totalUsd`** is the figure that prices a critique whole. It is `undefined`, never
+  `$0.0000`, when nothing was priced, and new **`unpricedRuns`** counts rows with no cost telemetry so a
+  total that is a floor says so. **`--max-budget-usd` is deliberately untouched**: its pre-flight asks
+  "will my next RUN breach this cap", so it still reads run-only history — feeding it evaluator spend would
+  have refused runs costing a fifth of the cap. Text output appends `total=$X` after the cost percentiles
+  (and `(N unpriced)` when relevant), so a consumer scraping the existing line keeps matching.
+- **A `--label`-filtered total is now complete.** `--label` reaches a critique's task turn but deliberately
+  not its reflection turn (labelling it would inject a near-always-green row into the labelled group and
+  inflate `passRate`), so a label-filtered set held turn 1 + the roll-up and silently dropped turn 2 — 19%
+  light. Rows are now re-admitted by shared `runId`, since a critique is one session. Those re-admitted
+  rows count toward **cost only** — never `runs`, `passRate` or any percentile — so the pass-rate property
+  the labelling rule protects is preserved exactly. Expansion applies only to the identity filters
+  (`--label`, `--skill-hash`) and never re-admits a row excluded by `--scenario`/`--since`/`--baseline`/
+  `--branch`. `--skill-hash` needed nothing: all three rows already carry the hash.
+
 ### Added
 
 - **`critique` accepts `--fidelity cowork`.** It was refused on the grounds that `cowork` resolves

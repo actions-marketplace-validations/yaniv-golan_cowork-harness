@@ -2997,7 +2997,11 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
   if (metric === "pass-rate") return base;
-  if (metric === "cost") return `${base} — cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}`;
+  // `total` is the whole group's spend, roll-ups included; the percentiles beside it are per-RUN and
+  // exclude them. Appended rather than inserted, so a consumer scraping the existing text keeps matching.
+  const totalPart =
+    s.totalUsd !== undefined ? ` total=${fmtCost(s.totalUsd)}${s.unpricedRuns > 0 ? ` (${s.unpricedRuns} unpriced)` : ""}` : "";
+  if (metric === "cost") return `${base} — cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}${totalPart}`;
   if (metric === "duration") return `${base} — duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}`;
   if (metric === "tokens") return `${base} — tokens p50=${s.p50Tokens ?? "n/a"} p95=${s.p95Tokens ?? "n/a"}`;
   if (metric === "turns") return `${base} — turns p50=${s.p50Turns ?? "n/a"} p95=${s.p95Turns ?? "n/a"}`;
@@ -3005,7 +3009,10 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
     return `${base} — cache-read-tokens p50=${s.p50CacheReadTokens ?? "n/a"} p95=${s.p95CacheReadTokens ?? "n/a"}`;
   if (metric === "model-cost") return `${base} — model-cost p50=${fmtCost(s.p50ModelCostUsd)} p95=${fmtCost(s.p95ModelCostUsd)}`;
   const parts = [
-    s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}` : null,
+    // `|| totalPart.trim()`: a group whose only PRICED row is a roll-up has no cost percentiles (those are
+    // run-only) but does have a total — dropping it there would hide the whole cost of exactly the case
+    // this feature exists for.
+    s.p50CostUsd !== undefined ? `cost p50=${fmtCost(s.p50CostUsd)} p95=${fmtCost(s.p95CostUsd)}${totalPart}` : totalPart.trim() || null,
     s.p50DurationMs !== undefined ? `duration p50=${fmtMs(s.p50DurationMs)} p95=${fmtMs(s.p95DurationMs)}` : null,
     s.lastGreenTs ? `last green ${s.lastGreenTs}` : "never green",
     s.prunedRuns > 0 ? `${s.prunedRuns} pruned` : null,

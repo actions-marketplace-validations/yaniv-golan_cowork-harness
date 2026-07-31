@@ -30,9 +30,29 @@ four-workload spend) plus the `skill` it graded; the two turn rows carry `critiq
 **`sum(costUsd)` over all rows is correct with no filtering.** The roll-up's `costUsd` is the EVALUATOR
 passes only — the two turns already contribute their own — so nothing double-counts and nothing is missed.
 `critiqueTotalUsd` is the per-critique convenience figure; summing THAT across roll-ups also gives true
-total critique spend. Roll-ups are excluded from `stats` aggregation entirely (they are bookkeeping, carry
-no verdict, and would otherwise add a phantom run and drag `passRate` toward 1). A roll-up with
-`result:"error"` means a workload was unpriced, so its totals UNDERCOUNT.
+total critique spend. A roll-up with `result:"error"` means a workload was unpriced, so its totals
+UNDERCOUNT.
+
+**Which statistics see a roll-up, and which do not.** Three different questions want three different row
+sets, and `stats` keeps them apart deliberately:
+
+| The question | Answered by | Roll-ups |
+|---|---|---|
+| *Is this a run, and did it pass?* | `runs`, `passRate`, `lastGreenTs`, `prunedRuns` | **excluded** — a roll-up has no verdict and no duration; counting it adds a phantom run and drags `passRate` toward 1 |
+| *What does ONE run cost or take?* | every `p50`/`p95` | **excluded** — the p50 of `[task, reflection, evaluators]` is not a typical run cost |
+| *What did all of this cost me?* | **`totalUsd`** | **included** — the only figure that reflects a critique's true spend |
+
+So a critique's real cost is `totalUsd`, never the cost percentiles beside it. On the live example run,
+`p50` reads `$0.1708` (a graded turn) against a `totalUsd` of `$1.0588` (the whole critique). The two are
+answering different questions and are both correct.
+
+`totalUsd` is `undefined` — never `$0.0000` — when nothing in the group carried cost telemetry, and
+**`unpricedRuns`** counts rows in the cost set that had none, so a total that is a floor says so instead
+of looking precise. The same rule as everywhere else here: an unpriced row is skipped, not counted as zero.
+
+**`--max-budget-usd` is deliberately NOT built on `totalUsd`.** Its pre-flight reads per-RUN history, which
+excludes roll-ups: it is asking "will my next run breach this cap", and a run is not a critique. Including
+evaluator spend there would refuse runs costing a fraction of the cap.
 
 `--reindex` reconstructs roll-ups from each run dir's `critique-report.json`, so a lost or corrupted index
 recovers critique costs along with everything else — provided the run dirs survive. Reconstruction is
@@ -78,7 +98,9 @@ cowork-harness stats csv-metrics --group-by skill-hash   # one row per skill gen
 cowork-harness stats csv-metrics --runs                   # + the individual runs behind each summary
 ```
 
-Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, and the
+Default output is a per-scenario summary line: run count, pass rate, cost/duration p50 & p95, the group's
+**`total=` spend** (roll-ups included — see the table above; appended after the cost percentiles, and
+followed by `(N unpriced)` when some row lacked cost telemetry), and the
 most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed). Each
 summary also carries `distinctSkillHashes` (how many skill generations the window folded together — see
 *Grouping by generation*), and the envelope carries `hashlessRuns` alongside `stats`.
