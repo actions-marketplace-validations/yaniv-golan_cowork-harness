@@ -745,7 +745,7 @@ function skillHashMatches(rowHash: string | undefined, query: string): boolean {
 
 /** The identity a group is keyed by. Kept as FIELDS, not a joined string: `buildStats` used to
  *  destructure its map key straight into `StatsSummary.scenario`, so a composite key would have emitted
- *  `scenario: "my-scenario abc123"` into the text line AND the JSON envelope — breaking scenario
+ *  `scenario: "my-scenario\0abc123"` into the text line AND the JSON envelope — breaking scenario
  *  matching for every consumer. A `--label` value is unvalidated freeform and may contain anything, so
  *  splitting a joined key back apart is not reliably possible either. */
 interface StatsGroup {
