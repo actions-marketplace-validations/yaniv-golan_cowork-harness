@@ -480,6 +480,12 @@ function hasHelp(args: string[]): boolean {
 // where `--help` was an "unknown flag" error — so you could only discover flags by triggering a bad
 // invocation. Intercept `--help`/`-h` at dispatch and print the command's usage (exit 0). One concise line
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
+
+/** The `trace --view` catalog — module-scope so `SUBCOMMAND_USAGE.trace` and the runtime validator in
+ *  `cmdTrace` cannot drift. `test/cli-help.test.ts` pins the usage string against this literal by
+ *  reading the source text (cli.ts is an entry module: importing it would run `main()`). */
+const TRACE_VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage", "subagent-research"] as const;
+
 const SUBCOMMAND_USAGE: Record<string, string> = {
   sync: "usage: sync [--diff] [--allow-empty|--force]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
@@ -503,7 +509,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
     "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.",
   trace:
-    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage] [--translate-paths] [--full-results] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --view tool-errors     one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars\n       --view files           workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)\n       --view usage           per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
+    "usage: trace <run-id | run-dir | events.jsonl> [--view tools|questions|dispatches|tool-durations|tool-errors|files|usage|subagent-research] [--translate-paths] [--full-results] [--output-format json]\n       --view tools           tool call / result rows\n       --view questions       gate lifecycle (question → answer → delivered)\n       --view dispatches      sub-agent dispatch tree + dispatch_count_max\n       --view tool-durations  per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)\n       --view tool-errors     one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars\n       --view files           workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)\n       --view usage           per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)\n       --view subagent-research  each dispatch's own WebSearch query + result, read from the sibling result.json's subagents[].webSearches (live/record lane capture only); UNAVAILABLE on replay, never rendered as zero research\n       --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)\n       --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)\n       (default: all views)\n       (for what the run PRODUCED — artifacts — use `inspect`)",
   assertions: "usage: assertions --list [--output-format json]",
   scaffold:
     "usage: scaffold <run-id | run-dir> [--out <file.yaml>] [--output-format text|json]\n       Turns a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists).\n       Positional <run-id | run-dir> is the canonical form.",
@@ -4240,7 +4246,7 @@ function cmdTrace(args: string[]) {
   const viewEqMatch = args.find((a) => a.startsWith("--view="));
   const viewArg: string | undefined = viewEqMatch ? viewEqMatch.slice("--view=".length) : viewIdx >= 0 ? args[viewIdx + 1] : undefined;
 
-  const VIEWS = ["tools", "questions", "dispatches", "tool-durations", "tool-errors", "files", "usage", "subagent-research"] as const;
+  const VIEWS = TRACE_VIEWS;
   type View = (typeof VIEWS)[number];
   if (viewArg !== undefined && !VIEWS.includes(viewArg as View)) {
     fail("trace", "usage", `--view: expected one of ${VIEWS.join("|")}, got "${viewArg}"`, undefined, json);

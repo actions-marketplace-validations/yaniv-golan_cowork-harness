@@ -300,3 +300,33 @@ describe("cli sync command: platform guard message accuracy", () => {
     expect(m![1]).toMatch(/this harness|sync tooling|not (yet )?support/i);
   });
 });
+
+// Docs guard: `trace --help` must list every view the runtime `--view` validator accepts. The two
+// sides used to drift (`subagent-research` was added to the runtime VIEWS array but never reached the
+// usage string) — this pins them to the same module-scope literal so that can't happen silently again.
+describe("trace --help stays in sync with the view catalog", () => {
+  const src = readFileSync(resolve("src/cli.ts"), "utf8");
+
+  // The single source of truth: the TRACE_VIEWS literal at module scope.
+  const views = (/const TRACE_VIEWS = \[([^\]]+)\] as const;/.exec(src)?.[1] ?? "")
+    .split(",")
+    .map((s) => s.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+
+  // The trace entry of SUBCOMMAND_USAGE, up to the closing quote of its first string.
+  const usage = /\n  trace:\n\s+"((?:[^"\\]|\\.)*)"/.exec(src)?.[1] ?? "";
+
+  it("parsed both sides out of the source", () => {
+    expect(views.length).toBeGreaterThan(5);
+    expect(usage).toContain("--view");
+  });
+
+  it("documents every view in the --view bracket list", () => {
+    const bracket = /--view ([a-z|-]+)\]/.exec(usage)?.[1] ?? "";
+    expect(bracket.split("|").sort()).toEqual([...views].sort());
+  });
+
+  it("gives every view its own explanation line", () => {
+    for (const v of views) expect(usage).toContain(`--view ${v} `);
+  });
+});
