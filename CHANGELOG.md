@@ -168,6 +168,25 @@ All notable changes to this project are documented here. The format is based on
   `total_cost_usd`), noted as a different source from summing `modelUsage[].costUSD`, which is what
   `trace --view usage` reports and which can legitimately differ.
 
+- **The verdict footer prints `warn`-severity signals. It never did.** Only `fail` signals were rendered,
+  and only in the branch a failing run takes — so on a green run every warn (`undelivered_deliverables`,
+  `ended_with_question`, `scan_unavailable`, `exec_infra_error`, `prompt_asset_missing`) reached
+  `result.json` and no surface a human reads. That is backwards for a severity whose entire purpose is to
+  fire when *nobody authored an assertion*: the runs that most need the warning are the ones where nobody
+  will go looking for it. Warns now render on pass and fail alike, prefixed `·` (never `✗` — a warn does
+  not change the verdict, and marking it like a failure would teach readers to skip it) and never
+  truncated, since the message *is* the finding. `non_deterministic` is excluded because the meta line
+  already carries it. Found by running this release's own new signal live and watching it not appear.
+
+- **`undelivered_deliverables` described the wrong lane's failure on `lane: remote`.** The candidate set
+  is lane-dependent — on remote nothing is delivered by location, so a file under `outputs/` counts — but
+  the message text was written for the local case only. A remote run therefore named `outputs/report.md`,
+  asserted it was "written outside every user-visible root", and prescribed "write deliverables under
+  `outputs/`" as the fix for a file already sitting there: self-contradictory, and the remedy is not even
+  true on that lane. The explanation now branches on the same predicate that selects the candidates, and
+  both variants name `allow_undelivered_deliverables` so the reader is told how to silence it. The
+  pre-existing tests asserted only the signal *code*, which is why the prose could be wrong and green.
+
 ## [1.13.2] — 2026-07-28
 
 ### Fixed

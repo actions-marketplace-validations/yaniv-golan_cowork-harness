@@ -200,6 +200,49 @@ describe("renderer — renderFooter", () => {
     expect(s.text()).toContain("1.5s");
   });
 
+  // A `warn` signal fires with no assertion authored — that is what the severity is FOR. The footer used
+  // to print fail-severity signals only, and only in the fail branch, so on a green run a warn reached
+  // result.json and nothing a human would look at. Caught by a live run: `undelivered_deliverables`
+  // (2 files never delivered) was in result.json and absent from the terminal.
+  const undelivered: RunResult = {
+    ...base,
+    assertions: [{ assertion: {}, pass: true }],
+    scratchpadEvidenceComplete: true,
+    presentedFiles: [],
+    workspaceFiles: [{ path: "scratchpad/report.html", bytes: 10, class: "scratchpad" }],
+  };
+
+  it("pass footer surfaces a warn-severity signal (it fires without any assertion)", () => {
+    const s = sink();
+    renderFooter(undelivered, plan({ color: false }), { write: s.write });
+    expect(s.text()).toContain("✓ success"); // a warn never changes the verdict
+    expect(s.text()).toContain("undelivered_deliverables");
+    expect(s.text()).toContain("scratchpad/report.html"); // the finding itself, not just the code
+  });
+
+  it("fail footer surfaces warns too — a failing run is where they matter most", () => {
+    const s = sink();
+    renderFooter(
+      { ...undelivered, assertions: [{ assertion: { file_exists: "x" }, pass: false, message: "missing" }] },
+      plan({ color: false }),
+      {
+        write: s.write,
+      },
+    );
+    expect(s.text()).toContain("✗ FAIL");
+    expect(s.text()).toContain("undelivered_deliverables");
+  });
+
+  it("does not print non_deterministic twice — the meta line already carries it", () => {
+    const s = sink();
+    renderFooter({ ...base, assertions: [{ assertion: {}, pass: true }], nonDeterministic: true }, plan({ color: false }), {
+      write: s.write,
+    });
+    const t = s.text();
+    expect(t).toContain("non-deterministic (LLM-decided)");
+    expect(t).not.toContain("non_deterministic:");
+  });
+
   it("fail footer: ✗ + failing assertion + the failing transcript (the debug win)", () => {
     const s = sink();
     const r = makeRenderer(plan({ live: false }), () => {});

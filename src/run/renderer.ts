@@ -2,7 +2,7 @@ import { tildeify, writeAllSync } from "../io.js";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
-import { computeVerdict, type GuardReport, type GuardStatus } from "./verdict.js";
+import { computeVerdict, type GuardReport, type GuardStatus, type VerdictSignal } from "./verdict.js";
 import { formatGateProvenanceLine } from "./gate-provenance.js";
 import { turnArtifactPath } from "./turn-layout.js";
 import { budgetFields } from "../assert.js";
@@ -268,6 +268,13 @@ export function renderFooter(
   const verdict = computeVerdict(r, opts.lane ?? "live");
   const passed = verdict.pass;
   const failSignals = verdict.signals.filter((s) => s.severity === "fail");
+  // A `warn` signal fires WITHOUT anyone authoring an assertion — that is the whole point of the severity
+  // (undelivered_deliverables exists precisely for runs whose author never considered delivery). Until
+  // this line, warns reached result.json and nothing else: on a PASSING run the footer printed only
+  // fail-severity signals, in a branch a passing run never enters, so the one audience that needs a warn
+  // had to open result.json to find it. `non_deterministic` is excluded because the meta line above
+  // already renders it (`nd`) — printing it here would say the same thing twice on the same footer.
+  const warnSignals = verdict.signals.filter((s) => s.severity === "warn" && s.code !== "non_deterministic");
   const sum = opts.renderer?.summary() ?? { tools: 0, subagents: 0 };
   const dur = opts.durationMs != null ? ` · ${(opts.durationMs / 1000).toFixed(1)}s` : "";
   // an LLM-decided run is NOT reproducible — never let a green read as a deterministic pass.
@@ -302,6 +309,7 @@ export function renderFooter(
     // the `?? 1` fallback below is never wrong for whatever reaches this line.
     if (opts.lane !== "replay" && r.outDir)
       write(`   ${dim(plan, "→ result: " + tildeify(turnArtifactPath(r.outDir, r.turn ?? 1, "result.json")))}\n`);
+    renderWarns(warnSignals, plan, write); // a green run is exactly when an unasserted warn is easiest to miss
     renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
     renderGateProvenance(r, plan, write);
     renderAnswerHints(r, plan, write);
@@ -336,6 +344,7 @@ export function renderFooter(
       `   ${dim(plan, "no terminal result event (likely turn/time exhaustion) — see " + (r.stderrLogPath ? tildeify(r.stderrLogPath) : "the run's agent.stderr.log"))}\n`,
     );
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
+  renderWarns(warnSignals, plan, write);
   renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)
   renderGateProvenance(r, plan, write);
   renderAnswerHints(r, plan, write);
@@ -368,6 +377,13 @@ export function renderFooter(
  */
 // the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
 // The load-bearing rule (no silent-false-green): a guard that didn't run renders — / ?, never ✓.
+/** Warn-severity verdict signals, one line each. `·` (not ✗) — a warn never changes pass/fail, and a
+ *  footer that marked it like a failure would train readers to ignore it. Never truncated: a warn's
+ *  message IS the finding (which files, and what to do), so a clipped one is worse than none. */
+function renderWarns(warns: VerdictSignal[], plan: RenderPlan, write: Sink): void {
+  for (const s of warns) write(`   ${dim(plan, "· " + s.code + ": " + s.message)}\n`);
+}
+
 function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): void {
   if (!guards.length) return;
   const sym = (s: GuardStatus) => (s === "ok" ? "✓" : s === "fired" ? "✗" : s === "unverified" ? "?" : "—");

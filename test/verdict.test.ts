@@ -551,6 +551,41 @@ describe("verdict — undelivered_deliverables: review regressions", () => {
     expect(codes(r)).not.toContain("undelivered_deliverables");
   });
 
+  // The candidate set is lane-dependent, so the EXPLANATION must branch on the same predicate. Caught
+  // live: on remote the message inherited the local wording and contradicted itself — it named
+  // `outputs/report.md`, called it "written outside every user-visible root", and prescribed "write
+  // deliverables under outputs/" as the remedy for a file already there. The pre-existing tests asserted
+  // only the signal CODE, so nothing failed. These assert the prose, which is the whole payload of a
+  // signal whose severity means nobody has to have authored an assertion to see it.
+  const msg = (r: RunResult) => computeVerdict(r, "live").signals.find((s) => s.code === "undelivered_deliverables")!.message;
+
+  it("on lane: remote, the message does NOT claim the file is outside a user-visible root", () => {
+    const m = msg(observed({ lane: "remote", workspaceFiles: [out("outputs/report.html")] }));
+    expect(m).toContain("outputs/report.html");
+    expect(m).not.toContain("outside every user-visible root");
+    expect(m).toContain("lane: remote");
+  });
+
+  it("on lane: remote, the message does not prescribe outputs/ as the remedy", () => {
+    const m = msg(observed({ lane: "remote", workspaceFiles: [out("outputs/report.html")] }));
+    expect(m).toContain("does not help on this lane");
+    expect(m).toContain("delivers it explicitly");
+  });
+
+  it("on lane: local, the scratchpad wording and the outputs/ remedy are kept", () => {
+    const m = msg(observed({ lane: "local", workspaceFiles: [scratch("scratchpad/report.html")] }));
+    expect(m).toContain("outside every user-visible root");
+    expect(m).toContain("Write deliverables under outputs/");
+  });
+
+  it("names the opt-out key on both lanes — the reader is told how to silence it", () => {
+    for (const r of [
+      observed({ lane: "local", workspaceFiles: [scratch("scratchpad/a.html")] }),
+      observed({ lane: "remote", workspaceFiles: [out("outputs/a.html")] }),
+    ])
+      expect(msg(r)).toContain("allow_undelivered_deliverables");
+  });
+
   // A read-only input the agent never authored is not a deliverable it failed to deliver.
   it("never counts input-class files as undelivered, even on remote", () => {
     const r = observed({ lane: "remote", workspaceFiles: [{ path: "uploads/in.csv", bytes: 1, class: "input" as const }] });

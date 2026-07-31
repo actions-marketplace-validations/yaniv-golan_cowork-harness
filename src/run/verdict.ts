@@ -351,9 +351,19 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
             .slice(0, 5)
             .map((f) => f.path)
             .join(", ")}${undelivered.length > 5 ? `, +${undelivered.length - 5} more` : ""}. ` +
-          "They were written outside every user-visible root and never delivered — on a remote Cowork session the " +
-          "workspace is reclaimed at session end, and on a local one they stay invisible to the user. " +
-          "Write deliverables under outputs/ (or a connected folder), or deliver them explicitly.",
+          // The explanation and the remedy BOTH depend on the lane, and must be branched on the same
+          // predicate that selected the candidates above — otherwise the remote lane (whose candidate set
+          // includes files under a user-visible root) inherits the local wording and reads as a
+          // self-contradiction: "written outside every user-visible root" naming `outputs/report.md`,
+          // with "write deliverables under outputs/" as the fix for a file already there. Observed live.
+          (locationDelivers(result.lane)
+            ? "They were written outside every user-visible root and never delivered — on a remote Cowork session the " +
+              "workspace is reclaimed at session end, and on a local one they stay invisible to the user. " +
+              "Write deliverables under outputs/ (or a connected folder), or deliver them explicitly."
+            : "On `lane: remote` NOTHING is delivered by location — the session's workspace is reclaimed at session " +
+              "end, so a file reaches the user only if the skill delivers it explicitly. Moving it under outputs/ " +
+              "does not help on this lane; deliver each one.") +
+          " Set `allow_undelivered_deliverables: true` if these are intermediates the user is not meant to receive.",
       });
 
     // absent scan evidence means host-path/outputs-delete did NOT run — a silent ✓ there would be its own
