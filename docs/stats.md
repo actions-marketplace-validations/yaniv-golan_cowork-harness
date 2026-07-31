@@ -103,7 +103,9 @@ Default output is a per-scenario summary line: run count, pass rate, cost/durati
 followed by `(N unpriced)` when some row lacked cost telemetry), and the
 most recent **passing** run's timestamp (`lastGreenTs` — absent if the scenario has never passed). Each
 summary also carries `distinctSkillHashes` (how many skill generations the window folded together — see
-*Grouping by generation*), and the envelope carries `hashlessRuns` alongside `stats`.
+*Grouping by generation*) and `distinctTiers`/`tiers` (how many effective fidelity tiers — see *Grouping
+by tier* below; unlike `distinctSkillHashes`, this key is total so there is no companion counter for rows
+it couldn't see), and the envelope carries `hashlessRuns` alongside `stats`.
 `--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost` narrows the line to just that one
 view (`cache-tokens` shows cache-read-token p50/p95; `model-cost` shows per-model cost p50/p95, distinct
 from the plain `cost` metric's overall run cost). `--last <n>`
@@ -138,9 +140,10 @@ generation a given run belonged to without opening its `result.json`. It selects
 summary above it aggregated (same filter path), and adds a `runs` array to the JSON envelope; without the
 flag that key is absent.
 
-`--group-by` accepts `scenario` (default) | `skill-hash` | `label`. When a window you did NOT narrow
-spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill generations`) and
-reports `distinctSkillHashes` in the JSON envelope, so CI can gate on the field rather than scraped text.
+`--group-by` accepts `scenario` (default) | `skill-hash` | `label` | `fidelity`. When a window you did NOT
+narrow spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill
+generations`) and reports `distinctSkillHashes` in the JSON envelope, so CI can gate on the field rather
+than scraped text.
 `--last <n>` windows per **group**, so `--group-by skill-hash --last 5` means "the last 5 runs of each
 generation".
 
@@ -160,6 +163,20 @@ pre-1.5.0 skill-lane row) is **excluded and counted**, never bucketed under a bl
 window mixing one generation with hashless runs is also comparing unlike things and the warning cannot
 see it. `hashlessRuns` is reported only when you group, so on a default `stats <scenario>` those rows are
 folded in silently. If a scenario's history mixes `chat`/no-skill runs with real ones, group explicitly.
+
+### Grouping by tier (the environment axis)
+
+`container` and `hostloop` runs of one scenario differ in pass rate, cost, and duration — averaging
+them is the same unlike-things mistake as averaging skill generations. Each summary carries
+`distinctTiers` and `tiers` (computed over `effectiveFidelity ?? fidelity` — what actually **ran**,
+so a `--fidelity cowork` run counts as the tier the gate resolved it to). When a window spans more
+than one tier, `stats` says so on stderr (`::warning:: … spans N fidelity tiers (…)`) and the remedy
+is `--group-by fidelity`, which splits per tier (`fidelity=container` / `fidelity=hostloop` on each
+line) and splits `totalUsd` with it — per-tier cost in one command. Unlike generation grouping,
+every row has a tier, so nothing is ever excluded from this grouping and there is no
+`hashlessRuns`-style counter for it. The generation warning and the tier warning fire
+independently: a window mixing both axes is unlike-vs-unlike twice over, and each warning names a
+different remedy.
 
 **The `jq` recipes below are still worth knowing** — they cover what the flags deliberately do not.
 `stats` reports cost *percentiles* over aggregatable rows only, so a per-generation **total spend** that

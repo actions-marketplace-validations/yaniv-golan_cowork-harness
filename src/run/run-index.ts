@@ -665,10 +665,20 @@ export function resolveRunsFromIndex(rows: RunIndexRow[], arg: string): RunIndex
   return resolveRunsFragmentFromIndex(rows, arg);
 }
 
-/** How `buildStats` buckets rows. `scenario` is the historical (and default) behaviour; the other two
- *  split a scenario by run IDENTITY, which is what an iterate-across-fixes A/B actually wants — a
- *  window spanning two skill versions aggregates unlike things, and only the tool can see that. */
-export type StatsGroupBy = "scenario" | "skill-hash" | "label";
+/** The tier a row actually RAN at. `fidelity` is what was asked for (possibly `cowork`);
+ *  `effectiveFidelity` is what resolved — comparability is about the environment, so effective leads.
+ *  The fallback covers the one writer that can omit it (reindex-from-critique-report with no
+ *  gradedEffectiveFidelity). TOTAL by construction — `fidelity` is a required field — so grouping on it
+ *  excludes nothing and needs no hashlessRuns-style honesty channel. If the fallback ever yields the
+ *  literal "cowork", grouping it separately is CORRECT: we genuinely do not know which tier it resolved
+ *  to, so it is unlike everything else. */
+const tierOf = (r: RunIndexRow): string => r.effectiveFidelity ?? r.fidelity;
+
+/** How `buildStats` buckets rows. `scenario` is the historical (and default) behaviour; `skill-hash` /
+ *  `label` split a scenario by run IDENTITY (the iterate-across-fixes A/B); `fidelity` splits by the
+ *  tier that actually RAN (`effectiveFidelity ?? fidelity`) — the ENVIRONMENT axis, the other thing
+ *  that makes two runs incomparable. */
+export type StatsGroupBy = "scenario" | "skill-hash" | "label" | "fidelity";
 
 export interface StatsSummary {
   scenario: string;
@@ -682,6 +692,17 @@ export interface StatsSummary {
    *  aggregate compares unlike things; `stats` warns on it. Always 1 under `--group-by skill-hash`.
    *  Counts only rows that HAVE a hash — see the hashless caveat on `StatsResult.hashlessRuns`. */
   distinctSkillHashes: number;
+  /** Set only when grouping by fidelity — the group's effective tier (`effectiveFidelity ?? fidelity`),
+   *  NOT folded into `scenario` (which stays exactly what it always was). */
+  fidelity?: string;
+  /** Distinct effective tiers among THIS group's post-window rows. The key is TOTAL — every row has
+   *  one — so unlike `distinctSkillHashes` there is no "rows without one" caveat and deliberately no
+   *  tierless counter. > 1 means the aggregate spans environments; `stats` warns and names them.
+   *  Always 1 under `--group-by fidelity`. */
+  distinctTiers: number;
+  /** The tier names behind `distinctTiers`, sorted — so the warning can name them without every
+   *  consumer re-deriving the fallback. */
+  tiers: string[];
   p50CostUsd?: number;
   p95CostUsd?: number;
   p50DurationMs?: number;
@@ -769,6 +790,7 @@ interface StatsGroup {
   scenario: string;
   skillHash?: string;
   runLabel?: string;
+  fidelity?: string;
   /** RUN rows — every count, rate, and percentile is computed from exactly these. */
   rows: RunIndexRow[];
   /** Rows contributing to `totalUsd` ONLY: `rows` plus the roll-ups, plus any row re-admitted by session
@@ -855,7 +877,8 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
   const spendScoped = hasIdentityFilter ? scoped.filter((r) => matchedRunIds.has(r.runId)) : scoped;
 
   const groupBy = filters.groupBy ?? "scenario";
-  const identityOf = (r: RunIndexRow) => (groupBy === "skill-hash" ? r.skillHash : groupBy === "label" ? r.runLabel : undefined);
+  const identityOf = (r: RunIndexRow) =>
+    groupBy === "skill-hash" ? r.skillHash : groupBy === "label" ? r.runLabel : groupBy === "fidelity" ? tierOf(r) : undefined;
   // NUL joins the composite: `--label` is unvalidated freeform (it may contain spaces, `=`, anything a
   // shell will pass), so any printable separator could collide two distinct generations into one group.
   const keyOf = (r: RunIndexRow, identity: string | undefined) => (groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`);
@@ -879,6 +902,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
         scenario: r.scenario,
         ...(groupBy === "skill-hash" ? { skillHash: identity } : {}),
         ...(groupBy === "label" ? { runLabel: identity } : {}),
+        ...(groupBy === "fidelity" ? { fidelity: identity } : {}),
         rows: [],
         spend: [],
       };
@@ -923,7 +947,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
 export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsResult {
   const { groups, hashlessRuns } = resolveGroups(rows, filters);
   const summaries: StatsSummary[] = [];
-  for (const { scenario, skillHash, runLabel, rows: group, spend } of groups.values()) {
+  for (const { scenario, skillHash, runLabel, fidelity, rows: group, spend } of groups.values()) {
     // Roll-ups are IN here and nowhere else above — see `carriesSpend`. `undefined`, not 0, when nothing
     // in the group was priced: the house rule is that an unpriced row is skipped rather than counted as
     // zero, and a `$0.0000` total would read as "this was free" instead of "we could not tell".
@@ -941,6 +965,7 @@ export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsRes
     const cacheReadTokensArr = numbers((r) => r.cacheReadTokens);
     const modelCostArr = numbers((r) => r.modelCostUsd);
     const greens = group.filter((r) => r.pass).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+    const tiers = [...new Set(group.map(tierOf))].sort();
     summaries.push({
       scenario,
       // undefined-valued keys are dropped by JSON.stringify, so these appear only when grouped on.
@@ -951,6 +976,9 @@ export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsRes
       // Counted over the POST-window rows — the same set every other number here is computed from, so
       // the warning can never disagree with the aggregate it annotates.
       distinctSkillHashes: new Set(group.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,
+      ...(fidelity !== undefined ? { fidelity } : {}),
+      distinctTiers: tiers.length,
+      tiers,
       p50CostUsd: costs.length ? percentile(costs, 0.5) : undefined,
       p95CostUsd: costs.length ? percentile(costs, 0.95) : undefined,
       p50DurationMs: durations.length ? percentile(durations, 0.5) : undefined,

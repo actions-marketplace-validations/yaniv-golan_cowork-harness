@@ -333,3 +333,63 @@ describe.skipIf(!can)("cli: stats — generation queries", () => {
     expect(r.out).toContain("1 run(s) excluded from grouping");
   });
 });
+
+describe.skipIf(!can)("cli: stats — tier heterogeneity", () => {
+  /** One scenario, two tiers — the environment mix the warning exists to catch. */
+  function seedTwoTiers() {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { fidelity: "container" });
+    seedRun(root, "s", "local_2", { fidelity: "hostloop" });
+    run(["stats", "--reindex"], root);
+    return root;
+  }
+
+  it("T2: warns when one aggregate spans two tiers, naming the tiers and the remedy", () => {
+    const r = run(["stats", "s"], seedTwoTiers());
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("spans 2 fidelity tiers (container, hostloop)");
+    expect(r.out).toContain("--group-by fidelity");
+  });
+
+  it("T2b: a uniform-tier aggregate does not warn", () => {
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { fidelity: "container" });
+    seedRun(root, "s", "local_2", { fidelity: "container" });
+    run(["stats", "--reindex"], root);
+    expect(run(["stats", "s"], root).out).not.toContain("fidelity tiers");
+  });
+
+  it("--group-by fidelity splits the aggregate, labels each line, and silences the tier warning", () => {
+    const r = run(["stats", "s", "--group-by", "fidelity"], seedTwoTiers());
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain("fidelity tiers");
+    expect(r.out).toContain("fidelity=container");
+    expect(r.out).toContain("fidelity=hostloop");
+  });
+
+  it("rejects an unknown --group-by value naming the widened enum", () => {
+    const r = run(["stats", "s", "--group-by", "tier"], runsRoot());
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("scenario|skill-hash|label|fidelity");
+  });
+
+  it("UC5: distinctTiers and tiers ride in the JSON envelope — CI gates on the field, not scraped text", () => {
+    const r = run(["stats", "s", "--output-format", "json"], seedTwoTiers());
+    expect(r.code).toBe(0);
+    const line = r.out.split("\n").find((l) => l.trim().startsWith("{"));
+    const envelope = JSON.parse(line!);
+    expect(envelope.stats[0].distinctTiers).toBe(2);
+    expect(envelope.stats[0].tiers).toEqual(["container", "hostloop"]);
+  });
+
+  it("T8: the generation warning and the tier warning fire independently — two remedies, two lines", () => {
+    // 2 generations AND 2 tiers is unlike-vs-unlike twice over; neither warning may suppress the other.
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { fidelity: "container", fingerprint: { skillHash: "5d2d482d80d3aaaa" } });
+    seedRun(root, "s", "local_2", { fidelity: "hostloop", fingerprint: { skillHash: "8fc999c77cdfbbbb" } });
+    run(["stats", "--reindex"], root);
+    const r = run(["stats", "s"], root);
+    expect(r.out).toContain("spans 2 skill generations");
+    expect(r.out).toContain("spans 2 fidelity tiers");
+  });
+});

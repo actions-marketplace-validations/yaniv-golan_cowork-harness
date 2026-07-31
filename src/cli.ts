@@ -542,12 +542,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       exit codes: 0 found · 2 no runs found for the scenario under the runs root (or a usage error)",
   stats:
     "usage: stats [<scenario>] [--since <ISO date>] [--baseline <b>] [--branch <b>] [--metric pass-rate|cost|tokens|duration|turns|cache-tokens|model-cost] [--last <n>]\n" +
-    "              [--skill-hash <prefix>] [--label <tag>] [--group-by scenario|skill-hash|label] [--runs] [--reindex] [--output-format text|json]\n" +
+    "              [--skill-hash <prefix>] [--label <tag>] [--group-by scenario|skill-hash|label|fidelity] [--runs] [--reindex] [--output-format text|json]\n" +
     "       queryable summary over <runsRoot>/index.jsonl — per-scenario run count, pass rate, cost/duration/token/turn p50/p95, last-green timestamp.\n" +
     "       --reindex rebuilds the index from the physical run-dir tree first (one-time migration for pre-index runs, or if index.jsonl is lost/corrupted beyond its own per-line tolerance).\n" +
     "       --last <n>: the N most recent runs PER GROUP (not globally — a global cut would starve a low-frequency scenario out of the window).\n" +
     "       --skill-hash/--label: narrow to ONE generation of the iterate-across-fixes loop. skillHash is the content-exact key (matches a 12-char index prefix or the full hash from result.json); --label is the tag you passed to run/skill.\n" +
     "       --group-by skill-hash: split each scenario per generation instead of aggregating across them — the A/B in one command. A window spanning >1 generation warns (aggregating unlike things); rows with no skillHash/label are EXCLUDED from grouping and counted, never bucketed under a blank key.\n" +
+    "       --group-by fidelity: split each scenario per effective tier (what actually RAN — a cowork request counts as the tier it resolved to). A window spanning >1 tier warns; every row has a tier, so nothing is excluded from this grouping.\n" +
     "       --runs: also list the individual runs behind each summary (timestamp, verdict, runId, skillHash, label, cost) — which generation a run belonged to, without opening its result.json.\n" +
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
     "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
@@ -3011,7 +3012,13 @@ function preflightBudget(command: string, scenario: string, maxBudgetUsd: number
  *  The identity suffix appears only under a non-default `--group-by`, so it composes with EVERY metric
  *  branch below (each builds on `base`) without changing the default line at all. */
 function formatStatsLine(s: StatsSummary, metric?: string): string {
-  const identity = [s.skillHash ? `skillHash=${s.skillHash}` : null, s.runLabel ? `label=${s.runLabel}` : null].filter(Boolean).join(" ");
+  const identity = [
+    s.skillHash ? `skillHash=${s.skillHash}` : null,
+    s.runLabel ? `label=${s.runLabel}` : null,
+    s.fidelity ? `fidelity=${s.fidelity}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const base = `${s.scenario}${identity ? ` (${identity})` : ""}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
@@ -3086,8 +3093,8 @@ function cmdStats(args: string[]) {
       json,
     );
   const groupBy = readValueFlag("stats", args, "--group-by", json);
-  if (groupBy !== undefined && !["scenario", "skill-hash", "label"].includes(groupBy))
-    return void fail("stats", "usage", `--group-by must be one of scenario|skill-hash|label (got "${groupBy}")`, undefined, json);
+  if (groupBy !== undefined && !["scenario", "skill-hash", "label", "fidelity"].includes(groupBy))
+    return void fail("stats", "usage", `--group-by must be one of scenario|skill-hash|label|fidelity (got "${groupBy}")`, undefined, json);
   if (metric !== undefined && !["pass-rate", "cost", "tokens", "duration", "turns", "cache-tokens", "model-cost"].includes(metric))
     return void fail(
       "stats",
@@ -3147,6 +3154,16 @@ function cmdStats(args: string[]) {
           // with hashless ones (chat lane, a run that mounted no skill) is also unlike-vs-unlike and this
           // warning cannot see it. Better to say so than to let silence read as "checked, and fine".
           `(Counts only runs that recorded a skillHash — runs without one are not compared.)`,
+      );
+  // The OTHER unlike-things axis. Deliberately no hashless-style caveat: the tier key is total (every
+  // row has one), so there is no "rows this warning cannot see" case to disclose. Fires independently of
+  // the generation warning — 2 generations AND 2 tiers is unlike-vs-unlike twice over, and each warning
+  // names a different remedy.
+  for (const s of stats)
+    if (s.distinctTiers > 1)
+      log(
+        `::warning:: stats: "${s.scenario}" spans ${s.distinctTiers} fidelity tiers (${s.tiers.join(", ")}) — ` +
+          `this aggregate compares unlike things. Split with --group-by fidelity.`,
       );
   // `--runs` swaps the AGGREGATE for the per-run detail behind it — same filters, same
   // `resolveGroups`, so the two views can never describe different row sets.
