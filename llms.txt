@@ -13,6 +13,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 ## Authoring tests
 - [docs/scenario.md](docs/scenario.md): scenario YAML — prompt + scripted answers + assert:
 - Scenario `lane: local|remote` — which Cowork lane's DELIVERY CONTRACT a run is held to (default `local`). On `remote`, location delivers nothing (no auto-delivering outputs dir; the container is reclaimed at session end) and `present_files` is not served. Orthogonal to `fidelity` (isolation tier) and `execution` (where the run happens).
+- Assertion tier scope — `present_files_called` is served at `fidelity: container|hostloop`; `no_scratchpad_leak` is `container`-only (hostloop passes a validated path through without promoting, so there is no promotion to leak). Both fail as cannot-verify on `lane: remote`.
 - [docs/session.md](docs/session.md): session YAML — pre-prompt setup (model, mounts, discovery)
 - Greenfield scaffold: `python3 .claude/skills/cowork-harness/scripts/scenario.py scaffold --name <name> --skill <dir>` — generates a valid scenario skeleton from scratch (distinct from `cowork-harness scaffold <run-id | run-dir>`, which requires a prior kept run)
 - [examples/README.md](examples/README.md): worked, copyable example scenarios + sessions + skills (from a source checkout — the npm package ships only examples/replays/; protocol/container tiers, token-free replay, prerequisites)

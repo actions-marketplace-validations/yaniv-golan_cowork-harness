@@ -211,16 +211,18 @@ up often enough to spell out:
   (`staleness[]` flags skill/baseline drift as a hint; only a live `run` re-confirms current
   behavior). See [`docs/cassette.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md) § "Still skipped on replay" and [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) § "Which
   assertions survive replay."
-- **Container-only assertions can't verify off the `container` tier.** `no_scratchpad_leak` and
+- **`present_files` assertions can't verify off the tiers that serve the tool.** `no_scratchpad_leak` and
   `present_files_called` check the `present_files` delivery path — the desktop-local lane's tool; remote
   Cowork delivers via the agent-native `SendUserFile` instead, so never hardcode a delivery tool name in
-  a SKILL.md (SKILL.md Gotcha 24). **The harness** serves it **only** on
-  `container` — not `hostloop`/`microvm`. Asserting them off-container hard-fails at runtime (a red
-  run, not a false green), so you won't be fooled if you write the assertion. The quieter trap is a
-  scenario that runs at `hostloop`/`microvm`/`protocol` and simply omits these assertions: a green
-  run there proves **nothing** about scratchpad-leak safety or present_files delivery, because that
-  tier never exercises the delivery path the assertions would check. Use `fidelity: container` for
-  present_files/scratchpad-delivery coverage.
+  a SKILL.md (SKILL.md Gotcha 24). **The harness** serves `present_files` on `container` **and `hostloop`**
+  — not `microvm`/`protocol`. `present_files_called` works at both; `no_scratchpad_leak` stays
+  `container`-only, because hostloop's handler passes a validated path through without promoting, so
+  there is no scratch→outputs copy to leak. Asserting either key off the tiers that serve it hard-fails at
+  runtime (a red run, not a false green), so you won't be fooled if you write the assertion. The quieter
+  trap is a scenario that runs at `microvm`/`protocol` and simply omits these assertions: a green run
+  there proves **nothing** about scratchpad-leak safety or present_files delivery, because that tier
+  never exercises the delivery path the assertions would check. Use `fidelity: container` or `hostloop`
+  for present_files-delivery coverage; `no_scratchpad_leak` still needs `container` specifically.
 - **The harness doesn't observe rendered-artifact interactions, browser downloads, or human
   clicks.** It runs the agent headless — no webview, no browser, no person clicking "Submit." A
   class of Cowork bug (a client-side write-back to a relative URL that resolves-but-fails against
