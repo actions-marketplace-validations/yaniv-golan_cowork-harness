@@ -124,13 +124,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The egress proxy binds loopback by default, instead of the wildcard.** An unqualified `listen(0)`
+  bound `*:<port>`, and on macOS `SO_REUSEADDR` lets that coexist with an existing `127.0.0.1:<port>`
+  listener — so the ephemeral allocator could hand the proxy a port an unrelated long-lived process
+  already held on loopback, and the kernel would route every `127.0.0.1` connection to the **more
+  specific** listener. The proxy silently received nothing; the caller waited for a
+  `200 Connection Established` that never came. Root-caused from an intermittent test failure (~0.13% per
+  proxy start on a machine with 21 parked loopback listeners), reproduced 12 times, and verified at 0
+  failures in 5600 iterations after the change. A collision is now a loud `EADDRINUSE` rather than a
+  silent steal. The two places a guest dials the proxy over a real interface — the microVM host proxy and
+  the Docker sidecar — pass `host: "0.0.0.0"` explicitly, so production behaviour is unchanged. **The
+  sidecar image tag moves to `cowork-egress-proxy:4`** so existing installs pick up the new CMD.
+
 - **The egress-proxy image builds on a supported Node base, and existing installs actually receive it.**
   It was built `FROM node:20-slim`. Both `ensureProxyImage` and `doctor` reuse that image on **tag
   existence alone**, so changing the Dockerfile would have reached nobody who had already built it —
   their machine would keep serving egress from an end-of-life base while `doctor` reported it healthy.
-  The tag therefore moves to **`cowork-egress-proxy:3`**, which makes the next run rebuild it
-  automatically. **Reclaim the old image with `docker image rm cowork-egress-proxy:2`** — nothing removes
-  it for you. If you pin `COWORK_PROXY_IMAGE`, rebuild that image yourself. **If you bring the proxy up
+  The tag therefore moves to **`cowork-egress-proxy:4`** (via `:3`, which never shipped — see the egress
+  bind fix below), which makes the next run rebuild it automatically. **Reclaim any old images with
+  `docker image rm cowork-egress-proxy:2 cowork-egress-proxy:3`** — nothing removes them for you. If you pin `COWORK_PROXY_IMAGE`, rebuild that image yourself. **If you bring the proxy up
   via `docker/compose.yml`** rather than letting the CLI manage it, that service is built under compose's
   own project namespace and is not covered by the tag bump — rebuild it explicitly with
   `docker compose -f docker/compose.yml build egress-proxy`.

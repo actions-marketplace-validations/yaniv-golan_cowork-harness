@@ -661,6 +661,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // agent spawns, not before the proxy binds — so proxy-first eliminates the freePort() TOCTOU window.
         hostProxy = startEgressProxy({
           allow: plan.egressAllow,
+          // NON-loopback on purpose: the guest reaches this proxy at `gatewayIp:port` over a real
+          // interface (see spawnMicroVm's vmGatewayIp), so a loopback-only bind would be unreachable.
+          // Everywhere else the default loopback bind applies — see ProxyOptions.host.
+          host: "0.0.0.0",
           port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
           logPath: join(outDir, "egress.log"),
           onDecision: (host, decision) => egress.push({ host, decision }),

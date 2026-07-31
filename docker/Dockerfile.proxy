@@ -1,4 +1,6 @@
 # Default-deny egress proxy sidecar (test fixture, not a security boundary).
+# host:'0.0.0.0' is REQUIRED here: the agent container reaches this sidecar across the docker network,
+# not over loopback. startEgressProxy defaults to a loopback bind (see ProxyOptions.host).
 # Built from the SHIPPED dist/ (no source checkout / TS build) so it works from an installed package.
 FROM node:22-slim
 WORKDIR /app
@@ -12,4 +14,4 @@ ENV PORT=8080
 # Entry runs the proxy standalone reading COWORK_ALLOW (comma-separated).
 # COWORK_PROXY_LOG: where to write JSON decision lines (default stdout; the sidecar
 # points it at a bind-mounted file so the CLI can read per-run egress decisions).
-CMD ["node", "-e", "import('./dist/egress/proxy.js').then(m=>m.startEgressProxy({allow:(process.env.COWORK_ALLOW||'').split(',').filter(Boolean),port:Number(process.env.PORT||8080),logPath:process.env.COWORK_PROXY_LOG||'/dev/stdout'}))"]
+CMD ["node", "-e", "import('./dist/egress/proxy.js').then(m=>m.startEgressProxy({allow:(process.env.COWORK_ALLOW||'').split(',').filter(Boolean),host:'0.0.0.0',port:Number(process.env.PORT||8080),logPath:process.env.COWORK_PROXY_LOG||'/dev/stdout'}))"]

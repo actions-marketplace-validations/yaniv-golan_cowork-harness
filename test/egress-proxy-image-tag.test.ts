@@ -48,6 +48,6 @@ describe("egress proxy image", () => {
       "docker/Dockerfile.proxy changed. If the change must reach existing installs (it almost always " +
         "must — they reuse the image on tag existence alone), bump cowork-egress-proxy:<n> in " +
         "src/egress/sidecar.ts AND src/run/doctor.ts, then update this digest in the same commit.",
-    ).toBe("f0ee83982d658510f5f695eeaaed1f3f3d841e681498f2ed316b04256ef8cc42");
+    ).toBe("f550ba73e1b27f3c761259e72785ee2cc79ef6a4657ce47d1522834e8aa5bd50");
   });
 });
