@@ -345,6 +345,7 @@ def test_no_scratchpad_leak_on_cowork_is_warn_naming_the_gate_dependency(tmp_pat
     ]
     assert len(findings) == 1
     assert findings[0].severity == "WARN"
+    assert "no_scratchpad_leak" in findings[0].message
     # offline gate fact: the message names the gate-resolution dependency (mirrors host-path-assert-cowork)
     assert scenario.HOST_LOOP_GATE_ID in findings[0].message
 
@@ -389,6 +390,14 @@ def test_container_only_key_warn_gates_only_under_strict(tmp_path):
     code_strict, _ = _lint_cmd([f], json_out=True, strict=True)
     assert code_strict != 0
 
+
+def test_container_only_key_error_gates_without_strict(tmp_path):
+    # ERROR (no_scratchpad_leak on protocol) is nonzero-exit even without --strict (mirrors
+    # present-files-key-off-tier's exit class -- the WARN test above only covers the cowork/gated case).
+    f = _write_at(tmp_path, "protocol", "assert:\n  - no_scratchpad_leak: true\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    assert code != 0
+    assert any(x["rule"] == "container-only-key-off-container" and x["severity"] == "ERROR" for x in findings)
 
 
 # --- lint --min-severity (1.11.0) -------------------------------------------------------------------

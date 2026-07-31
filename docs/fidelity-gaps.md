@@ -488,9 +488,9 @@ Verified against the pinned baseline: the asar's spawn `tools:`/`allowedTools` a
 (2.1.219), and a live-recorded 2.1.219 init toolset that carries `mcp__cowork__present_files` and no
 `SendUserFile`.
 
-**Harness behaviour:** serves `present_files` with the local lane's exact name and schema, on the
-`container` tier only. Not serving `SendUserFile` is fidelity to the emulated lane, not a gap. **But
-serving `present_files` on `container` alone IS a gap** — see below.
+**Harness behaviour (before the fix below):** served `present_files` with the local lane's exact name and
+schema, on the `container` tier only. Not serving `SendUserFile` is fidelity to the emulated lane, not a
+gap. **But serving `present_files` on `container` alone was a gap** — closed next.
 
 ### Closed: `hostloop` serves `present_files` (production runs host-loop)
 
@@ -564,5 +564,6 @@ this harness disagree about file delivery, establish which lane the probe ran on
   they explicitly connected, and it is Desktop-advertised infrastructure the agent assembles when a user
   asks for files on disk — not a skill-authoring API. No first-party skill, prompt, or doc instructs a
   skill to call it.
-- **Assert on delivery, not on the tool.** `present_files_called` / `no_scratchpad_leak` keep working as
-  container-tier assertions; they name the harness's assertion keys, not a production tool name.
+- **Assert on delivery, not on the tool.** `present_files_called` (served at `container`/`hostloop`) and
+  `no_scratchpad_leak` (`container`-only, on the merits — see above) keep working; they name the harness's
+  assertion keys, not a production tool name.

@@ -26,7 +26,10 @@ All notable changes to this project are documented here. The format is based on
 
 - **The assertion tables — in the docs, the shipped skill's own references, and `llms.txt` — are rescoped
   to match the lint fix above**, describing `present_files_called` as working at `container|hostloop`
-  rather than `container` alone.
+  rather than `container` alone. This also reverses stale `user_visible_artifact` guidance for a skill that
+  delivers via write-to-cwd→`present_files`: docs previously said that pattern "false-reds" at `hostloop`;
+  it actually **passes** there, because the agent's cwd at that tier already *is* the outputs dir (no
+  promotion needed to make the file user-visible) — the false-red note now names only `microvm`/`protocol`.
 
 - **Five factual corrections:** the documented Node floor (was 20, is 22, matching `engines`/`doctor`);
   README's default egress-proxy image tag (was `:3`, is `:4`); CONTRIBUTING's CI stage count (was
@@ -35,8 +38,8 @@ All notable changes to this project are documented here. The format is based on
   to `/sessions/<id>`); and `docs/debugging.md`'s `stats` index-key recipe (the index key is the skill
   folder's basename, not the raw `$SKILL` path). Also fixes a stale `src/assert.ts` comment claiming
   `WRITE_BACK_SOURCE_EXTS` mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` — it's a deliberate superset, not
-  a mirror — replaces a stale baseline-version pin in DESIGN.md with a pointer that can't rot, and renames
-  a DESIGN.md heading that read like a command into a description of the sync extractor.
+  a mirror — replaces a stale baseline-version pin in DESIGN.md with a pointer that can't rot, and rewords
+  a DESIGN.md paragraph lead-in that read like a command into a description of the sync extractor.
 
 - **Two dead anchors fixed** — README's `lane:` link and `examples/README.md`'s flakiness link, both stale
   after `docs/scenario.md`'s headings moved — found via a repo-wide sweep of all 96 in-repo anchor links

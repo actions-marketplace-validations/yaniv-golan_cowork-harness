@@ -615,7 +615,7 @@ It is informational — it never changes the verdict. The block is a live/`parti
                       ┌───────────────────────▼────────────────────────┐
                       │  Agent:  claude -p   (CLAUDE_CODE_IS_COWORK=1) │
                       │    --input-format / --output-format stream-json│
-                      │    cwd = /sessions/<id>                       │
+                      │    cwd = /sessions/<id>                        │
                       │    mnt/uploads · mnt/<folder-name> · plugins   │
                       └───────────────────────┬────────────────────────┘
             decision control request          │  outbound network (egress)
