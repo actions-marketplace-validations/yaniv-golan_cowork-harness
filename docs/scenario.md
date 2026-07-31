@@ -444,8 +444,11 @@ pass/fail):
   written, which is the point: `present_files_called` covers the positive case only when an author thought
   to ask for it, and the runs that most need this are the ones where nobody did. It is **silent when the
   evidence cannot answer the question** — no workspace walk (`workspaceFiles` absent), or a tier that runs
-  no scratchpad walk — because "cannot tell" must never read as "clean". No opt-out key: write deliverables
-  under `outputs/` (or a connected folder), or deliver them explicitly.
+  no scratchpad walk, absent delivery telemetry, or a resumed turn (the scratchpad still holds files
+  delivered on an earlier turn, since `present_files` copies rather than moves) — because "cannot tell"
+  must never read as "clean". Fix by writing deliverables under `outputs/` (or a connected folder), or
+  delivering them explicitly; opt out with `allow_undelivered_deliverables: true` when the leftovers are
+  intentional.
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 

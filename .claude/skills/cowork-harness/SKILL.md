@@ -417,8 +417,10 @@ Recognize these before "fixing" a non-bug:
   does not get them. It fires with no assertion written — `present_files_called` covers the positive case
   only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
   **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
-  scratchpad walk) — "cannot tell" never reads as "clean". No opt-out: write deliverables under `outputs/`
-  or a connected folder, or deliver them explicitly.
+  scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
+  Fix by writing deliverables under `outputs/` or a connected folder, or delivering them explicitly; assert
+  **`allow_undelivered_deliverables: true`** when the leftovers are intentional (intermediates, caches,
+  downloaded inputs) rather than a delivery gap.
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
@@ -524,13 +526,23 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   call-count/timing table, the sub-agent dispatch tree, the gate lifecycle, the tool/error rollups, …);
   bare `trace` digests the whole run. The view set is actively being extended — run `trace --help` for
   the current list rather than relying on a fixed enumeration here.
+- **`lane: local|remote`** (scenario key, default `local`) — which Cowork lane's DELIVERY CONTRACT the run
+  is held to. Cowork picks the lane per session ("Run this task: In the cloud / On your computer") and
+  cloud is the default for new sessions; the lanes disagree about what *delivered* means. On `remote`,
+  location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at
+  session end), `present_files` is NOT served, and `user_visible_artifact` /
+  `present_files_called` / `no_scratchpad_leak` are rejected at LOAD time as unable to pass. Reach for it
+  to check a skill's delivery survives the lane most new sessions get. Orthogonal to `fidelity` — a
+  `lane: remote` scenario still runs locally.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
   plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and
   `--group-by scenario|skill-hash|label` to split per generation instead of aggregating across them (see
   Gotcha 6). `--runs` lists the individual runs behind each summary with their `skillHash`/`runLabel`, so
   you can tell which arm a run belonged to without opening its `result.json`. `--last <n>` windows per group.
-- **`result.json` carries the raw fields** the assertions read: `verdict`, `cost` (`cost.usd` = the SDK's
+- **`result.json` carries the raw fields** the assertions read: `verdict`, `lane` (which Cowork delivery
+  contract the run was held to — see Gotcha 24), `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
+  walk observe this run — what distinguishes "nothing was left undelivered" from "cannot tell"), `cost` (`cost.usd` = the SDK's
   `total_cost_usd` for the run — the authoritative single-run spend; NOT the same source as summing
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
   `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations`, `models`, `toolErrors`,
@@ -562,7 +574,7 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   cost spike from fan-out reads as `trace --view dispatches` (how many, which agent) against that model's
   per-model usage — the harness doesn't line-item each sub-agent's tokens.
 - **Debugging a wrong Cowork UI panel.** Each panel is reconstructed in `result.json`: **Progress** =
-  `tasks[]`, **Working folder** = `workspaceFiles[]` (classified output/mount/input, with a
+  `tasks[]`, **Working folder** = `workspaceFiles[]` (classified output/mount/input/scratchpad — the last being the agent's working area outside every user-visible root, with a
   `trace --view files` diff), **Context / Connectors** = `context` (tools / mcpServers / availableSkills),
   **Scratch-pad → outputs** = `presentedFiles[]`. If a panel looks wrong in a run, read its field. An
   **absent** `workspaceFiles`/`artifacts` (a replay result, or a run whose workspace root was missing at
