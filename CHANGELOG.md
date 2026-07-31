@@ -35,7 +35,9 @@ All notable changes to this project are documented here. The format is based on
   run that refused to start. New finding tag `lane-remote-incompatible-key` (ERROR). The tier rules
   (`container-only-key-off-container`, `present-files-key-off-tier`) are suppressed on `lane: remote`,
   since the lane check fires first regardless of tier and their "use a different tier" advice cannot help
-  there.
+  there. `manifest-needs-snapshot` is suppressed too, but only for `user_visible_artifact` — the one key
+  that is both manifest-backed and lane-rejected — since the ERROR above already covers it and a
+  redundant INFO about a key the scenario can never load with would just be noise.
 
 - **`stats` warns when an aggregate spans more than one fidelity tier, and `--group-by fidelity` splits
   it.** `container` and `hostloop` runs of one scenario were averaged together silently — the same
@@ -46,7 +48,11 @@ All notable changes to this project are documented here. The format is based on
   of the skill-generation warning. `--group-by fidelity` splits per effective tier, and `totalUsd` splits
   with it — per-tier cost in one command. A `--fidelity` filter on `stats` was considered and deferred: a
   flag is covered surface (removing it later would be a MAJOR bump), and its only unique capability —
-  comparing generations within a single tier — has no demonstrated workflow yet.
+  comparing generations within a single tier — has no demonstrated workflow yet. `stats --runs` gains the
+  same field per row: `RunListEntry.fidelity`, computed by the same `tierOf` helper the summary grouping
+  keys on, so a listed run's tier can never disagree with the summary aggregating it. Total by
+  construction — every row has one — unlike `skillHash`/`runLabel`, which are conditionally omitted.
+  JSON-only: the text-mode run line (`formatRunLine`) is unchanged.
 
 ### Documentation
 

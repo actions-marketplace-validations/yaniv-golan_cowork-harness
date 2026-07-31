@@ -407,4 +407,31 @@ describe.skipIf(!can)("cli: stats — tier heterogeneity", () => {
     expect(r.out).toContain("spans 2 skill generations");
     expect(r.out).toContain("spans 2 fidelity tiers");
   });
+
+  it("--group-by label --runs nests each label's summary with ONLY that label's own run row", () => {
+    // Mirrors the fidelity nesting test above: the nesting filter is `x.scenario === s.scenario &&
+    // (s.skillHash === undefined || x.skillHash === s.skillHash) && (s.fidelity === undefined || x.fidelity
+    // === s.fidelity) && (s.runLabel === undefined || x.runLabel === s.runLabel)`. Mutating the runLabel
+    // clause to `true` degrades it to scenario+fidelity(+skillHash), and since neither summary carries a
+    // fidelity or skillHash under --group-by label, every run of the scenario would list under BOTH
+    // summary lines.
+    const root = runsRoot();
+    seedRun(root, "s", "local_1", { runLabel: "gen-1" });
+    seedRun(root, "s", "local_2", { runLabel: "gen-2" });
+    run(["stats", "--reindex"], root);
+    const r = run(["stats", "s", "--group-by", "label", "--runs"], root);
+    expect(r.code).toBe(0);
+    const lines = r.out.split("\n").filter((l) => l.length > 0);
+    const gen1Idx = lines.findIndex((l) => l.includes("(label=gen-1):"));
+    const gen2Idx = lines.findIndex((l) => l.includes("(label=gen-2):"));
+    expect(gen1Idx).toBeGreaterThanOrEqual(0);
+    expect(gen2Idx).toBeGreaterThanOrEqual(0);
+    // Each summary reports exactly 1 run(s) — so the very next line is that label's ONLY nested run row.
+    expect(lines[gen1Idx]).toContain("1 run(s)");
+    expect(lines[gen1Idx + 1]).toContain("local_1");
+    expect(lines[gen1Idx + 1]).not.toContain("local_2");
+    expect(lines[gen2Idx]).toContain("1 run(s)");
+    expect(lines[gen2Idx + 1]).toContain("local_2");
+    expect(lines[gen2Idx + 1]).not.toContain("local_1");
+  });
 });

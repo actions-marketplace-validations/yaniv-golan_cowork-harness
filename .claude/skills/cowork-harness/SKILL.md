@@ -806,11 +806,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 
 22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —
     `manifest-needs-snapshot` and `gate-needs-controlout` — fire on the mere presence of manifest/gate
-    assertion keys, unconditionally. The linter is **static**: it never reads your cassettes, so it cannot
-    know whether yours already carry an `artifacts` manifest and `controlOut` (a current cassette does).
-    On a healthy fleet every one of those lines is a false alarm. *Fix:* `lint --min-severity WARN` in CI
-    (≥1.11.0) — the INFO advisories stay one flag away for interactive use. `--strict --min-severity ERROR`
-    behaves as a plain lint, not a contradiction.
+    assertion keys. The linter is **static**: it never reads your cassettes, so it cannot know whether
+    yours already carry an `artifacts` manifest and `controlOut` (a current cassette does). On a healthy
+    fleet every one of those lines is a false alarm. One exception: `manifest-needs-snapshot` is
+    suppressed for `user_visible_artifact` on `lane: remote` — the only manifest-backed key that lane also
+    rejects outright (`lane-remote-incompatible-key`, an ERROR), so the INFO would be redundant advice
+    about a key the scenario can never even load with. `gate-needs-controlout` has no such exception. *Fix:*
+    `lint --min-severity WARN` in CI (≥1.11.0) — the INFO advisories stay one flag away for interactive use.
+    `--strict --min-severity ERROR` behaves as a plain lint, not a contradiction.
 23. **`verify-cassettes`/`replay` report a `discovery-surface` note on cassettes you just recorded fine.**
     *Why:* the cassette froze its `system/init` tool inventory from before the skills/plugins discovery
     servers existed at that tier (added 1.10.0). It is a non-gating **note**, never a finding — it cannot

@@ -135,10 +135,12 @@ cowork-harness stats my-scenario --label gen-2               # …by the human t
 ```
 
 `--runs` additionally lists the runs behind each summary — timestamp, verdict, `runId`, `skillHash`,
-`runLabel`, cost, duration, and `(pruned)` when the evidence is gone from disk — so you can see which
-generation a given run belonged to without opening its `result.json`. It selects **exactly** the rows the
-summary above it aggregated (same filter path), and adds a `runs` array to the JSON envelope; without the
-flag that key is absent.
+`runLabel`, `fidelity` (the tier the run actually ran at — `effectiveFidelity ?? fidelity`, total by
+construction so it's never conditionally omitted the way `skillHash`/`runLabel` are), cost, duration, and
+`(pruned)` when the evidence is gone from disk — so you can see which generation a given run belonged to
+without opening its `result.json`. It selects **exactly** the rows the summary above it aggregated (same
+filter path), and adds a `runs` array to the JSON envelope; without the flag that key is absent. `fidelity`
+is JSON-only — the text-mode run line (`formatRunLine`) is unchanged.
 
 `--group-by` accepts `scenario` (default) | `skill-hash` | `label` | `fidelity`. When a window you did NOT
 narrow spans more than one generation, `stats` says so on stderr (`::warning:: … spans N skill
