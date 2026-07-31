@@ -14,7 +14,7 @@
   `doctor` — it detects this and prints the exact remedy.
 - **Reading `doctor`'s output.** Each line is one check: `✓` ok, `✗` fail (blocks the tier), `!` warn
   (works but worth fixing), `·` skipped (not needed for this tier). A `✗`/`!` line prints a `→ remedy`
-  right after it — that's the fix, not a generic "something's wrong." Common `✗`s: Node < 20, no
+  right after it — that's the fix, not a generic "something's wrong." Common `✗`s: Node < 22, no
   Docker/container runtime running, the agent image not built, the staged agent binary missing (open
   Cowork Desktop once to stage it), no auth token resolvable, or no platform baseline on disk (`sync`
   on macOS, or restore a `baselines/desktop-*.json`).

@@ -175,7 +175,8 @@ cowork-harness skill "$SKILL" "<the same task>" --repeat 5 --label gen-2
 #    `fingerprint.skillHash` changes on any tracked edit. If it didn't change, you tested the old skill.
 
 # 5. COMPARE generations — pass rate and cost percentiles, one row per generation:
-cowork-harness stats "skill-$SKILL" --group-by skill-hash
+#    The index key is `skill-<folder BASENAME>` (non-alphanumerics → `-`), not the path you passed:
+cowork-harness stats "skill-$(basename "$SKILL")" --group-by skill-hash
 #    A window you did NOT split warns when it spans >1 generation, so a cross-generation aggregate
 #    never passes silently. For per-generation TOTAL spend including critique's evaluator passes, use
 #    stats.md's jq recipes — `stats` reports percentiles over aggregatable rows.

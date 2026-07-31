@@ -88,7 +88,7 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 ## Commit & PR
 
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
-- Open PRs against `main`. CI runs a seven-stage pipeline (`build`, `test`, `action-self-test`, `python`, `boundary`, `scenarios`, `parity-drift` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
+- Open PRs against `main`. CI runs an eight-stage pipeline (`build`, `test`, `action-self-test`, `python`, `boundary`, `scenarios`, `parity-drift`, `floor` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
 - Describe *what changed and why*; link issues.
 
 ## Reporting issues

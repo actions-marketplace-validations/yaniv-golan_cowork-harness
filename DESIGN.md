@@ -1,6 +1,6 @@
 # DESIGN — parity model, deltas, and the maintenance contract
 
-This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through build 1.19367.0 — volatile fields tracked in `baselines/desktop-1.19367.0.json`) and the on-disk runtime state on macOS.
+This document is the reference for *how faithful* each tier is, *what we deliberately don't reproduce*, and *why the chosen seams keep parity cheap to maintain*. Everything here is grounded in analysis of the live Claude Desktop `app.asar` (spawn contract and gates first verified at build 1.12603.1; updated through the newest baseline in `baselines/` (see `baselines/desktop-*.json`; `cowork-harness sync --diff` adds the next one)) and the on-disk runtime state on macOS.
 
 > **Just want to pick a tier or write a scenario?** This doc is the *why*. For the *how*, start at the
 > [README](./README.md) (tiers, quick start) and [docs/](./docs/README.md) (scenario/session reference).
@@ -24,7 +24,7 @@ flowchart TB
     subgraph AGENT["Agent · claude -p · CLAUDE_CODE_IS_COWORK=1"]
         direction TB
         IO["--input-format / --output-format stream-json"]
-        FS["cwd = /sessions/&lt;id&gt;/mnt<br/>mnt/uploads · mnt/&lt;folder-name&gt; · plugins"]
+        FS["cwd = /sessions/&lt;id&gt;<br/>mnt/uploads · mnt/&lt;folder-name&gt; · plugins"]
     end
 
     AGENT -->|"decision control request<br/>(tool · question · dialog · elicitation)"| DRV["AgentSession → Decider → Run<br/>protocol seam · policy seam · turn loop + RunRecord"]

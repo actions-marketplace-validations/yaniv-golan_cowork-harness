@@ -605,10 +605,10 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
 // scenario can GATE on "the agent didn't emit an interactive artifact whose Submit is lost under Cowork".
 // ------------------------------------------------------------------------------------------------- //
 
-/** Tier A source extensions — mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` (HTML + code/generator
- *  extensions), duplicated here (not exported there) only to PRE-filter the authored set before handing the
- *  real on-disk absolute paths to `analyzeArtifacts` (which re-filters internally). Pre-filtering keeps the
- *  candidate set honest so could-not-verify reasoning is per-source. */
+/** Tier A source extensions — a **superset** of `analyze-artifact.ts`'s `SOURCE_EXTS`, deliberately: this
+ *  set PRE-filters the authored candidate set (so could-not-verify reasoning stays per-source), while
+ *  `analyzeArtifacts` re-filters internally and drops `.ts`/`.jsx`/`.tsx` as out of scope (acorn cannot
+ *  parse TS/JSX — see the note on `CODE_EXTS` there). Do **not** "sync" the two sets; they differ on purpose. */
 const WRITE_BACK_SOURCE_EXTS = new Set([".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".py"]);
 const SCRATCHPAD_PREFIX = "scratchpad/";
 
