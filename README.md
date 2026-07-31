@@ -721,9 +721,9 @@ it mirrors what Desktop itself uses (no separate API-billing setup).
 ### The harness's own suite
 
 ```bash
-npm run ci            # typecheck + build + test (Stage 1 locally; run format:check separately)
+npm run ci            # typecheck + build + test (run format:check separately; NOT the same set as CI's `build` job — see CONTRIBUTING.md)
 npm test              # vitest: decider, egress allowlist, launch plan, example validation
-cowork-harness boundary-check   # Stage 2: self-verify the sandbox (needs Docker)
+cowork-harness boundary-check   # self-verify the sandbox (needs Docker; not part of `npm run ci`)
 ```
 
 Unit tests cover the scripted-answer logic, the egress allowlist matcher, the session→launch-plan materialization (mounts + discovery settings + env-strip), and a **schema guard** that fails if any shipped baseline/session/scenario stops validating. Add a test alongside any new schema field or `Decider` rule — see [CONTRIBUTING.md](./CONTRIBUTING.md).

@@ -140,7 +140,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
       tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
       the push-to-main live suite will soft-skip and this release won't be live-validated in CI).
-- [ ] `npm run format:check` — fix any issues (`npx prettier --write "src/**/*.ts" "test/**/*.ts"`).
+- [ ] `npm run format:check` — fix any issues (`npm run format:write`).
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.

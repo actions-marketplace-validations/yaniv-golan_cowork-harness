@@ -33,8 +33,9 @@ or Lima for `microvm`).
    **Lima + Apple Virtualization.framework** instead (macOS arm64 only), **not** Docker — `brew install
    lima`. Run `cowork-harness doctor --tier microvm` to see what's missing.
 3. **An auth token** for runs that actually call the model (not needed for the replay-only path).
-   Precedence: `process.env` > `--dotenv <path>` >
-   `./.env` (auto-loaded from the dir you run `pytest` from) > `<install>/.env`. Simplest: put it in a `.env`
+   Precedence (resolved by the **CLI** the wrapper shells out to — the Python API itself exposes no `dotenv`
+   parameter): `process.env` > `--dotenv <path>` > `./.env` (auto-loaded from the dir you run `pytest` from) >
+   `<install>/.env`. Simplest: put it in a `.env`
    file in the dir you run `pytest` from (it's gitignored, host-side, never mounted):
    ```bash
    export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # or: echo "CLAUDE_CODE_OAUTH_TOKEN=…" >> .env

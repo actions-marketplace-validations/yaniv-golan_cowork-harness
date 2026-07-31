@@ -111,7 +111,7 @@ HAND-AUTHORED (in baselines/*.json, drift-guarded — sync does NOT extract thes
   - spawn.env.CLAUDE_CODE_IS_COWORK + bgEnvStrip.knownVars (BG env-strip list)
 ```
 
-`cowork-sync`:
+The sync extractor (`src/sync/cowork-sync.ts`, driven by `cowork-harness sync`):
 1. reads the live install (`claude-code-vm/.sdk-version`, `config.json`) and the `app.asar` main bundle,
 2. re-derives every VOLATILE field,
 3. computes an `asarFingerprint` over the cowork-relevant code regions,

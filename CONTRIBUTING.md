@@ -72,7 +72,8 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Mark unverified code.** Anything not yet run end-to-end against a live agent gets a `// UNVERIFIED` comment so reviewers know.
 - **Add a test.** New schema fields, `Decider` rules, or egress logic need a unit test in `test/`. Examples must validate (`test/examples.test.ts`).
 - **Consumer-visible workflow changes update the skill.** A change a scenario author would act on — a new assertion key, cassette field, CLI command, or a changed record/replay/verify workflow — must land with a matching update to `.claude/skills/cowork-harness/` (SKILL.md or `references/`). The machine-checkable slices are enforced (`test/skill-docs-sync.test.ts` pins the skill against the assertion-key catalog and the cassette schema's field list; `test/cli-help.test.ts` pins the README command table); prose workflows are on you — this checklist line exists because `effectiveFidelity` shipped consumer-visible and stayed undocumented in the skill until an external consumer flagged it.
-- **Format.** `npm run format:check` must pass (`npx prettier --write "src/**/*.ts" "test/**/*.ts"` to fix).
+- **Typecheck.** `npm test` is `vitest run` — it strips types and does **not** typecheck. `tsconfig.json` covers only `src`; test files are typechecked solely by `tsconfig.test.json`, i.e. only via `npm run typecheck` (which `npm run ci` runs). After editing `src/`, run `npm run typecheck`, not just `npm test`.
+- **Format.** `npm run format:check` must pass (`npm run format:write` to fix).
 
 ## Validating a companion-skill edit (answer quality)
 
