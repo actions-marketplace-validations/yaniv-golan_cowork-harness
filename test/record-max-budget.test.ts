@@ -74,7 +74,11 @@ describe.skipIf(!can)("record --max-budget-usd — single scenario", () => {
     seedRun(root, "pricey", "local_1", 0.5);
     cli(["stats", "--reindex"], root);
     writeFileSync(join(work, "pricey.yaml"), scenarioYaml("pricey"));
-    const r = cli(["record", join(work, "pricey.yaml"), "--max-budget-usd", "0.1"], root);
+    // Asserted through --dry-run so this holds with or without model credentials. The gate is the SAME
+    // one the real path runs (pinned by the dry-vs-real precedence test below); going through the real
+    // path here would assert the auth guard's message on a tokenless runner instead — which is how this
+    // test first passed locally (a repo .env supplies a token) and failed in CI.
+    const r = cli(["record", join(work, "pricey.yaml"), "--max-budget-usd", "0.1", "--dry-run"], root);
     expect(r.all).toMatch(/refused before spending/);
     expect(r.all).toMatch(/has cost up to \$0\.5000/);
     expect(r.code).not.toBe(0);
@@ -138,17 +142,45 @@ describe.skipIf(!can)("record --max-budget-usd — batch semantics are CUMULATIV
 });
 
 describe.skipIf(!can)("record --max-budget-usd — the gate is part of --dry-run, not skipped by it", () => {
-  it("--dry-run refuses identically (a preview that reports clean and is then refused is a false preview)", () => {
+  it("--dry-run refuses on budget rather than reporting clean (a preview that is then refused is a false preview)", () => {
     const root = tmpRoot();
     const work = tmpWork();
     seedRun(root, "pricey", "local_1", 0.5);
     cli(["stats", "--reindex"], root);
     writeFileSync(join(work, "pricey.yaml"), scenarioYaml("pricey"));
-    const dry = cli(["record", join(work, "pricey.yaml"), "--max-budget-usd", "0.1", "--dry-run"], root);
-    const real = cli(["record", join(work, "pricey.yaml"), "--max-budget-usd", "0.1"], root);
-    expect(dry.all).toMatch(/refused before spending/);
-    expect(real.all).toMatch(/refused before spending/);
-    expect(dry.code).toBe(real.code); // the preview's verdict IS the real verdict
+    const refused = cli(["record", join(work, "pricey.yaml"), "--max-budget-usd", "0.1", "--dry-run"], root);
+    const allowed = cli(["record", join(work, "pricey.yaml"), "--max-budget-usd", "5", "--dry-run"], root);
+    expect(refused.all).toMatch(/refused before spending/);
+    expect(refused.code).not.toBe(0);
+    // Same command, same scenario, only the cap differs — so the refusal is the gate deciding, not
+    // --dry-run failing for some unrelated reason.
+    expect(allowed.all).not.toMatch(/refused before spending/);
+    expect(allowed.code).toBe(0);
+  });
+
+  it("on the REAL path the auth guard takes precedence over the budget gate when credentials are absent", () => {
+    // Pins the ordering deterministically on any runner. With no token you cannot record at all, so the
+    // credential error is the more fundamental thing to report — the budget gate sits after it. Asserting
+    // the budget message here instead would make the test pass only where a token happens to exist.
+    const root = tmpRoot();
+    const work = tmpWork();
+    seedRun(root, "pricey", "local_1", 0.5);
+    cli(["stats", "--reindex"], root);
+    writeFileSync(join(work, "pricey.yaml"), scenarioYaml("pricey"));
+    const r = spawnSync("node", [CLI, "record", join(work, "pricey.yaml"), "--max-budget-usd", "0.1"], {
+      encoding: "utf8",
+      // Scrub every credential source the guard consults, so this is deterministic even where a repo
+      // .env or an exported token would otherwise satisfy it.
+      env: {
+        ...process.env,
+        COWORK_HARNESS_RUNS_DIR: root,
+        CLAUDE_CODE_OAUTH_TOKEN: "",
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_AUTH_TOKEN: "",
+      },
+      cwd: work, // away from the repo root, so a repo-level .env is not in scope
+    });
+    expect(r.stdout + r.stderr).toMatch(/no model credentials/);
   });
 });
 
