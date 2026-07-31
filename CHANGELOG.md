@@ -6,6 +6,56 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`lint` no longer errors `present_files_called` on `fidelity: hostloop`.** The harness has served
+  `present_files` at `container` **and** `hostloop` since the host-loop handler landed, but the linter
+  still treated the key as container-only and hard-failed a scenario the runtime accepts. The key set is
+  now split: `present_files_called` is flagged only on `protocol`/`microvm` (new finding tag
+  `present-files-key-off-tier`) and is clean on `container`, `hostloop`, and `cowork` (which resolves to
+  one of the two). `no_scratchpad_leak` keeps its container-only ERROR on the merits — hostloop serves the
+  tool but passes a validated path through without promoting, so there is no scratch→outputs copy to leak
+  — and its message now says that instead of implying the tool is missing.
+
+- **`trace --help` documents the `subagent-research` view.** The usage string never listed it even though
+  the `--view` validator accepted it. The view list is now a single module-scope constant shared by both,
+  and a test pins the usage string's bracket list and per-view explanation lines against that constant so
+  they cannot drift apart again.
+
+### Documentation
+
+- **The assertion tables — in the docs, the shipped skill's own references, and `llms.txt` — are rescoped
+  to match the lint fix above**, describing `present_files_called` as working at `container|hostloop`
+  rather than `container` alone.
+
+- **Five factual corrections:** the documented Node floor (was 20, is 22, matching `engines`/`doctor`);
+  README's default egress-proxy image tag (was `:3`, is `:4`); CONTRIBUTING's CI stage count (was
+  seven-stage, is eight with the floor job); the agent's documented working directory in both the
+  DESIGN.md mermaid diagram and README's ASCII twin (said `/sessions/<id>/mnt`; the spawn contract sets it
+  to `/sessions/<id>`); and `docs/debugging.md`'s `stats` index-key recipe (the index key is the skill
+  folder's basename, not the raw `$SKILL` path). Also fixes a stale `src/assert.ts` comment claiming
+  `WRITE_BACK_SOURCE_EXTS` mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` — it's a deliberate superset, not
+  a mirror — replaces a stale baseline-version pin in DESIGN.md with a pointer that can't rot, and renames
+  a DESIGN.md heading that read like a command into a description of the sync extractor.
+
+- **Two dead anchors fixed** — README's `lane:` link and `examples/README.md`'s flakiness link, both stale
+  after `docs/scenario.md`'s headings moved — found via a repo-wide sweep of all 96 in-repo anchor links
+  across README.md, CONTRIBUTING.md, DESIGN.md, SPEC.md, `examples/README.md`, and `docs/*.md`, which
+  turned up no others broken. `examples/README.md`'s npm-package caveat now also names `matrices/`,
+  `answer-policies/`, and `probes/` as trees that need a source checkout (confirmed via
+  `npm pack --dry-run` that the published tarball ships only `examples/README.md` and
+  `examples/replays/`). The `doctor` blurb in `examples/README.md` and `docs/README.md` now states that a
+  bare `doctor` defaults to the `container` tier and that a Keychain-only login downgrades its auth check
+  to a warn specifically at `protocol`; the trigger-accuracy-sweep row now notes that `run` skips a
+  subdirectory non-recursively.
+
+- **Contributor-workflow corrections:** CONTRIBUTING's pre-push checklist gains a `Typecheck` bullet
+  (`npm test` strips types; `npm run typecheck` is the only path that checks test files); CONTRIBUTING.md
+  and RELEASING.md now point at the `format:write` script instead of the raw `prettier` invocation;
+  README's local command list drops the "Stage 1"/"Stage 2" numbering now that `boundary-check` is no
+  longer part of `npm run ci`; and `python/README.md` clarifies that its `.env` precedence chain describes
+  the CLI only — the Python API has no `dotenv` parameter.
+
 ## [1.14.0] — 2026-07-30
 
 ### Added
