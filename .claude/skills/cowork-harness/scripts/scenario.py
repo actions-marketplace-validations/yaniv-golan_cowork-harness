@@ -571,8 +571,15 @@ def lint_doc(doc, path, raw_lines):
                 )
             )
 
-    # I: manifest-backed keys need an artifacts manifest on replay
+    # I: manifest-backed keys need an artifacts manifest on replay. On `lane: remote`, a key that is ALSO
+    # in LANE_REMOTE_INCOMPATIBLE_KEYS (user_visible_artifact) already got the ERROR above and is rejected
+    # at scenario-LOAD time -- it can never reach a replay to re-record for, so "re-record so it evaluates"
+    # is unreachable advice for that key (same rationale as the tier-rule suppression above). Filtered
+    # per-key, not the whole block: the other manifest keys (file_exists, artifact_json, ...) are NOT
+    # lane-rejected and stay genuinely reachable and worth advising about on `lane: remote`.
     manifest_present = sorted(assert_keys & MANIFEST_KEYS)
+    if lane == "remote":
+        manifest_present = [k for k in manifest_present if k not in LANE_REMOTE_INCOMPATIBLE_KEYS]
     if manifest_present:
         findings.append(
             Finding(

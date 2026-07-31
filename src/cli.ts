@@ -3163,7 +3163,8 @@ function cmdStats(args: string[]) {
     if (s.distinctTiers > 1)
       log(
         `::warning:: stats: "${s.scenario}" spans ${s.distinctTiers} fidelity tiers (${s.tiers.join(", ")}) — ` +
-          `this aggregate compares unlike things. Split with --group-by fidelity.`,
+          `this aggregate compares unlike things. Split with --group-by fidelity, or — if you're already ` +
+          `narrowed to one skill generation and want to keep that split — --skill-hash <prefix> --group-by fidelity.`,
       );
   // `--runs` swaps the AGGREGATE for the per-run detail behind it — same filters, same
   // `resolveGroups`, so the two views can never describe different row sets.
@@ -3175,7 +3176,13 @@ function cmdStats(args: string[]) {
     log(formatStatsLine(s, metric));
     // Nested under their summary when a listing was asked for: the run rows ARE that line's evidence.
     if (runs)
-      for (const r of runs.filter((x) => x.scenario === s.scenario && (s.skillHash === undefined || x.skillHash === s.skillHash)))
+      for (const r of runs.filter(
+        (x) =>
+          x.scenario === s.scenario &&
+          (s.skillHash === undefined || x.skillHash === s.skillHash) &&
+          (s.fidelity === undefined || x.fidelity === s.fidelity) &&
+          (s.runLabel === undefined || x.runLabel === s.runLabel),
+      ))
         log(formatRunLine(r));
   }
   if (hashlessRuns > 0)

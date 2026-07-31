@@ -1013,6 +1013,11 @@ export interface RunListEntry {
   result: "success" | "error";
   skillHash?: string;
   runLabel?: string;
+  /** The tier this run actually ran at (`effectiveFidelity ?? fidelity` — the same `tierOf` helper
+   *  `buildStats`'s fidelity grouping keys on, so a summary's `fidelity` and a listed run's `fidelity`
+   *  can never diverge). TOTAL by construction — every row has one — so unlike `skillHash`/`runLabel`
+   *  this is never conditionally omitted. */
+  fidelity: string;
   turn?: number;
   critiqueRole?: RunIndexRow["critiqueRole"];
   costUsd?: number;
@@ -1039,6 +1044,7 @@ export function listRuns(rows: RunIndexRow[], filters: StatsFilters): { runs: Ru
       // a null a consumer has to special-case.
       ...(r.skillHash !== undefined ? { skillHash: r.skillHash } : {}),
       ...(r.runLabel !== undefined ? { runLabel: r.runLabel } : {}),
+      fidelity: tierOf(r),
       ...(r.turn !== undefined ? { turn: r.turn } : {}),
       ...(r.critiqueRole !== undefined ? { critiqueRole: r.critiqueRole } : {}),
       ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),

@@ -540,8 +540,9 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
   plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and
   `--group-by scenario|skill-hash|label|fidelity` to split per generation — or per effective fidelity
-  tier — instead of aggregating across them (a window spanning >1 generation or >1 tier warns; see
-  Gotcha 6). `--runs` lists the individual runs behind each summary with their `skillHash`/`runLabel`, so
+  tier — instead of aggregating across them (a window spanning >1 generation warns — see Gotcha 6;
+  >1 tier warns too, independently, with `--group-by fidelity` as its own remedy). `--runs` lists the
+  individual runs behind each summary with their `skillHash`/`runLabel`, so
   you can tell which arm a run belonged to without opening its `result.json`. `--last <n>` windows per group.
 - **`result.json` carries the raw fields** the assertions read: `verdict`, `lane` (which Cowork delivery
   contract the run was held to — see Gotcha 24), `scratchpadEvidenceComplete` (did a COMPLETE scratchpad

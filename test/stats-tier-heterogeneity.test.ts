@@ -50,16 +50,39 @@ const REFLECTION = 0.19672499999999998;
 const EVALUATORS = 0.6911825;
 const CRITIQUE_TOTAL = 1.0587545;
 
-/** The three rows one critique writes, all sharing one tier. NOTE: no effectiveFidelity — this is the
- *  reindex-from-critique-report shape (run-index.ts leaves it undefined there), so these rows ALSO
- *  exercise the ?? fidelity fallback on every path that touches them. */
-function critiqueRows(opts: { runId: string; tier?: string; ts?: string }): RunIndexRow[] {
-  const { runId, tier = "hostloop", ts = "2026-07-31T09:42:48.000Z" } = opts;
+/** The three rows one critique writes, all sharing one tier. `effectiveFidelity` is undefined unless the
+ *  caller passes one: omitted, this is the reindex-from-critique-report shape (run-index.ts leaves it
+ *  undefined there), so the rows exercise the `?? fidelity` fallback on every path that touches them.
+ *  Passed, it stamps all three rows the way every LIVE writer actually produces them (run-index.ts:149,
+ *  :284, chat.ts:278, :356) — the shape T6's fallback-only fixture does NOT exercise. */
+function critiqueRows(opts: { runId: string; tier?: string; effectiveFidelity?: string; ts?: string }): RunIndexRow[] {
+  const { runId, tier = "hostloop", effectiveFidelity, ts = "2026-07-31T09:42:48.000Z" } = opts;
   const outDir = `/runs/skill-csv-metrics/${runId}`;
   return [
-    { ...base, ts, runId, outDir, fidelity: tier, turn: 1, critiqueRole: "task", costUsd: TASK, durationMs: 6000 },
-    { ...base, ts, runId, outDir, fidelity: tier, turn: 2, critiqueRole: "reflection", costUsd: REFLECTION, durationMs: 11100 },
-    { ...base, ts, runId, outDir, fidelity: tier, critiqueRole: "rollup", costUsd: EVALUATORS, critiqueTotalUsd: CRITIQUE_TOTAL },
+    { ...base, ts, runId, outDir, fidelity: tier, effectiveFidelity, turn: 1, critiqueRole: "task", costUsd: TASK, durationMs: 6000 },
+    {
+      ...base,
+      ts,
+      runId,
+      outDir,
+      fidelity: tier,
+      effectiveFidelity,
+      turn: 2,
+      critiqueRole: "reflection",
+      costUsd: REFLECTION,
+      durationMs: 11100,
+    },
+    {
+      ...base,
+      ts,
+      runId,
+      outDir,
+      fidelity: tier,
+      effectiveFidelity,
+      critiqueRole: "rollup",
+      costUsd: EVALUATORS,
+      critiqueTotalUsd: CRITIQUE_TOTAL,
+    },
   ] as RunIndexRow[];
 }
 
@@ -120,12 +143,13 @@ describe("--group-by fidelity", () => {
     expect(hashlessRuns).toBe(0);
   });
 
-  // NOTE: give this one an effectiveFidelity-stamped fixture. The shared `critiqueRows` helper does
-  // NOT set effectiveFidelity, so an unmodified T5 exercises the SAME fallback path as T6 and the two
-  // tests become identical inputs under different names — a distinction that reads as coverage but is
-  // not. Stamp `effectiveFidelity: "hostloop"` on all three rows here; leave T6 unstamped.
+  // Stamped with effectiveFidelity on all three rows — the shape every LIVE writer actually produces
+  // (run-index.ts:149, :284, chat.ts:278, :356). T6 below exercises the OTHER shape (the
+  // reindex-from-critique-report fallback, with no effectiveFidelity on any row) — without this stamp
+  // the two tests would feed identical inputs under different names, a distinction that reads as
+  // coverage but is not.
   it("T5: a critique's 3 rows stay in ONE group and its totalUsd survives intact", () => {
-    const s = only(critiqueRows({ runId: "sess-crit-1" }), { groupBy: "fidelity" });
+    const s = only(critiqueRows({ runId: "sess-crit-1", effectiveFidelity: "hostloop" }), { groupBy: "fidelity" });
     expect(s.fidelity).toBe("hostloop");
     expect(s.totalUsd).toBeCloseTo(CRITIQUE_TOTAL, 10);
   });
@@ -138,14 +162,17 @@ describe("--group-by fidelity", () => {
     expect(s.totalUsd).toBeCloseTo(CRITIQUE_TOTAL, 10);
   });
 
-  it("T6b: KNOWN EDGE (documented, unreachable today) — a roll-up keying to a tier with no run rows is silently dropped from every total", () => {
+  it("T6b: CHANGE-DETECTOR (not a guard) — pins today's documented, currently-unreachable data loss", () => {
     // Under --group-by fidelity the tier key is never undefined, so a spend roll-up always keys on its
     // OWN tier; if that ever disagrees with its turns' tier it lands in a phantom group and
-    // `groups.get(key)?.spend.push(r)` silently drops it. Unreachable today: critique resolves `cowork`
-    // at parse time and every writer stamps both fields consistently. This pin exists so that if a
-    // change ever makes the disagreement reachable, THIS test fails and forces an honesty channel
-    // (a counter or a note) before the silent loss ships. If you are here because it failed: do not
-    // just update the expectation.
+    // `groups.get(key)?.spend.push(r)` silently drops it. This test asserts the CURRENT lossy behaviour
+    // (the evaluator spend goes missing from every total) — it stays green regardless of what production
+    // emits, and only turns red if someone *fixes* the drop, not if the divergence becomes reachable.
+    // Unreachable today: critique resolves `cowork` at parse time and every writer stamps both fields
+    // consistently. NOTHING here guards the unreachable -> reachable transition — if a future change ever
+    // makes rows disagree in production, this silent loss ships with no test failure to catch it. If you
+    // are here because this test failed, you likely just fixed the drop: update the expectation, and
+    // consider whether a real guard (a counter or a warning) belongs at the fix site.
     const rows = critiqueRows({ runId: "sess-crit-3" });
     rows[2] = { ...rows[2], fidelity: "container" } as RunIndexRow; // divergent roll-up
     const s = buildStats(rows, { groupBy: "fidelity" }).summaries;

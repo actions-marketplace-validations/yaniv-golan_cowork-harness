@@ -448,6 +448,28 @@ def test_tier_keys_are_a_subset_of_the_lane_incompatible_keys():
     )
 
 
+def test_lane_remote_suppresses_manifest_needs_snapshot_for_the_lane_rejected_key(tmp_path):
+    """`user_visible_artifact` on `lane: remote` gets `lane-remote-incompatible-key` (ERROR, load-time
+    rejection) -- the `manifest-needs-snapshot` INFO's "re-record so this evaluates" advice is
+    unreachable for this key: it can never reach a replay to re-record for. Same rationale as the
+    tier-rule suppression above."""
+    body = "assert:\n  - user_visible_artifact: outputs/x.md\n"
+    rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", body)))}
+    assert "lane-remote-incompatible-key" in rules
+    assert "manifest-needs-snapshot" not in rules
+
+
+def test_lane_remote_still_flags_manifest_needs_snapshot_for_other_manifest_keys(tmp_path):
+    """Mutation guard: `file_exists` is manifest-backed but NOT lane-rejected (only
+    `user_visible_artifact` overlaps `LANE_REMOTE_INCOMPATIBLE_KEYS` within `MANIFEST_KEYS`), so it stays
+    genuinely reachable on `lane: remote` and the advisory must still fire -- a blanket per-lane
+    suppression (instead of the per-key filter) would wrongly swallow this one too."""
+    body = "assert:\n  - file_exists: outputs/x.md\n"
+    rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", body)))}
+    assert "lane-remote-incompatible-key" not in rules
+    assert "manifest-needs-snapshot" in rules
+
+
 def test_present_files_key_error_gates_without_strict(tmp_path):
     # ERROR always gates -- nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
     f = _write_at(tmp_path, "protocol", "assert:\n  - present_files_called: true\n")

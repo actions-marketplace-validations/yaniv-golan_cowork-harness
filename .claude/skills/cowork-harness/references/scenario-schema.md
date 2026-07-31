@@ -40,12 +40,14 @@ execution: local                    # OPTIONAL — orthogonal to fidelity (a pri
 lane: local                         # OPTIONAL — which Cowork lane's DELIVERY CONTRACT the run is held to:
                                     # local (default) | remote. On `remote`, location delivers NOTHING (a
                                     # remote container has no auto-delivering outputs dir and is reclaimed
-                                    # at session end), `present_files` is NOT served (a local MCP server
-                                    # can't reach a remote session), `user_visible_artifact` fails as
-                                    # unverifiable, and present_files_called/no_scratchpad_leak fail as
-                                    # can't-verify. Orthogonal to fidelity and execution — a `lane: remote`
-                                    # scenario still runs locally. Delivery semantics only; the remote
-                                    # device bridge is deliberately unmodeled.
+                                    # at session end) and `present_files` is NOT served (a local MCP server
+                                    # can't reach a remote session) — so `user_visible_artifact` and
+                                    # present_files_called/no_scratchpad_leak are REJECTED AT SCENARIO-LOAD
+                                    # TIME (before the run starts, before any spend), not left to fail
+                                    # unverifiable/can't-verify at assertion time. Orthogonal to fidelity
+                                    # and execution — a `lane: remote` scenario still runs locally.
+                                    # Delivery semantics only; the remote device bridge is deliberately
+                                    # unmodeled.
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 

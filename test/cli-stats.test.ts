@@ -222,10 +222,10 @@ describe.skipIf(!can)("cli: stats — generation queries", () => {
     expect(r.out).toMatch(/1 run\(s\)/);
   });
 
-  it("rejects an unknown --group-by value with a usage error, not a silent fallback", () => {
+  it("rejects an unknown --group-by value with a usage error naming the widened enum, not a silent fallback", () => {
     const r = run(["stats", "--group-by", "bogus"], runsRoot());
     expect(r.code).toBe(2);
-    expect(r.out).toContain("--group-by must be one of scenario|skill-hash|label");
+    expect(r.out).toContain("--group-by must be one of scenario|skill-hash|label|fidelity");
   });
 
   it("rejects a --skill-hash too short to identify a generation", () => {
@@ -367,10 +367,25 @@ describe.skipIf(!can)("cli: stats — tier heterogeneity", () => {
     expect(r.out).toContain("fidelity=hostloop");
   });
 
-  it("rejects an unknown --group-by value naming the widened enum", () => {
-    const r = run(["stats", "s", "--group-by", "tier"], runsRoot());
-    expect(r.code).not.toBe(0);
-    expect(r.out).toContain("scenario|skill-hash|label|fidelity");
+  it("--group-by fidelity --runs nests each tier's summary with ONLY that tier's own run row", () => {
+    // Reproduces the bug: the nesting filter was `x.scenario === s.scenario && (s.skillHash === undefined
+    // || x.skillHash === s.skillHash)` — under --group-by fidelity, s.skillHash is always undefined, so
+    // it degrades to a bare scenario match and every run of the scenario (both tiers) lists under BOTH
+    // summary lines, disagreeing with the "1 run(s)" the summary above it just reported.
+    const r = run(["stats", "s", "--group-by", "fidelity", "--runs"], seedTwoTiers());
+    expect(r.code).toBe(0);
+    const lines = r.out.split("\n").filter((l) => l.length > 0);
+    const containerIdx = lines.findIndex((l) => l.includes("(fidelity=container):"));
+    const hostloopIdx = lines.findIndex((l) => l.includes("(fidelity=hostloop):"));
+    expect(containerIdx).toBeGreaterThanOrEqual(0);
+    expect(hostloopIdx).toBeGreaterThanOrEqual(0);
+    // Each summary reports exactly 1 run(s) — so the very next line is that tier's ONLY nested run row.
+    expect(lines[containerIdx]).toContain("1 run(s)");
+    expect(lines[containerIdx + 1]).toContain("local_1");
+    expect(lines[containerIdx + 1]).not.toContain("local_2");
+    expect(lines[hostloopIdx]).toContain("1 run(s)");
+    expect(lines[hostloopIdx + 1]).toContain("local_2");
+    expect(lines[hostloopIdx + 1]).not.toContain("local_1");
   });
 
   it("UC5: distinctTiers and tiers ride in the JSON envelope — CI gates on the field, not scraped text", () => {
