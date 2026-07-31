@@ -17,8 +17,8 @@ Two subcommands:
 lint flags (see references/scenario-schema.md for the why of each):
   E  egress assertion on `fidelity: protocol`        (the harness rejects this run)
   E  `transcript_no_host_path` on hostloop/protocol  (fails BY DESIGN at those tiers)
-  E  `no_scratchpad_leak`/`present_files_called` off  (container-only: served only at fidelity:
-     protocol/microvm/hostloop                          container; off-container = cannot-verify)
+  E  `no_scratchpad_leak` off container            (container-only: hostloop serves the tool but never promotes)
+  E  `present_files_called` on protocol/microvm    (served at container+hostloop)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)
   E  on_unanswered: agent / invalid value            (schema rejects `agent`)
@@ -26,8 +26,7 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
   W  `transcript_no_host_path` on `fidelity: cowork` (tier resolves per baseline gate —
                                                       incompatible if it lands hostloop)
-  W  `no_scratchpad_leak`/`present_files_called` on   (tier resolves per baseline gate — cannot-verify
-     `fidelity: cowork`                                if it resolves off-container)
+  W  `no_scratchpad_leak` on `fidelity: cowork`    (tier resolves per baseline gate)
   W  no content assertion → no-op on a replay gate    (every assertion is fs/egress)
   W  mixed-class assert item → fs/egress half dropped on replay
   W  unknown top-level / assertion key                (typo or hallucinated schema)
@@ -135,10 +134,14 @@ LIVE_ONLY_KEYS = {
     "no_lost_write_back",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
-# container-only: served only at fidelity: container (present_files / the scratchpad promotion path
-# it depends on). Off-container these report cannot-verify, not a meaningful pass/fail — same tier-fidelity
-# class as transcript_no_host_path below, just the opposite direction (container-only vs container-hostile).
-CONTAINER_ONLY_KEYS = {"no_scratchpad_leak", "present_files_called"}
+# container-only: promotion/leak semantics exist only at fidelity: container. Production's host-loop
+# branch validates a path and passes it through WITHOUT promoting, so at hostloop there is no
+# scratch->outputs copy that could ever leak -- cannot-verify, not a meaningful pass/fail.
+CONTAINER_ONLY_KEYS = {"no_scratchpad_leak"}
+# container+hostloop: the harness serves present_files at BOTH tiers, so the DELIVERY RECORD this key
+# asserts is meaningful at both. Only protocol (no /sessions/ layout) and microvm (stages into a
+# different tree than the artifact scan walks) deterministically cannot serve it.
+CONTAINER_HOSTLOOP_KEYS = {"present_files_called"}
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
 VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
@@ -404,11 +407,10 @@ def lint_doc(doc, path, raw_lines):
                 )
             )
 
-    # E/W: CONTAINER_ONLY_KEYS (no_scratchpad_leak / present_files_called) are served only at
-    # fidelity: container — off-container they report cannot-verify, not a meaningful check. Mirrors
-    # the transcript_no_host_path tier check above, just the opposite direction: ERROR on the tiers
-    # where the runtime deterministically can't serve it, WARN on cowork (baseline-gate-resolution
-    # dependent — the linter stays offline, so the message names the dependency instead of resolving it).
+    # E/W: CONTAINER_ONLY_KEYS (no_scratchpad_leak) -- promotion/leak semantics are container-shaped.
+    # NOT a harness coverage gap: the harness serves present_files at hostloop too, but production's
+    # host-loop branch validates a path and passes it through WITHOUT promoting, so there is no
+    # scratch->outputs copy that could ever leak there.
     container_only_present = sorted(assert_keys & CONTAINER_ONLY_KEYS)
     if container_only_present:
         if fidelity in ("protocol", "microvm", "hostloop"):
@@ -416,9 +418,10 @@ def lint_doc(doc, path, raw_lines):
                 Finding(
                     "ERROR",
                     "container-only-key-off-container",
-                    f"{container_only_present} on `fidelity: {fidelity}` — container-only (present_files "
-                    "is served only there); off-container it reports cannot-verify. Use fidelity: "
-                    "container for present_files/scratchpad delivery.",
+                    f"{container_only_present} on `fidelity: {fidelity}` -- promotion/leak semantics "
+                    "apply only at the container tier (hostloop serves present_files but never "
+                    "promotes, so there is no scratch->outputs copy to leak); off container it "
+                    "reports cannot-verify.",
                     "Use fidelity: container (or drop the assertion for this tier).",
                     path,
                 )
@@ -428,16 +431,33 @@ def lint_doc(doc, path, raw_lines):
                 Finding(
                     "WARN",
                     "container-only-key-off-container",
-                    f"{container_only_present} on `fidelity: cowork` — container-only (present_files "
-                    "is served only there); off-container it reports cannot-verify. Use fidelity: "
-                    f"container for present_files/scratchpad delivery. (The tier resolves per the "
-                    f"baseline's host-loop gate ({HOST_LOOP_GATE_ID}); if it resolves off-container this "
-                    "assertion cannot verify anything.)",
-                    "Pin fidelity: container if the assertion is load-bearing; keep cowork only if "
-                    "you accept the gate-resolution dependency.",
+                    f"{container_only_present} on `fidelity: cowork` -- the tier resolves to "
+                    f"container or hostloop per gate {HOST_LOOP_GATE_ID}; on hostloop this key "
+                    "reports cannot-verify (no promotion happens there).",
+                    "Pin fidelity: container if you need this asserted deterministically.",
                     path,
                 )
             )
+
+    # E: CONTAINER_HOSTLOOP_KEYS (present_files_called) -- served at container AND hostloop, so only
+    # protocol and microvm are flagged. Deliberately NO `cowork` arm: cowork resolves to
+    # hostloop|container ONLY (src/run/execute.ts), and both serve the tool -- an advisory there would
+    # fire on every applicable scenario with no inapplicable case to distinguish (AGENTS.md, Advisory
+    # design: "actionable by construction, or aggregated").
+    present_files_present = sorted(assert_keys & CONTAINER_HOSTLOOP_KEYS)
+    if present_files_present and fidelity in ("protocol", "microvm"):
+        findings.append(
+            Finding(
+                "ERROR",
+                "present-files-key-off-tier",
+                f"{present_files_present} on `fidelity: {fidelity}` -- present_files is served only "
+                "at container/hostloop (protocol has no /sessions/ layout for the handler's path "
+                "model; microvm stages into a different tree than the artifact scan walks); there it "
+                "reports cannot-verify.",
+                "Use fidelity: container or hostloop (or drop the assertion for this tier).",
+                path,
+            )
+        )
 
     # E: requires_capabilities on protocol — the capability probe cannot run at protocol tier
     # (clause b of the requires_capabilities contract), so the run HARD-FAILS unless an assert item

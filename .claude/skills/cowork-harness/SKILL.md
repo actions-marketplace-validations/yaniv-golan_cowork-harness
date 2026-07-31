@@ -284,8 +284,10 @@ quoting, an egress assert on `protocol` fidelity, `transcript_no_host_path` on `
 (ERROR — fails by design at those tiers; WARN on `fidelity: cowork`, whose tier resolves per the
 baseline's host-loop gate), non-empty `requires_capabilities` on `protocol` without
 `allow_missing_capability` (ERROR — the capability probe can't run there, so the run hard-fails as
-unverifiable), a container-only assertion key (`no_scratchpad_leak`/`present_files_called`) off the
-`container` tier (ERROR on `protocol`/`microvm`/`hostloop`, WARN on `cowork`), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
+unverifiable), `no_scratchpad_leak` off `container` (ERROR on `protocol`/`microvm`/`hostloop` — hostloop's
+`present_files` passes a validated path through without promoting, so there is no scratch→outputs copy
+to leak; WARN on `cowork`, whose tier resolves per the baseline gate) or `present_files_called` on
+`protocol`/`microvm` (ERROR — served only at `container`/`hostloop`), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
 and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is non-zero on errors
 (CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
 emits a scenario `lint` would reject.

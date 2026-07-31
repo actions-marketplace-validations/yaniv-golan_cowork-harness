@@ -269,57 +269,92 @@ def test_empty_requires_capabilities_on_protocol_is_clean(tmp_path):
     assert "capabilities-on-protocol" not in rules
 
 
-# --- container-only keys (no_scratchpad_leak / present_files_called) off `fidelity: container` ---
-# Mirrors the transcript_no_host_path tier precedent above (test_host_path_assert_on_*), just the
-# opposite direction: container-only keys ERROR on tiers that can't serve present_files at all
-# (protocol/microvm/hostloop), WARN on cowork (baseline-gate-resolution dependent), clean on
-# container/omitted.
+# --- present_files tier keys off their serving tiers -------------------------------------------------
+# The two keys are deliberately NOT the same tier class:
+#   no_scratchpad_leak  -- container-only ON THE MERITS. Production's host-loop branch validates a path
+#                          and passes it through WITHOUT promoting, so at hostloop there is no
+#                          scratch->outputs copy that could ever leak.
+#   present_files_called -- asserts the harness-side DELIVERY RECORD, served at container AND hostloop
+#                          (src/assert.ts: `!== "container" && !== "hostloop"`). Only protocol and
+#                          microvm deterministically cannot serve it.
+# `fidelity: cowork` resolves to hostloop|container ONLY (src/run/execute.ts), so present_files_called
+# is clean there -- no advisory, per AGENTS.md "Advisory design".
 
-CONTAINER_ONLY_KEYS = ("no_scratchpad_leak", "present_files_called")
-ERROR_TIERS = ("protocol", "microvm", "hostloop")
+SCRATCHPAD_ERROR_TIERS = ("protocol", "microvm", "hostloop")
+PRESENT_FILES_ERROR_TIERS = ("protocol", "microvm")
 
 
-@pytest.mark.parametrize("key", CONTAINER_ONLY_KEYS)
-@pytest.mark.parametrize("tier", ERROR_TIERS)
-def test_container_only_key_off_container_tiers_is_error(key, tier, tmp_path):
-    body = f"assert:\n  - {key}: true\n"
+@pytest.mark.parametrize("tier", SCRATCHPAD_ERROR_TIERS)
+def test_no_scratchpad_leak_off_container_is_error(tier, tmp_path):
+    body = "assert:\n  - no_scratchpad_leak: true\n"
     findings = [
         f
         for f in scenario.lint_file(str(_write_at(tmp_path, tier, body)))
         if f.rule == "container-only-key-off-container"
     ]
-    assert len(findings) == 1, (key, tier)
+    assert len(findings) == 1, tier
     assert findings[0].severity == "ERROR"
-    assert key in findings[0].message
+    assert "no_scratchpad_leak" in findings[0].message
     assert tier in findings[0].message
 
 
-@pytest.mark.parametrize("key", CONTAINER_ONLY_KEYS)
-def test_container_only_key_on_cowork_is_warn_naming_the_gate_dependency(key, tmp_path):
-    body = f"assert:\n  - {key}: true\n"
+@pytest.mark.parametrize("tier", PRESENT_FILES_ERROR_TIERS)
+def test_present_files_called_off_serving_tiers_is_error(tier, tmp_path):
+    body = "assert:\n  - present_files_called: true\n"
+    findings = [
+        f for f in scenario.lint_file(str(_write_at(tmp_path, tier, body))) if f.rule == "present-files-key-off-tier"
+    ]
+    assert len(findings) == 1, tier
+    assert findings[0].severity == "ERROR"
+    assert "present_files_called" in findings[0].message
+    assert tier in findings[0].message
+
+
+@pytest.mark.parametrize("tier", ("container", "hostloop", "cowork", None))
+def test_present_files_called_on_serving_tiers_is_clean(tier, tmp_path):
+    """The regression this task exists for: the runtime accepts hostloop, so the linter must not flag it.
+    `cowork` resolves to hostloop|container -- both serve the tool -- so it is clean too. `None` =
+    omitted fidelity, which defaults to container."""
+    body = "assert:\n  - present_files_called: true\n"
+    if tier is None:
+        f = tmp_path / "sc.yaml"
+        f.write_text("name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n" + body, encoding="utf-8")
+        findings = scenario.lint_file(str(f))
+    else:
+        findings = scenario.lint_file(str(_write_at(tmp_path, tier, body)))
+    assert not any(f.rule in ("present-files-key-off-tier", "container-only-key-off-container") for f in findings)
+
+
+def test_no_scratchpad_leak_on_hostloop_still_errors(tmp_path):
+    """Mutation guard: a fix that lifted BOTH keys would green the test above and be wrong."""
+    body = "assert:\n  - no_scratchpad_leak: true\n"
+    findings = [
+        f
+        for f in scenario.lint_file(str(_write_at(tmp_path, "hostloop", body)))
+        if f.rule == "container-only-key-off-container"
+    ]
+    assert len(findings) == 1
+
+
+def test_no_scratchpad_leak_on_cowork_is_warn_naming_the_gate_dependency(tmp_path):
+    body = "assert:\n  - no_scratchpad_leak: true\n"
     findings = [
         f
         for f in scenario.lint_file(str(_write_at(tmp_path, "cowork", body)))
         if f.rule == "container-only-key-off-container"
     ]
-    assert len(findings) == 1, key
+    assert len(findings) == 1
     assert findings[0].severity == "WARN"
-    assert key in findings[0].message
     # offline gate fact: the message names the gate-resolution dependency (mirrors host-path-assert-cowork)
     assert scenario.HOST_LOOP_GATE_ID in findings[0].message
 
 
-@pytest.mark.parametrize("key", CONTAINER_ONLY_KEYS)
 @pytest.mark.parametrize("tier", ("container", None))
-def test_container_only_key_on_container_or_omitted_is_clean(key, tier, tmp_path):
-    body = f"assert:\n  - {key}: true\n"
+def test_no_scratchpad_leak_on_container_or_omitted_is_clean(tier, tmp_path):
+    body = "assert:\n  - no_scratchpad_leak: true\n"
     if tier is None:
-        # omitted fidelity defaults to container
         f = tmp_path / "sc.yaml"
-        f.write_text(
-            "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n" + body,
-            encoding="utf-8",
-        )
+        f.write_text("name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n" + body, encoding="utf-8")
         findings = scenario.lint_file(str(f))
     else:
         findings = scenario.lint_file(str(_write_at(tmp_path, tier, body)))
@@ -336,17 +371,17 @@ def _write_at(tmp_path, tier, yaml_body, name="sc.yaml"):
     return f
 
 
-def test_container_only_key_error_gates_without_strict(tmp_path):
-    # ERROR always gates — nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
+def test_present_files_key_error_gates_without_strict(tmp_path):
+    # ERROR always gates -- nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
     f = _write_at(tmp_path, "protocol", "assert:\n  - present_files_called: true\n")
     code, findings = _lint_cmd([f], json_out=True, strict=False)
     assert code != 0
-    assert any(x["rule"] == "container-only-key-off-container" and x["severity"] == "ERROR" for x in findings)
+    assert any(x["rule"] == "present-files-key-off-tier" and x["severity"] == "ERROR" for x in findings)
 
 
 def test_container_only_key_warn_gates_only_under_strict(tmp_path):
-    # WARN (cowork) is zero-exit without --strict, nonzero with --strict.
-    f = _write_at(tmp_path, "cowork", "assert:\n  - present_files_called: true\n")
+    # WARN (no_scratchpad_leak on cowork) is zero-exit without --strict, nonzero with --strict.
+    f = _write_at(tmp_path, "cowork", "assert:\n  - no_scratchpad_leak: true\n")
     code_plain, findings_plain = _lint_cmd([f], json_out=True, strict=False)
     assert code_plain == 0
     assert any(x["rule"] == "container-only-key-off-container" and x["severity"] == "WARN" for x in findings_plain)
