@@ -6,120 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Fixed
-
-- **`lint` no longer errors `present_files_called` on `fidelity: hostloop`.** The harness has served
-  `present_files` at `container` **and** `hostloop` since the host-loop handler landed, but the linter
-  still treated the key as container-only and hard-failed a scenario the runtime accepts. The key set is
-  now split: `present_files_called` is flagged only on `protocol`/`microvm` (new finding tag
-  `present-files-key-off-tier`) and is clean on `container`, `hostloop`, and `cowork` (which resolves to
-  one of the two). `no_scratchpad_leak` keeps its container-only ERROR on the merits — hostloop serves the
-  tool but passes a validated path through without promoting, so there is no scratch→outputs copy to leak
-  — and its message now says that instead of implying the tool is missing.
-
-- **Every `trace --view` help list now derives from one catalog.** `src/cli.ts` carried the view list in
-  three places — the top-level command catalog, `trace --help`'s `SUBCOMMAND_USAGE.trace`, and the
-  no-target usage error — and two of the three had drifted, omitting the `subagent-research` view even
-  though the `--view` validator accepted it. All three now interpolate one `TRACE_VIEWS` constant, moved
-  above the module-load `HELP` template literal so the interpolation can't throw a temporal-dead-zone
-  `ReferenceError` at import time. `SUBCOMMAND_USAGE.trace` is now a real multi-line template literal
-  rather than one line with embedded `\n`s. A guard test fails on any hardcoded `--view` pipe-list left in
-  the source, and pins the usage string's per-view explanation lines against the same constant.
-
-### Added
-
-- **`lint` flags `lane: remote` against the assertion keys the runtime rejects.**
-  `present_files_called`, `no_scratchpad_leak`, and `user_visible_artifact` are refused at scenario
-  **load** time on that lane — it serves no `present_files` and delivers nothing by location, so these
-  keys can only ever report cannot-verify. The linter previously said nothing, so the first signal was a
-  run that refused to start. New finding tag `lane-remote-incompatible-key` (ERROR). The tier rules
-  (`container-only-key-off-container`, `present-files-key-off-tier`) are suppressed on `lane: remote`,
-  since the lane check fires first regardless of tier and their "use a different tier" advice cannot help
-  there. `manifest-needs-snapshot` is suppressed too, but only for `user_visible_artifact` — the one key
-  that is both manifest-backed and lane-rejected — since the ERROR above already covers it and a
-  redundant INFO about a key the scenario can never load with would just be noise.
-
-- **`stats` warns when an aggregate spans more than one fidelity tier, and `--group-by fidelity` splits
-  it.** `container` and `hostloop` runs of one scenario were averaged together silently — the same
-  unlike-things gap the skill-generation warning covers on the other axis, and the one the 1.14.0
-  `--fidelity cowork` entry named as still open. Each summary now carries `distinctTiers` and `tiers`,
-  computed over `effectiveFidelity ?? fidelity` — the tier that actually **ran** — a total key, so nothing
-  is ever excluded from this grouping. The warning names the tiers and the remedy, and fires independently
-  of the skill-generation warning. `--group-by fidelity` splits per effective tier, and `totalUsd` splits
-  with it — per-tier cost in one command. A `--fidelity` filter on `stats` was considered and deferred: a
-  flag is covered surface (removing it later would be a MAJOR bump), and its only unique capability —
-  comparing generations within a single tier — has no demonstrated workflow yet. `stats --runs` gains the
-  same field per row: `RunListEntry.fidelity`, computed by the same `tierOf` helper the summary grouping
-  keys on, so a listed run's tier can never disagree with the summary aggregating it. Total by
-  construction — every row has one — unlike `skillHash`/`runLabel`, which are conditionally omitted.
-  JSON-only: the text-mode run line (`formatRunLine`) is unchanged.
-
-### Documentation
-
-- **The assertion tables — in the docs, the shipped skill's own references, and `llms.txt` — are rescoped
-  to match the lint fix above**, describing `present_files_called` as working at `container|hostloop`
-  rather than `container` alone. This also reverses stale `user_visible_artifact` guidance for a skill that
-  delivers via write-to-cwd→`present_files`: docs previously said that pattern "false-reds" at `hostloop`;
-  it actually **passes** there, because the agent's cwd at that tier already *is* the outputs dir (no
-  promotion needed to make the file user-visible) — the false-red note now names only `microvm`/`protocol`.
-
-- **Five factual corrections:** the documented Node floor (was 20, is 22, matching `engines`/`doctor`);
-  README's default egress-proxy image tag (was `:3`, is `:4`); CONTRIBUTING's CI stage count (was
-  seven-stage, is eight with the floor job); the agent's documented working directory in both the
-  DESIGN.md mermaid diagram and README's ASCII twin (said `/sessions/<id>/mnt`; the spawn contract sets it
-  to `/sessions/<id>`); and `docs/debugging.md`'s `stats` index-key recipe (the index key is the skill
-  folder's basename, not the raw `$SKILL` path). Also fixes a stale `src/assert.ts` comment claiming
-  `WRITE_BACK_SOURCE_EXTS` mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` — it's a deliberate superset, not
-  a mirror — replaces a stale baseline-version pin in DESIGN.md with a pointer that can't rot, and rewords
-  a DESIGN.md paragraph lead-in that read like a command into a description of the sync extractor.
-
-- **Two dead anchors fixed** — README's `lane:` link and `examples/README.md`'s flakiness link, both stale
-  after `docs/scenario.md`'s headings moved — found via a repo-wide sweep of all 96 in-repo anchor links
-  across README.md, CONTRIBUTING.md, DESIGN.md, SPEC.md, `examples/README.md`, and `docs/*.md`, which
-  turned up no others broken. `examples/README.md`'s npm-package caveat now also names `matrices/`,
-  `answer-policies/`, and `probes/` as trees that need a source checkout (confirmed via
-  `npm pack --dry-run` that the published tarball ships only `examples/README.md` and
-  `examples/replays/`). The `doctor` blurb in `examples/README.md` and `docs/README.md` now states that a
-  bare `doctor` defaults to the `container` tier and that a Keychain-only login downgrades its auth check
-  to a warn specifically at `protocol`; the trigger-accuracy-sweep row now notes that `run` skips a
-  subdirectory non-recursively.
-
-- **Contributor-workflow corrections:** CONTRIBUTING's pre-push checklist gains a `Typecheck` bullet
-  (`npm test` strips types; `npm run typecheck` is the only path that checks test files); CONTRIBUTING.md
-  and RELEASING.md now point at the `format:write` script instead of the raw `prettier` invocation;
-  README's local command list drops the "Stage 1"/"Stage 2" numbering now that `boundary-check` is no
-  longer part of `npm run ci`; and `python/README.md` clarifies that its `.env` precedence chain describes
-  the CLI only — the Python API has no `dotenv` parameter.
-
-## [1.14.0] — 2026-07-30
-
-### Fixed
-
-- **`stats` under-reported a `critique`'s cost by 65–84%; it now reports a group `total=`.** A critique's
-  three index rows partition its spend disjointly — the two graded turns carry their own, and the roll-up
-  row's `costUsd` is the two evaluator passes *only*, set that way so the sum is exact and double-counts
-  nothing. But `stats` dropped every roll-up row before any filter ran, so the one consumer that sums
-  `costUsd` never saw the partition. A live critique costing **$1.0588** was reported at **$0.368**
-  unfiltered and **$0.1708** under `--label`. `critiqueTotalUsd`, added in 1.13.0 for exactly this, had
-  writers, a type guard and tests — and no reader. Root cause: one predicate answered two different
-  questions. *"Is this a run?"* is correctly **no** for a roll-up (it has no verdict or duration, and
-  counting it drags `passRate` toward 1); *"does this carry spend?"* is **yes**, and the same gate said no.
-  Those are now separate predicates. **Every count, rate and percentile is unchanged** — cost `p50`/`p95`
-  stay per-run, since the median of a graded turn, a reflection turn and an evaluator pair is not a typical
-  run cost. The new **`totalUsd`** is the figure that prices a critique whole. It is `undefined`, never
-  `$0.0000`, when nothing was priced, and new **`unpricedRuns`** counts rows with no cost telemetry so a
-  total that is a floor says so. **`--max-budget-usd` is deliberately untouched**: its pre-flight asks
-  "will my next RUN breach this cap", so it still reads run-only history — feeding it evaluator spend would
-  have refused runs costing a fifth of the cap. Text output appends `total=$X` after the cost percentiles
-  (and `(N unpriced)` when relevant), so a consumer scraping the existing line keeps matching.
-- **A `--label`-filtered total is now complete.** `--label` reaches a critique's task turn but deliberately
-  not its reflection turn (labelling it would inject a near-always-green row into the labelled group and
-  inflate `passRate`), so a label-filtered set held turn 1 + the roll-up and silently dropped turn 2 — 19%
-  light. Rows are now re-admitted by shared `runId`, since a critique is one session. Those re-admitted
-  rows count toward **cost only** — never `runs`, `passRate` or any percentile — so the pass-rate property
-  the labelling rule protects is preserved exactly. Expansion applies only to the identity filters
-  (`--label`, `--skill-hash`) and never re-admits a row excluded by `--scenario`/`--since`/`--baseline`/
-  `--branch`. `--skill-hash` needed nothing: all three rows already carry the hash.
+## [1.14.0] — 2026-07-31
 
 ### Added
 
@@ -140,10 +27,10 @@ All notable changes to this project are documented here. The format is based on
   a net regression for the person hitting it. `microvm` and `protocol` stay refused, each with its own
   reason. **`chat` still refuses `cowork`** — its fidelity is fixed at parse time with no gate
   resolution at all, which is a differently-shaped change; deliberately out of scope here.
-  Known gap, unchanged by this: `stats` does not warn when one aggregate spans more than one
-  **tier** the way it now does for skill generations, so runs at different tiers still average together
-  silently. That is reachable today by passing different `--fidelity` values explicitly and is not
-  introduced here.
+  The related gap on the **tier** axis — `stats` averaging runs from different tiers together without
+  saying so — is closed in this same release; see *"`stats` warns when an aggregate spans more than one
+  fidelity tier"* below. It was reachable by passing different `--fidelity` values explicitly and was not
+  introduced by this change.
 
 - **Scenarios can declare which Cowork lane's delivery contract to test against — `lane: local|remote`.**
   Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: In the cloud /
@@ -161,8 +48,17 @@ All notable changes to this project are documented here. The format is based on
   those keys cannot pass on that lane, and an authored assertion that can never pass should cost a config
   error rather than a paid run that fails at assertion time.
 
+- **`ended_with_question` now consults the lane too.** This pre-existing `warn` signal treated the presence
+  of an `output`-class file as evidence the run produced something, and stayed quiet on that basis. That
+  reasoning holds only where location delivers: on `lane: remote` an `output`-class file has reached nobody,
+  so it no longer suppresses the warning — which is the lane where "the agent ended by asking a question
+  instead of finishing" matters most. Behaviour on `lane: local` (the default) is unchanged.
+
 - **A run now warns when the skill produced deliverables it never delivered.** New `warn`-severity verdict
-  signal `undelivered_deliverables`: files written outside every user-visible root and never presented. It
+  signal `undelivered_deliverables`: files the run produced but never got to the user. **What counts
+  depends on the lane**, because what "delivered" means does: on `local`, where the outputs directory
+  delivers by location, a candidate is a file written outside every user-visible root; on `remote`, where
+  location delivers nothing, every produced file is a candidate — a file sitting in `outputs/` included. It
   fires without any assertion being written — which is the point, since `present_files_called` covers the
   positive case only when an author thought to ask for it, and the runs that most need this are the ones
   where nobody did. Observed motivating case: a real run created 23 files, delivered 3, and reported
@@ -225,6 +121,34 @@ All notable changes to this project are documented here. The format is based on
   verdict. `critique` still rejects the flag, now for an accurate reason: it spends across four workloads,
   so a cap pre-flighted from single-run history would gate on the wrong number.
 
+- **`lint` flags `lane: remote` against the assertion keys the runtime rejects.** *(Author-time
+  enforcement of the load-time rule described under the `lane` axis above — same three keys, checked
+  before you spend rather than at load.)*
+  `present_files_called`, `no_scratchpad_leak`, and `user_visible_artifact` are refused at scenario
+  **load** time on that lane — it serves no `present_files` and delivers nothing by location, so these
+  keys can only ever report cannot-verify. The linter previously said nothing, so the first signal was a
+  run that refused to start. New finding tag `lane-remote-incompatible-key` (ERROR). The tier rules
+  (`container-only-key-off-container`, `present-files-key-off-tier`) are suppressed on `lane: remote`,
+  since the lane check fires first regardless of tier and their "use a different tier" advice cannot help
+  there. `manifest-needs-snapshot` is suppressed too, but only for `user_visible_artifact` — the one key
+  that is both manifest-backed and lane-rejected — since the ERROR above already covers it and a
+  redundant INFO about a key the scenario can never load with would just be noise.
+
+- **`stats` warns when an aggregate spans more than one fidelity tier, and `--group-by fidelity` splits
+  it.** `container` and `hostloop` runs of one scenario were averaged together silently — the same
+  unlike-things gap the skill-generation warning covers on the other axis, and the one the 1.14.0
+  `--fidelity cowork` entry named as still open. Each summary now carries `distinctTiers` and `tiers`,
+  computed over `effectiveFidelity ?? fidelity` — the tier that actually **ran** — a total key, so nothing
+  is ever excluded from this grouping. The warning names the tiers and the remedy, and fires independently
+  of the skill-generation warning. `--group-by fidelity` splits per effective tier, and `totalUsd` splits
+  with it — per-tier cost in one command. A `--fidelity` filter on `stats` was considered and deferred: a
+  flag is covered surface (removing it later would be a MAJOR bump), and its only unique capability —
+  comparing generations within a single tier — has no demonstrated workflow yet. `stats --runs` gains the
+  same field per row: `RunListEntry.fidelity`, computed by the same `tierOf` helper the summary grouping
+  keys on, so a listed run's tier can never disagree with the summary aggregating it. Total by
+  construction — every row has one — unlike `skillHash`/`runLabel`, which are conditionally omitted.
+  JSON-only: the text-mode run line (`formatRunLine`) is unchanged.
+
 ### Changed
 
 - **The supported Node floor moves from 20 to 22.** Node 20 reached end-of-life on 2026-04-30 and
@@ -250,23 +174,33 @@ All notable changes to this project are documented here. The format is based on
   this release's CLI will fail `doctor` and warn `EBADENGINE` on install. Bump `node-version` to `'22'`
   or `'24'` wherever you pasted it.
 
-### Documentation
-
-- **`docs/fidelity-gaps.md` records the file-delivery lane split.** Cowork has two file-delivery tools —
-  `mcp__cowork__present_files` on the desktop-local sandbox this harness emulates, and the agent-native
-  `SendUserFile` (`files: string[]`, required `status`, optional `caption`/`display`) on remote
-  cloud-container sessions. Probing a remote session and diffing against this harness reads as "wrong tool
-  name AND wrong schema"; it is neither, and adopting `SendUserFile` would green skills that then fail on
-  real desktop-local Cowork. Verified against the pinned baseline's spawn allowlist and `present_files`
-  handler, the agent binary's `SendUserFileTool` schema and enablement gate, and a live-recorded init
-  toolset. The entry names the discriminator (`CLAUDE_CODE_ENTRYPOINT`) and the guidance that holds on
-  both lanes: never hardcode a delivery tool name in a `SKILL.md`. The rule is stated where an author
-  actually forms the belief, not only in that one page: **SKILL.md Gotcha 24** (the installed payload —
-  `docs/` is repo-only), both assertion catalogs, `references/fidelity-and-answers.md`'s tier discussion,
-  and the `no_scratchpad_leak`/`present_files_called` descriptions themselves, so `assertions --list` and
-  `schema/scenario.schema.json` carry it too.
-
 ### Fixed
+
+- **`stats` under-reported a `critique`'s cost by 65–84%; it now reports a group `total=`.** A critique's
+  three index rows partition its spend disjointly — the two graded turns carry their own, and the roll-up
+  row's `costUsd` is the two evaluator passes *only*, set that way so the sum is exact and double-counts
+  nothing. But `stats` dropped every roll-up row before any filter ran, so the one consumer that sums
+  `costUsd` never saw the partition. A live critique costing **$1.0588** was reported at **$0.368**
+  unfiltered and **$0.1708** under `--label`. `critiqueTotalUsd`, added in 1.13.0 for exactly this, had
+  writers, a type guard and tests — and no reader. Root cause: one predicate answered two different
+  questions. *"Is this a run?"* is correctly **no** for a roll-up (it has no verdict or duration, and
+  counting it drags `passRate` toward 1); *"does this carry spend?"* is **yes**, and the same gate said no.
+  Those are now separate predicates. **Every count, rate and percentile is unchanged** — cost `p50`/`p95`
+  stay per-run, since the median of a graded turn, a reflection turn and an evaluator pair is not a typical
+  run cost. The new **`totalUsd`** is the figure that prices a critique whole. It is `undefined`, never
+  `$0.0000`, when nothing was priced, and new **`unpricedRuns`** counts rows with no cost telemetry so a
+  total that is a floor says so. **`--max-budget-usd` is deliberately untouched**: its pre-flight asks
+  "will my next RUN breach this cap", so it still reads run-only history — feeding it evaluator spend would
+  have refused runs costing a fifth of the cap. Text output appends `total=$X` after the cost percentiles
+  (and `(N unpriced)` when relevant), so a consumer scraping the existing line keeps matching.
+- **A `--label`-filtered total is now complete.** `--label` reaches a critique's task turn but deliberately
+  not its reflection turn (labelling it would inject a near-always-green row into the labelled group and
+  inflate `passRate`), so a label-filtered set held turn 1 + the roll-up and silently dropped turn 2 — 19%
+  light. Rows are now re-admitted by shared `runId`, since a critique is one session. Those re-admitted
+  rows count toward **cost only** — never `runs`, `passRate` or any percentile — so the pass-rate property
+  the labelling rule protects is preserved exactly. Expansion applies only to the identity filters
+  (`--label`, `--skill-hash`) and never re-admits a row excluded by `--scenario`/`--since`/`--baseline`/
+  `--branch`. `--skill-hash` needed nothing: all three rows already carry the hash.
 
 - **The egress proxy binds loopback by default, instead of the wildcard.** An unqualified `listen(0)`
   bound `*:<port>`, and on macOS `SO_REUSEADDR` lets that coexist with an existing `127.0.0.1:<port>`
@@ -321,6 +255,77 @@ All notable changes to this project are documented here. The format is based on
   true on that lane. The explanation now branches on the same predicate that selects the candidates, and
   both variants name `allow_undelivered_deliverables` so the reader is told how to silence it. The
   pre-existing tests asserted only the signal *code*, which is why the prose could be wrong and green.
+
+- **`lint` no longer errors `present_files_called` on `fidelity: hostloop`.** *(The author-time linter
+  catching up with the runtime change above — a separate code path in the bundled `scenario.py`, not a
+  second fix to the same one.)* The harness has served
+  `present_files` at `container` **and** `hostloop` since the host-loop handler landed, but the linter
+  still treated the key as container-only and hard-failed a scenario the runtime accepts. The key set is
+  now split: `present_files_called` is flagged only on `protocol`/`microvm` (new finding tag
+  `present-files-key-off-tier`) and is clean on `container`, `hostloop`, and `cowork` (which resolves to
+  one of the two). `no_scratchpad_leak` keeps its container-only ERROR on the merits — hostloop serves the
+  tool but passes a validated path through without promoting, so there is no scratch→outputs copy to leak
+  — and its message now says that instead of implying the tool is missing.
+
+- **Every `trace --view` help list now derives from one catalog.** `src/cli.ts` carried the view list in
+  three places — the top-level command catalog, `trace --help`'s `SUBCOMMAND_USAGE.trace`, and the
+  no-target usage error — and two of the three had drifted, omitting the `subagent-research` view even
+  though the `--view` validator accepted it. All three now interpolate one `TRACE_VIEWS` constant, moved
+  above the module-load `HELP` template literal so the interpolation can't throw a temporal-dead-zone
+  `ReferenceError` at import time. `SUBCOMMAND_USAGE.trace` is now a real multi-line template literal
+  rather than one line with embedded `\n`s. A guard test fails on any hardcoded `--view` pipe-list left in
+  the source, and pins the usage string's per-view explanation lines against the same constant.
+
+### Documentation
+
+- **`docs/fidelity-gaps.md` records the file-delivery lane split.** Cowork has two file-delivery tools —
+  `mcp__cowork__present_files` on the desktop-local sandbox this harness emulates, and the agent-native
+  `SendUserFile` (`files: string[]`, required `status`, optional `caption`/`display`) on remote
+  cloud-container sessions. Probing a remote session and diffing against this harness reads as "wrong tool
+  name AND wrong schema"; it is neither, and adopting `SendUserFile` would green skills that then fail on
+  real desktop-local Cowork. Verified against the pinned baseline's spawn allowlist and `present_files`
+  handler, the agent binary's `SendUserFileTool` schema and enablement gate, and a live-recorded init
+  toolset. The entry names the discriminator (`CLAUDE_CODE_ENTRYPOINT`) and the guidance that holds on
+  both lanes: never hardcode a delivery tool name in a `SKILL.md`. The rule is stated where an author
+  actually forms the belief, not only in that one page: **SKILL.md Gotcha 24** (the installed payload —
+  `docs/` is repo-only), both assertion catalogs, `references/fidelity-and-answers.md`'s tier discussion,
+  and the `no_scratchpad_leak`/`present_files_called` descriptions themselves, so `assertions --list` and
+  `schema/scenario.schema.json` carry it too.
+
+- **The assertion tables — in the docs, the shipped skill's own references, and `llms.txt` — are rescoped
+  to match the lint fix above**, describing `present_files_called` as working at `container|hostloop`
+  rather than `container` alone. This also reverses stale `user_visible_artifact` guidance for a skill that
+  delivers via write-to-cwd→`present_files`: docs previously said that pattern "false-reds" at `hostloop`;
+  it actually **passes** there, because the agent's cwd at that tier already *is* the outputs dir (no
+  promotion needed to make the file user-visible) — the false-red note now names only `microvm`/`protocol`.
+
+- **Five factual corrections:** the documented Node floor (was 20, is 22, matching `engines`/`doctor`);
+  README's default egress-proxy image tag (was `:3`, is `:4`); CONTRIBUTING's CI stage count (was
+  seven-stage, is eight with the floor job); the agent's documented working directory in both the
+  DESIGN.md mermaid diagram and README's ASCII twin (said `/sessions/<id>/mnt`; the spawn contract sets it
+  to `/sessions/<id>`); and `docs/debugging.md`'s `stats` index-key recipe (the index key is the skill
+  folder's basename, not the raw `$SKILL` path). Also fixes a stale `src/assert.ts` comment claiming
+  `WRITE_BACK_SOURCE_EXTS` mirrors `analyze-artifact.ts`'s `SOURCE_EXTS` — it's a deliberate superset, not
+  a mirror — replaces a stale baseline-version pin in DESIGN.md with a pointer that can't rot, and rewords
+  a DESIGN.md paragraph lead-in that read like a command into a description of the sync extractor.
+
+- **Two dead anchors fixed** — README's `lane:` link and `examples/README.md`'s flakiness link, both stale
+  after `docs/scenario.md`'s headings moved — found via a repo-wide sweep of all 96 in-repo anchor links
+  across README.md, CONTRIBUTING.md, DESIGN.md, SPEC.md, `examples/README.md`, and `docs/*.md`, which
+  turned up no others broken. `examples/README.md`'s npm-package caveat now also names `matrices/`,
+  `answer-policies/`, and `probes/` as trees that need a source checkout (confirmed via
+  `npm pack --dry-run` that the published tarball ships only `examples/README.md` and
+  `examples/replays/`). The `doctor` blurb in `examples/README.md` and `docs/README.md` now states that a
+  bare `doctor` defaults to the `container` tier and that a Keychain-only login downgrades its auth check
+  to a warn specifically at `protocol`; the trigger-accuracy-sweep row now notes that `run` skips a
+  subdirectory non-recursively.
+
+- **Contributor-workflow corrections:** CONTRIBUTING's pre-push checklist gains a `Typecheck` bullet
+  (`npm test` strips types; `npm run typecheck` is the only path that checks test files); CONTRIBUTING.md
+  and RELEASING.md now point at the `format:write` script instead of the raw `prettier` invocation;
+  README's local command list drops the "Stage 1"/"Stage 2" numbering now that `boundary-check` is no
+  longer part of `npm run ci`; and `python/README.md` clarifies that its `.env` precedence chain describes
+  the CLI only — the Python API has no `dotenv` parameter.
 
 ## [1.13.2] — 2026-07-28
 
