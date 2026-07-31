@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.14.0` (baseline `desktop-1.24012.9`).
+Self-contained reference. Tracks `cowork-harness 1.15.0` (baseline `desktop-1.24012.9`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.14.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "1.15.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -58,7 +58,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.14.0"
+- run: npm i -g "cowork-harness@>=1.15.0"
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
 - run: cowork-harness replay cassettes/              # token-free content/structure
@@ -107,8 +107,10 @@ The split is not just about tokens — it decides **where each lane can run**:
   one (see [docs/cassette.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md)). This is your **always-on PR gate**. With `--output-format json`, read each
   `results[].verdict.{pass,signals}` for **per-cassette** pass/fail and the reason (the top-level `ok`
   collapses the whole batch) — e.g. a `stalled` signal fails a cassette whose assertions all passed.
-  The PR gate evaluates the assertions **frozen in the cassette**; to re-check against an edited on-disk
-  `assert:` without a paid re-record, use `replay --assert-from <scenario.yaml>` (or `--reassert`).
+  The PR gate evaluates the **whole scenario frozen in the cassette** (`lane:`/`fidelity:`/`baseline:` too,
+  not only `assert:`) — a YAML edit cannot move this gate's verdict. To re-check against an edited on-disk
+  `assert:` without a paid re-record, use `replay --assert-from <scenario.yaml>` (or `--reassert`); any other
+  edited key needs a re-record.
 - **`run` / `record` (live).** Spawns the real agent in a sandbox: real model tokens + Docker **+ the
   staged Claude Code agent ELF**, bind-mounted from a local Claude Desktop install or pointed to via
   `COWORK_AGENT_BINARY`. Nothing is bundled, and **the agent binary is not redistributable** — a clean
@@ -222,7 +224,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.14.0"
+      - run: npm i -g "cowork-harness@>=1.15.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -251,7 +253,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.14.0"
+        run: npm i -g "cowork-harness@>=1.15.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

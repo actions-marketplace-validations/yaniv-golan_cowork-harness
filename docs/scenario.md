@@ -76,6 +76,38 @@ assert:                                  # pass/fail checks (see below)
 > **Use `baseline:`, not `profile:`.** `profile:` was an earlier name for this key; it is retired —
 > a scenario carrying `profile:` now errors as an unknown key, so write `baseline:`.
 
+### Unknown keys: the loader is strict, `lint` is lenient
+
+The scenario schema rejects **every** key it does not know — there is no `profile:` special case, and no
+tolerance for a typo or a key borrowed from a newer release. The two surfaces that see your file disagree
+about how loudly to say so, and the difference matters:
+
+| surface | on an unknown top-level key | exit |
+|---|---|---|
+| the **loader** — `run`, `skill`, `record` | **hard error**: `Unrecognized key: "<k>"`; the scenario does not run at all | `2` (a directory target reports each `✗ broken:` file and exits `1`) |
+| **`lint`** | ⚠ `WARN [unknown-top-key]`, plus the list of valid keys | `0` |
+
+Two consequences worth internalising:
+
+- **A scenario that lints with only warnings may still be unloadable.** `lint` is the more permissive
+  check, not the stricter one. A clean-ish lint is not proof the file runs.
+- **A key from a newer harness fails LOUD on an older CLI — it is never silently reinterpreted.** Add
+  `lane:` to a scenario and run it on 1.13.x and you get `Unrecognized key: "lane"` and exit 2, not a
+  quiet fallback to `lane: local`. That is why a new key comes with a version floor rather than a
+  compatibility shim.
+
+**To check whether a scenario loads, without spending anything:**
+
+```bash
+cowork-harness record path/to/scenario.yaml --dry-run   # runs the real loader; exit 2 on a schema error
+```
+
+`--dry-run` writes nothing and needs no token or staged agent to report a schema error, so it is the
+cheap way to answer "does the runtime accept this file?". `lint` answers a different and more permissive
+question. Note that a plain `replay` cannot answer it at all — it evaluates the scenario frozen in the
+cassette (see [What `replay` evaluates](#what-replay-evaluates--the-whole-scenario-frozen)); it does print
+a `::notice::` when the sibling YAML fails to load, but the verdict is unaffected.
+
 ## Lanes (`lane:`) — which delivery contract the run is held to
 
 Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: **In the
@@ -88,6 +120,12 @@ cloud** / **On your computer**"), with cloud the default for new sessions. They 
 | `present_files` | served | **not served** — a local MCP server cannot reach a remote session |
 | `user_visible_artifact` | asserts location, as always | rejected at scenario-LOAD time — location proves nothing there; assert the delivery itself |
 | `present_files_called` / `no_scratchpad_leak` | as documented per tier | rejected at scenario-LOAD time — the tool does not exist on that lane, so the scenario never runs |
+
+> **`lane:` needs cowork-harness ≥ 1.14.0.** On an older CLI a scenario carrying it does **not** load —
+> `Unrecognized key: "lane"`, exit 2 — rather than falling back to `lane: local`. So adopting the key means
+> raising your floor (`npx "cowork-harness@>=1.14.0"`, or the `npm i -g` pin in your CI recipe); it will
+> not silently mean something different on an older runner. See
+> [Unknown keys](#unknown-keys-the-loader-is-strict-lint-is-lenient).
 
 `lane` is orthogonal to **`fidelity`** (which isolation tier the harness runs in) and to **`execution`**
 (where the run happens). A `lane: remote` scenario still executes locally, in whichever tier you chose —
@@ -533,7 +571,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 > *can be evaluated on replay at all* (content-class vs live-only). It does **not** mean an edit to that key in
 > `scenarios/<name>.yaml` reaches a default replay — a default replay reads the **frozen** copy regardless of
 > class. Content-class ⇒ *evaluable* on replay, **not** *your edit runs*. Which copy is used is the separate
-> frozen-by-default rule: see [Where `replay` reads `assert:` from](#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
+> frozen-by-default rule: see [What `replay` evaluates](#what-replay-evaluates--the-whole-scenario-frozen).
 
 **Evaluated on replay (content assertions):**
 `transcript_*` (incl. `transcript_matches`), `tool_*` (incl. `tool_available`), `subagent_*`, `dispatch_count_max`,
@@ -598,7 +636,36 @@ Two consequences for CI:
 - On `replay`, skipped assertions are **absent** from `results[].assertions[]` (filtered before evaluation),
   not present-and-passing — so a CI script must not assume a fixed assertion count across the two lanes.
 
-#### Where `replay` reads `assert:` from — frozen by default, on-disk by opt-in
+<a id="where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in"></a>
+
+#### What `replay` evaluates — the whole scenario, frozen
+
+<!-- The anchor alias above preserves this section's pre-1.15.0 slug, when it was titled "Where `replay`
+     reads `assert:` from". Shipped CHANGELOG entries and any external link still point at it, and neither
+     can be rewritten — the CHANGELOG because shipped sections are immutable, external links because they
+     are not ours. Do not remove it. New links should use the heading's own slug. -->
+
+
+**A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
+`baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`, `requires_capabilities`,
+`expect_denied` and `assert` are all captured at `record` time, and a plain `replay` evaluates **every one
+of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
+
+The on-disk sibling YAML *is* opened — but only to print non-verdict-affecting `::notice::` lines when it
+has drifted (a different `assert:`, a different `prompt:`, or a file that fails to load at all). Those
+notices exist to kill the silent trap; they never move a result.
+
+`--assert-from`/`--reassert` opt **only `assert:` (+`expect_denied:`)** back to the on-disk copy. They do
+not re-read any other key — for the recording-shaping ones they only *drift-check*, and hard-fail on a
+mismatch. So there is no flag that makes a plain `replay` honour an edited `lane:`, `fidelity:` or
+`baseline:`: those reach a replay only by re-recording.
+
+> **Authoring a scenario for a newer harness?** The frozen copy is why a `replay` gate can look happy
+> while the YAML is unloadable. Check the file against the real loader with
+> `cowork-harness record <file.yaml> --dry-run` — see
+> [Unknown keys: the loader is strict, `lint` is lenient](#unknown-keys-the-loader-is-strict-lint-is-lenient).
+
+The rest of this section is the `assert:`-specific detail.
 
 By default `replay` evaluates the assertions **frozen inside the cassette** (the copy `record` captured), so a
 plain `replay` is byte-deterministic and independent of the working tree — editing `scenarios/<name>.yaml`'s

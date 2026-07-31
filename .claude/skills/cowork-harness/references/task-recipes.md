@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.14.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.15.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -177,7 +177,12 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    `--repeat` works on the `skill` lane, not just `run`. A single green run proves it passed *once*.
    Companions: `--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd`, `--allow-budget-stop`.
    (`--max-budget-usd` also works WITHOUT `--repeat`, where it pre-flights a single run against that
-   scenario's cost history and refuses before spending; the others are batch-only.) It rejects `--session-id`/
+   scenario's cost history and refuses before spending; the others are batch-only.
+   **`record` accepts it too** — there it is CUMULATIVE across the batch (a `dir/` or `--rerecord-stale`
+   sweep is the least predictable spend in the CLI), refusing up front if the summed history exceeds the
+   cap. At `--concurrency 1` a running total also stops the batch once the cap is reached; above that the
+   stop is disabled and the tool says so, because with N runs in flight the total is only known after an
+   overshoot is already paid for. Unpriced scenarios contribute $0 and are named as a LOWER BOUND.) It rejects `--session-id`/
    `--resume` (both pin one run dir) and `--decider-cmd`/`--decider-dir` (a driving agent x N is not a
    measurement).
    The full loop (harvest -> reproduce -> fix -> prove freshness -> compare) is written out end-to-end in

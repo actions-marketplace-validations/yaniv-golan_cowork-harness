@@ -121,12 +121,19 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 ## Checklist
 
 - [ ] Decide the version per the semver rule above.
-- [ ] **Does this release add or change a user-facing CLI flag, assertion key, cassette field, message, or
-      version coupling?** If so update **CHANGELOG.md + README.md + `.claude/skills/cowork-harness/SKILL.md`
-      + `references/`** — a version bump is NOT documentation. Only *some* of this is guarded (the
-      assertion-key catalog and cassette schema fields, by `test/skill-docs-sync.test.ts`); a new **flag**
-      or **message** is guarded by nothing and is on you. Two consecutive consumer adoption reports spent
-      ~40% of their findings on exactly this.
+- [ ] **Does this release add or change a user-facing CLI flag, assertion key, cassette field, message,
+      top-level scenario key, or version coupling?** If so update **CHANGELOG.md + README.md +
+      `.claude/skills/cowork-harness/SKILL.md` + `references/`** — a version bump is NOT documentation.
+      Only *some* of this is guarded (the assertion-key catalog and cassette schema fields, by
+      `test/skill-docs-sync.test.ts`); a new **flag** or **message** is guarded by nothing and is on you.
+      Two consecutive consumer adoption reports spent ~40% of their findings on exactly this.
+- [ ] **New top-level scenario key?** Then the docs above MUST also state **the version floor and what an
+      older CLI does with the key** — the loader is `z.strictObject`, so an unknown key is a hard error
+      (`Unrecognized key: "<k>"`, exit 2), never a silent fallback to the default. Adopting the key is a
+      floor bump for every consumer, and "it just means the default on older versions" is the wrong guess
+      a reader makes when you don't say. This category was added after `lane:` (1.14.0) cleared every
+      machine-enumerable guard — schema, `lint`'s valid-key list, the surface snapshot — and still shipped
+      with no floor documented anywhere, which cost a consumer a wrong conclusion and a wasted test cycle.
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
