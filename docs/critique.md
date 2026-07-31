@@ -112,7 +112,7 @@ ignored.
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged) |
 | `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ its `agents/<name>.md`) instead of a missing plugin-root SKILL.md — see below |
-| `--fidelity container\|hostloop` | container (default) or hostloop; `microvm`/`protocol`/`cowork` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
+| `--fidelity container\|hostloop\|cowork` | container (default) or hostloop; `cowork` resolves via the baseline's loop gate to one of those two and pins BOTH turns to it. `microvm`/`protocol` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
 | `--run-dir <path>` | **global, unlike `--dotenv`** — must still PRECEDE the subcommand; a trailing `critique … --run-dir` is rejected |
@@ -236,7 +236,8 @@ The header also reports the pinned **fidelity** (plus the tier/baseline the grad
 mismatch is visible rather than assumed away) and a per-critique **cost** rollup across all four model
 workloads — the two graded turns *and* the two evaluator passes — marked `INCOMPLETE` whenever any
 workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
-/ `costUsd`, and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
+/ `costUsd` — plus `requestedFidelity`, present only when `--fidelity cowork` was passed and naming what
+it resolved to — and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
 malformed evaluator items (the surviving findings are then not necessarily the complete reply). An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + references +
@@ -347,24 +348,22 @@ the two cannot disagree.
   skill's quality or safety, and never as a gate. This holds whether you authored the skill or are probing
   one you did not (see *Running it on a skill you did not write* above). It is a separate point from "never a
   gate / findings exit 0", which is about not blocking CI on findings.
-- **Tiers.** critique runs at `--fidelity container` (default) or `hostloop`. The container→hostloop pin
-  was lifted on 2026-07-23 once hostloop resume-continuity was proven live against the *native* agent
-  binary (`test/live-contract.test.ts`, "resume-continuity proof at hostloop"; 4/4 runs). A cross-tier
-  `--resume` (turn 1 at one tier, turn 2 at another) is blocked fail-loud by the session-manifest fidelity
-  stamp. The three tiers still refused, each for its own reason:
+- **Tiers.** critique runs at `--fidelity container` (default), `hostloop`, or `cowork`. The
+  container→hostloop pin was lifted on 2026-07-23 once hostloop resume-continuity was proven live against
+  the *native* agent binary (`test/live-contract.test.ts`, "resume-continuity proof at hostloop"; 4/4
+  runs). `cowork` is not a fourth environment: it means *"whichever tier real Cowork would use here"*, and
+  is resolved **once, before either turn is spawned**, from the pinned baseline's loop gate — both turns
+  then receive the resolved literal. That single resolution is what makes it safe; a cross-tier `--resume`
+  (turn 1 at one tier, turn 2 at another) is blocked fail-loud by the session-manifest fidelity stamp. The
+  resolution is echoed to stderr as `[loop] cowork → <tier>` and reported as
+  `requestedFidelity` alongside the tier that ran, so a report never reads as though you named the tier
+  yourself. The two tiers still refused, each for its own reason:
 - **`[unverified]` The microvm tier is refused** — resume-continuity is unproven for the microVM guest (a
   different Apple-VZ guest and in-guest session store than the proven container/hostloop tiers). A live
   resume-continuity proof there would lift it.
 - **`[not-built]` The protocol tier is refused** — it never plumbs a session id or `--resume`, so
   critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
   (which also runs with no sandbox) would be the work.
-- **`[deliberate]` The cowork tier is refused** — pass the resolved tier (`container`|`hostloop`)
-  explicitly. cowork resolves dynamically to hostloop|container via the synced loop gate; accepting it
-  would make the graded tier baseline-dependent, adding noise to skillHash-paired generation comparisons.
-  In plain terms: `cowork` lets the *environment pick itself* (from a synced switch that changes with the
-  Desktop baseline), so two runs of the same skill could quietly land in different environments — and
-  critique's whole value is comparing runs over time, which needs a fixed, known environment. Naming a real
-  tier keeps that comparison honest.
 - **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — SKILL.md, every `references/**`
   file, and `agents/<skill>.md` are packaged in full, up to a **512 KiB combined corpus ceiling** covering
   all three together. The ceiling is a sanity valve, not an allocation (~2.3x the largest skill measured

@@ -10,6 +10,28 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`critique` accepts `--fidelity cowork`.** It was refused on the grounds that `cowork` resolves
+  dynamically and "would make the graded tier baseline-dependent" — conservative rather than necessary.
+  The determinism that actually matters is *within* a critique: both turns must run at the same tier,
+  because a cross-tier `--resume` is blocked fail-loud by the session-manifest fidelity stamp. So
+  `cowork` is now resolved **once, before either turn is spawned**, and both turns receive the resolved
+  literal — the invariant is preserved exactly, and the literal `cowork` never reaches a child. This is
+  the same argument that lifted the container-only pin to `container|hostloop` in 1.12.0. The resolution
+  reads the pinned baseline's loop gate exactly as a plain run does, echoes `[loop] cowork → <tier>` to
+  stderr, and is reported as **`requestedFidelity`** next to the tier that ran, so a report never reads
+  as though you named the tier yourself. It also accounts for `--dotenv`: the child CLI loads that file
+  before deciding, so its `CLAUDE_FORCE_HOST_LOOP` is read here too (read, **not** applied — loading the
+  file into critique's own env would hand every variable in it to the evaluator's spawned CLI). An
+  unreadable baseline is rewrapped into a sentence naming both the cause and the escape hatch, rather
+  than surfacing a bare `ENOENT` — a worse diagnostic than the refusal it replaces would have made this
+  a net regression for the person hitting it. `microvm` and `protocol` stay refused, each with its own
+  reason. **`chat` still refuses `cowork`** — its fidelity is fixed at parse time with no gate
+  resolution at all, which is a differently-shaped change; deliberately out of scope here.
+  Known gap, unchanged by this: `stats` does not warn when one aggregate spans more than one
+  **tier** the way it now does for skill generations, so runs at different tiers still average together
+  silently. That is reachable today by passing different `--fidelity` values explicitly and is not
+  introduced here.
+
 - **Scenarios can declare which Cowork lane's delivery contract to test against — `lane: local|remote`.**
   Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: In the cloud /
   On your computer"), with cloud the default for new sessions — and they disagree about what *delivered*

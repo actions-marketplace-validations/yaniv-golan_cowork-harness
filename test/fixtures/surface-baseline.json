@@ -695,6 +695,12 @@
         "type": "string",
         "required": true
       },
+      ".requestedFidelity": {
+        "type": "string",
+        "enum": [
+          "cowork"
+        ]
+      },
       ".selfReportStatus": {
         "type": "string",
         "enum": [

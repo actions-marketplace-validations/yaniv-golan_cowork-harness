@@ -56,6 +56,34 @@ export function loadDotenv(file = resolve(process.cwd(), ".env"), opts: { strict
     if (opts.strict) throw new DotenvReadError(file, err);
     return [];
   }
+  for (const [key, val] of parseDotenv(text)) {
+    if (process.env[key] === undefined) {
+      process.env[key] = val;
+      loaded.push(key);
+    }
+  }
+  return loaded;
+}
+
+/**
+ * Parse `KEY=VALUE` pairs out of dotenv TEXT — the same semantics {@link loadDotenv} applies (comments,
+ * surrounding quotes, an optional `export ` prefix, and `KEY=` meaning "not provided").
+ *
+ * **The FIRST non-empty assignment for a key wins**, which is deliberate rather than conventional: the
+ * loop this was extracted from wrote straight into `process.env`, so a second assignment to an
+ * already-set key was a no-op. Last-wins would read as the more standard dotenv behaviour and is what a
+ * fresh implementation would pick — but flipping credential precedence as a side effect of extracting a
+ * pure parser is not a trade worth making. (An empty `KEY=` never enters the map at all, so the
+ * documented "a blank template placeholder is harmless and a later non-empty line still wins" holds.)
+ *
+ * **Does not touch `process.env`.** This exists for the caller that needs to READ what a `.env` would
+ * contribute without applying it — `critique` resolving `--fidelity cowork` has to know the effective
+ * `CLAUDE_FORCE_HOST_LOOP` its child turns will see, but loading the whole file into its own env would
+ * also hand those variables to the evaluator's spawned CLI, a side effect well outside that decision.
+ * Callers that want the file applied should use `loadDotenv`, which is defined in terms of this.
+ */
+export function parseDotenv(text: string): Map<string, string> {
+  const vars = new Map<string, string>();
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
@@ -72,10 +100,7 @@ export function loadDotenv(file = resolve(process.cwd(), ".env"), opts: { strict
     // An empty value (`KEY=`) means "not provided" — skip it, so a blank template placeholder is
     // harmless and a later non-empty line (or an exported var) still wins.
     if (val === "") continue;
-    if (process.env[key] === undefined) {
-      process.env[key] = val;
-      loaded.push(key);
-    }
+    if (!vars.has(key)) vars.set(key, val);
   }
-  return loaded;
+  return vars;
 }

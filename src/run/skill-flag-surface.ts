@@ -157,7 +157,7 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
     arity: 1,
     critique: {
       kind: "owned",
-      note: "container (default) or hostloop; microvm/protocol/cowork refused (resume continuity unproven there)",
+      note: "container (default), hostloop, or cowork — which resolves once via the baseline's loop gate and pins BOTH turns to the result; microvm/protocol refused (resume continuity unproven there)",
     },
   },
   {
