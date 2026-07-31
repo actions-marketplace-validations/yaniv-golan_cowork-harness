@@ -6,6 +6,95 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-07-31
+
+Documentation-led release. A consumer adoption pass over 1.14.0 found no bugs — but reported a
+confidently wrong conclusion about how `replay` sources a scenario, and tracing *why* found that our own
+docs taught it. Most of what follows is that root cause; one new flag and one new message came out of it.
+
+### Added
+
+- **`record --max-budget-usd <x>` — a cost cap on the paid path.** `run` and `skill` have had one since
+  1.13.0; `record` never did, despite being the widest-blast-radius spend in the CLI (it takes a `dir/`,
+  has `--rerecord-stale`, and parallelizes up to `--concurrency 8`, so a re-record sweep is 16+ live runs
+  with nothing bounding it). On a batch the cap is **cumulative**, not per-scenario: it sums each
+  scenario's worst observed cost from run history and refuses **before the first spawn** if the total
+  exceeds `x`. That is the reading `--max-budget-usd` already carries under `run --repeat`, applied to the
+  other batch lane — a per-scenario cap on a 16-scenario batch would permit 16× the number you typed.
+  At **`--concurrency 1`** a running total additionally stops the batch once the cap is reached, and the
+  scenarios that did not run say so explicitly (they have no cassette and stay stale). **Above
+  `--concurrency 1` the running-total stop is disabled and the tool says so out loud** — with N runs in
+  flight the total is only known once an overshoot is already paid for, and a cap that fires after the
+  money is gone is a false guarantee, not a cap. Unpriced scenarios contribute $0 and are named, with the
+  estimate labelled a LOWER BOUND, rather than being silently treated as free. Missing cost telemetry
+  mid-batch disables the running total loudly (once) instead of counting an unknown as zero. The gate also
+  runs under **`--dry-run`**, refusing identically — a preview that reports clean and is then refused for
+  real is a false preview.
+
+- **A scenario that fails to LOAD is now announced on the default `replay` lane.** Plain `replay` reads the
+  sibling YAML to emit its `assert:`/`prompt:` drift notices, inside a `catch` that swallowed *everything*.
+  That catch is right for a half-written file — a mid-edit sibling must never break a deterministic
+  replay — but it also swallowed **schema** errors, so a scenario carrying a typo'd or too-new key replayed
+  with no signal at all. It now emits a `::notice::` naming the offending key and pointing at
+  `record --dry-run`, while read/YAML-parse failures stay silent as before. Notice only: it cannot move a
+  verdict or an exit code. This was the mechanism behind the adoption report's wrong conclusion — the
+  loader's loud rejection was invisible through `replay`.
+
+### Changed
+
+- **The freeze rule is documented at the right scope.** A cassette freezes the **whole scenario** —
+  `name`, `prompt`, `session`, `baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`,
+  `requires_capabilities`, `expect_denied`, `assert` — and a plain `replay` evaluates every one of them
+  from the frozen copy. Every place we documented this scoped it to `assert:` ("Where `replay` reads
+  `assert:` from…", "To iterate on **assertions** token-free…"), across eight sites. That scoping did not
+  merely omit the general rule, it implied the opposite: if only `assert:` were frozen, the other keys
+  would come from disk — which is exactly the inference the adoption report made about `lane:`.
+  `docs/scenario.md`, `docs/cassette.md`, `README.md`, `SKILL.md` and the `scenario-schema` / `ci-recipe`
+  references now state the scenario-wide rule first and keep the `assert:` detail beneath it, and spell
+  out that **only `assert:`/`expect_denied:` can be opted back to disk** — an edited `lane:`/`fidelity:`/
+  `baseline:` reaches a replay only by re-recording. The `docs/scenario.md` section was retitled to match;
+  its previous slug is preserved as an anchor alias so existing links keep resolving.
+
+- **The unknown-key strictness contract is written down.** The loader (`run`/`skill`/`record`) rejects
+  every key it does not know — a hard `Unrecognized key: "<k>"`, exit 2 — while `lint` only warns and
+  exits 0. Nothing said so, and the asymmetry runs opposite to the natural guess: **`lint` is the lenient
+  surface, the runtime is the strict one.** Two consequences now documented: a scenario that lints with
+  only warnings may still be unloadable, and **a key from a newer harness fails loud on an older CLI
+  rather than being silently reinterpreted**.
+
+- **`record --dry-run` is documented as the token-free loader check**, not just a recording preview. It
+  runs the real loader and needs no token or staged agent to report a schema error (exit 2 for a single
+  file; a directory reports each `✗ broken:` file and exits 1). It is the only path that reaches the
+  loader *and* is side-effect-free on a valid scenario.
+
+- **`lane:` now states its version floor (≥ 1.14.0).** On an older CLI a scenario carrying it does not load
+  at all — it is **not** reinterpreted as `lane: local`. The floor was documented nowhere when the key
+  shipped; it is now in `docs/scenario.md` and `references/scenario-schema.md`.
+
+- **`RELEASING.md` gains "top-level scenario key" as a documentation-trigger category**, with a required
+  clause: state the version floor and what older CLIs do with the key. `lane:` cleared every
+  machine-enumerable guard — schema, `lint`'s valid-key list, the surface snapshot — and still shipped with
+  its behavioural contract undocumented, in a category the checklist did not name.
+
+### Fixed
+
+- **The egress-proxy reclaim command in 1.14.0's notes omitted `cowork-egress-proxy:1`.** That tag really
+  shipped (it was the original, bumped to `:2` early), so anyone who installed before that bump keeps a
+  stale image by following the published command. The 1.14.0 entry is left as shipped; the corrected
+  command is:
+
+  ```bash
+  docker image rm cowork-egress-proxy:1 cowork-egress-proxy:2 cowork-egress-proxy:3
+  ```
+
+  Keep `:4` — that is the current tag.
+
+### Internal
+
+- `preflightBudget` moved from `src/cli.ts` into a new `src/run/budget.ts` so `record` (in
+  `cassette.ts`) can reach it without an import cycle. Pure extraction — `run`/`skill` behaviour is
+  unchanged and the move required no test edits.
+
 ## [1.14.0] — 2026-07-31
 
 ### Added

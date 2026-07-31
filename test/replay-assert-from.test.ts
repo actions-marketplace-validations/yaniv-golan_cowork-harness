@@ -127,6 +127,62 @@ describe.skipIf(!can)("replay default — frozen assertions drive; only the SILE
   });
 });
 
+// A sibling that fails SCHEMA validation used to be swallowed whole by the decoration block's catch, so a
+// scenario carrying a key from a newer release replayed with no signal at all — the loader's loud rejection
+// was invisible through `replay`, and a consumer reasonably concluded the runtime silently accepted the key.
+// The distinction that matters: a HALF-WRITTEN sibling must stay silent (that is what the catch is for), a
+// SCHEMA-INVALID one must not. Both directions are pinned here; loosening either reds a case.
+describe.skipIf(!can)("replay default — a schema-invalid sibling is announced, a half-written one is not", () => {
+  it("emits a ::notice:: naming the offending key when the sibling fails schema validation", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({}));
+    // `someFutureKey` stands in for a key from a newer release — the exact shape of the original report.
+    write(cwd, "c.yaml", scenarioYaml() + "someFutureKey: remote\n");
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.stderr).toMatch(/does not load/);
+    expect(r.stderr).toMatch(/someFutureKey/);
+    // Points at the loader check rather than leaving the reader to find it.
+    expect(r.stderr).toMatch(/--dry-run/);
+  });
+
+  it("the notice does NOT move the verdict or the exit code (decoration only)", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({ assert: [{ transcript_contains: "hello" }] }));
+    write(cwd, "c.yaml", scenarioYaml() + "someFutureKey: remote\n");
+    const r = replay(cwd, ["c.cassette.json", "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    expect(r.json?.ok).toBe(true);
+  });
+
+  it("stays SILENT when the sibling is unparseable YAML (the half-written-file property)", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({}));
+    write(cwd, "c.yaml", 'name: c\nprompt: "unterminated\n  - [oops\n');
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toMatch(/does not load/);
+  });
+
+  it("stays SILENT when there is no sibling at all", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({}));
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toMatch(/does not load/);
+  });
+
+  it("a schema-invalid sibling suppresses the assert-drift notice (there is nothing parsed to compare)", () => {
+    const cwd = tmp();
+    // The sibling's assert: differs AND the file is schema-invalid. Only the load notice can fire — this
+    // pins that the drift notice's absence here is understood, not an accident of ordering.
+    write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));
+    write(cwd, "c.yaml", scenarioYaml({ assert: "  - transcript_contains: hello\n" }) + "someFutureKey: remote\n");
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.stderr).toMatch(/does not load/);
+    expect(r.stderr).not.toMatch(/different `assert:` block/);
+  });
+});
+
 describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by construction", () => {
   it("the founder loop: --assert-from adding allow_stall flips a stalled run green", () => {
     const cwd = tmp();

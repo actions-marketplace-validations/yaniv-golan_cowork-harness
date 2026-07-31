@@ -31,14 +31,18 @@ replay  (no token, no Docker, no network)
 The cassette is NOT a test in isolation — it replays what the agent did in a past live run.
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
 
-**The cassette freezes the *interaction*, not your *assertions*.** A plain `replay` evaluates the `assert:`
-block **frozen in the cassette** (deterministic, independent of the working tree) — editing
-`scenarios/<name>.yaml` does not change it; replay only prints a `::notice::` when a sibling's `assert:`
-differs. To iterate on assertions token-free, opt in with `replay --assert-from <scenario.yaml>` (or
+**The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
+`baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`, `requires_capabilities`, `expect_denied`
+and `assert` are all captured at record time, and a plain `replay` evaluates every one of them from that
+frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
+change a replay; the sibling is read only to print `::notice::` lines when it has drifted, or when it
+fails to load. **Only `assert:` (+`expect_denied:`) can be opted back to disk** — a changed `lane:`/`fidelity:`/
+`baseline:` reaches a replay only by re-recording. To iterate on assertions token-free, opt in with
+`replay --assert-from <scenario.yaml>` (or
 `--reassert`): it re-checks against the on-disk `assert:`, but **hard-fails** if any recording-shaping field
 (`prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities`) or the skill content drifted from the recording (then you must
 re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
-[docs/scenario.md](./scenario.md#where-replay-reads-assert-from--frozen-by-default-on-disk-by-opt-in).
+[docs/scenario.md](./scenario.md#what-replay-evaluates--the-whole-scenario-frozen).
 
 A validated re-check does **not** reach a plain `replay` (which reads the frozen block) until it is written
 back. Add **`--write`** to `--reassert` to persist the re-validated block into the cassette — free, no re-record —
@@ -486,7 +490,8 @@ asserting `tool_available: "mcp__skills__.*"` will fail against them, correctly,
 genuinely had no such tool. Re-record those.
 
 ```bash
-cowork-harness record scenarios/ --dry-run          # preview the scenarios + token/binary checks, write nothing
+cowork-harness record scenarios/ --dry-run          # preview + REAL loader check (schema errors surface here), write nothing
+cowork-harness record scenarios/ --max-budget-usd 2.50   # refuse up front if the batch's cost history exceeds the cap
 cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/
 ```

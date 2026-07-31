@@ -73,6 +73,7 @@ import {
   eventsFromLines,
   runsRoot,
 } from "./run/trace-view.js";
+import { preflightBudget } from "./run/budget.js";
 import { loadVmPathContext } from "./run/vm-path-ctx-file.js";
 import { makeDisplayTranslator, linkifyForTerminal, shouldLinkify } from "./run/display-translate.js";
 import {
@@ -2971,41 +2972,8 @@ function formatRunLine(r: RunListEntry): string {
  *  holds 12 chars, `result.json` holds 64), so a very short query would pair unrelated generations. */
 const SKILL_HASH_QUERY_MIN = 6;
 
-/**
- * `--max-budget-usd` on a SINGLE run (no `--repeat`): refuse BEFORE spending if this scenario's own
- * history says the run is likely to exceed the cap.
- *
- * Why pre-flight and not a mid-run kill: there is no live cost signal to abort on. `cost.usd` arrives
- * only with the SDK result message (by which point the run is paid for), and `api_metrics` — the one
- * mid-stream cost-adjacent event — is TTFT/output-token metering that carries no USD at all (verified
- * against the staged agent binary; see `CostInfo.raw` in types.ts). History is the only thing available
- * before the spend, so history is what this uses.
- *
- * Degrades LOUDLY, never silently: with no priced history there is nothing to compare against, so it
- * says so and proceeds rather than either blocking a first run or pretending the cap is enforced. That
- * mirrors the batch lane's own missing-telemetry degradation in `runRepeatBatch`.
- */
-function preflightBudget(command: string, scenario: string, maxBudgetUsd: number, json: boolean): void {
-  const history = scenarioCostHistory(readIndex(runsRoot()), scenario);
-  if (history.length === 0) {
-    log(
-      `::warning:: --max-budget-usd: no priced run history for "${scenario}" — cannot pre-flight this run, proceeding UNCAPPED. ` +
-        `(A single run has no mid-run cost signal to abort on; the cap becomes enforceable once this scenario has run once.)`,
-    );
-    return;
-  }
-  // The WORST observed cost, not the median: this is a refusal gate, and an estimate that under-predicts
-  // lets through exactly the expensive run the flag was reached for.
-  const worst = Math.max(...history);
-  if (worst > maxBudgetUsd)
-    fail(
-      command,
-      "runtime",
-      `--max-budget-usd $${maxBudgetUsd.toFixed(4)} refused before spending: "${scenario}" has cost up to $${worst.toFixed(4)} across ${history.length} prior run(s).`,
-      `Raise the cap, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history — a single run cannot be aborted mid-flight on cost (no live cost signal exists).`,
-      json,
-    );
-}
+/* `preflightBudget` now lives in `src/run/budget.ts` — `record` (in cassette.ts) needs it too, and
+ * cassette.ts cannot import cli.ts without a cycle (cli.ts imports cmdRecord from it). */
 
 /** One text-mode line per group. `--metric` narrows to a single focused view; omitted shows
  *  everything the row has (a metric with no telemetry in the group is simply absent, not "0").

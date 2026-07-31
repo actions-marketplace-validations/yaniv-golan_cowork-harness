@@ -16,6 +16,14 @@ import {
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
+import { UsageError } from "../errors.js";
+import { preflightBudget, preflightBatchBudget, batchBudgetTracker } from "./budget.js";
+
+/** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
+ *  AND both real batch paths — a caveat that differs between the preview and the run would be its own bug. */
+const CONCURRENCY_BUDGET_CAVEAT = (n: number) =>
+  `::warning:: --max-budget-usd with --concurrency ${n}: the running-total stop is DISABLED (with ${n} runs in flight the total is only known after an overshoot is already paid for). ` +
+  `The cap is a pre-flight estimate only here. Use --concurrency 1 for a running total.\n`;
 import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, type SessionConfig } from "../session.js";
@@ -2004,6 +2012,7 @@ export async function cmdRecord(args: string[]) {
         "--decider-model",
         "--on-unanswered",
         "--concurrency",
+        "--max-budget-usd",
       ],
       noDashValue: ["--out", "--decider-dir"],
       enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
@@ -2052,12 +2061,26 @@ export async function cmdRecord(args: string[]) {
     }
     concurrency = n;
   }
+  // `--max-budget-usd`: a cost cap for the paid path. Pre-flight only — there is no live cost signal to
+  // abort a single run on (see budget.ts) — so on a batch this is a cumulative estimate from history plus,
+  // at --concurrency 1 only, a running total between scenarios.
+  let maxBudgetUsd: number | undefined;
+  const budgetRaw = p.options["--max-budget-usd"];
+  if (budgetRaw !== undefined) {
+    const n = Number(budgetRaw);
+    if (!Number.isFinite(n) || n <= 0) {
+      return fail("record", "usage", `record: --max-budget-usd requires a positive number (got "${budgetRaw}")`, undefined, asJson);
+    }
+    maxBudgetUsd = n;
+  }
   const target = p.positionals[0];
   if (!target) {
     return fail(
       "record",
       "usage",
-      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>]\n" +
+      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>] [--max-budget-usd <x>]\n" +
+        "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
+        "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
         '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"] [--decider-model <id>]] | [--on-unanswered fail|first]',
       undefined,
       asJson,
@@ -2201,6 +2224,23 @@ export async function cmdRecord(args: string[]) {
         log(tokenLine);
         log(agentLine);
       }
+      // The budget gate runs under --dry-run too, and refuses identically. A dry run whose whole job is
+      // "tell me what this would do before I spend" must not report clean and then be refused for real —
+      // that is a false preview, and it is free to check (history lookup, no spend).
+      if (maxBudgetUsd !== undefined) {
+        const names: string[] = [];
+        for (const f of disc.scenarios) {
+          try {
+            names.push(parseScenarioFile(f).name);
+          } catch {
+            /* classified `broken` above */
+          }
+        }
+        preflightBatchBudget("record", names, maxBudgetUsd, asJson);
+        // Part of the preview: the cap is weaker than it looks above --concurrency 1, and the reader
+        // deserves to learn that here rather than after spending.
+        if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
+      }
       // Exit 1 when there are broken files (they won't run but the user should know).
       return process.exit(disc.broken.length > 0 ? 1 : 0);
     }
@@ -2236,6 +2276,8 @@ export async function cmdRecord(args: string[]) {
       log(tokenLine);
       log(agentLine);
     }
+    // See the dir branch above: the budget gate is part of the preview, not skipped by it.
+    if (maxBudgetUsd !== undefined) preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
     return process.exit(0);
   }
 
@@ -2274,6 +2316,20 @@ export async function cmdRecord(args: string[]) {
       return process.exit(0);
     }
     const staleTotal = stale.length;
+    // Budget pre-flight for the whole re-record batch, BEFORE the first spawn — a refusal that fires
+    // after items 1..N-1 are already paid for is not a pre-flight. Names come from each cassette's
+    // frozen scenario (the stale set is cassettes, not YAML).
+    const staleNames: string[] = [];
+    for (const { path: cp } of stale) {
+      const rc = readCassette(cp);
+      if (!("error" in rc)) staleNames.push(rc.cassette.scenario.name);
+    }
+    if (maxBudgetUsd !== undefined) {
+      preflightBatchBudget("record", staleNames, maxBudgetUsd, asJson);
+      if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
+    }
+    const staleBudget = batchBudgetTracker(maxBudgetUsd, concurrency === 1);
+    let staleSkipped = 0;
     // ONE redaction preflight for the whole re-record batch, before the first spawn (same rationale
     // as the dir-batch path below). Policy dirs per item = cwd + the cassette's own dir (its write target).
     if (!noRedact) {
@@ -2290,6 +2346,11 @@ export async function cmdRecord(args: string[]) {
     // bound is --concurrency. Output lines are index-tagged so interleaved completions stay readable.
     const outcomes = await pMapBounded(stale, concurrency, async ({ path: cp, staleness }, i) => {
       const tag = `[${i + 1}/${staleTotal}]`;
+      if (staleBudget.stopped()) {
+        staleSkipped++;
+        log(`  · ${tag} ${cp} SKIPPED — --max-budget-usd reached; this cassette was NOT re-recorded and stays stale`);
+        return true; // not a failure: an incomplete batch, same framing as the run --repeat lane
+      }
       const rc = readCassette(cp);
       if ("error" in rc) {
         log(`  ✗ ${tag} ${cp}: ${rc.error} — cannot re-record`);
@@ -2335,6 +2396,7 @@ export async function cmdRecord(args: string[]) {
             { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true },
           );
         }
+        staleBudget.add(budgetFields(r.result).costUsd);
         log(`  ✓ ${tag} ${cp} (${r.result.result})`);
         return true;
       } catch (e) {
@@ -2343,6 +2405,8 @@ export async function cmdRecord(args: string[]) {
       }
     });
     const failures = outcomes.filter((ok) => !ok).length;
+    const staleSummary = staleBudget.summary(staleTotal - staleSkipped, staleTotal);
+    if (staleSummary) warn(staleSummary + "\n");
     return process.exit(failures > 0 ? 1 : 0);
   }
 
@@ -2389,6 +2453,22 @@ export async function cmdRecord(args: string[]) {
     }
 
     const total = disc.scenarios.length;
+    // Budget pre-flight for the whole batch, BEFORE the first spawn — same rationale as the redaction
+    // preflight below and as `run`'s dir sweep: a refusal that spends money before refusing is not one.
+    if (maxBudgetUsd !== undefined) {
+      const names: string[] = [];
+      for (const f of disc.scenarios) {
+        try {
+          names.push(parseScenarioFile(f).name);
+        } catch {
+          /* unparseable → classified `broken`; the record path reports it */
+        }
+      }
+      preflightBatchBudget("record", names, maxBudgetUsd, asJson);
+      if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
+    }
+    const batchBudget = batchBudgetTracker(maxBudgetUsd, concurrency === 1);
+    let batchSkipped = 0;
     // ONE redaction preflight for the whole batch, BEFORE the first spawn — a per-scenario warning under
     // pMapBounded would fire for scenario N after 1…N−1 already paid, and a shared empty policy would
     // emit N interleaved duplicates. Same policy search set as each scenario's own record path.
@@ -2410,9 +2490,15 @@ export async function cmdRecord(args: string[]) {
     // interleaved completions stay readable.
     const outcomes = await pMapBounded(disc.scenarios, concurrency, async (f, i) => {
       const tag = `[${i + 1}/${total}]`;
+      if (batchBudget.stopped()) {
+        batchSkipped++;
+        log(`  · ${tag} ${f} SKIPPED — --max-budget-usd reached; no cassette was written for it`);
+        return true; // not a failure: an incomplete batch, same framing as the run --repeat lane
+      }
       log(`${tag} recording ${f}…`);
       try {
         const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, skipRedactionPreflight: true, ...liveDecider });
+        batchBudget.add(budgetFields(r.result).costUsd);
         log(`  ✓ ${tag} → ${r.cassettePath} (${r.result.result})`);
         return true;
       } catch (e) {
@@ -2421,16 +2507,29 @@ export async function cmdRecord(args: string[]) {
       }
     });
     const failures = disc.broken.length + outcomes.filter((ok) => !ok).length;
+    const batchSummary = batchBudget.summary(total - batchSkipped, total);
+    if (batchSummary) warn(batchSummary + "\n");
     log(
       failures > 0
         ? `✗ record: ${failures} of ${disc.scenarios.length + disc.broken.length} failed`
-        : `✓ record: ${disc.scenarios.length} cassette(s)`,
+        : batchSkipped > 0
+          ? `✓ record: ${total - batchSkipped} cassette(s), ${batchSkipped} skipped on budget`
+          : `✓ record: ${disc.scenarios.length} cassette(s)`,
     );
     return process.exit(failures > 0 ? 1 : 0);
   }
 
-  // Single scenario file. `--decider-dir` opens an in-band file rendezvous for the driving agent; close it
-  // after the run (mirrors `run`'s one-channel lifecycle).
+  // Single scenario file. Budget pre-flight BEFORE the spawn — identical semantics to `run`'s single-run
+  // gate (worst observed cost from this scenario's own history; loud degradation when it has none).
+  if (maxBudgetUsd !== undefined) {
+    try {
+      preflightBudget("record", parseScenarioFile(target).name, maxBudgetUsd, asJson);
+    } catch (e) {
+      return fail("record", "usage", `record: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
+    }
+  }
+  // `--decider-dir` opens an in-band file rendezvous for the driving agent; close it after the run
+  // (mirrors `run`'s one-channel lifecycle).
   const channel = deciderDir !== undefined ? fileChannel(deciderDir) : undefined;
   try {
     const cassettePath = p.options["--out"];
@@ -3117,6 +3216,41 @@ async function writeReassertedAssertBlock(
  *  `::notice::`. `--assert-from <file>` / `--reassert` is the explicit opt-in to re-check against the on-disk
  *  `assert:`+`expect_denied:`; on that path recording-shaping drift (prompt/answers/baseline/skills) and skill
  *  staleness HARD-FAIL, so on-disk asserts can never green against events a different scenario/skill produced. */
+/**
+ * Compact a `parseScenarioFile` UsageError down to one readable clause for a `::notice::`.
+ *
+ * The underlying Zod message is a pretty-printed JSON issue array — many lines, mostly punctuation —
+ * which would swamp a notice line. Pull out each issue's `message` ("Unrecognized key: \"lane\"") and
+ * join them. Anything unexpected falls back to a whitespace-collapsed truncation, so a message shape
+ * we did not anticipate still produces a usable line rather than a wall of JSON.
+ *
+ * MUST NOT THROW: it runs on the default replay lane's decoration path, where an error raised while
+ * *reporting* an error would be exactly the bug this whole block is guarded against.
+ */
+export function compactSchemaError(message: string, limit = 200): string {
+  const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
+  const truncate = (s: string) => (s.length > limit ? s.slice(0, limit - 1) + "…" : s);
+  try {
+    const start = message.indexOf("[");
+    if (start !== -1) {
+      const issues: unknown = JSON.parse(message.slice(start));
+      if (Array.isArray(issues)) {
+        const parts = issues
+          .map((i) =>
+            i && typeof i === "object" && typeof (i as { message?: unknown }).message === "string"
+              ? (i as { message: string }).message
+              : "",
+          )
+          .filter(Boolean);
+        if (parts.length) return truncate(collapse(parts.join("; ")));
+      }
+    }
+  } catch {
+    /* fall through to the raw-message fallback below */
+  }
+  return truncate(collapse(message));
+}
+
 export async function cmdReplay(args: string[]) {
   // Up-front JSON detection (see cmdRecord) so every error path emits the shared envelope in JSON mode.
   const asJson = isJsonOutput(args);
@@ -3327,20 +3461,37 @@ export async function cmdReplay(args: string[]) {
         try {
           const src = _resolveRerecordSource(f, rc.cassette);
           if (src.path) {
-            const onDisk = parseScenarioFile(src.path);
-            const norm = (a: unknown) => JSON.stringify(a ?? []);
-            if (norm(onDisk.assert) !== norm(rc.cassette.scenario.assert))
-              warn(
-                `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
-                  `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
-              );
-            // Prompt drift is invisible to the fingerprint (see scenarioContentDrift). Surface it as a
-            // non-failing notice here too — the default lane never changes the verdict.
-            if ((onDisk.prompt ?? "") !== (rc.cassette.scenario.prompt ?? ""))
-              warn(
-                `::notice:: [replay] ${src.path} has a different \`prompt:\` than the cassette's frozen prompt; the frozen events reflect the recorded prompt. ` +
-                  `Re-record to sync (verify-cassettes hard-fails this drift).\n`,
-              );
+            // A SCHEMA violation here is an actionable authoring mistake (a typo'd or too-new key), and
+            // swallowing it is why a scenario carrying a key from a newer release looked like it replayed
+            // fine — the loader's loud rejection was invisible through `replay`. Surface it as a notice.
+            // A read/YAML-parse failure keeps the original silence: that is the half-written-sibling case
+            // this block was wrapped for, and it must never speak up. Notice only — no verdict, no exit.
+            let onDisk: Scenario | undefined;
+            try {
+              onDisk = parseScenarioFile(src.path);
+            } catch (e) {
+              if (e instanceof UsageError)
+                warn(
+                  `::notice:: [replay] ${src.path} does not load: ${compactSchemaError(e.message)} — replay used the scenario frozen in the cassette and is unaffected. ` +
+                    `Run \`cowork-harness record ${src.path} --dry-run\` for the full error.\n`,
+                );
+            }
+            // Drift notices need a parsed sibling; without one there is nothing to compare against.
+            if (onDisk) {
+              const norm = (a: unknown) => JSON.stringify(a ?? []);
+              if (norm(onDisk.assert) !== norm(rc.cassette.scenario.assert))
+                warn(
+                  `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
+                    `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
+                );
+              // Prompt drift is invisible to the fingerprint (see scenarioContentDrift). Surface it as a
+              // non-failing notice here too — the default lane never changes the verdict.
+              if ((onDisk.prompt ?? "") !== (rc.cassette.scenario.prompt ?? ""))
+                warn(
+                  `::notice:: [replay] ${src.path} has a different \`prompt:\` than the cassette's frozen prompt; the frozen events reflect the recorded prompt. ` +
+                    `Re-record to sync (verify-cassettes hard-fails this drift).\n`,
+                );
+            }
           }
         } catch {
           /* on-disk file is decoration on the default lane — a parse/read failure must not affect the run */

@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.14.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.15.0`
 (baseline `desktop-1.24012.9`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -48,6 +48,9 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # and execution — a `lane: remote` scenario still runs locally.
                                     # Delivery semantics only; the remote device bridge is deliberately
                                     # unmodeled.
+                                    # NEEDS >= 1.14.0: on an older CLI a scenario carrying `lane:` does NOT
+                                    # load (`Unrecognized key: "lane"`, exit 2) — it is NOT reinterpreted as
+                                    # `lane: local`. Adopting the key means raising your floor.
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 
@@ -382,9 +385,12 @@ overall run verdict and exit code — `assert result: success` alone won't catch
 A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re-evaluates only the
 **content** assertions. The authoritative list is `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` (composed) in `src/run/cassette.ts`.
 
-**Assertion source — frozen by default, on-disk by opt-in.** A plain `replay` evaluates the `assert:` block
-**frozen in the cassette** (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does
-not change it — replay only prints a `::notice::` when a sibling's `assert:` differs. `replay --assert-from
+**Scenario source — the WHOLE scenario is frozen; only `assert:` can be opted back to disk.** A cassette
+captures every key (`name`/`prompt`/`session`/`baseline`/`fidelity`/`lane`/`skills`/`answers`/`execution`/
+`requires_capabilities`/`expect_denied`/`assert`), and a plain `replay` evaluates **all** of them from that
+frozen copy (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does not change
+it — replay only prints a `::notice::` when a sibling's `assert:`/`prompt:` differs, or when it fails to
+load at all. An edited `lane:`/`fidelity:`/`baseline:` reaches a replay ONLY by re-recording. `replay --assert-from
 <scenario.yaml>` / `--reassert` is the opt-in token-free re-check against the on-disk block; it **hard-fails**
 on recording-shaping drift (`prompt`/`answers`/`baseline`/`skills`) or skill-content staleness (it implies
 `--fail-on-skill-drift`). `expect_denied`/filesystem/egress keys are sourced from on-disk but stay live-only —
