@@ -17,10 +17,36 @@ All notable changes to this project are documented here. The format is based on
   tool but passes a validated path through without promoting, so there is no scratch→outputs copy to leak
   — and its message now says that instead of implying the tool is missing.
 
-- **`trace --help` documents the `subagent-research` view.** The usage string never listed it even though
-  the `--view` validator accepted it. The view list is now a single module-scope constant shared by both,
-  and a test pins the usage string's bracket list and per-view explanation lines against that constant so
-  they cannot drift apart again.
+- **Every `trace --view` help list now derives from one catalog.** `src/cli.ts` carried the view list in
+  three places — the top-level command catalog, `trace --help`'s `SUBCOMMAND_USAGE.trace`, and the
+  no-target usage error — and two of the three had drifted, omitting the `subagent-research` view even
+  though the `--view` validator accepted it. All three now interpolate one `TRACE_VIEWS` constant, moved
+  above the module-load `HELP` template literal so the interpolation can't throw a temporal-dead-zone
+  `ReferenceError` at import time. `SUBCOMMAND_USAGE.trace` is now a real multi-line template literal
+  rather than one line with embedded `\n`s. A guard test fails on any hardcoded `--view` pipe-list left in
+  the source, and pins the usage string's per-view explanation lines against the same constant.
+
+### Added
+
+- **`lint` flags `lane: remote` against the assertion keys the runtime rejects.**
+  `present_files_called`, `no_scratchpad_leak`, and `user_visible_artifact` are refused at scenario
+  **load** time on that lane — it serves no `present_files` and delivers nothing by location, so these
+  keys can only ever report cannot-verify. The linter previously said nothing, so the first signal was a
+  run that refused to start. New finding tag `lane-remote-incompatible-key` (ERROR). The tier rules
+  (`container-only-key-off-container`, `present-files-key-off-tier`) are suppressed on `lane: remote`,
+  since the lane check fires first regardless of tier and their "use a different tier" advice cannot help
+  there.
+
+- **`stats` warns when an aggregate spans more than one fidelity tier, and `--group-by fidelity` splits
+  it.** `container` and `hostloop` runs of one scenario were averaged together silently — the same
+  unlike-things gap the skill-generation warning covers on the other axis, and the one the 1.14.0
+  `--fidelity cowork` entry named as still open. Each summary now carries `distinctTiers` and `tiers`,
+  computed over `effectiveFidelity ?? fidelity` — the tier that actually **ran** — a total key, so nothing
+  is ever excluded from this grouping. The warning names the tiers and the remedy, and fires independently
+  of the skill-generation warning. `--group-by fidelity` splits per effective tier, and `totalUsd` splits
+  with it — per-tier cost in one command. A `--fidelity` filter on `stats` was considered and deferred: a
+  flag is covered surface (removing it later would be a MAJOR bump), and its only unique capability —
+  comparing generations within a single tier — has no demonstrated workflow yet.
 
 ### Documentation
 
