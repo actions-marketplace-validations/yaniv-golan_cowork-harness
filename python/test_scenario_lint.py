@@ -372,6 +372,82 @@ def _write_at(tmp_path, tier, yaml_body, name="sc.yaml"):
     return f
 
 
+def _write_lane(tmp_path, lane, yaml_body, tier="container", name="sc.yaml"):
+    f = tmp_path / name
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\n"
+        f"fidelity: {tier}\nlane: {lane}\nprompt: hi\n" + yaml_body,
+        encoding="utf-8",
+    )
+    return f
+
+
+# The runtime (src/run/execute.ts) throws at scenario LOAD time for these three keys on `lane: remote`.
+# The linter must catch it offline, before a paid run.
+LANE_REMOTE_KEYS = ("present_files_called", "no_scratchpad_leak", "user_visible_artifact")
+
+
+@pytest.mark.parametrize("key", LANE_REMOTE_KEYS)
+def test_lane_remote_incompatible_key_is_error(key, tmp_path):
+    value = "outputs/x.md" if key == "user_visible_artifact" else "true"
+    body = f"assert:\n  - {key}: {value}\n"
+    findings = [f for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", body))) if f.rule == "lane-remote-incompatible-key"]
+    assert len(findings) == 1, key
+    assert findings[0].severity == "ERROR"
+    assert key in findings[0].message
+    assert "lane: local" in findings[0].fix or "lane: local" in findings[0].message
+
+
+@pytest.mark.parametrize("key", LANE_REMOTE_KEYS)
+@pytest.mark.parametrize("lane", ("local", None))
+def test_lane_local_or_omitted_is_clean(key, lane, tmp_path):
+    """`local` is the default; neither it nor an omitted lane may trip the rule."""
+    value = "outputs/x.md" if key == "user_visible_artifact" else "true"
+    body = f"assert:\n  - {key}: {value}\n"
+    f = _write_lane(tmp_path, lane, body) if lane else _write_at(tmp_path, "container", body)
+    assert not any(x.rule == "lane-remote-incompatible-key" for x in scenario.lint_file(str(f)))
+
+
+def test_lane_remote_suppresses_the_tier_rule(tmp_path):
+    """`present_files_called` on `lane: remote` + `fidelity: protocol` must report ONLY the lane
+    finding. The tier advice ('use container or hostloop') is unreachable -- the lane rejection fires
+    first, at load, regardless of tier."""
+    body = "assert:\n  - present_files_called: true\n"
+    rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", body, tier="protocol")))}
+    assert "lane-remote-incompatible-key" in rules
+    assert "present-files-key-off-tier" not in rules
+
+
+def test_lane_remote_still_flags_tier_rule_when_lane_is_local(tmp_path):
+    """Mutation guard: a suppression that fired unconditionally would green the test above and be wrong."""
+    body = "assert:\n  - present_files_called: true\n"
+    rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "local", body, tier="protocol")))}
+    assert "present-files-key-off-tier" in rules
+
+
+def test_lane_remote_key_error_gates_without_strict(tmp_path):
+    f = _write_lane(tmp_path, "remote", "assert:\n  - user_visible_artifact: outputs/x.md\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    assert code != 0
+    assert any(x["rule"] == "lane-remote-incompatible-key" and x["severity"] == "ERROR" for x in findings)
+
+
+def test_tier_keys_are_a_subset_of_the_lane_incompatible_keys():
+    """THE invariant that makes whole-block tier suppression safe (Step 4).
+
+    Suppressing the tier blocks wholesale on `lane: remote` is only correct because every key those
+    blocks can flag is ALSO lane-rejected -- so the author still gets an ERROR naming that key, just a
+    more fundamental one. If a key is ever added to a tier set WITHOUT being lane-rejected, the
+    `if lane != "remote"` guard would silently swallow a REACHABLE tier finding, and no other test here
+    would notice (they all exercise `present_files_called`). Pin the invariant, not the instance."""
+    tier_keys = scenario.CONTAINER_ONLY_KEYS | scenario.CONTAINER_HOSTLOOP_KEYS
+    assert tier_keys <= scenario.LANE_REMOTE_INCOMPATIBLE_KEYS, (
+        f"{sorted(tier_keys - scenario.LANE_REMOTE_INCOMPATIBLE_KEYS)} can be flagged by a tier rule but "
+        "is not lane-rejected -- whole-block suppression in lint_file would hide a reachable finding. "
+        "Either add the key to LANE_REMOTE_INCOMPATIBLE_KEYS, or make the suppression per-key."
+    )
+
+
 def test_present_files_key_error_gates_without_strict(tmp_path):
     # ERROR always gates -- nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
     f = _write_at(tmp_path, "protocol", "assert:\n  - present_files_called: true\n")

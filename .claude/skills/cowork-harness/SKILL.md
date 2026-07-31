@@ -287,7 +287,7 @@ baseline's host-loop gate), non-empty `requires_capabilities` on `protocol` with
 unverifiable), `no_scratchpad_leak` off `container` (ERROR on `protocol`/`microvm`/`hostloop` — hostloop's
 `present_files` passes a validated path through without promoting, so there is no scratch→outputs copy
 to leak; WARN on `cowork`, whose tier resolves per the baseline gate) or `present_files_called` on
-`protocol`/`microvm` (ERROR — served only at `container`/`hostloop`), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
+`protocol`/`microvm` (ERROR — served only at `container`/`hostloop`), or `present_files_called`/`no_scratchpad_leak`/`user_visible_artifact` on `lane: remote` (ERROR — the runtime rejects those at scenario load time, so the tier rules are suppressed there), a `controlOut`-gated key on a non-`controlOut` replay, mixed-class assertion items,
 and hallucinated schema (`assertions:` vs `assert:`, unknown keys). Exit code is non-zero on errors
 (CI-friendly). `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never
 emits a scenario `lint` would reject.
