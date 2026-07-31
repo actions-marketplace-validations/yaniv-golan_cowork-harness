@@ -21,7 +21,10 @@ All notable changes to this project are documented here. The format is based on
   `execution` (where the run happens) — a `lane: remote` scenario still runs locally. Scoped to delivery
   semantics: the remote device bridge (`device_bash`/`device_commit_files`) stays deliberately unmodeled,
   since emulating it faithfully would mean real command execution and real writes on the operator's
-  machine on behalf of a simulated session.
+  machine on behalf of a simulated session. **A `lane: remote` scenario that also asserts
+  `present_files_called`, `no_scratchpad_leak` or `user_visible_artifact` is rejected at LOAD time** —
+  those keys cannot pass on that lane, and an authored assertion that can never pass should cost a config
+  error rather than a paid run that fails at assertion time.
 
 - **A run now warns when the skill produced deliverables it never delivered.** New `warn`-severity verdict
   signal `undelivered_deliverables`: files written outside every user-visible root and never presented. It
@@ -30,8 +33,14 @@ All notable changes to this project are documented here. The format is based on
   where nobody did. Observed motivating case: a real run created 23 files, delivered 3, and reported
   success. On a remote Cowork session an undelivered file is destroyed with the workspace; on a local one
   it persists but stays invisible — either way the user does not get it. **Silent when the evidence cannot
-  answer the question** (no workspace walk, or a tier that runs no scratchpad walk), because "cannot tell"
-  must never read as "clean".
+  answer the question** — no workspace walk, a tier that runs no scratchpad walk, absent delivery
+  telemetry, or a resumed turn (where the scratchpad still holds files delivered on an earlier turn,
+  because `present_files` copies rather than moves) — since "cannot tell" must never read as "clean".
+  Opt out per scenario with **`allow_undelivered_deliverables: true`** when a skill legitimately leaves
+  intermediates, caches or downloaded inputs behind; the signal is warn-only and never fails a run alone.
+- **`result.json` gains `scratchpadEvidenceComplete`** — whether a complete scratchpad walk observed this
+  run. It is what lets the warning above distinguish "nothing was left undelivered" from "we could not
+  tell", so a consumer reading the absence of that signal knows which of the two it means.
 - **`present_files` is served at the `hostloop` tier.** Real Cowork registers the tool unconditionally and
   `alwaysLoad`, and its handler has both a VM branch and a host-loop branch — and production runs host-loop
   mode. The harness served it only at `container`, so its parity-claiming tier was one `alwaysLoad` tool
