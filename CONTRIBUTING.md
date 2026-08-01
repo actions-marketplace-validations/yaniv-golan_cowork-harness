@@ -23,7 +23,7 @@ Node ≥ 22. The project is ESM TypeScript; no transpiler magic — `tsc` only.
 Extra prerequisites for specific stages:
 
 - **python3** — required for `cowork-harness lint` (the scenario linter shells out to `python3`; it hard-fails with exit `127` when `python3` is missing). PyYAML is **bundled** with the linter — no separate install.
-- **Docker (arm64)** — required for `boundary-check` and the **L1 `container`** + `hostloop` fidelity tiers (the container sandbox + agent image).
+- **Docker (arm64)** — required for `boundary-check` and the **L1 `container`** + `hostloop` fidelity tiers (the container sandbox + agent image). **`hostloop` additionally needs a staged native macOS agent binary** (its agent loop is a host process, not a container one), so Docker alone is not enough for it and a Linux box cannot run it — see README Prerequisites.
 - **Lima (`limactl`, macOS arm64)** — required only for the **L2 `microvm`** tier and the `vm` commands; the guest runs on Apple Virtualization.framework (`vmType: vz`). `microvm` does **not** use Docker. (`cowork-harness doctor --tier microvm` checks for Lima, not Docker.)
 
 CI Stage 1 (the `build` job in `.github/workflows/ci.yml`) does **not** invoke `npm run ci`. It runs the

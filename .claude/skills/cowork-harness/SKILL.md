@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.15.0
-  tracks-harness: cowork-harness 1.15.0 (baseline desktop-1.24012.9)
+  version: 1.16.0
+  tracks-harness: cowork-harness 1.16.0 (baseline desktop-1.24012.9)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.15.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.16.0` (baseline
 > `desktop-1.24012.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.15.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.15.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.15.0"`. **Pin `@>=1.15.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.16.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.16.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.16.0"`. **Pin `@>=1.16.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -296,9 +296,11 @@ emits a scenario `lint` would reject.
 `lint` (exit 0) but a **hard error** in the runtime (`Unrecognized key: "<k>"`, exit 2) — so a scenario
 that lints with warnings may still not run. To check whether a scenario actually loads, without spending:
 `cowork-harness record <file.yaml> --dry-run` (exit 2 on a schema error; a directory reports each
-`✗ broken:` file and exits 1). Corollary: **a key from a newer harness fails LOUD on an older CLI**, never
-silently — `lane:` on a pre-1.14.0 CLI does not load rather than defaulting to `lane: local`. That is why a
-new scenario key ships with a version floor.
+`✗ broken:` file and exits 1). Corollary: **the loader** fails LOUD on an unknown key (never silently) —
+but **`replay` does not**: a frozen top-level key it doesn't recognize (e.g. `lane:` recorded pre-1.16.0) is
+silently ignored and can flip a lane-sensitive verdict green; only frozen **assertion** keys stay
+hard-rejected there. Full split + the v11 version-regime:
+[docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#unknown-keys-the-loader-is-strict-lint-is-lenient).
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -780,7 +782,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     points you at the fix.
     *Fix:* to re-check token-free against the edited block, `replay --assert-from <scenario.yaml>` (or
     `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if
-    `prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities` or the skill content (when a
+    `prompt`/`answers`/`baseline`/`fidelity`/`lane`/`skills`/`requires_capabilities` or the skill content (when a
     fingerprint exists) drifted from the recording (re-record then), and `expect_denied`/filesystem/egress keys
     are sourced but stay **live-only** (it warns; they don't move the replay verdict). **Caveat:** the `session`
     (model / data mounts / discovery) is NOT drift-checked or fingerprinted, so a **model change** between record

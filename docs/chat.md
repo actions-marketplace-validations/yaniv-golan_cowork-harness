@@ -31,7 +31,7 @@ cowork-harness chat <skill-folder> [prompt] [options]
 | `--plugin <dir>` | — | Load an additional local plugin alongside the main skill folder (repeatable). Rejected in `--raw` mode. |
 | `--verbose` | off | Show thinking blocks, tool inputs, and the full sub-agent tree (indented by dispatch depth). Default: tool call markers only. |
 | `--run-dir <path>` (global) | `$COWORK_HARNESS_RUNS_DIR` or `~/.cowork-harness/runs` | Relocate the run/transcript output dir. A **global** flag (stripped before the chat parser), so it works on `chat` too. |
-| `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--upload`, `--folder`, `--plugin`, and `--fidelity` are **rejected** (they can't be honored in native mode); `--model` is still applied. |
+| `--raw` | off | Skip the control protocol; spawns `docker run -it` in native cowork mode. Egress sandbox is NOT applied. `--upload`, `--folder`, `--plugin`, `--fidelity`, and `--allow-host-writes` are **rejected** (they can't be honored in native mode); `--model` is still applied. |
 | `--allow-host-writes` | off | Consent to let a bind-mounted (`hostloop`-fidelity) connected folder be written to by the agent — same consent as clicking "connect folder" in Desktop. See [Mount paths](#mount-paths) below. |
 
 ## Reading the output

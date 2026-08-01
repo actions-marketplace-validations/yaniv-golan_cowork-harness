@@ -13,6 +13,7 @@ import {
   type StalenessFinding,
   type PlatformBaseline,
   Assertion as AssertionSchema,
+  ScenarioObject,
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
 import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
@@ -268,7 +269,12 @@ export interface Cassette {
 //  (the pre-fix behavior — such a cassette simply never captured links; safe because it can't have
 //  recorded a link stray in the first place). `rehash` cannot synthesize link entries from an old
 //  manifest, so it routes a v9→v10 bump to a re-record (see cmdRehash).
-export const CASSETTE_VERSION = 10;
+// v11 (P8): `cassetteVersion` stops meaning "which recorder wrote this" and starts meaning "the minimum
+//  format version a reader needs to INTERPRET this cassette correctly" — see requiredVersionFor below.
+//  The only value that currently needs v11 is `lane: "remote"` (changes replay-verdict semantics a
+//  pre-lane reader doesn't know about); `lane: "local"`/omitted — nearly every existing scenario — still
+//  stamps v10, unchanged. No hashing or manifest-shape change; HASH_FORMAT_EPOCH stays at v8.
+export const CASSETTE_VERSION = 11;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -283,10 +289,66 @@ export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
 // that once compared a per-cassette algorithm version against this constant was deleted with the floor).
 const CONTENTSIG_ALGO = 4;
 
-/** Canonical URL of the JSON Schema for this cassette format version.
- *  Appears in every written cassette as `$schema` so editors and unfamiliar readers
- *  can discover what tool produced the file and what the format means. */
-const CASSETTE_SCHEMA_URL = `https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v${CASSETTE_VERSION}.json`;
+/** The last cassette format version that actually changed HASHING (skillHash/contentSig framing or
+ *  algorithm) — v7→v8 bumped CONTENTSIG_ALGO 3→4 to fix the two framing collisions (see CHANGELOG). v9
+ *  and v10 both changed the cassette SHAPE (sessionFingerprint/folderPrefixMap; ManifestEntry.linkKind)
+ *  without touching skillHash/contentSig — their own comments above say so explicitly — and v11 (P8)
+ *  changes neither; it's a per-scenario interpretation floor, not a hash-format change. computeStaleness's
+ *  "recorded under an older hash format" classification keys off THIS constant, not CASSETTE_VERSION —
+ *  otherwise a correctly-current v9/v10/v11 cassette with genuine skill drift would get a false "older
+ *  format" finding and lose its per-bucket drift attribution. */
+const HASH_FORMAT_EPOCH = 8;
+
+/** Canonical URL of the JSON Schema for a given STAMPED cassette version.
+ *  Appears in every written cassette as `$schema` so editors and unfamiliar readers can discover what
+ *  tool produced the file and what the format means. A function, not a module-level constant derived from
+ *  CASSETTE_VERSION: P8 stamps a version PER SCENARIO (see requiredVersionFor), so a v10-stamped cassette
+ *  must carry the v10 URL even while this build's max is v11. */
+export function cassetteSchemaUrl(version: number): string {
+  return `https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v${version}.json`;
+}
+
+/** For each `ScenarioObject` key: the minimum cassette format an OLDER reader needs to interpret THIS
+ *  VALUE correctly. Value-aware ON PURPOSE, NOT key-presence: `lane` carries a Zod `.default("local")`
+ *  (src/types.ts), so EVERY parsed scenario carries the key — a presence-based map would stamp v11 on
+ *  every cassette, exactly the unconditional bump this mechanism exists to avoid (the falsified v1
+ *  design). Returning 0 means "any supported reader interprets this value the same way" — the BASE=10
+ *  floor in requiredVersionFor still applies via Math.max, so 0 is not "no version".
+ *  MUST carry one entry per ScenarioObject.shape key (15 today) — enforced by a coverage test in
+ *  test/cassette-version-stamp.test.ts. Adding a scenario key without deciding its cassette-version
+ *  impact must red CI, not silently default to 0. */
+export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
+  name: () => 0,
+  baseline: () => 0,
+  session: () => 0,
+  fidelity: () => 0,
+  execution: () => 0,
+  // `lane: "remote"` changes what a replay verdict MEANS (location delivers nothing; present_files is not
+  // served) — a pre-lane reader doesn't know that and would misread it. `lane: "local"` (the default, and
+  // the only behavior a pre-lane reader has ever had) needs no bump.
+  lane: (v) => (v === "remote" ? 11 : 0),
+  prompt: () => 0,
+  timeout_ms: () => 0,
+  answers: () => 0,
+  on_unanswered: () => 0,
+  expect_denied: () => 0,
+  assert: () => 0,
+  skills: () => 0,
+  requires_capabilities: () => 0,
+  allow_host_writes: () => 0,
+};
+
+/** The minimum cassette format version a reader needs to correctly interpret this scenario — what gets
+ *  STAMPED at every write site (record, rehash). NOT "which recorder wrote it" (see the CASSETTE_VERSION
+ *  doc comment). BASE=10 is the format floor from before `lane` existed. `scenario` is `unknown` because
+ *  callers hold values of different strictness — `record` has a parsed `Scenario`, `rehash` has an
+ *  on-disk cassette's frozen scenario read through CassetteShape's loose passthrough, not the strict
+ *  schema. */
+export function requiredVersionFor(scenario: unknown): number {
+  const s = (scenario ?? {}) as Record<string, unknown>;
+  const BASE = 10;
+  return Math.max(BASE, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
+}
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
 
@@ -1157,7 +1219,10 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
     else if (live.skillHash !== fp.skillHash) {
       debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live); // surface WHICH files drifted
       const recordedVersion = cassette.cassetteVersion ?? 0;
-      if (recordedVersion < CASSETTE_VERSION) {
+      // HASH_FORMAT_EPOCH (not CASSETTE_VERSION): v9/v10/v11 all changed cassette SHAPE, none changed
+      // hashing, so a correctly-current cassette in that range must fall through to the drift-bucket
+      // attribution below, not this branch (P8; see HASH_FORMAT_EPOCH's doc comment).
+      if (recordedVersion < HASH_FORMAT_EPOCH) {
         findings.push({
           class: "format",
           message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
@@ -1981,6 +2046,129 @@ async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ res
   return recordScenarioObject(parseScenarioFile(file), { ...opts, scenarioSourceFile: file }, [dirname(file)]);
 }
 
+// `record`'s accepted flags — hoisted to exported consts (not a function-local literal) so both
+// `parseArgs` below AND the flag-coverage guard test (test/record-usage-guard.test.ts) read the SAME
+// list. Two hand-maintained copies of this set drifted in both directions before (P3/F2): a flag added
+// to one and not the other. Consuming the same const in both places makes that class of drift
+// impossible for the FLAG SET; RECORD_USAGE below (the single sourced --help / usage-error text) is the
+// other half — the guard test cross-checks the two.
+export const RECORD_BOOLEAN_FLAGS = [
+  "--no-redact",
+  "--allow-failing",
+  "--rerecord-stale",
+  "--from-embedded",
+  "--force",
+  "--quiet",
+  "--verbose",
+  "--dry-run",
+  "--decider-llm",
+] as const;
+export const RECORD_VALUE_FLAGS = [
+  "--out",
+  "--output-format",
+  "--max-artifact-bytes",
+  "--decider-dir",
+  "--intent",
+  "--decider-model",
+  "--on-unanswered",
+  "--concurrency",
+  "--max-budget-usd",
+] as const;
+
+// --- Flag-coverage guard registry (P9) -------------------------------------------------------------
+//
+// P3 built a record-only guard: RECORD_BOOLEAN_FLAGS/RECORD_VALUE_FLAGS (the flag SET) plus
+// INTENTIONALLY_UNDOCUMENTED (a single global allowlist) plus RECORD_USAGE (the single-sourced text).
+// P9 generalizes this to `replay` and `verify-cassettes`, which had the same two-hand-maintained-strings
+// problem `record` had (see the RECORD_USAGE comment below) AND no coverage guard at all. Generalizing
+// surfaced two things a record-only shape couldn't represent:
+//   - `verify-cassettes` accepts SIX `repeated:` flags (`--allow`/`--allow-domain`/`--allow-email`/
+//     `--allow-path`/`--allow-machine-inventory`/`--allow-patterns-file`, see cmdVerifyCassettes below).
+//     `repeated` is NOT `values` — parseArgs (src/cli-args.ts) collects repeated flags into
+//     `p.repeated[]` (every occurrence kept); a plain `values` flag is last-write-wins (every earlier
+//     occurrence silently discarded). Folding `repeatedFlags` into `valueFlags` here would make the
+//     GUARD correct while making the REAL parser wrong the moment someone "simplified" cmdVerifyCassettes
+//     to match — so `repeatedFlags` is its own axis, not a variant of `valueFlags`.
+//   - a single global allowlist silently over-exempts: `record`'s `--quiet` is FUNCTIONAL and documented
+//     (suppresses the `--dry-run` preview, see cmdRecord below) while `replay`'s and `verify-cassettes`'
+//     `--quiet` are parsed and never read — genuinely inert. A global list containing `--quiet` would
+//     exempt record's real, documented flag from coverage as a side effect of exempting the other two
+//     commands' dead one — so its documentation could vanish later without CI noticing. Allowlists are
+//     per-command; see RECORD_ALLOWLIST / REPLAY_ALLOWLIST / VERIFY_CASSETTES_ALLOWLIST below.
+//
+// Not modeled here: `src/run/skill-flag-surface.ts` (SKILL_FLAG_SURFACE) also has a per-flag registry for
+// `skill`, but it answers a DIFFERENT question — not "is this flag documented?" but "what does `critique`
+// do with this `skill` flag when forwarding a spawned turn?" (forward-to-both-turns / forward-to-task-only
+// / reject-with-reason / owned-by-critique). Doc coverage and forwarding disposition are orthogonal axes
+// on different consumers (usage text vs. critique's spawn); keep them as two registries, not one merged
+// shape — forcing `skill`'s forwarding semantics into this coverage-only shape (or vice versa) would blur
+// what each one actually guards.
+
+/** One flag in a per-command allowlist: accepted by the parser, deliberately left out of that command's
+ *  usage text, with a REASON (so the exemption is a decision on record, not a silent gap). */
+export interface UsageAllowlistEntry {
+  readonly flag: string;
+  readonly reason: string;
+}
+
+/** One row of the flag-coverage guard registry (test/usage-guard.test.ts). Mirrors a command's own
+ *  `parseArgs` config (booleanFlags/valueFlags/repeatedFlags/aliases) plus its single-sourced usage text
+ *  and allowlist, so the guard test can assert:
+ *   1. every accepted flag is documented in `usage` or named in `allowlist` (coverage), and
+ *   2. every `--flag` token IN `usage` is either an accepted flag or a declared exception (the reverse,
+ *      phantom-flag check — catches a doc that tells a user to pass a flag the parser rejects, which is
+ *      exactly the `--best-effort-future-cassette` bug this generalization was written to fix).
+ *  `aliases` is carried for parity with `parseArgs`'s own config (so this registry mirrors the real
+ *  parser, not a hand-simplified view of it); none of the three commands' usage text mentions a short
+ *  alias today, so it does not currently feed either check above. */
+export interface UsageGuardEntry {
+  readonly command: string;
+  readonly booleanFlags: readonly string[];
+  readonly valueFlags: readonly string[];
+  readonly repeatedFlags: readonly string[];
+  readonly aliases: Readonly<Record<string, string>>;
+  readonly usage: string;
+  readonly allowlist: readonly UsageAllowlistEntry[];
+}
+
+// Deliberate no-op: accepted for flag consistency with `run`/`skill`/`replay` but not (yet) wired up in
+// `record` (the renderer plan is fixed — --verbose has nothing extra to show). Contrast --quiet, which IS
+// wired up (suppresses only the --dry-run preview block, see cmdRecord) and so IS documented in
+// RECORD_USAGE below, not allowlisted. Excluded from the flag-coverage guard on purpose — do NOT add a
+// flag here just to silence the guard; document it in RECORD_USAGE instead.
+export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
+  {
+    flag: "--verbose",
+    reason:
+      "accepted for flag consistency with run/skill/replay; record's renderer plan is fixed so there is nothing extra for it to show — inert here.",
+  },
+];
+
+// Single-sourced `record` usage text — used for BOTH `record --help` (src/cli.ts's SUBCOMMAND_USAGE.record)
+// and the no-positional usage error below. Previously two hand-maintained strings that drifted in both
+// directions (--max-budget-usd/--decider-model missing from --help; --dry-run missing from the usage
+// error).
+//
+// UNIFICATION DECISION (P9, applies to RECORD_USAGE / REPLAY_USAGE / VERIFY_CASSETTES_USAGE alike): of
+// the two options — (a) both `--help` and the usage error print the SAME full multi-line string, or
+// (b) a short USAGE + a long HELP that provably starts with it — this file picks (a) for all three
+// commands. Reasons: `record` already shipped (a) and it works; `--help` and "you passed no target" are
+// not meaningfully different audiences here (both want the full flag list, not a one-liner pointing
+// at `--help`); and (b) would need its own "HELP starts with USAGE" pinning test to keep the two from
+// re-drifting, which is exactly the kind of second guard this generalization exists to avoid adding.
+// `replay` and `verify-cassettes` are unified onto (a) below, replacing the two independently-drifted
+// copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
+// textually diverged --margins prose — the cli.ts wording is kept as the single source).
+export const RECORD_USAGE =
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>]\n" +
+  "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
+  "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
+  "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
+  '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"] [--decider-model <id>]] | [--on-unanswered fail|first]\n' +
+  "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
+  "       --quiet: suppress the --dry-run readiness/scenario preview block (✗ broken:/skipped: lines and exit codes are unaffected).\n" +
+  "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).";
+
 /** `record <scenario.yaml | dir> [--out <file>] [--rerecord-stale] [--no-redact] [--allow-failing]` —
  *  run live + save a cassette. A single file records one; a dir batches; --rerecord-stale treats
  *  the dir as committed cassettes and re-records only those whose fingerprint drifted. */
@@ -1991,29 +2179,11 @@ export async function cmdRecord(args: string[]) {
   let p;
   try {
     p = parseArgs(args, {
-      // --quiet/--verbose accepted for flag consistency but currently no-op in record (renderer plan is fixed).
-      booleans: [
-        "--no-redact",
-        "--allow-failing",
-        "--rerecord-stale",
-        "--from-embedded",
-        "--force",
-        "--quiet",
-        "--verbose",
-        "--dry-run",
-        "--decider-llm",
-      ],
-      values: [
-        "--out",
-        "--output-format",
-        "--max-artifact-bytes",
-        "--decider-dir",
-        "--intent",
-        "--decider-model",
-        "--on-unanswered",
-        "--concurrency",
-        "--max-budget-usd",
-      ],
+      // --quiet suppresses only the --dry-run preview block (see below); --verbose remains a no-op
+      // (renderer plan is fixed). Both flag SETS are the exported RECORD_BOOLEAN_FLAGS/RECORD_VALUE_FLAGS
+      // consts above — do not fork this list back into a local literal (that's the drift P3 fixed).
+      booleans: [...RECORD_BOOLEAN_FLAGS],
+      values: [...RECORD_VALUE_FLAGS],
       noDashValue: ["--out", "--decider-dir"],
       enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
       // no `-V`: verbose is long-only everywhere (`-v` is version at the top level; the A3 shift-key-typo fix).
@@ -2075,16 +2245,7 @@ export async function cmdRecord(args: string[]) {
   }
   const target = p.positionals[0];
   if (!target) {
-    return fail(
-      "record",
-      "usage",
-      "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--concurrency <N>] [--max-budget-usd <x>]\n" +
-        "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
-        "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
-        '       answer gates live during the recording: [--decider-dir <dir>] (single scenario) | [--decider-llm [--intent "…"] [--decider-model <id>]] | [--on-unanswered fail|first]',
-      undefined,
-      asJson,
-    );
+    return fail("record", "usage", RECORD_USAGE, undefined, asJson);
   }
   if (p.positionals.length > 1) {
     return fail(
@@ -2182,12 +2343,23 @@ export async function cmdRecord(args: string[]) {
       return fail("record", "usage", "record: --dry-run and --rerecord-stale cannot be combined", undefined, asJson);
     }
 
+    // `--quiet` suppresses only this preview block (below) — never the ✗ broken:/skipped: diagnostics
+    // (P5's hard constraint: muting the loader check's only useful output would gut the feature) and
+    // never an exit code. It's a NO-OP outside --dry-run (record's other paths don't print a preview).
+    const quiet = p.flags["--quiet"] ?? false;
+
+    // This whole block is a RECORDING-READINESS PREVIEW, not a verdict on this dry run: token/agent are
+    // irrelevant to --dry-run by construction (it never spends or spawns the agent), so their absence
+    // here does NOT mean anything failed. Worded to read as "informational" rather than "broken" in a CI
+    // log — a stale ✗-prefixed MISSING line, on a token-free check, used to read as a failure there.
     const token = realProbe.hasToken();
     const agent = realProbe.agentBinary();
     const tokenLine = token
-      ? "  token:  found"
-      : "  token:  ✗ MISSING — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN";
-    const agentLine = agent.ok ? `  agent:  ${agent.path}` : `  agent:  ✗ ${agent.error.split("\n")[0]}`;
+      ? "  token:  found (would be used by a real, non-dry-run record)"
+      : "  token:  (absent — fine for --dry-run; only a real record needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN)";
+    const agentLine = agent.ok
+      ? `  agent:  ${agent.path} (would be used by a real, non-dry-run record)`
+      : `  agent:  (unresolved — fine for --dry-run; only a real record needs it — ${agent.error.split("\n")[0]})`;
     const agentPayload = agent.ok ? { ok: true as const, path: agent.path } : { ok: false as const, error: agent.error };
 
     if (isDir) {
@@ -2218,7 +2390,7 @@ export async function cmdRecord(args: string[]) {
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
         return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
       }
-      if (!asJson) {
+      if (!asJson && !quiet) {
         log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
         for (let i = 0; i < disc.scenarios.length; i++) log(`  [${i + 1}] ${disc.scenarios[i]}`);
         log(tokenLine);
@@ -2267,7 +2439,7 @@ export async function cmdRecord(args: string[]) {
           agent: agentPayload,
         }),
       );
-    } else {
+    } else if (!quiet) {
       log("record --dry-run");
       log(`  scenario: ${scenario.name}`);
       log(`  file:     ${target}`);
@@ -2750,10 +2922,13 @@ async function recordScenarioObject(
   } catch {
     // Baseline failed to load — proceed without agentBinaryFormat (it's optional).
   }
+  // The STAMPED version — the minimum a reader needs to interpret THIS scenario, not the build's max
+  // (CASSETTE_VERSION). Nearly every scenario (lane: local/omitted) stamps v10, unchanged (P8).
+  const stampedVersion = requiredVersionFor(relocatable);
   const base: Cassette = {
-    $schema: CASSETTE_SCHEMA_URL,
+    $schema: cassetteSchemaUrl(stampedVersion),
     generator: "cowork-harness",
-    cassetteVersion: CASSETTE_VERSION,
+    cassetteVersion: stampedVersion,
     scenario: relocatable,
     events: safeLines(join(result.outDir, "events.jsonl")),
     controlOut: safeLines(join(result.outDir, "control-out.jsonl")),
@@ -2916,6 +3091,19 @@ function replayErrorResult(file: string): RunResult {
   });
 }
 
+/** Single source of truth for which scenario fields `recordingShapingDrift` compares, in the canonical
+ *  order used everywhere the set is presented ("/"-joined). Every message that enumerates the drift set —
+ *  the `--reassert`/`--assert-from` `::notice::` below, `replay`'s `--help` usage string (src/cli.ts), and
+ *  `replay`'s own doc comment above `cmdReplay` — derives from this list so it cannot drift a fourth time
+ *  (P6: two of those three sites were already stale before `lane` was added).
+ *
+ *  `execution` is DELIBERATELY absent: it has exactly one legal value today (`cloud-describe` is a
+ *  load-time error, see src/types.ts), so no on-disk sibling can ever differ from a frozen recording on it
+ *  and the check could never fire. Add it here when a second `execution` value (a cloud runner) ships. */
+export const RECORDING_SHAPING_FIELDS = ["prompt", "baseline", "fidelity", "lane", "answers", "skills", "requires_capabilities"] as const;
+
+const normRecordingShapingValue = (v: unknown) => JSON.stringify(v ?? null);
+
 /** Recording-shaping fields that MUST still match the recording for on-disk assertions to be evaluated
  *  against the frozen events soundly.
  *
@@ -2928,30 +3116,34 @@ function replayErrorResult(file: string): RunResult {
  *  schema could produce a spurious drift hard-fail; re-record closes it. (Cassettes are written from a parsed
  *  scenario, so in practice both sides already carry the same post-Zod shape.)
  *
- *  Covers `prompt`/`baseline`/`fidelity`/`answers`/`skills`/`requires_capabilities` — the authored fields that
- *  shape what the recording is. `session` is DELIBERATELY excluded: the cassette stores it relative-to-cassette-dir
+ *  Covers every field in `RECORDING_SHAPING_FIELDS` — the authored fields that shape what the recording is,
+ *  including `lane` (it conditions assertion outcomes, src/assert.ts, so a lane-flipped sibling must hard-fail
+ *  like the rest — P6). `session` is DELIBERATELY excluded: the cassette stores it relative-to-cassette-dir
  *  while parseScenarioFile resolves it absolute, so a string-equal would never match (it'd brick every sessioned
  *  scenario); and the session is already baked into the frozen events with no cheap content hash to compare. Skill
  *  *content* drift is policed separately (failOnSkillDrift on the opt-in path) — and only when a skill fingerprint
  *  was recorded; the caller warns when it wasn't. */
+const RECORDING_SHAPING_CHECKS: Record<(typeof RECORDING_SHAPING_FIELDS)[number], (frozen: Scenario, onDisk: Scenario) => boolean> = {
+  prompt: (frozen, onDisk) => (frozen.prompt ?? "") === (onDisk.prompt ?? ""),
+  baseline: (frozen, onDisk) => (frozen.baseline ?? "latest") === (onDisk.baseline ?? "latest"),
+  fidelity: (frozen, onDisk) => (frozen.fidelity ?? "container") === (onDisk.fidelity ?? "container"),
+  lane: (frozen, onDisk) => (frozen.lane ?? "local") === (onDisk.lane ?? "local"),
+  answers: (frozen, onDisk) => normRecordingShapingValue(frozen.answers ?? []) === normRecordingShapingValue(onDisk.answers ?? []),
+  skills: (frozen, onDisk) => normRecordingShapingValue(frozen.skills ?? []) === normRecordingShapingValue(onDisk.skills ?? []),
+  requires_capabilities: (frozen, onDisk) =>
+    normRecordingShapingValue(frozen.requires_capabilities ?? []) === normRecordingShapingValue(onDisk.requires_capabilities ?? []),
+};
+
 function recordingShapingDrift(frozen: Scenario, onDisk: Scenario): string[] {
-  const drifted: string[] = [];
-  const norm = (v: unknown) => JSON.stringify(v ?? null);
-  if ((frozen.prompt ?? "") !== (onDisk.prompt ?? "")) drifted.push("prompt");
-  if ((frozen.baseline ?? "latest") !== (onDisk.baseline ?? "latest")) drifted.push("baseline");
-  if ((frozen.fidelity ?? "container") !== (onDisk.fidelity ?? "container")) drifted.push("fidelity");
-  if (norm(frozen.answers ?? []) !== norm(onDisk.answers ?? [])) drifted.push("answers");
-  if (norm(frozen.skills ?? []) !== norm(onDisk.skills ?? [])) drifted.push("skills");
-  if (norm(frozen.requires_capabilities ?? []) !== norm(onDisk.requires_capabilities ?? [])) drifted.push("requires_capabilities");
-  return drifted;
+  return RECORDING_SHAPING_FIELDS.filter((key) => !RECORDING_SHAPING_CHECKS[key](frozen, onDisk));
 }
 
 /** Scenario-content drift for `verify-cassettes`: has the committed on-disk scenario's PROMPT diverged from
  *  the cassette's frozen copy? The fingerprint covers skill-dir content + baseline but NOT the scenario's own
  *  prompt, so an edited-but-not-re-recorded prompt silently diverges — invisible to `replay`/`verify-cassettes`
- *  and caught only by the opt-in `--assert-from`. Now covers ALL recording-shaping fields (prompt, baseline,
- *  fidelity, answers, skills, requires_capabilities — see recordingShapingDrift), each default-normalized so
- *  a `[]`-vs-undefined churn can't false-positive. A resolvable+drifted field from an EXACTLY-recorded
+ *  and caught only by the opt-in `--assert-from`. Covers every field in `RECORDING_SHAPING_FIELDS` (prompt,
+ *  baseline, fidelity, lane, answers, skills, requires_capabilities — see recordingShapingDrift), each
+ *  default-normalized so a `[]`-vs-undefined churn can't false-positive. A resolvable+drifted field from an EXACTLY-recorded
  *  (persisted) source is a DEFINITE divergence → hard fail; a name-resolved match, or an unresolvable/
  *  unparseable source, is "can't compare" → a non-failing note, never a false-red (many valid cassettes ship
  *  without a committed source). */
@@ -3214,8 +3406,9 @@ async function writeReassertedAssertBlock(
  *  Assertion source: by default the assertions FROZEN in the cassette drive the verdict (byte-deterministic,
  *  no ambient filesystem dependency) — a sibling scenario whose `assert:` differs only triggers a discoverability
  *  `::notice::`. `--assert-from <file>` / `--reassert` is the explicit opt-in to re-check against the on-disk
- *  `assert:`+`expect_denied:`; on that path recording-shaping drift (prompt/answers/baseline/skills) and skill
- *  staleness HARD-FAIL, so on-disk asserts can never green against events a different scenario/skill produced. */
+ *  `assert:`+`expect_denied:`; on that path recording-shaping drift (prompt/baseline/fidelity/lane/answers/skills/
+ *  requires_capabilities — see RECORDING_SHAPING_FIELDS) and skill staleness HARD-FAIL, so on-disk asserts can
+ *  never green against events a different scenario/skill produced. */
 /**
  * Compact a `parseScenarioFile` UsageError down to one readable clause for a `::notice::`.
  *
@@ -3251,25 +3444,54 @@ export function compactSchemaError(message: string, limit = 200): string {
   return truncate(collapse(message));
 }
 
+// `replay`'s accepted flags — hoisted to exported consts for the same reason as RECORD_BOOLEAN_FLAGS/
+// RECORD_VALUE_FLAGS above (P9 generalizes P3's guard to this command). --quiet/--verbose are accepted
+// for flag consistency but are genuinely inert here (parsed, never read — see REPLAY_ALLOWLIST below).
+export const REPLAY_BOOLEAN_FLAGS = [
+  "--strict",
+  "--fail-on-skill-drift",
+  "--reassert",
+  "--write",
+  "--allow-failing",
+  "--explain",
+  "--best-effort-future-cassette",
+  "--quiet",
+  "--verbose",
+] as const;
+export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from"] as const;
+
+// Both inert on `replay` — parsed into p.flags, never read anywhere in cmdReplay below (verified by
+// reading every `p.flags["--quiet"]`/`p.flags["--verbose"]` site in this file: none exists outside
+// cmdRecord). Contrast RECORD_ALLOWLIST's --verbose entry: record's --quiet IS wired up there, so it's
+// documented instead of allowlisted; here neither is, so both are.
+export const REPLAY_ALLOWLIST: readonly UsageAllowlistEntry[] = [
+  { flag: "--quiet", reason: "accepted for flag consistency; inert on this command" },
+  { flag: "--verbose", reason: "accepted for flag consistency; inert on this command" },
+];
+
+// Single-sourced `replay` usage text — see the UNIFICATION DECISION comment above RECORD_USAGE for why
+// both `replay --help` (src/cli.ts's SUBCOMMAND_USAGE.replay) and the no-target usage error below share
+// this one string. Previously two independently hand-maintained strings (cli.ts's was a superset of this
+// one; this one was missing --best-effort-future-cassette entirely, undiscoverable at the exact point
+// (`cassette format too new: …`) that tells a user to pass it — the P9 bug this generalization fixes).
+export const REPLAY_USAGE =
+  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
+  "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
+  `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
+  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.\n" +
+  '       --best-effort-future-cassette: override the refusal to replay a cassette recorded by a NEWER format version and attempt it anyway. `verify-cassettes` deliberately does NOT accept this flag — a verification gate has no "read it anyway" path. Cost: an older CLI reading a newer cassette can silently misread a scenario key it does not recognize — this is a best-effort escape hatch, not a safe one.';
+
 export async function cmdReplay(args: string[]) {
   // Up-front JSON detection (see cmdRecord) so every error path emits the shared envelope in JSON mode.
   const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
-      // --quiet/--verbose accepted for flag consistency but currently no-op in replay (renderer plan is fixed).
-      booleans: [
-        "--strict",
-        "--fail-on-skill-drift",
-        "--reassert",
-        "--write",
-        "--allow-failing",
-        "--explain",
-        "--best-effort-future-cassette",
-        "--quiet",
-        "--verbose",
-      ],
-      values: ["--output-format", "--assert-from"],
+      // Both flag SETS are the exported REPLAY_BOOLEAN_FLAGS/REPLAY_VALUE_FLAGS consts above — do not
+      // fork this list back into a local literal (that's the drift P9 generalized P3's fix to prevent).
+      booleans: [...REPLAY_BOOLEAN_FLAGS],
+      values: [...REPLAY_VALUE_FLAGS],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet" },
     });
@@ -3278,13 +3500,7 @@ export async function cmdReplay(args: string[]) {
   }
   const target = p.positionals[0];
   if (!target) {
-    return fail(
-      "replay",
-      "usage",
-      "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--output-format text|json]",
-      undefined,
-      asJson,
-    );
+    return fail("replay", "usage", REPLAY_USAGE, undefined, asJson);
   }
   if (p.positionals.length > 1) {
     return fail("replay", "usage", `replay takes one target (got ${p.positionals.length}: ${p.positionals.join(", ")})`, undefined, asJson);
@@ -3443,7 +3659,7 @@ export async function cmdReplay(args: string[]) {
         const skillVerifiable = !!rc.cassette.fingerprint?.skillHash;
         warn(
           `::notice:: [replay] re-asserting from on-disk ${srcPath} ` +
-            `(authored fields prompt/baseline/fidelity/answers/skills/requires_capabilities verified unchanged; ` +
+            `(authored fields ${RECORDING_SHAPING_FIELDS.join("/")} verified unchanged; ` +
             `skill-content drift ${skillVerifiable ? "will hard-fail" : "NOT verifiable — no skill fingerprint"}; ` +
             `session model/mounts/discovery is NOT verified — re-record if the session changed)\n`,
         );
@@ -3625,15 +3841,89 @@ async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): 
  *  over an unverifiable when both occur in the same run. `unscanned` notes are informational. Dedicated
  *  JSON envelope. `--margins` adds a per-count-assert recorded-vs-budget report (a per-cassette replay
  *  cost, single-sample). */
+// `verify-cassettes`' accepted flags — hoisted to exported consts (P9, same reason as REPLAY_BOOLEAN_FLAGS
+// above). NOTE the six `--allow*` flags are `repeatedFlags`, not `valueFlags`: parseArgs collects a
+// repeated flag's every occurrence into p.repeated[]; a plain values-flag keeps only the LAST occurrence.
+// Folding these into VERIFY_CASSETTES_VALUE_FLAGS would make only the last `--allow` survive parsing — a
+// semantic regression, not a refactor — so they stay a separate axis both here and in cmdVerifyCassettes's
+// own `parseArgs` call below.
+export const VERIFY_CASSETTES_BOOLEAN_FLAGS = [
+  "--skip-privacy",
+  "--skip-staleness",
+  "--skip-scenario-drift",
+  "--margins",
+  "--quiet",
+  "--verbose",
+] as const;
+export const VERIFY_CASSETTES_VALUE_FLAGS = ["--output-format"] as const;
+export const VERIFY_CASSETTES_REPEATED_FLAGS = [
+  "--allow",
+  "--allow-domain",
+  "--allow-email",
+  "--allow-path",
+  "--allow-machine-inventory",
+  "--allow-patterns-file",
+] as const;
+
+// Both inert on `verify-cassettes` — same verification as REPLAY_ALLOWLIST (grepped every
+// `p.flags["--quiet"]`/`p.flags["--verbose"]` read site in this file: only cmdRecord's exists).
+export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
+  { flag: "--quiet", reason: "accepted for flag consistency; inert on this command" },
+  { flag: "--verbose", reason: "accepted for flag consistency; inert on this command" },
+];
+
+// Single-sourced `verify-cassettes` usage text — see the UNIFICATION DECISION comment above RECORD_USAGE.
+// Previously two independently hand-maintained strings whose --margins prose had already drifted
+// (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
+// recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
+export const VERIFY_CASSETTES_USAGE =
+  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
+  "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.";
+
+// The full flag-coverage guard registry (P9) — see the UsageGuardEntry doc comment above RECORD_ALLOWLIST.
+// Defined here (after all three commands' consts exist) so it can reference them directly.
+export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
+  {
+    command: "record",
+    booleanFlags: RECORD_BOOLEAN_FLAGS,
+    valueFlags: RECORD_VALUE_FLAGS,
+    repeatedFlags: [],
+    aliases: { "-q": "--quiet" },
+    usage: RECORD_USAGE,
+    allowlist: RECORD_ALLOWLIST,
+  },
+  {
+    command: "replay",
+    booleanFlags: REPLAY_BOOLEAN_FLAGS,
+    valueFlags: REPLAY_VALUE_FLAGS,
+    repeatedFlags: [],
+    aliases: { "-q": "--quiet" },
+    usage: REPLAY_USAGE,
+    allowlist: REPLAY_ALLOWLIST,
+  },
+  {
+    command: "verify-cassettes",
+    booleanFlags: VERIFY_CASSETTES_BOOLEAN_FLAGS,
+    valueFlags: VERIFY_CASSETTES_VALUE_FLAGS,
+    repeatedFlags: VERIFY_CASSETTES_REPEATED_FLAGS,
+    aliases: { "-q": "--quiet" },
+    usage: VERIFY_CASSETTES_USAGE,
+    allowlist: VERIFY_CASSETTES_ALLOWLIST,
+  },
+];
+
 export async function cmdVerifyCassettes(args: string[]) {
   // Up-front JSON detection (see cmdRecord) so every error path emits the shared envelope in JSON mode.
   const asJson = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(args, {
-      booleans: ["--skip-privacy", "--skip-staleness", "--skip-scenario-drift", "--margins", "--quiet", "--verbose"],
-      values: ["--output-format"],
-      repeated: ["--allow", "--allow-domain", "--allow-email", "--allow-path", "--allow-machine-inventory", "--allow-patterns-file"],
+      // Flag SETS are the exported VERIFY_CASSETTES_* consts above — do not fork this list back into a
+      // local literal (P9 generalized P3's fix here too).
+      booleans: [...VERIFY_CASSETTES_BOOLEAN_FLAGS],
+      values: [...VERIFY_CASSETTES_VALUE_FLAGS],
+      repeated: [...VERIFY_CASSETTES_REPEATED_FLAGS],
       enums: { "--output-format": ["text", "json"] },
       noDashValue: ["--allow-patterns-file"],
       aliases: { "-q": "--quiet" },
@@ -3691,15 +3981,7 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const target = p.positionals[0];
   if (!target) {
-    return fail(
-      "verify-cassettes",
-      "usage",
-      "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
-        "  --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
-        "  --margins reports recorded-vs-budget for each count-bound assert (adds a per-cassette replay cost; a SINGLE-SAMPLE estimate — one cassette ≠ variance). Diagnostic only; never changes the gate verdict.",
-      undefined,
-      asJson,
-    );
+    return fail("verify-cassettes", "usage", VERIFY_CASSETTES_USAGE, undefined, asJson);
   }
   if (p.positionals.length > 1) {
     return fail(
@@ -3953,9 +4235,13 @@ export function cmdRehash(args: string[]): void {
     }
     const { cassette } = rc;
     const recordedVersion = cassette.cassetteVersion ?? 0;
+    // The version THIS scenario requires — not CASSETTE_VERSION (the build's max). Without this,
+    // `rehash` would bump a lane-free v10 cassette to v11 for no interpretive reason, reintroducing the
+    // blanket cost P8 exists to avoid via the very command this plan names as the recovery path.
+    const requiredVersion = requiredVersionFor(cassette.scenario);
 
-    // Already at current version — nothing to do.
-    if (recordedVersion >= CASSETTE_VERSION) {
+    // Already at (or above) the version this scenario requires — nothing to do.
+    if (recordedVersion >= requiredVersion) {
       results.push({ file, action: "skipped", reason: `already at v${recordedVersion}` });
       continue;
     }
@@ -3968,7 +4254,7 @@ export function cmdRehash(args: string[]): void {
     // needs to block the eventual STAMP — the content/baseline gates below still run and their own
     // skip/error reasons (baseline drift) take precedence, so this fires only when a cassette would
     // otherwise have migrated cleanly.
-    const crossesIntoV10 = recordedVersion < 10 && CASSETTE_VERSION >= 10;
+    const crossesIntoV10 = recordedVersion < 10 && requiredVersion >= 10;
 
     // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
     if (!cassette.fingerprint?.skillHash) {
@@ -4027,13 +4313,13 @@ export function cmdRehash(args: string[]): void {
     }
 
     // Safe to migrate: content is provably unchanged. Recompute the full fingerprint under the
-    // current algorithm and bump cassetteVersion.
+    // current algorithm and bump cassetteVersion to what this scenario requires (may be < CASSETTE_VERSION).
     if (!dryRun) {
       const updated: Cassette = {
         ...cassette,
-        $schema: CASSETTE_SCHEMA_URL,
+        $schema: cassetteSchemaUrl(requiredVersion),
         generator: "cowork-harness",
-        cassetteVersion: CASSETTE_VERSION,
+        cassetteVersion: requiredVersion,
         fingerprint: { ...liveFingerprint },
       };
       writeFileAtomic(file, JSON.stringify(updated, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
@@ -4041,7 +4327,7 @@ export function cmdRehash(args: string[]): void {
     results.push({
       file,
       action: "migrated",
-      reason: `v${recordedVersion} → v${CASSETTE_VERSION}${dryRun ? " (dry-run)" : ""}`,
+      reason: `v${recordedVersion} → v${requiredVersion}${dryRun ? " (dry-run)" : ""}`,
     });
   }
 
@@ -4060,7 +4346,9 @@ export function cmdRehash(args: string[]): void {
       log(
         errors > 0
           ? `✗ rehash: ${migrated} migrated, ${skipped} skipped, ${errors} could not migrate${dryRun ? " (dry-run)" : ""}`
-          : `✓ rehash: ${migrated} cassette(s) migrated to v${CASSETTE_VERSION}${dryRun ? " (dry-run — nothing written)" : ""}`,
+          : // No single target version here — P8 stamps per-scenario (requiredVersionFor), so a batch can
+            // migrate some cassettes to v10 and others to v11; each row's own reason already says which.
+            `✓ rehash: ${migrated} cassette(s) migrated${dryRun ? " (dry-run — nothing written)" : ""}`,
       );
     } else {
       log("✓ rehash: nothing to migrate");
@@ -4270,6 +4558,40 @@ export async function replayCassette(
       : undefined;
   if (futureVersionMsg && opts.bestEffortFutureCassette) {
     warn(`::warning:: [replay] ${futureVersionMsg} (--best-effort-future-cassette: proceeding anyway)\n`);
+  }
+
+  // P2: name an unknown top-level key on the frozen scenario. `readCassette` parses `scenario` through a
+  // `z.looseObject` PASSTHROUGH (CassetteShape), so a key this build's `ScenarioObject` doesn't recognize is
+  // carried but never consulted — replay behaves exactly as if it were absent (see the `replay` doc comment
+  // above `cmdReplay`). That's silent by design for an ordinary same-version cassette (forward tolerance is
+  // the point of `looseObject`); it stops being silent-by-DESIGN and becomes silent-by-ACCIDENT once the
+  // cassette's own `cassetteVersion` says a newer build wrote it.
+  //
+  // Deliberately paired with the version signal (`futureVersionMsg`) rather than diffing keys on every
+  // replay: `ScenarioObject`'s Zod defaults materialize into the frozen scenario at record time, so a FUTURE
+  // release's new *defaulted* key would otherwise trip this notice on every replay of any newer cassette —
+  // unfilterable spam, because this build cannot know an unknown key's default. Gating on `futureVersionMsg`
+  // also keeps this notice complementary to P8 (which refuses to interpret cassette VALUES a build can't
+  // understand) rather than overlapping it.
+  //
+  // MUST NOT THROW: an error while reporting an error is exactly the bug class this guards against — wrap
+  // defensively even though `cassette.scenario` is normally a plain object.
+  if (futureVersionMsg) {
+    try {
+      const knownKeys = new Set(Object.keys(ScenarioObject.shape));
+      const frozenScenario = cassette.scenario as unknown;
+      const frozenKeys = frozenScenario && typeof frozenScenario === "object" ? Object.keys(frozenScenario as Record<string, unknown>) : [];
+      const unknownKeys = frozenKeys.filter((k) => !knownKeys.has(k));
+      if (unknownKeys.length) {
+        warn(
+          `::notice:: [replay] frozen scenario carries unknown top-level key(s) this build does not recognize: ` +
+            `${unknownKeys.join(", ")} (cassette format v${cassetteVersion} is newer than v${CASSETTE_VERSION} — ` +
+            `the value was never consulted; verdict/exit code unaffected by this notice)\n`,
+        );
+      }
+    } catch {
+      // Defense-in-depth only — never let a reporting failure abort replay.
+    }
   }
 
   const session = new CassetteAgentSession(cassette.events, cassette.controlOut);

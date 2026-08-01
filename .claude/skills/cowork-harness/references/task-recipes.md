@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.15.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.16.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -48,11 +48,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v10.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v10.json)):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v11.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v11.json)):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version (current: 10) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 11; a `lane: remote` scenario stamps 11, nearly everything else stays 10) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
@@ -182,7 +182,11 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    sweep is the least predictable spend in the CLI), refusing up front if the summed history exceeds the
    cap. At `--concurrency 1` a running total also stops the batch once the cap is reached; above that the
    stop is disabled and the tool says so, because with N runs in flight the total is only known after an
-   overshoot is already paid for. Unpriced scenarios contribute $0 and are named as a LOWER BOUND.) It rejects `--session-id`/
+   overshoot is already paid for. Unpriced scenarios contribute $0 and are named as a LOWER BOUND.
+   **Pre-flighting the sweep itself:** `--dry-run` and `--rerecord-stale` cannot be combined (dry-run has
+   no stale-selection logic). Dry-run the plain scenarios dir instead —
+   `cowork-harness record scenarios/ --dry-run` — a superset of what the sweep would actually touch, so
+   it's conservative in the right direction.) It rejects `--session-id`/
    `--resume` (both pin one run dir) and `--decider-cmd`/`--decider-dir` (a driving agent x N is not a
    measurement).
    The full loop (harvest -> reproduce -> fix -> prove freshness -> compare) is written out end-to-end in

@@ -86,15 +86,30 @@ about how loudly to say so, and the difference matters:
 |---|---|---|
 | the **loader** — `run`, `skill`, `record` | **hard error**: `Unrecognized key: "<k>"`; the scenario does not run at all | `2` (a directory target reports each `✗ broken:` file and exits `1`) |
 | **`lint`** | ⚠ `WARN [unknown-top-key]`, plus the list of valid keys | `0` |
+| **`replay`** (frozen scenario) | **silently ignored** — carried in the cassette but never consulted; can flip a lane-sensitive assertion's verdict, see below | `0` |
 
 Two consequences worth internalising:
 
 - **A scenario that lints with only warnings may still be unloadable.** `lint` is the more permissive
   check, not the stricter one. A clean-ish lint is not proof the file runs.
-- **A key from a newer harness fails LOUD on an older CLI — it is never silently reinterpreted.** Add
-  `lane:` to a scenario and run it on 1.13.x and you get `Unrecognized key: "lane"` and exit 2, not a
-  quiet fallback to `lane: local`. That is why a new key comes with a version floor rather than a
-  compatibility shim.
+- **Unknown *top-level* scenario keys are handled differently by the two paths.** The **loader**
+  (`run`/`skill`/`record`, reading scenario YAML) rejects one outright: exit 2 for a single file, or exit 1
+  for a directory, which reports each `✗ broken:` file. **`replay` does not.** A cassette's frozen scenario
+  is read as a passthrough object, so a top-level key the running CLI does not know is carried in the file
+  but never consulted — replay behaves exactly as if it were absent. Where that key conditions assertions
+  (as `lane:` does), the result is not merely quiet: **a stale CLI can report green on a cassette the
+  current CLI fails.** Since `replay` is the token-free CI gate, pin the floor in CI.
+
+  *Frozen **assertions** are not loose:* an assertion key this CLI does not recognise, in a cassette
+  recorded at this version or older, is a hard reject (exit 2) rather than a silent drop.
+
+  A cassette recorded by **≥ 1.16.0** whose scenario carries `lane: remote` is stamped v11, which `replay`
+  and `verify-cassettes` on an older CLI **refuse** — loudly. A cassette recorded by **1.14.0 or 1.15.0**
+  carrying `lane: remote` is stamped v10 and is still silently misread by a pre-`lane` CLI; run `rehash` to
+  re-stamp it. **And `replay --best-effort-future-cassette` overrides the refusal** — on that path an older
+  CLI replays the v11 cassette and the silent misread returns, so do not reach for that flag to work around
+  a version refusal on a cassette you did not record. See [docs/cassette.md → Cassette
+  versioning](./cassette.md#cassette-versioning).
 
 **To check whether a scenario loads, without spending anything:**
 
@@ -124,7 +139,11 @@ cloud** / **On your computer**"), with cloud the default for new sessions. They 
 > **`lane:` needs cowork-harness ≥ 1.14.0.** On an older CLI a scenario carrying it does **not** load —
 > `Unrecognized key: "lane"`, exit 2 — rather than falling back to `lane: local`. So adopting the key means
 > raising your floor (`npx "cowork-harness@>=1.14.0"`, or the `npm i -g` pin in your CI recipe); it will
-> not silently mean something different on an older runner. See
+> not silently mean something different on an older runner **at the loader**. That guarantee is
+> loader-only: on `replay`, a frozen `lane:` an older CLI doesn't recognize is **silently ignored**, not
+> refused — unless the cassette itself is stamped v11 (recorded ≥ 1.16.0 with `lane: remote`), which
+> `replay` and `verify-cassettes` on an older CLI both refuse loudly instead (`replay` alone takes
+> `--best-effort-future-cassette` to override that refusal). See
 > [Unknown keys](#unknown-keys-the-loader-is-strict-lint-is-lenient).
 
 `lane` is orthogonal to **`fidelity`** (which isolation tier the harness runs in) and to **`execution`**
@@ -623,7 +642,7 @@ identity keyed on `appVersion` alone cannot see it.
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
-`no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
+`semantic_matches`, `no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
 (token + Docker).
 
 Two consequences for CI:
@@ -647,8 +666,9 @@ Two consequences for CI:
 
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`, `requires_capabilities`,
-`expect_denied` and `assert` are all captured at `record` time, and a plain `replay` evaluates **every one
+`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
 
 The on-disk sibling YAML *is* opened — but only to print non-verdict-affecting `::notice::` lines when it
@@ -682,8 +702,8 @@ from the frozen copy until you re-record or `replay --reassert --write`.
 against the **on-disk** `assert:` (+`expect_denied:`) — the token-free "edit the assert, re-check without a
 paid re-record" loop. Because re-asserting against frozen events is only sound if the recording still
 corresponds to the scenario, this path is safe by construction:
-- **Recording-shaping drift hard-fails** — if `prompt`, `answers`, `baseline`, `fidelity`, `skills`, or
-  `requires_capabilities` differ from the recording, replay refuses (re-record instead).
+- **Recording-shaping drift hard-fails** — if `prompt`, `answers`, `baseline`, `fidelity`, `lane`, `skills`,
+  or `requires_capabilities` differ from the recording, replay refuses (re-record instead).
 - **The `session` is NOT verified** — it's excluded from the drift check (stored relative in the cassette,
   resolves absolute on disk) and is **not fingerprinted**, so a change to the **model**, data mounts, or
   discovery in the session between record and re-assert is **undetected**. The notice says so; re-record if the

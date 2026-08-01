@@ -33,7 +33,17 @@ import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
-import { cmdRecord, cmdReplay, cmdVerifyCassettes, cmdRehash, buildFingerprint, fingerprintSkillDrift } from "./run/cassette.js";
+import {
+  cmdRecord,
+  cmdReplay,
+  cmdVerifyCassettes,
+  cmdRehash,
+  buildFingerprint,
+  fingerprintSkillDrift,
+  RECORD_USAGE,
+  REPLAY_USAGE,
+  VERIFY_CASSETTES_USAGE,
+} from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./run/artifacts.js";
 import { readPreRunManifestOrigin, readPreRunManifestStats } from "./run/pre-run-manifest.js";
@@ -497,22 +507,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove a named VM\n  prune   drop all orphaned VMs",
   chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw] [--allow-host-writes]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity/--allow-host-writes (only --model applies)\n       --allow-host-writes: consent to a writable hostloop connected folder (native host FS access); refused loud otherwise\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
-  record:
-    "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>]\n" +
-    "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
-    '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"]] | [--on-unanswered fail|first]\n' +
-    "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
-    "       NOTE: --allow-failing only relaxes the post-run VERDICT gate; it does NOT salvage an unanswered gate (that throws before any cassette is written — use --on-unanswered first / a decider).",
-  replay:
-    "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--output-format text|json]\n" +
-    "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
-    "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
-    "       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (prompt/answers/baseline/skills) and skill staleness HARD-FAIL.\n" +
-    "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.",
-  "verify-cassettes":
-    "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
-    "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
-    "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.",
+  // Single-sourced from src/run/cassette.ts's RECORD_USAGE/REPLAY_USAGE/VERIFY_CASSETTES_USAGE (also each
+  // command's own `parseArgs` no-target usage error) so this text and each command's *_BOOLEAN_FLAGS/
+  // *_VALUE_FLAGS consts can't drift apart again — see P3 (record) and P9 (replay/verify-cassettes,
+  // USAGE_GUARD_REGISTRY in the same file).
+  record: RECORD_USAGE,
+  replay: REPLAY_USAGE,
+  "verify-cassettes": VERIFY_CASSETTES_USAGE,
   // A real multi-line template literal (not one giant line with embedded \n): keeping the interpolated
   // ${TRACE_VIEWS.join("|")} call on its own physical line, apart from the per-view rows below that
   // mention "result.json", keeps this out of the per-turn-artifact-addressing scan's blind spot (it

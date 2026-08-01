@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.15.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.16.0`
 (baseline `desktop-1.24012.9`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -50,7 +50,12 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # unmodeled.
                                     # NEEDS >= 1.14.0: on an older CLI a scenario carrying `lane:` does NOT
                                     # load (`Unrecognized key: "lane"`, exit 2) — it is NOT reinterpreted as
-                                    # `lane: local`. Adopting the key means raising your floor.
+                                    # `lane: local`. Adopting the key means raising your floor. That
+                                    # guarantee is LOADER-ONLY: replay reads a frozen scenario as
+                                    # passthrough, so an unrecognized `lane:` there is silently ignored,
+                                    # not refused — UNLESS the cassette is v11 (lane: remote, recorded
+                                    # >= 1.16.0), which replay/verify-cassettes on an older CLI DO refuse
+                                    # loudly (`--best-effort-future-cassette` overrides that refusal).
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 

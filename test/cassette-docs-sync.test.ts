@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { ALWAYS_CONTENT_KEYS, QUESTION_GATE_KEYS, MANIFEST_KEYS, LIVE_ONLY_KEYS } from "../src/run/cassette";
-import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { VERDICT_MODIFIER_KEYS, ScenarioObject } from "../src/types.js";
 
 // Anti-drift guard: docs/cassette.md's "Assertion table" hand-documents every replay-evaluated
 // assertion key. Source of truth = the three key arrays in src/run/cassette.ts (ALWAYS_CONTENT_KEYS /
@@ -103,4 +103,25 @@ describe("README.md ↔ src/run/cassette.ts replay-bucket sync", () => {
     const missing = LIVE_ONLY_KEYS.filter((k) => !covered(k, liveOnlyCell));
     expect(missing, `README.md's live-only cell is missing: ${missing.join(", ")}`).toEqual([]);
   });
+});
+
+// The "a cassette freezes the WHOLE scenario" passage hand-enumerates every ScenarioObject field, in two
+// docs. It had already gone stale — omitting `timeout_ms`, `on_unanswered` and `allow_host_writes` — which
+// matters because the passage's whole point is that editing any of them on disk cannot move a plain
+// replay's verdict. A field the list forgets reads as a field the freeze does not cover.
+describe("the whole-scenario freeze passage names every ScenarioObject field", () => {
+  const FIELDS = Object.keys(ScenarioObject.shape);
+
+  for (const file of ["docs/scenario.md", "docs/cassette.md"]) {
+    it(`${file} enumerates all ${FIELDS.length} scenario fields`, () => {
+      const text = readFileSync(resolve(file), "utf8");
+      const start = text.indexOf("freezes the");
+      expect(start, `could not locate the freeze passage in ${file}`).toBeGreaterThan(-1);
+      // Bound to the passage, not the file: every field name appears elsewhere in these docs, so an
+      // unbounded search would pass while the list itself was missing entries.
+      const passage = text.slice(start, start + 700);
+      const missing = FIELDS.filter((f) => !passage.includes(`\`${f}\``));
+      expect(missing, `${file}'s freeze passage omits: ${missing.join(", ")}`).toEqual([]);
+    });
+  }
 });

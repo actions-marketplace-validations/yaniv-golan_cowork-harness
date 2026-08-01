@@ -178,7 +178,7 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
 - `cowork.trace(run_id_or_dir, tools=False)` → `list[dict]` of trace rows (tool calls, sub-agent
   dispatches, decisions) — for asserting the *real* dispatch count vs. todo items named after sub-agents.
   Pass `tools=True` to include tool rows (runs `trace --view tools`; the CLI view set is
-  `--view tools|questions|dispatches|tool-durations|tool-errors|files|usage`).
+  `--view tools|questions|dispatches|tool-durations|tool-errors|files|usage|subagent-research`).
 - `Result`: `.assert_success()`, `.assert_transcript_contains(s)`, `.assert_tool_called(name)`,
   `.assert_subagent_dispatched(agent_type)`, `.assert_dispatch_count_max(n)`,
   `.assert_artifact_json(rel_path, predicate)`; plus `.result`, `.out_dir`, `.work_dir`, `.outputs_dir`

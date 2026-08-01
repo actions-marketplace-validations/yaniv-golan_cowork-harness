@@ -32,8 +32,9 @@ The cassette is NOT a test in isolation — it replays what the agent did in a p
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`, `requires_capabilities`, `expect_denied`
-and `assert` are all captured at record time, and a plain `replay` evaluates every one of them from that
+`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+all captured at record time, and a plain `replay` evaluates every one of them from that
 frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
 change a replay; the sibling is read only to print `::notice::` lines when it has drifted, or when it
 fails to load. **Only `assert:` (+`expect_denied:`) can be opted back to disk** — a changed `lane:`/`fidelity:`/
@@ -43,6 +44,25 @@ fails to load. **Only `assert:` (+`expect_denied:`) can be opted back to disk** 
 (`prompt`/`answers`/`baseline`/`fidelity`/`skills`/`requires_capabilities`) or the skill content drifted from the recording (then you must
 re-record). `expect_denied`/filesystem/egress keys are sourced but stay live-only. See
 [docs/scenario.md](./scenario.md#what-replay-evaluates--the-whole-scenario-frozen).
+
+**Unknown *top-level* scenario keys are handled differently by the two paths.** The **loader**
+(`run`/`skill`/`record`, reading scenario YAML) rejects one outright: exit 2 for a single file, or exit 1
+for a directory, which reports each `✗ broken:` file. **`replay` does not.** A cassette's frozen scenario
+is read as a passthrough object, so a top-level key the running CLI does not know is carried in the file
+but never consulted — replay behaves exactly as if it were absent. Where that key conditions assertions
+(as `lane:` does), the result is not merely quiet: **a stale CLI can report green on a cassette the
+current CLI fails.** Since `replay` is the token-free CI gate, pin the floor in CI.
+
+*Frozen **assertions** are not loose:* an assertion key this CLI does not recognise, in a cassette recorded
+at this version or older, is a hard reject (exit 2) rather than a silent drop.
+
+A cassette recorded by **≥ 1.16.0** whose scenario carries `lane: remote` is stamped v11, which `replay`
+and `verify-cassettes` on an older CLI **refuse** — loudly. A cassette recorded by **1.14.0 or 1.15.0**
+carrying `lane: remote` is stamped v10 and is still silently misread by a pre-`lane` CLI; run `rehash` to
+re-stamp it — see [Cassette versioning](#cassette-versioning) below. **And `replay
+--best-effort-future-cassette` overrides the refusal** — on that path an older CLI replays the v11
+cassette and the silent misread returns, so do not reach for that flag to work around a version refusal on
+a cassette you did not record.
 
 A validated re-check does **not** reach a plain `replay` (which reads the frozen block) until it is written
 back. Add **`--write`** to `--reassert` to persist the re-validated block into the cassette — free, no re-record —
@@ -63,7 +83,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 10,                  // format version; ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
+  "cassetteVersion": 10,                  // the MINIMUM format a reader needs for this scenario (see Cassette versioning below) — most cassettes stay 10; a `lane: "remote"` scenario stamps 11. ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
@@ -91,8 +111,30 @@ enables full-fidelity replay (see §Full-fidelity replay below). When absent, re
 events-only mode with a loud warning.
 
 `artifacts` and `fingerprint` are also optional — both engage only when present, so old
-cassettes replay unchanged. `cassetteVersion` is the format-schema version (a monotonic integer, not
-semver): a value newer than the harness understands triggers a loud forward-compat warning.
+cassettes replay unchanged.
+
+### Cassette versioning
+
+`cassetteVersion` is **the minimum format version a reader needs to interpret this cassette's `scenario`
+correctly** — not which recorder wrote it, and not a flat build counter. `record` stamps the *value-aware*
+minimum a given scenario actually needs: a scenario needs v11 only when a field's actual VALUE requires a
+reader that understands it — today, only `lane: "remote"` does (a pre-`lane` reader already treats every
+run as local-delivery semantics, which is exactly what `lane: "local"`/omitted asks for, so those need no
+bump). Nearly every cassette therefore still stamps **v10**, unchanged, and still replays on an old
+install. A stamped version newer than a given build understands is refused loudly by both `replay` and
+`verify-cassettes`. **`replay` alone offers an opt-in override, `--best-effort-future-cassette`;
+`verify-cassettes` does not accept that flag** — a verification gate has no "read it anyway" path, and its
+refusal says to upgrade instead. See [Unknown
+keys](./scenario.md#unknown-keys-the-loader-is-strict-lint-is-lenient) for what that refusal does and does
+not cover.
+
+`rehash <dir/>` re-stamps a cassette to the version its scenario actually requires (it skips a cassette
+already at or above that version) — the recovery path for a `lane: remote` cassette recorded by
+1.14.0/1.15.0 (stamped v10 there, since the conditional stamp described above shipped in 1.16.0). Two
+preconditions bound it, so "rehash can migrate it" is conditional, not a guarantee: it **skips** a
+cassette whose recorded baseline has drifted from the live one, and it **errors** on a `contentSig`
+mismatch (a genuine skill-content change) rather than silently re-stamping over one. A cassette that fails
+either check needs a real re-record, not just a re-stamp.
 
 ### Recording provenance (`environment`)
 
@@ -491,6 +533,7 @@ genuinely had no such tool. Re-record those.
 
 ```bash
 cowork-harness record scenarios/ --dry-run          # preview + REAL loader check (schema errors surface here), write nothing
+cowork-harness record scenarios/ --dry-run --quiet  # the same check shaped for CI: silent on success, loud on failure
 cowork-harness record scenarios/ --max-budget-usd 2.50   # refuse up front if the batch's cost history exceeds the cap
 cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/
@@ -505,12 +548,15 @@ stable across these shifts; prose-level `transcript_matches` is not. Prefer stru
 possible.
 
 `verify-cassettes` reports these staleness causes:
-- **`recorded under an older hash format (vN → vM)`** — format upgrade; re-record once and the message
-  goes away. (Any cassette recorded below the **v9** read floor is refused at load time with a re-record
-  error before `verify-cassettes`/`rehash` ever reach this staleness check — see the boundary note below.
-  Within the readable v9+ range, this message just tracks the ordinary `cassetteVersion` bump, e.g. a v9
-  cassette needing one re-record after upgrading to v10. A cassette that carries no `skillHash` is
-  unaffected and keeps replaying.)
+- **`recorded under an older hash format (vN → vM)`** — the cassette's staleness hash predates a
+  hash-**algorithm** change, not merely an older `cassetteVersion` stamp: this message fires only when the
+  recorded version is below the **hash-format epoch** (v8, the last bump that actually changed how
+  `skillHash`/`contentSig` are computed) — never merely because it is below the current `cassetteVersion`.
+  A correctly-recorded v9/v10/v11 cassette never gets this message for genuine skill drift; it gets the
+  per-bucket `skill files changed …` finding below instead, with the changed-file detail intact. Re-record
+  once and the message goes away. (Any cassette recorded below the **v9** read floor is refused at load
+  time with a re-record error before `verify-cassettes`/`rehash` ever reach this staleness check — see the
+  boundary note below. A cassette that carries no `skillHash` is unaffected and keeps replaying.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
   from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
@@ -576,6 +622,13 @@ re-record error — `rehash` never gets the chance to attempt a digest-only migr
 cowork-harness record scenarios/                 # record every scenario in the dir (one cassette each)
 cowork-harness record cassettes/ --rerecord-stale # re-record ONLY the cassettes whose fingerprint drifted
 ```
+
+**`--dry-run` and `--rerecord-stale` cannot be combined** — dry-running a stale-only re-record would need
+real filesystem selection work `--dry-run` doesn't do, so the combination is rejected. To pre-flight what a
+`--rerecord-stale` sweep would touch, dry-run the plain **scenarios directory** instead
+(`cowork-harness record scenarios/ --dry-run`): a superset of what actually gets re-recorded (every
+committed cassette's source scenario, not just the ones whose fingerprint drifted), so it's conservative in
+the right direction.
 
 Each cassette is written **atomically** — to a same-directory temp file, then `rename`d over the target
 (atomic on POSIX). An interrupted, failed, or OOM-killed batch therefore never leaves a partial or corrupt
