@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.15.0` (baseline `desktop-1.24012.9`).
+Self-contained reference. Tracks `cowork-harness 1.16.0` (baseline `desktop-1.24012.9`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.15.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "1.16.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -58,7 +58,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.15.0"
+- run: npm i -g "cowork-harness@>=1.16.0"
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
 - run: cowork-harness replay cassettes/              # token-free content/structure
@@ -196,6 +196,18 @@ A typical skill repo runs four stages, fastest/cheapest first:
    `cowork-harness boundary-check` where relevant. Token-free, agent-free. **Don't `|| true` the lint
    step** — a missing python3 (exit 127) or a lint error makes `scenario.py` exit non-zero, and swallowing
    that turns the false-green guard itself into a silent no-op.
+
+   **Add a load gate next to `lint`** — they answer different questions, and `lint` is the more permissive
+   of the two (it *warns* on an unknown key; the runtime *refuses* to load one):
+
+   ```bash
+   cowork-harness record scenarios/ --dry-run --quiet   # does every scenario LOAD? no tokens, writes nothing
+   ```
+
+   This is the shape a CI step wants: **silent on success (no output, exit 0), loud and specific on
+   failure** — `--quiet` suppresses the readiness preview but never the `✗ broken:` lines, which name the
+   offending file *and* the rejected key, and the step still exits 1. A scenario that lints with only
+   warnings can still be unloadable, so a green `lint` is not evidence the suite runs.
 3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
    Token-free; content + structure + gate delivery.
 4. **Parity / live (nightly, self-hosted)** — `cowork-harness run scenarios/` with a token + Docker +
@@ -224,7 +236,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.15.0"
+      - run: npm i -g "cowork-harness@>=1.16.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -253,7 +265,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.15.0"
+        run: npm i -g "cowork-harness@>=1.16.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

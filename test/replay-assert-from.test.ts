@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { loadBaseline } from "../src/baseline.js";
-import { CASSETTE_VERSION } from "../src/run/cassette.js";
+import { CASSETTE_VERSION, RECORDING_SHAPING_FIELDS } from "../src/run/cassette.js";
 
 // On-disk re-assert opt-in + per-result verdict — exercised through the BUILT CLI so the
 // cmdReplay→replayCassette wiring is covered (a unit test on replayCassette can't see the flag plumbing).
@@ -46,6 +46,7 @@ function cassetteJson(opts: {
   fingerprint?: object;
   endQuestion?: boolean;
   session?: string;
+  lane?: "local" | "remote";
 }): string {
   return JSON.stringify({
     cassetteVersion: CASSETTE_VERSION,
@@ -54,6 +55,7 @@ function cassetteJson(opts: {
       baseline: "latest",
       session: opts.session ?? "(inline)",
       fidelity: "container",
+      ...(opts.lane ? { lane: opts.lane } : {}),
       prompt: opts.prompt ?? "do the thing",
       answers: [],
       expect_denied: [],
@@ -66,11 +68,12 @@ function cassetteJson(opts: {
 }
 
 // Minimal sibling scenario YAML (parseScenarioFile-valid). `name`/`prompt` default to match the cassette.
-function scenarioYaml(opts: { name?: string; prompt?: string; assert?: string; session?: string } = {}): string {
+function scenarioYaml(opts: { name?: string; prompt?: string; assert?: string; session?: string; lane?: "local" | "remote" } = {}): string {
   return (
     `name: ${opts.name ?? "c"}\n` +
     `prompt: ${opts.prompt ?? "do the thing"}\n` +
     (opts.session ? `session: ${opts.session}\n` : "") +
+    (opts.lane ? `lane: ${opts.lane}\n` : "") +
     `assert:\n${opts.assert ?? "  - result: success\n"}`
   );
 }
@@ -217,6 +220,33 @@ describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by con
     expect(r.code).not.toBe(0);
     expect(r.stderr).toMatch(/prompt/);
     expect(r.stderr).toMatch(/drifted from the recording/);
+  });
+
+  // P6: `lane` conditions assertion outcomes (src/assert.ts) but was missing from recordingShapingDrift's
+  // comparison set — a lane-flipped sibling used to silently re-check under the WRONG delivery contract.
+  it("recording-shaping drift (lane) HARD-FAILS and names the field", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({ lane: "local" }));
+    write(cwd, "edit.yaml", scenarioYaml({ lane: "remote" }));
+    const r = replay(cwd, ["c.cassette.json", "--assert-from", "edit.yaml"]);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/lane/);
+    expect(r.stderr).toMatch(/drifted from the recording/);
+  });
+
+  it("a matching lane (explicit on both sides, or omitted on both — defaults to local) does NOT drift", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({ lane: "remote" }));
+    write(cwd, "edit.yaml", scenarioYaml({ lane: "remote" }));
+    const r = replay(cwd, ["c.cassette.json", "--assert-from", "edit.yaml", "--output-format", "json"]);
+    expect(r.code).toBe(0);
+    expect(r.json?.ok).toBe(true);
+
+    write(cwd, "c2.cassette.json", cassetteJson({ name: "c2" })); // lane omitted (defaults to local)
+    write(cwd, "edit2.yaml", scenarioYaml({ name: "c2" })); // lane omitted too
+    const r2 = replay(cwd, ["c2.cassette.json", "--assert-from", "edit2.yaml", "--output-format", "json"]);
+    expect(r2.code).toBe(0);
+    expect(r2.json?.ok).toBe(true);
   });
 
   it("recording-shaping drift in answers / baseline / skills each HARD-FAILS and names the field", () => {
@@ -434,5 +464,133 @@ describe.skipIf(!can)("replay — per-result verdict in the JSON envelope", () =
     expect(res.verdict.pass).toBe(false); // ...yet the run failed
     expect(res.verdict.signals.some((s: any) => s.code === "stalled")).toBe(true);
     expect(r.json?.ok).toBe(false); // top-level ok == every(verdict.pass)
+  });
+});
+
+// P6: the three sites that enumerate the recording-shaping drift set (the --reassert notice, `replay --help`,
+// and the `cmdReplay` doc comment) must all name every field actually compared by `recordingShapingDrift` —
+// including `lane`, which was missing from all three before this fix (two of the three were ALSO already
+// stale, omitting `fidelity`/`requires_capabilities`). Derived from the single exported `RECORDING_SHAPING_FIELDS`
+// list so the enumeration can't drift a fourth time.
+describe("P6 — recording-shaping drift enumeration derives from RECORDING_SHAPING_FIELDS", () => {
+  it("RECORDING_SHAPING_FIELDS includes `lane` alongside the other six authored fields", () => {
+    expect([...RECORDING_SHAPING_FIELDS].sort()).toEqual(
+      ["prompt", "baseline", "fidelity", "lane", "answers", "skills", "requires_capabilities"].sort(),
+    );
+  });
+
+  it.skipIf(!can)("the --reassert notice names every field in RECORDING_SHAPING_FIELDS", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({ assert: [{ transcript_contains: "NOT_IN_TRANSCRIPT" }] }));
+    write(cwd, "c.yaml", scenarioYaml({ assert: "  - transcript_contains: hello\n" }));
+    const r = replay(cwd, ["c.cassette.json", "--reassert"]);
+    for (const field of RECORDING_SHAPING_FIELDS) expect(r.stderr, `notice should name ${field}`).toContain(field);
+  });
+
+  it.skipIf(!can)("`replay --help` names every field in RECORDING_SHAPING_FIELDS in the --assert-from/--reassert line", () => {
+    const r = spawnSync("node", [CLI, "replay", "--help"], { encoding: "utf8", cwd: tmp() });
+    const text = (r.stderr || "") + (r.stdout || "");
+    for (const field of RECORDING_SHAPING_FIELDS) expect(text, `--help should name ${field}`).toContain(field);
+  });
+
+  it("the cmdReplay doc comment above `replay <file|dir>` in src/cli.ts's cassette.ts names every field", () => {
+    const src = readFileSync(resolve("src/run/cassette.ts"), "utf8");
+    const start = src.indexOf("/** `replay <file|dir>`");
+    const end = src.indexOf("*/", start);
+    expect(start, "could not locate the cmdReplay doc comment").toBeGreaterThan(-1);
+    const block = src.slice(start, end);
+    for (const field of RECORDING_SHAPING_FIELDS) expect(block, `doc comment should name ${field}`).toContain(field);
+  });
+
+  // The shipped skill is a FOURTH hand-maintained copy of this enumeration, and the one an agent actually
+  // reads. It went stale exactly the way the three in-repo copies had — listing six fields while the guard
+  // compared seven — so a reader would not learn that a lane flip is caught. Consolidating the code copies
+  // without pinning this one would have left the drift live in the highest-traffic surface.
+  it("the shipped skill's gotcha-17 drift list names every field (SKILL.md is a fourth copy)", () => {
+    const skill = readFileSync(resolve(".claude/skills/cowork-harness/SKILL.md"), "utf8");
+    const start = skill.indexOf("17. **Editing `scenarios/*.yaml`");
+    expect(start, "could not locate gotcha 17 in SKILL.md").toBeGreaterThan(-1);
+    const gotcha = skill.slice(start, skill.indexOf("\n18. ", start));
+    // Bound to the DRIFT-LIST sentence, not the whole gotcha. Scoping only to gotcha 17 makes this test
+    // decoration: its "*Why:*" sentence already names `lane:` among the frozen keys, so a `toContain("lane")`
+    // over the whole block passes even when the drift list itself omits it — verified by mutation. The
+    // slash-delimited run of backticked field names is the thing that must stay in sync.
+    const list = /hard-fails\*\* if\s+([^]*?)\s+or the skill content/.exec(gotcha)?.[1];
+    expect(list, "could not locate gotcha 17's drift-field list").toBeTruthy();
+    for (const field of RECORDING_SHAPING_FIELDS)
+      expect(list, `SKILL.md gotcha 17's drift list should name ${field}`).toContain(`\`${field}\``);
+  });
+});
+
+// P2: an unknown top-level key on the FROZEN scenario is invisible to replay by design (looseObject
+// passthrough) — but that silence stops being harmless once the cassette's own cassetteVersion says a
+// newer build wrote it (this build may not understand what the key means). Fires ONLY when the cassette
+// is future-versioned, paired with the version signal rather than diffed on every replay — see the P2
+// design note in src/run/cassette.ts (avoids per-replay spam from a future release's new DEFAULTED key).
+describe.skipIf(!can)("P2 — unknown top-level frozen-scenario key on a future-version cassette", () => {
+  function futureCassetteWithExtraKey(extraKeys: Record<string, unknown>): string {
+    return JSON.stringify({
+      cassetteVersion: CASSETTE_VERSION + 1,
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "do the thing",
+        answers: [],
+        expect_denied: [],
+        assert: [{ result: "success" }],
+        ...extraKeys,
+      },
+      events: events("hello there", false),
+      controlOut: [],
+    });
+  }
+
+  it("notices the unknown key by name, without --best-effort-future-cassette", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", futureCassetteWithExtraKey({ someFutureKey: "remote" }));
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.stderr).toMatch(/unknown top-level key/);
+    expect(r.stderr).toContain("someFutureKey");
+  });
+
+  it("verdict and exit code are UNCHANGED by the notice — identical to the same cassette without the extra key", () => {
+    const cwd = tmp();
+    write(cwd, "with.cassette.json", futureCassetteWithExtraKey({ someFutureKey: "remote" }));
+    write(cwd, "without.cassette.json", futureCassetteWithExtraKey({}));
+    const withExtra = replay(cwd, ["with.cassette.json", "--best-effort-future-cassette", "--output-format", "json"]);
+    const withoutExtra = replay(cwd, ["without.cassette.json", "--best-effort-future-cassette", "--output-format", "json"]);
+    expect(withExtra.code).toBe(withoutExtra.code);
+    expect(withExtra.json?.ok).toBe(withoutExtra.json?.ok);
+    expect(withExtra.json?.results?.[0]?.verdict).toEqual(withoutExtra.json?.results?.[0]?.verdict);
+    // The notice appears only on the cassette that actually carries the extra key.
+    expect(withExtra.stderr).toContain("someFutureKey");
+    expect(withoutExtra.stderr).not.toMatch(/unknown top-level key/);
+  });
+
+  it("stays SILENT on an ordinary SAME-version cassette, even one carrying an extra key (no false positives)", () => {
+    const cwd = tmp();
+    const body = JSON.parse(futureCassetteWithExtraKey({ someFutureKey: "remote" }));
+    body.cassetteVersion = CASSETTE_VERSION; // not future — this build wrote (or could have written) this version
+    write(cwd, "c.cassette.json", JSON.stringify(body));
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.stderr).not.toMatch(/unknown top-level key/);
+  });
+
+  it("stays SILENT on an ordinary future-version-free replay of a normal cassette (no false positives)", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));
+    const r = replay(cwd, ["c.cassette.json"]);
+    expect(r.stderr).not.toMatch(/unknown top-level key/);
+  });
+
+  it("does not throw / crash even when scenario carries several unknown keys", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", futureCassetteWithExtraKey({ someFutureKey: "remote", anotherNewKey: 42 }));
+    const r = replay(cwd, ["c.cassette.json", "--output-format", "json"]);
+    expect(r.json).toBeTruthy(); // valid JSON envelope emitted — no crash mid-report
+    expect(r.stderr).toContain("someFutureKey");
+    expect(r.stderr).toContain("anotherNewKey");
   });
 });
