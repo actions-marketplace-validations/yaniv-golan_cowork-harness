@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`docs/cassette.md` never stated that replay executes nothing.** Every individual fact was documented,
+  but two consequences a reader has to assemble were not. First: a skill's bundled scripts are **not run**
+  on replay — a `Bash` call and its result are frozen text, and `artifact_json` reads the recorded
+  `outputs/` snapshot, so a rewritten or broken `scripts/produce.py` replays green on the old output.
+  Second: staleness is enforced by **`verify-cassettes` (exit 1)**, not by `replay`, which warns and exits
+  0 — so a CI job running `replay` alone does not gate a skill that moved. Both are now stated in the
+  mental model and next to the drift flags, with the division of labor between the two commands named.
+
 ## [1.17.0] — 2026-08-01
 
 Reported by two consumer skills against published 1.16.0, plus a 54-item documentation review against the

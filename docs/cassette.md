@@ -31,6 +31,20 @@ replay  (no token, no Docker, no network)
 The cassette is NOT a test in isolation — it replays what the agent did in a past live run.
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
 
+**What a green replay proves — and what it does not.** Replay re-evaluates your assertions against the
+recording. **Nothing is executed**: not the model, and not any script your skill bundles. A `Bash` call and
+its result are frozen text, and `artifact_json` / `file_exists` read the `outputs/` snapshot `record` took —
+so a skill whose real work happens in `scripts/produce.py` can have that script rewritten, or broken, and
+replay stays green on the old output. What replay does gate is everything downstream of the model: your
+scenario still loads, your scripted answers still match the gates that fired, your assertions still hold,
+and the verdict still computes the same way — which is what catches a CLI upgrade or a regression in the
+harness itself. For "does my script still produce the right numbers", test the script directly (see the
+[pytest lane](../python/README.md)); for "does the agent still behave this way", re-record or run live.
+Editing a bundled script *does* change the skill hash and stale every cassette recorded against it — that
+tripwire is what keeps the gap above from going unnoticed. Note which command enforces it: `verify-cassettes`
+hard-fails on staleness, while `replay` only warns — so a CI job that runs `replay` alone will not catch a
+skill that moved. Run both; the drift note in the "Filesystem assertions" section below has the detail.
+
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
 `assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
@@ -411,6 +425,16 @@ A green replay re-confirms *record-time* artifacts, **not** that the current
 skill still produces them — `replay --strict` fails the run when the `fingerprint` shows ANY skill/baseline
 drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
 Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.
+
+> **On `replay`, drift WARNS by default — the staleness gate is `verify-cassettes`.** Edit a skill without
+> re-recording and a bare `replay` prints `::warning:: cassette stale … re-record` and still reports
+> success (exit 0); `verify-cassettes` on the same tree exits **1**. That split is deliberate: `replay`
+> answers "do the assertions still hold", `verify-cassettes` answers "is this recording still current", and
+> a stale recording is not by itself a wrong answer. **The consequence is that `replay` alone does not gate
+> staleness.** Run both in CI — this repo does ([`ci.yml`](../.github/workflows/ci.yml) runs the replay
+> fixtures and then `verify-cassettes examples/replays/`) — or, if you want one command to do both, pass
+> `replay --fail-on-skill-drift` (or `--strict`, which also fails on baseline drift). `--reassert` /
+> `--assert-from` imply skill-drift hard-fail already.
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 
