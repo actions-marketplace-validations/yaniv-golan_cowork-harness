@@ -35,6 +35,14 @@ lint flags (see references/scenario-schema.md for the why of each):
   W  double-quoted regex with a backslash             (YAML eats the backslash)
   I  gate key present → needs a controlOut cassette on replay
 
+lint-skill flags (skill bodies + any sibling hooks.json):
+  E  `hook-event-unknown`      hooks.json declares a name that is not a hook event (typo → never runs)
+  W  `hooks-json-misplaced`    hooks.json not under `hooks/` — the agent reads <plugin>/hooks/hooks.json,
+                               so a root-level file is SILENTLY ignored and nothing fires
+  I  `hook-event-not-served`   a real hook event that DOES fire (plugin hooks are executed by the agent,
+                               live-verified) but has no assertion key, so a scenario can't gate on it
+  W  `${CLAUDE_PLUGIN_ROOT}` in a VM bash step / host-side hook seeding (host-loop footguns)
+
 Designed for agents and CI: non-interactive, --help, --json, meaningful exit codes,
 idempotent. `lint` exits 1 on any ERROR (or any finding with --strict); else 0.
 
@@ -182,6 +190,33 @@ def _load_assert_keys():
 
 # every valid key inside an `assert:` list item (generated from the zod schema; see _load_assert_keys)
 ASSERT_KEYS = _load_assert_keys()
+
+# Hook events the harness SERVES vs every event the agent binary KNOWS. Both come from the same generated
+# sidecar as ASSERT_KEYS (single source of truth: SERVED_HOOK_EVENTS / KNOWN_HOOK_EVENTS in
+# src/agent/session.ts). The embedded fallbacks are parity-tested against the generated file for the same
+# reason the key lists are: a hand-copied served-set silently stops warning about the event it was later
+# extended to cover — the exact drift this check exists to prevent.
+_FALLBACK_SERVED_HOOK_EVENTS = {"PreToolUse"}
+_FALLBACK_KNOWN_HOOK_EVENTS = {
+    "PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart",
+    "SessionEnd", "SubagentStop", "PreCompact", "Notification", "Stop",
+}
+
+
+def _load_hook_events():
+    """(served, known) hook-event sets, from the generated assertion-keys.json sidecar."""
+    p = Path(__file__).resolve().parent / "assertion-keys.json"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        served, known = set(d["servedHookEvents"]), set(d["knownHookEvents"])
+        if served and known:
+            return served, known
+    except Exception:
+        pass
+    return set(_FALLBACK_SERVED_HOOK_EVENTS), set(_FALLBACK_KNOWN_HOOK_EVENTS)
+
+
+SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS = _load_hook_events()
 
 # Self-check: every valid assertion key must be classified, else the replay-class lint logic mishandles it.
 # Surfaced loudly at load AND as a lint ERROR in cmd_lint (so --strict / exit codes flow). Never sys.exit here.
@@ -923,6 +958,87 @@ def _check_hook_command(path, line_no, cmd, findings):
         findings.append(_finding_hook_host_write(path, line_no, "writes into /tmp"))
 
 
+def _lint_hook_events(path):
+    """Flag hook events a plugin DECLARES that this harness does not SERVE.
+
+    Why this exists: the harness installs `PreToolUse` only, while real Cowork installs three event types
+    and the agent binary understands nine. A plugin declaring `UserPromptSubmit` therefore mounted, ran,
+    and produced no comment of any kind — the surface was discoverable only by grepping the harness's own
+    compiled output, which is exactly what one consumer had to do.
+
+    Deliberately WARN, not ERROR, and deliberately worded as uncertainty: a declared-but-unserved event is
+    not a *skill* defect, and the harness cannot currently prove the event never fires. It only knows it
+    adds no handling of its own — the agent binary loads a plugin's hooks.json through its own
+    `--plugin-dir` channel, which is a separate path the harness neither serves nor blocks and which has
+    not been probed. Claiming "this will not fire" would assert more than is known; claiming nothing
+    leaves the consumer to reverse-engineer it. So say precisely what is known.
+    """
+    findings = []
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        doc = json.loads(raw)
+    except Exception:
+        return findings  # unparseable hooks.json — the text linter still scans it line-wise
+    # PLACEMENT. The agent binary reads a plugin's hooks from `hooks/hooks.json` — a `hooks.json` sitting
+    # at the plugin ROOT is silently ignored and NOTHING fires. Live-verified: the identical file fired all
+    # three declared events from `hooks/hooks.json` and fired nothing from the root. Silent, so it looks
+    # exactly like "hooks don't work in Cowork" — which is how this probe nearly drew the wrong conclusion.
+    p = Path(path)
+    if p.name == "hooks.json" and p.parent.name != "hooks":
+        findings.append(Finding(
+            "WARN", "hooks-json-misplaced",
+            f"`{path}` is not in a `hooks/` directory — the agent reads plugin hooks from "
+            f"`<plugin>/hooks/hooks.json`, so a root-level `hooks.json` is silently ignored and none of "
+            f"its hooks ever run. Live-verified at `container` and `hostloop`.",
+            f"Move it to `{p.parent.name}/hooks/hooks.json`.",
+            path, 1,
+        ))
+    if not isinstance(doc, dict):
+        return findings
+    # `{"hooks": {...}}` (settings.json shape) and a bare `{...}` event map are both seen in the wild.
+    events = doc.get("hooks") if isinstance(doc.get("hooks"), dict) else doc
+    if not isinstance(events, dict):
+        return findings
+    # Line number for the event key, so the finding points at something the reader can jump to.
+    lines = raw.splitlines()
+    for name in events:
+        if not isinstance(name, str) or name in SERVED_HOOK_EVENTS:
+            continue
+        line_no = next((i for i, ln in enumerate(lines, 1) if f'"{name}"' in ln), 1)
+        if name in KNOWN_HOOK_EVENTS:
+            findings.append(Finding(
+                "INFO", "hook-event-not-served",
+                f"`{name}` fires here — a plugin's own `hooks/hooks.json` is loaded and executed by the "
+                f"agent binary (live-verified at both `container` and `hostloop`) — but cowork-harness "
+                f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. Two "
+                f"consequences: there is no assertion key for this event, so a scenario cannot GATE on it; "
+                f"and the harness does not reproduce the additional `{name}` hooks real Cowork installs, so "
+                f"anything driven by those is absent here.",
+                "Your hook still runs — this is about assertability, not breakage. To gate on its effect, "
+                "assert the OBSERVABLE result instead (a file it writes, a tool it blocks), not the hook "
+                "itself.",
+                path, line_no,
+            ))
+        elif name.lower() in {e.lower() for e in KNOWN_HOOK_EVENTS}:
+            correct = next(e for e in KNOWN_HOOK_EVENTS if e.lower() == name.lower())
+            findings.append(Finding(
+                "ERROR", "hook-event-unknown",
+                f"`{name}` is a hook event name with the wrong capitalization — matching is case-sensitive, "
+                f"so this hook never runs.",
+                f"Use `{correct}`.",
+                path, line_no,
+            ))
+        else:
+            findings.append(Finding(
+                "ERROR", "hook-event-unknown",
+                f"`{name}` is not a recognized hook event — an unrecognized event name is ignored, so this "
+                f"hook would never run on any surface.",
+                f"Check spelling and capitalization. Valid events: {', '.join(sorted(KNOWN_HOOK_EVENTS))}.",
+                path, line_no,
+            ))
+    return findings
+
+
 def _lint_skill_text(path, raw_lines, force_json=False):
     """Scan one file. `force_json=True` treats every line as a hooks-config JSON body
     (used for standalone hooks.json files); otherwise fences drive the context."""
@@ -1348,6 +1464,7 @@ def cmd_lint_skill(args):
             all_findings.extend(
                 _lint_skill_text(hp, Path(hp).read_text(encoding="utf-8").splitlines(), force_json=True)
             )
+            all_findings.extend(_lint_hook_events(hp))
     if args.json:
         print(json.dumps([x.as_dict() for x in all_findings], indent=2))
     else:

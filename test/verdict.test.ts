@@ -539,11 +539,55 @@ describe("verdict — undelivered_deliverables: review regressions", () => {
     expect(codes(r)).not.toContain("undelivered_deliverables");
   });
 
-  // F5: the lane never reached the verdict, so the motivating case (produced 23, delivered 3) was
-  // invisible on the very lane it was observed on — outputs/ delivers nothing there.
-  it("on lane: remote, an outputs-located file counts as undelivered", () => {
+  // SUPERSEDED INTENT (consumer report, 2026-08-01). This previously asserted that a remote
+  // outputs-located file "counts as undelivered". It does not — and the old behaviour made the signal
+  // fire on EVERY live first-turn remote run that wrote any file, because `isDelivered`'s location arm is
+  // off on remote (correct) while its `presentedFiles` arm can never match there (no remote delivery tool
+  // is modeled, so the array is structurally always empty). A signal that always fires carries no
+  // information, and it forced `allow_undelivered_deliverables: true` into every remote scenario.
+  //
+  // The harness cannot distinguish "the skill failed to deliver" from "delivery is unobservable here", so
+  // it must not assert the former. It now reports the gap itself via `delivery_unobservable`.
+  it("on lane: remote, an outputs-located file is UNOBSERVABLE, not undelivered", () => {
     const r = observed({ lane: "remote", workspaceFiles: [out("outputs/report.html")] });
-    expect(codes(r)).toContain("undelivered_deliverables");
+    expect(codes(r)).not.toContain("undelivered_deliverables");
+    expect(codes(r)).toContain("delivery_unobservable");
+  });
+
+  // The two signals answer the same question and must never both fire — one claims a delivery failure,
+  // the other says the question is unanswerable.
+  it("never emits both delivery signals for the same run", () => {
+    for (const lane of ["local", "remote"] as const) {
+      const c = codes(observed({ lane, workspaceFiles: [scratch("scratchpad/a.html"), out("outputs/b.html")] }));
+      expect(c.filter((x) => x === "undelivered_deliverables" || x === "delivery_unobservable")).toHaveLength(1);
+    }
+  });
+
+  // Guards the always-fires property the replaced behaviour had: a remote run that produced nothing to
+  // deliver has nothing unverifiable about it, so the cannot-verify notice must stay quiet too.
+  it("stays quiet on a remote run that produced no deliverable at all", () => {
+    expect(codes(observed({ lane: "remote", workspaceFiles: [] }))).not.toContain("delivery_unobservable");
+    const inputOnly = observed({ lane: "remote", workspaceFiles: [{ path: "uploads/in.csv", bytes: 1, class: "input" as const }] });
+    expect(codes(inputOnly)).not.toContain("delivery_unobservable");
+  });
+
+  it("delivery_unobservable names the lane, the cause, and both remedies", () => {
+    const m = computeVerdict(observed({ lane: "remote", workspaceFiles: [out("outputs/r.html")] }), "live").signals.find(
+      (s) => s.code === "delivery_unobservable",
+    )!.message;
+    expect(m).toContain("lane: remote");
+    expect(m).toContain("CANNOT BE VERIFIED");
+    expect(m).toContain("lane: local"); // the measure-it-properly remedy
+    expect(m).toContain("allow_undelivered_deliverables"); // the acknowledge-the-gap remedy
+  });
+
+  it("honours allow_undelivered_deliverables for the unobservable notice too", () => {
+    const r = observed({
+      lane: "remote",
+      workspaceFiles: [out("outputs/report.html")],
+      assertions: [{ assertion: { allow_undelivered_deliverables: true }, pass: true }],
+    });
+    expect(codes(r)).not.toContain("delivery_unobservable");
   });
 
   it("on lane: local, that same file is delivered by location and stays silent", () => {
@@ -559,18 +603,11 @@ describe("verdict — undelivered_deliverables: review regressions", () => {
   // signal whose severity means nobody has to have authored an assertion to see it.
   const msg = (r: RunResult) => computeVerdict(r, "live").signals.find((s) => s.code === "undelivered_deliverables")!.message;
 
-  it("on lane: remote, the message does NOT claim the file is outside a user-visible root", () => {
-    const m = msg(observed({ lane: "remote", workspaceFiles: [out("outputs/report.html")] }));
-    expect(m).toContain("outputs/report.html");
-    expect(m).not.toContain("outside every user-visible root");
-    expect(m).toContain("lane: remote");
-  });
-
-  it("on lane: remote, the message does not prescribe outputs/ as the remedy", () => {
-    const m = msg(observed({ lane: "remote", workspaceFiles: [out("outputs/report.html")] }));
-    expect(m).toContain("does not help on this lane");
-    expect(m).toContain("delivers it explicitly");
-  });
+  // The two remote-message tests that lived here are retired with the behaviour they described:
+  // `undelivered_deliverables` no longer fires on remote at all, so there is no remote message of that
+  // code left to assert. Its lane-branched `else` arm is retained in verdict.ts (unreachable today,
+  // live again the moment a remote delivery tool ships) and the replacement coverage is
+  // "delivery_unobservable names the lane, the cause, and both remedies" above.
 
   it("on lane: local, the scratchpad wording and the outputs/ remedy are kept", () => {
     const m = msg(observed({ lane: "local", workspaceFiles: [scratch("scratchpad/report.html")] }));
@@ -578,12 +615,10 @@ describe("verdict — undelivered_deliverables: review regressions", () => {
     expect(m).toContain("Write deliverables under outputs/");
   });
 
-  it("names the opt-out key on both lanes — the reader is told how to silence it", () => {
-    for (const r of [
-      observed({ lane: "local", workspaceFiles: [scratch("scratchpad/a.html")] }),
-      observed({ lane: "remote", workspaceFiles: [out("outputs/a.html")] }),
-    ])
-      expect(msg(r)).toContain("allow_undelivered_deliverables");
+  it("names the opt-out key — the reader is told how to silence it", () => {
+    expect(msg(observed({ lane: "local", workspaceFiles: [scratch("scratchpad/a.html")] }))).toContain("allow_undelivered_deliverables");
+    // The remote half of this moved to the delivery_unobservable message test above, which asserts the
+    // same opt-out is named there — the reader must never hit an unsilenceable warn on either lane.
   });
 
   // A read-only input the agent never authored is not a deliverable it failed to deliver.

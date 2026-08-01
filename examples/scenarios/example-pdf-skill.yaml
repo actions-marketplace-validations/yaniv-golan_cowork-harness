@@ -4,7 +4,7 @@
 # Run:  cowork-harness run examples/scenarios/example-pdf-skill.yaml
 baseline: latest # platform baseline (auto-synced from Desktop)
 session: ../sessions/default.yaml # everything you'd set in Cowork pre-prompt
-fidelity: container # protocol | container | microvm
+fidelity: container # protocol | container | microvm | hostloop | cowork
 
 prompt: |
   Read report.pdf from your uploads, summarize it, and write the action items
@@ -22,7 +22,8 @@ answers:
 
 # No egress assertion here: this prompt never makes a network call, so there is nothing to
 # deny — asserting egress_denied without a real attempt would be a latent false-green. For a
-# genuine egress-denied test backed by real skill behavior, see scenarios/csv-fx-normalize.yaml.
+# genuine egress-denied test backed by real skill behavior, see
+# examples/scenarios/csv-fx-normalize.yaml.
 
 assert:
   - result: success

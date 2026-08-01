@@ -407,17 +407,25 @@ function renderAnswerHints(r: RunResult, plan: RenderPlan, write: Sink): void {
   // marked nonDeterministic by execute.ts (`by` ∈ agent|external|human) and are NOT reproducible via
   // --answer, so telling the user to "add --answer" for them was wrong.
   const NON_DETERMINISTIC = new Set(["llm", "external", "human"]); // mirrors execute.ts nonDeterministic
-  const scriptable = u.filter((a) => !NON_DETERMINISTIC.has(a.by)); // `first` (auto-default) + scripted-defaults — pinnable via --answer
-  const nondet = u.filter((a) => NON_DETERMINISTIC.has(a.by)); // LLM/external/human — not reproducible by --answer
+  const scriptable = u.filter((a) => !NON_DETERMINISTIC.has(a.by)); // `first` (auto-default) + scripted-defaults — pinnable
+  const nondet = u.filter((a) => NON_DETERMINISTIC.has(a.by)); // LLM/external/human — not reproducible by a scripted answer
   if (scriptable.length) {
-    write(`   ${dim(plan, `${scriptable.length} question(s) were auto-answered — to script, add:`)}\n`);
-    for (const a of scriptable) write(`   ${dim(plan, `--answer ${JSON.stringify(`${a.question}=${a.chosen}`)}`)}\n`);
+    // COMMAND-NEUTRAL, same reasoning as FailDecider's hint (src/decide/decider.ts): this footer renders for
+    // `skill` (where `--answer` works) AND for `run`/`record` (which reject it — `run --on-unanswered first`
+    // is accepted, so a SUCCESSFUL `run` reaches here). `renderFooter` receives only a derived
+    // `scaffoldTip?: boolean`, not the command, so rather than plumb one through for a hint, name both
+    // spellings and label where each applies. Wrong-for-half-the-commands was the actual defect.
+    write(`   ${dim(plan, `${scriptable.length} question(s) were auto-answered — to script, pin each one:`)}\n`);
+    for (const a of scriptable) {
+      write(`   ${dim(plan, `in answers:  - when_question: ${JSON.stringify(a.question)}  ->  choose: ${JSON.stringify(a.chosen)}`)}\n`);
+      write(`   ${dim(plan, `on \`skill\`:  --answer ${JSON.stringify(`${a.question}=${a.chosen}`)}`)}\n`);
+    }
   }
   if (nondet.length) {
-    // these answers are NON-deterministic (LLM/external/human-decided) — --answer does NOT reproduce
-    // them. Surface what was chosen and nudge toward pinning a deterministic answer for reproducibility.
+    // these answers are NON-deterministic (LLM/external/human-decided) — a scripted answer does NOT
+    // reproduce them. Surface what was chosen and nudge toward pinning a deterministic answer.
     write(
-      `   ${dim(plan, `${nondet.length} question(s) answered non-deterministically (LLM/external/human) — not reproducible via --answer; pin for reproducibility:`)}\n`,
+      `   ${dim(plan, `${nondet.length} question(s) answered non-deterministically (LLM/external/human) — not reproducible by a scripted answer; pin for reproducibility:`)}\n`,
     );
     for (const a of nondet) write(`   ${dim(plan, `chose ${JSON.stringify(`${a.question}=${a.chosen}`)} (by ${a.by})`)}\n`);
   }

@@ -391,6 +391,98 @@ no signal that a tool was absent. Two consequences to keep in mind:
 
 ---
 
+## Hooks — the harness installs one of production's six
+
+**Real Cowork behaviour (binary-verified, `app.asar` 1.24012.9):** the Cowork spawn's `hooks` object —
+identified by the `env` block immediately following it (`CLAUDE_CODE_IS_COWORK:"1"`,
+`CLAUDE_CODE_ENTRYPOINT:"local-agent"`, matching the pinned baseline's `spawn.env`) — installs **three
+event types and six hooks**:
+
+| Event | Matcher | What it does | Modeled here |
+|---|---|---|---|
+| `PreToolUse` | `Task` | blocks `run_in_background`; emits `subagent_invoked` | **yes** |
+| `PreToolUse` | `Skill` | emits `skill_invoked`; injects per-skill `additionalContext` | no |
+| `PreToolUse` | force-ask set | `permissionDecision:"ask"` in *every* permission mode | no |
+| `PreToolUse` | `mcp__.*` | remote-MCP deny → `decision:"block"` | no |
+| `PostToolUse` | `WebSearch` | seeds `webFetchAllowedUrls` — a WebSearch **widens** the web_fetch allowlist | no |
+| `UserPromptSubmit` | *(none)* | expands a leading `/slash` into `additionalContext` | no |
+
+**Harness behaviour:** `initialize` installs the `PreToolUse:Task` hook only
+(`COWORK_PRETOOLUSE_HOOKS`). The *mechanism* accepts any event (`HookBundle` is keyed by event name),
+but the served set is deliberately narrow — see `SERVED_HOOK_EVENTS` in `src/agent/session.ts`. The full
+production bundle is recorded in `spawn.hooks` of each baseline as a drift tripwire, so a Desktop release
+that adds or drops one surfaces as sync drift rather than as a consumer bug report.
+
+### Why the others aren't modeled — none would change behaviour here today
+
+Checked one by one, rather than assumed:
+
+| Hook | Why not serving it costs nothing today |
+|---|---|
+| `PreToolUse` force-ask | gates `allow_cowork_file_delete` / `request_cowork_directory` / `launch_code_session` / `save_skill` — **none registered by this harness**, so the matcher never fires. Becomes worth serving if `save_skill` is modeled. |
+| `PreToolUse:mcp__.*` | denies *remote* MCP tools; the harness serves none, so nothing to deny. |
+| `UserPromptSubmit` | expands a leading `/slash` command. A scenario `prompt:` is not a slash command, so the hook returns `{}` — exactly what production returns on a non-slash prompt. |
+| `PreToolUse:Skill` | the one genuine blocker: its `additionalContext` is sourced from Desktop's plugin/skill registry, which the harness does not have. Inventing that text would put words in the model's context production never sends — worse than sending none, because it silently changes what the skill under test reacts to. |
+| `PostToolUse:WebSearch` | **already covered by a different path** — see below. |
+
+**`PostToolUse:WebSearch` — the effect IS modeled.** In production this hook seeds the per-session
+`webFetchAllowedUrls` set from search results, so a later `web_fetch` of a result URL is permitted. The
+harness reaches the same end without the hook: `ProvenanceTracker.seedFromToolResult` runs on **every**
+tool result (`src/run/run.ts`), so WebSearch output seeds the set too. The divergence is precision, not
+presence — production uses a structured extractor over the result objects, the harness a regex over the
+rendered text — and `src/hostloop/provenance.ts` documents that trade in its own header.
+
+*(An earlier revision of this section claimed the harness "does not seed it from `WebSearch`", implying a
+behavioural gap. That was wrong — corrected here after tracing the call.)*
+
+### What this actually costs you
+
+- A scenario cannot **assert** on any event but `PreToolUse`; `hook_blocked`/`no_hook_blocked` are
+  `PreToolUse`-scoped in effect. This is about gating, not about hooks running — a plugin's own hooks do
+  run (next section).
+- The `PreToolUse:Skill` context injection is absent, so a skill whose behaviour depends on it will act
+  differently here than in production.
+
+### Adding one later is cheap — verified, not assumed
+
+Serving another event was expected to force a cassette re-record. It does not: with `PostToolUse` added to
+the served set, all three committed cassettes replayed clean and `verify-cassettes` passed
+(`RECORDING_SHAPING_FIELDS` covers authored scenario fields, not the `initialize` hook bundle). The only
+failures were the served-set parity guards, which is precisely their job — regenerate
+`assertion-keys.json` and update the linter's fallback and they pass. So the gate on serving a hook is
+**fidelity of its reply**, not migration cost.
+
+### A separate channel — plugin `hooks/hooks.json` — **fires here** (live-verified)
+
+The table above is what **Desktop** installs. A plugin's *own* hooks reach the agent by a different
+route — the `--plugin-dir` argv — and the agent binary loads and executes them itself. The harness
+neither serves nor blocks that path.
+
+**Live-verified 2026-08-01, both tiers.** A fixture plugin declaring `SessionStart`, `UserPromptSubmit`
+and `PostToolUse` had **all three fire** at `container` *and* at `hostloop` (each hook appended a sentinel;
+every one appeared). So a plugin's own hooks are not a gap — they work. This also matches production: a
+2026-07-07 probe on real Desktop saw a plugin `SessionStart` hook fire in both execution modes, and the
+asar carries a UI filter that *skips* `SessionStart` hook stream messages, which only makes sense if they
+arrive.
+
+**What is missing is harness-side, and it is narrower than "hooks don't work":**
+
+- **No assertion key** for any event but `PreToolUse`, so a scenario cannot *gate* on a hook firing. Assert
+  the hook's observable effect (a file it writes, a tool it blocks) instead.
+- **The additional hooks production installs** for those events (the table above) are not reproduced.
+
+> **Placement footgun — silent, and it will fool you.** The binary reads **`<plugin>/hooks/hooks.json`**.
+> The identical file at the plugin **root** fires nothing, with no error, no warning, and no log line
+> anywhere. This nearly produced a wrong conclusion in the very probe that established the above: the
+> first run placed `hooks.json` at the root, observed zero sentinels, and looked exactly like "plugin
+> hooks don't fire in the harness." Moving the file one directory down flipped every result.
+> `lint-skill` now flags a misplaced file (`hooks-json-misplaced`), and so does a `run` at mount time.
+
+(Unchanged either way: the host-side seeding footgun — a hook that `export`s an env var or writes `/tmp`
+host-side is not visible to the in-VM agent. See [plugin-root.md](./plugin-root.md).)
+
+---
+
 ## Skill authoring — `save_skill` and `propose_skills` are not modeled
 
 **Real Cowork behaviour:** a cowork session on a standard account declares

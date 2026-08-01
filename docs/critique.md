@@ -254,6 +254,16 @@ stays the authority.
 On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
 
+**`scripts/` is outside the evaluator's corpus — deliberately, and with one consequence worth knowing.**
+The three classes above are the whole corpus: `SKILL.md`, `references/**`, and `agents/<name>.md`. The
+*graded* agent, by contrast, has the skill's `scripts/` mounted and is explicitly invited to reflect on it
+(the reflection prompt asks about "SKILL.md and anything under `references/` or `scripts/`"). The two
+actors therefore see different things, which is correct — the evaluator grades authored *guidance*, not
+implementation. But it means a reflection finding grounded in a script's behaviour has no corpus text
+behind it, so citation validation cannot confirm or refute it and it tends to land as not-adjudicable.
+If a script's contract matters to how the skill is *used*, state it in `SKILL.md` or a `references/` file;
+that is what reaches the evaluator.
+
 **A corpus-ceiling breach has a second, sharper consequence than the not-adjudicable steer: DROPPED
 findings.** Citation validation checks each finding's `evidence` excerpt verbatim against the *packaged*
 (cut) copy — so a finding that quotes text past a per-file cut cannot resolve and lands in **DROPPED**,

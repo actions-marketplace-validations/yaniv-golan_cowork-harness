@@ -20,7 +20,8 @@ export interface VerdictSignal {
     | "prompt_asset_missing"
     | "scan_unavailable"
     | "ended_with_question"
-    | "undelivered_deliverables";
+    | "undelivered_deliverables"
+    | "delivery_unobservable";
   severity: "fail" | "warn";
   message: string;
 }
@@ -146,6 +147,26 @@ export function locationDelivers(lane: RunResult["lane"]): boolean {
   return lane !== "remote";
 }
 
+/** Can the harness OBSERVE an explicit delivery on this lane at all?
+ *
+ *  Deliberately distinct from `locationDelivers`, which asks whether a file's LOCATION counts as
+ *  delivery. This asks the prior question: does the harness serve any delivery tool here whose calls it
+ *  could record?
+ *
+ *  LOCAL: yes — `present_files` is served (container + hostloop) and its calls land in `presentedFiles`.
+ *  REMOTE: no — production delivers via the agent-native `SendUserFile`, which this harness does not
+ *  model, so `presentedFiles` is structurally incapable of being non-empty there. Without this
+ *  distinction `undelivered_deliverables` fires on EVERY live first-turn remote run that writes a file:
+ *  `isDelivered`'s location arm is off (correctly), its `presentedFiles` arm can never match, and the
+ *  warning then reports "never reached the user" about files whose delivery was simply unobservable.
+ *  That is a claim the evidence cannot support — hence the separate `delivery_unobservable` signal.
+ *
+ *  Flip the remote arm when a remote delivery tool is modeled and this whole path self-heals into an
+ *  informative signal; nothing else needs to change. */
+export function deliveryObservable(lane: RunResult["lane"]): boolean {
+  return lane !== "remote";
+}
+
 /** Can this run answer "was anything left undelivered?" at all?
  *
  *  Three distinct ways the answer is UNKNOWN rather than "nothing": the workspace walk produced no
@@ -155,6 +176,10 @@ export function locationDelivers(lane: RunResult["lane"]): boolean {
  *  which is the failure mode this signal exists to remove. */
 function isDeliveryEvidenceUsable(result: RunResult): boolean {
   if (result.workspaceFiles === undefined) return false; // no workspace walk at all
+  // No delivery tool is served on this lane, so `presentedFiles` can never be non-empty — "not in the
+  // delivered set" carries zero information here. Handled by `delivery_unobservable` instead, which says
+  // the question was unanswerable rather than answering it wrongly.
+  if (!deliveryObservable(result.lane)) return false;
   // The PERSISTED completeness flag, not an emptiness check on the results. Inferring "the walk ran" from
   // "a scratchpad entry exists" is self-fulfilling: it cannot distinguish a tier that runs no walk
   // (protocol has no session-root layout; chat passes no root; replay materializes a tree) from a run that
@@ -356,6 +381,13 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           // includes files under a user-visible root) inherits the local wording and reads as a
           // self-contradiction: "written outside every user-visible root" naming `outputs/report.md`,
           // with "write deliverables under outputs/" as the fix for a file already there. Observed live.
+          //
+          // The `else` arm is currently UNREACHABLE — `isDeliveryEvidenceUsable` now returns false when
+          // delivery is unobservable, and `deliveryObservable` and `locationDelivers` happen to agree
+          // (both "not remote") while no remote delivery tool is modeled. It is retained deliberately:
+          // the two predicates are distinct questions and diverge the moment a remote delivery tool
+          // ships (observable:true, locationDelivers:false), which makes this arm live again. Deleting
+          // it would silently restore the wrong-wording bug at exactly that point.
           (locationDelivers(result.lane)
             ? "They were written outside every user-visible root and never delivered — on a remote Cowork session the " +
               "workspace is reclaimed at session end, and on a local one they stay invisible to the user. " +
@@ -364,6 +396,33 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
               "end, so a file reaches the user only if the skill delivers it explicitly. Moving it under outputs/ " +
               "does not help on this lane; deliver each one.") +
           " Set `allow_undelivered_deliverables: true` if these are intermediates the user is not meant to receive.",
+      });
+
+    // The honest counterpart to the signal above, for a lane where the delivery question cannot be
+    // answered at all. Silence would read as "clean" (the exact failure `undelivered_deliverables` was
+    // built to remove) and firing `undelivered_deliverables` would claim more than the evidence supports,
+    // so state the gap itself.
+    //
+    // Gated on the SAME candidate set the other signal would have used: a run that produced nothing to
+    // deliver has nothing unverifiable about it, and warning there would make this fire on every remote
+    // run regardless of behaviour — reproducing in miniature the always-fires defect this replaces.
+    // `allow_undelivered_deliverables` suppresses it too: a scenario that has already declared its
+    // leftovers intentional should not be nagged about the lane instead.
+    if (
+      !deliveryObservable(result.lane) &&
+      result.workspaceFiles !== undefined &&
+      result.workspaceFiles.some((f) => f.class !== "input") &&
+      !result.assertions.some((a) => a.assertion.allow_undelivered_deliverables === true)
+    )
+      signals.push({
+        code: "delivery_unobservable",
+        severity: "warn",
+        message:
+          "this run produced file(s), but whether any of them reached the user CANNOT BE VERIFIED on `lane: remote` — " +
+          "nothing is delivered by location there, and the harness models no remote delivery tool (production uses the " +
+          "agent-native SendUserFile). This is a harness coverage gap, not a finding about the skill: treat the run's " +
+          "delivery behaviour as unmeasured rather than clean. Use `lane: local` to measure delivery via present_files, " +
+          "or set `allow_undelivered_deliverables: true` to acknowledge the gap for this scenario.",
       });
 
     // absent scan evidence means host-path/outputs-delete did NOT run — a silent ✓ there would be its own

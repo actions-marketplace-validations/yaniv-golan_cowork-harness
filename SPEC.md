@@ -678,7 +678,8 @@ fail the gate.
 **Exit codes:** `0` clean · `1` **verification RAN and found a real problem** — any `findings[]` entry
 (cls != `unscanned`), any `staleness[]` entry, or any `scenarioDrift[]` entry · `2` usage (e.g.
 `--skip-privacy`+`--skip-staleness` together, or zero cassettes under a dir — a loud non-zero, never a
-vacuous pass) · `3` **verification could NOT complete** — any `unverifiable[]` entry, any `version[]`
+vacuous pass; **`--allow-empty` opts out for the empty-directory case only**, exiting `0` with
+`ok:true, results:[]` — a *missing* path still exits `2`, so the flag can never green a typo) · `3` **verification could NOT complete** — any `unverifiable[]` entry, any `version[]`
 entry, or any `error` (a malformed/unreadable cassette or a per-file crash). A real finding always wins
 `1` over a co-occurring could-not-verify signal in the same run. This split exists so a consumer's
 non-zero-exit tripwire can't false-green on a could-not-verify outcome (e.g. a cassette a newer harness

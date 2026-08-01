@@ -182,7 +182,11 @@ export function combineSdkMcp(...bundles: SdkMcp[]): SdkMcp {
  * isn't one of the built-in ids. Used by hostloop's path-containment gate — the harness's only current caller.
  */
 export interface HookBundle {
-  definitions: { PreToolUse: Array<{ matcher: string; hookCallbackIds: string[] }> };
+  /** Keyed by hook event. Only events in `SERVED_HOOK_EVENTS` are honored — see that const for why the
+   *  served set is narrower than what production installs, and narrower still than what the agent
+   *  binary supports. A `matcher` is optional because production's `UserPromptSubmit` hook carries none
+   *  (it is not tool-scoped, so there is nothing to match on). */
+  definitions: Partial<Record<HookEvent, Array<{ matcher?: string; hookCallbackIds: string[] }>>>;
   handle: (callbackId: string, input: any) => Promise<Record<string, unknown>> | Record<string, unknown>;
 }
 
@@ -305,8 +309,73 @@ const dialogEnvelope = successEnvelope;
 // success control_response carrying the hook output ({decision:"block",…} or {} to allow). The hook is
 // evaluated in the agent loop → tier-uniform (container/microvm/host-loop) by construction.
 const TASK_BG_HOOK_ID = "cowork-task-bg-block";
-/** The PreToolUse hooks the harness installs in cowork mode (sent on `initialize`). */
-export const COWORK_PRETOOLUSE_HOOKS = { PreToolUse: [{ matcher: "Task", hookCallbackIds: [TASK_BG_HOOK_ID] }] };
+
+/** Every hook event name the AGENT BINARY understands (ELF 2.1.219 — each appears as a live event-name
+ *  constant, e.g. `SessionStart` ×63, `UserPromptSubmit` ×49). Used to tell "a real event this harness
+ *  doesn't serve" apart from "a typo", so the unserved-hook warning can say which it is. */
+export const KNOWN_HOOK_EVENTS = [
+  "PreToolUse",
+  "PostToolUse",
+  "UserPromptSubmit",
+  "SessionStart",
+  "SessionEnd",
+  "SubagentStop",
+  "PreCompact",
+  "Notification",
+  "Stop",
+] as const;
+export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
+
+/** The hook events this harness actually SERVES on `initialize`.
+ *
+ *  SINGLE SOURCE OF TRUTH — the generated `served-hook-events.json` (gen-schema.ts) and the Python
+ *  linter's unserved-event check both derive from this. Never hand-copy it: a stale copy would silently
+ *  stop warning about the very event it was added to cover.
+ *
+ *  ## Why this is narrower than production, and what that costs
+ *
+ *  Binary-verified against Desktop app.asar 1.24012.9: the real Cowork spawn installs **three** event
+ *  types and **six** hooks —
+ *    PreToolUse  `Task`      → blocks run_in_background; emits subagent_invoked telemetry   [SERVED here]
+ *    PreToolUse  `Skill`     → skill_invoked telemetry + per-skill additionalContext injection
+ *    PreToolUse  <force-ask> → permissionDecision:"ask" regardless of permission mode
+ *    PreToolUse  `mcp__.*`   → remote-MCP deny hook
+ *    PostToolUse `WebSearch` → seeds session.webFetchAllowedUrls from search results
+ *    UserPromptSubmit        → expands a leading /slash command into additionalContext
+ *
+ *  The MECHANISM here now accepts all of them (HookBundle is keyed by event), but the DEFAULT INSTALL is
+ *  still only the `Task` hook — because, checked one by one, NONE of the other five would change
+ *  observable behaviour here today:
+ *
+ *   - force-ask     gates allow_cowork_file_delete / request_cowork_directory / launch_code_session /
+ *                   save_skill — none registered by this harness, so the matcher never fires. Worth
+ *                   serving if/when `save_skill` is modeled.
+ *   - `mcp__.*`     denies REMOTE MCP tools; the harness serves none.
+ *   - UserPromptSubmit  expands a leading `/slash`; a scenario prompt is not one, so production itself
+ *                   returns {} for these inputs.
+ *   - `Skill`       the one genuine blocker: its additionalContext comes from Desktop's plugin/skill
+ *                   registry, which we do not have. Inventing it would put words in the model's context
+ *                   production never sends — worse than sending none.
+ *   - `WebSearch`   ALREADY COVERED by another path: ProvenanceTracker.seedFromToolResult runs on every
+ *                   tool result (run.ts), so WebSearch output already seeds webFetchAllowedUrls. Less
+ *                   precise than production's structured extractor, honestly documented in
+ *                   hostloop/provenance.ts.
+ *
+ *  Migration cost is NOT a reason — that was assumed and then measured: adding `PostToolUse` to this set
+ *  left all three committed cassettes replaying clean (RECORDING_SHAPING_FIELDS covers authored scenario
+ *  fields, not the initialize hook bundle); only the served-set parity guards fired, which is their job.
+ *  So the gate on serving a hook is FIDELITY OF ITS REPLY, nothing else.
+ *
+ *  Tracked in docs/fidelity-gaps.md ("Hooks"). When adding one: emulate the decision faithfully or not at
+ *  all, regenerate assertion-keys.json, and update scenario.py's fallback set. */
+export const SERVED_HOOK_EVENTS: readonly HookEvent[] = ["PreToolUse"];
+
+/** The PreToolUse hooks the harness installs in cowork mode (sent on `initialize`).
+ *  `satisfies` (not a type annotation) so the literal keeps its concrete shape — callers can read
+ *  `.PreToolUse` without a null check, while still being checked against the bundle type. */
+export const COWORK_PRETOOLUSE_HOOKS = {
+  PreToolUse: [{ matcher: "Task", hookCallbackIds: [TASK_BG_HOOK_ID] }],
+} satisfies HookBundle["definitions"];
 /** Pure output for a fired hook callback. Unknown ids → no-op (allow); the only installed hook blocks
  *  `Task` with `run_in_background` to match Cowork's verbatim reason string. */
 export function hookOutput(callbackId: string, input: any): Record<string, unknown> {
@@ -567,11 +636,21 @@ export class LiveAgentSession implements AgentSession {
     const initRequest: Record<string, unknown> = { subtype: "initialize" };
     if (opts.subagentAppend) initRequest.appendSubagentSystemPrompt = opts.subagentAppend;
     if (opts.sdkMcp?.servers.length) initRequest.sdkMcpServers = opts.sdkMcp.servers;
-    // Merge the caller-supplied PreToolUse definitions (e.g. hostloop's path gate) onto the
-    // always-installed COWORK_PRETOOLUSE_HOOKS (Task run_in_background block) — never replace it.
-    initRequest.hooks = opts.hooks
-      ? { PreToolUse: [...COWORK_PRETOOLUSE_HOOKS.PreToolUse, ...opts.hooks.definitions.PreToolUse] }
-      : COWORK_PRETOOLUSE_HOOKS;
+    // Merge the caller-supplied definitions (e.g. hostloop's path gate) onto the always-installed
+    // COWORK_PRETOOLUSE_HOOKS (Task run_in_background block) — never replace it. Merges PER EVENT so a
+    // caller adding a non-PreToolUse event can't drop the built-in Task hook (the previous form hardcoded
+    // `{PreToolUse: ...}`, which silently discarded any other event a bundle declared).
+    //
+    // An event outside SERVED_HOOK_EVENTS is dropped here rather than forwarded: forwarding it would
+    // install a hook whose decision the harness has not verified against production, and a hook that
+    // fires with an unfaithful reply is worse than one that never fires. Callers are warned about the
+    // drop upstream (the unserved-hook check), so this is never silent.
+    const mergedHooks: HookBundle["definitions"] = { PreToolUse: [...COWORK_PRETOOLUSE_HOOKS.PreToolUse] };
+    for (const [event, defs] of Object.entries(opts.hooks?.definitions ?? {})) {
+      if (!SERVED_HOOK_EVENTS.includes(event as HookEvent) || !defs?.length) continue;
+      mergedHooks[event as HookEvent] = [...(mergedHooks[event as HookEvent] ?? []), ...defs];
+    }
+    initRequest.hooks = mergedHooks;
     // Production's host-loop-only tool alias map (Bash→mcp__workspace__bash, WebFetch→mcp__workspace__web_fetch)
     // — omitted entirely (not an empty object) when the caller passes none, so container/microvm's
     // initialize request is byte-identical to before this option existed.

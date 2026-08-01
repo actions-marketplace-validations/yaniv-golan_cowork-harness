@@ -197,7 +197,7 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   `egress_*`, `file_exists`, `user_visible_artifact`, `result`) are robust. Free-text content is
   not: match prose with `transcript_matches` / `transcript_contains` (stable lexical markers only —
   not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
-  `artifact_json` (or the pytest lane for complex predicates), not via a transcript substring.
+  `artifact_json` (or the [pytest lane](https://github.com/yaniv-golan/cowork-harness/blob/main/python/README.md) for complex predicates), not via a transcript substring.
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
   **content keys** evaluate; filesystem / egress keys are skipped (live-only) — loudly, via an
   `::warning::` annotation, not a silent no-op. A key
@@ -430,9 +430,17 @@ Recognize these before "fixing" a non-bug:
   only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
   **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
   scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
-  Fix by writing deliverables under `outputs/` or a connected folder, or delivering them explicitly; assert
+  **The fix is lane-dependent.** On `lane: local`, write deliverables under `outputs/` or a connected
+  folder, or deliver them explicitly. **On `lane: remote`, moving a file under `outputs/` does NOT help** —
+  nothing is delivered by location there, so only an explicit delivery counts. Assert
   **`allow_undelivered_deliverables: true`** when the leftovers are intentional (intermediates, caches,
   downloaded inputs) rather than a delivery gap.
+- **`delivery_unobservable`** (`WARN`, `lane: remote` only) — the run produced file(s) but the harness
+  serves **no delivery tool on that lane**, so whether they reached the user is unanswerable. This is the
+  honest cannot-verify companion to `undelivered_deliverables`: reporting every remote file as undelivered
+  would claim more than the evidence supports, and staying silent would read as clean. Mutually exclusive
+  with `undelivered_deliverables`, and quiet on a run that produced nothing to deliver. Not a skill defect —
+  a harness coverage gap (see the *File delivery* section of fidelity-gaps).
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored

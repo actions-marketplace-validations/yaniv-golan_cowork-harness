@@ -33,6 +33,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
+import { warnUnservedHookEvents } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import {
@@ -455,6 +456,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
   }
+  // A mounted plugin can declare hook events this harness does not serve (it installs PreToolUse only,
+  // while real Cowork installs three). Before this warning, such a declaration mounted and ran with no
+  // comment at all, and the gap was discoverable only by reading the harness's compiled output. Scans the
+  // HOST sources (pre-stage) so it reports a real path the author can open. Tier-independent by design —
+  // the served set is a property of the harness, not of the fidelity tier. Suppressed under --compact
+  // alongside the other informational notices.
+  if (!opts.compact)
+    warnUnservedHookEvents(
+      plan.mounts
+        .filter((mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin")
+        .map((mt) => mt.hostPath),
+      warn,
+    );
   // Pre-run baseline capture: only when something will consume it — the scenario asserts
   // no_unexpected_files, input_unmodified, or no_delete_in_outputs (the filesystem pre/post outputs
   // diff below needs this SAME baseline to catch a delete that never shows up as a Bash/mcp__workspace__bash
@@ -1584,13 +1598,19 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
   // cowork MCP server, so those keys can only ever report can't-verify. Rejecting at LOAD time follows the
   // `cloud-describe` precedent above — an authored assertion that CANNOT pass should cost a config error,
   // not a paid run that fails at assertion time.
+  //
+  // The remedy this message offers is deliberately NOT "assert the delivery itself": the harness models no
+  // remote delivery tool at all (production's is the agent-native `SendUserFile`), so there is currently
+  // NOTHING on this lane to assert a delivery against. Advising it sent a consumer looking for a key that
+  // does not exist. Until a remote delivery tool is served, the honest remedies are the weaker
+  // path-plus-statement proxy or switching lanes — say exactly that.
   if (scenario.lane === "remote") {
     const LANE_INCOMPATIBLE = ["present_files_called", "no_scratchpad_leak", "user_visible_artifact"] as const;
     for (const a of scenario.assert)
       for (const key of LANE_INCOMPATIBLE)
         if (a[key] !== undefined)
           throw new Error(
-            `${context}: \`${key}\` cannot pass on \`lane: remote\` — that lane serves no present_files and delivers nothing by location, so the key can only report "cannot verify". Assert the delivery itself, or set \`lane: local\` if this scenario models the desktop lane.`,
+            `${context}: \`${key}\` cannot pass on \`lane: remote\` — that lane serves no present_files and delivers nothing by location, so the key can only report "cannot verify". Tool-level delivery is NOT YET ASSERTABLE on this lane (the harness models no remote delivery tool; production uses the agent-native SendUserFile). Either assert the written path plus the agent's own statement of it (\`file_exists\` + \`transcript_matches\` — a weaker proxy, since the semantic judge cannot see tool calls), or set \`lane: local\` if this scenario models the desktop lane.`,
           );
   }
   // assert[] patterns

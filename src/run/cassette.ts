@@ -3852,6 +3852,7 @@ export const VERIFY_CASSETTES_BOOLEAN_FLAGS = [
   "--skip-staleness",
   "--skip-scenario-drift",
   "--margins",
+  "--allow-empty",
   "--quiet",
   "--verbose",
 ] as const;
@@ -3877,9 +3878,10 @@ export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
 // recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
 export const VERIFY_CASSETTES_USAGE =
-  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
-  "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.";
+  "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
+  "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.";
 
 // The full flag-coverage guard registry (P9) — see the UsageGuardEntry doc comment above RECORD_ALLOWLIST.
 // Defined here (after all three commands' consts exist) so it can reference them directly.
@@ -3994,6 +3996,20 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const resolved = resolveInputs(target, ".cassette.json");
   if ("error" in resolved) {
+    // `--allow-empty` opts into "a cassette-free directory is a clean pass" — for a repo that deliberately
+    // keeps no committed cassettes (e.g. one whose CI gate is the token-free static lane), where the
+    // default loud exit-2 forces every caller to wrap this command in an `ls` guard.
+    //
+    // Scoped to `empty-dir` ONLY, never `not-found`. Both arrive as `{error}`, and honoring the flag for
+    // both would exit 0 on a typo'd or moved path — silently reporting "verified" for a directory that
+    // does not exist. That is the vacuous pass this command's loud default exists to prevent, and the
+    // caller most likely to hit it is the scripted CI job the flag is FOR.
+    if (resolved.kind === "empty-dir" && (p.flags["--allow-empty"] ?? false)) {
+      const empty = { command: "verify-cassettes", ok: true, coverage: { privacy: doPrivacy, staleness: doStaleness }, results: [] };
+      if (json) out(JSON.stringify(empty));
+      else if (!p.flags["--quiet"]) log(`✓ verify-cassettes: no cassettes under ${target} — nothing to verify (--allow-empty)`);
+      return;
+    }
     return fail("verify-cassettes", "usage", `verify-cassettes: ${resolved.error}`, undefined, asJson);
   }
   const files = resolved.files;

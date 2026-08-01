@@ -7,7 +7,7 @@
 # reaches the model, a tool runs, a file is written, the transcript says what you expect.
 # What it CANNOT assert: anything boundary-shaped (`egress_*` / `expect_denied`) — those are
 # pre-rejected at protocol because there is no sandbox to enforce them (it'd be a false pass).
-# For a genuine egress test, see scenarios/csv-fx-normalize.yaml (runs at container fidelity).
+# For a genuine egress test, see examples/scenarios/csv-fx-normalize.yaml (runs at container fidelity).
 #
 # Run:  cowork-harness run examples/scenarios/protocol-smoke.yaml
 baseline: latest

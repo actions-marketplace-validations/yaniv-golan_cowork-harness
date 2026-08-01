@@ -9,9 +9,10 @@ See `.github/workflows/ci.yml`.
 
 > **Reading this on npm?** `scenarios/`, `sessions/`, `skills/`, `data/`, `matrices/`,
 > `answer-policies/`, and `probes/` trees described below need a source checkout
-> (`git clone https://github.com/yaniv-golan/cowork-harness`) — the npm package ships only this
-> README and `replays/`. See the what-ships table under
-> [README → Drive it from Claude Code](../README.md#drive-it-from-claude-code-companion-skill).
+> (`git clone https://github.com/yaniv-golan/cowork-harness`) — from this directory, the npm
+> package ships only this README and `replays/` (the package as a whole ships more — see the
+> what-ships table under
+> [README → Drive it from Claude Code](../README.md#drive-it-from-claude-code-companion-skill)).
 
 > These are *examples* of the layout you'd author in your own skill repo. In **your** repo,
 > `scenarios/` + `sessions/` typically live at the root; here they're under `examples/`
@@ -61,7 +62,7 @@ self-contained and relocatable.
 | `scenarios/protocol-smoke.yaml` | `protocol` | the **smoke test with no Docker, no staged agent (still needs a token)** — just the host control loop. Asserts only control-loop + skill-logic facts (a scripted answer reaches the model, a file is written). See note below on the omitted `transcript_no_host_path` assertion. |
 | `scenarios/example-pdf-skill.yaml` | `container` | the minimal sandboxed shape — prompt + scripted answers + assertions (placeholder skill; harness plumbing only) |
 | `scenarios/csv-metrics.yaml` | `container` | a non-trivial skill running a **bundled producer** end-to-end → structured `outputs/metrics.json` + a `summary.md` (paired with `../python/test_csv_metrics_lane.py` for a JSON-content predicate) |
-| `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) |
+| `scenarios/csv-fx-normalize.yaml` | `container` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing. Its `egress_denied` assertion needs a sandboxed tier (`container`+) and is pre-rejected at `protocol` fidelity (no sandbox to enforce it would be a false pass) (paired with `../python/test_csv_fx_lane.py` for a JSON-content predicate asserting the offline fallback: `converted is False`, `fx.status == "unavailable_offline"`) |
 | `scenarios/skill-loads.yaml` | `container` | an acceptance check that a local skill loads and the python toolchain is present |
 | `scenarios/trigger-accuracy-sweep/` | `container` | a **trigger-accuracy sweep** — a positive prompt and a negative-control prompt against the same skill, each asserting `skill_triggered`/`no_skill_triggered`; run the directory under `run --repeat N` to measure how reliably a description/trigger phrase actually invokes the skill across repeated tries (see [docs/scenario.md § Measuring flakiness](../docs/scenario.md#measuring-flakiness-run---repeat-skill---repeat)) — it is a **subdirectory**, so `run examples/scenarios/` (non-recursive) skips it; point `run` at the directory itself |
 | `scenarios/hostloop-computer-links.yaml` | `hostloop` | the harness's **only `hostloop`-tier worked example** — the agent writes a file and shares it back as a `computer://` link, asserting the link `computer_links_resolve`s to the real collected artifact (the "host" side of a hostloop mount is production's own real host path, so this is where link resolution is most load-bearing). Committed as `replays/hostloop-computer-links.cassette.json`, the harness's only token-free replay fixture at the `hostloop` tier. |

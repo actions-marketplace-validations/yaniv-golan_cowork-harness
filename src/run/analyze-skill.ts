@@ -1,11 +1,18 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { analyzeArtifacts } from "./analyze-artifact.js";
 import { confirmArtifactRuntime, type RuntimeVerdict } from "./analyze-artifact-runtime.js";
 import { writeAllSync } from "../io.js";
+
+/** Extensions an author plausibly points `analyze-skill` at expecting an artifact/write-back scan, that the
+ *  artifact analyzer deliberately does NOT parse: the in-process acorn parser reads neither TypeScript
+ *  annotations nor JSX (`src/run/analyze-artifact.ts`'s `CODE_EXTS` comment — advertising them produced
+ *  fail-closed parse noise on every real frontend source, so they were narrowed out on purpose). Kept here
+ *  as the REPORTING counterpart to that exclusion: out-of-scope must be visible, not silent. */
+const ARTIFACT_UNPARSEABLE_EXTS = new Set([".ts", ".tsx", ".jsx"]);
 
 // Synchronous fd writes (match cli.ts / doctor.ts / cassette.ts): machine→stdout, human→stderr.
 // writeAllSync retries EAGAIN and loops on short writes so the whole payload lands on a pipe (see
@@ -1287,6 +1294,22 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
   const fileList = [...files].sort();
   const unscanned = [...unscannedSet].sort();
 
+  // An EXPLICITLY NAMED target whose extension the artifact analyzer cannot parse (`.ts`/`.tsx`/`.jsx` —
+  // the in-process parser reads neither TypeScript annotations nor JSX, see analyze-artifact.ts's
+  // CODE_EXTS) used to vanish from the artifact scan with no trace: the file appeared in `scanned` (it IS
+  // text-scanned for path-fidelity contract strings), `artifactScanned` was empty, `unscanned` was empty,
+  // and the envelope read `ok:true` — a clean bill of health on a file nobody looked at for write-backs.
+  // The help string that promised these extensions were scanned made that reading actively reasonable.
+  //
+  // Reported in its OWN field rather than folded into `unscanned`: the file is genuinely scanned as a
+  // markdown/contract source, so listing the same path under both `scanned` and `unscanned` would be a
+  // self-contradictory envelope. This names exactly what was skipped and by which scan.
+  //
+  // Scoped to explicit positionals ONLY. A directory walk collects candidates by extension and never
+  // reaches a `.ts` file, so announcing every unrelated `.ts` in a repo would be noise — the user asked
+  // about the directory, not about those files. This fires when they pointed AT one.
+  const unscannedArtifactSources = p.positionals.filter((t) => ARTIFACT_UNPARSEABLE_EXTS.has(extname(t).toLowerCase())).sort();
+
   const perFile: { file: string; findings: SkillFinding[]; suppressed: boolean }[] = [];
   for (const file of fileList) {
     let text: string;
@@ -1379,6 +1402,9 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
         markdownScanned: fileList,
         artifactScanned: artifact.scanned,
         unscanned,
+        // Explicitly-named targets the ARTIFACT scan cannot parse (`.ts`/`.tsx`/`.jsx`). Distinct from
+        // `unscanned` because these files ARE markdown/contract-scanned — see the field's derivation above.
+        unscannedArtifactSources,
         analysisFailures,
         ...(runtime ? { runtimeConfirmations } : {}),
         strict,
@@ -1429,6 +1455,15 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
     } else if (analysisFailures.length === 0) {
       log(`✓ analyze-skill: ${fileList.length} file(s) scanned — no findings`);
     }
+    // Printed in text mode too, and printed BEFORE the pre-flight caveat: a green result on a `.ts` target
+    // is not "no write-backs found", it is "the write-back scan never ran on this file". Silence here was
+    // the whole defect.
+    if (unscannedArtifactSources.length > 0)
+      log(
+        `  ⚠ artifact/write-back scan SKIPPED for ${unscannedArtifactSources.length} target(s) — ` +
+          `${unscannedArtifactSources.join("; ")}: .ts/.tsx/.jsx cannot be parsed for interactive-artifact ` +
+          `write-backs (only .html/.htm/.js/.mjs/.py are). A clean result above says NOTHING about these files.`,
+      );
     log(
       "  a clean result is a PRE-FLIGHT signal, not proof of on-tier resolution — the runtime " +
         "no_vm_path_file_op / vm_path_denied asserts remain authoritative (see docs/subagents.md).",

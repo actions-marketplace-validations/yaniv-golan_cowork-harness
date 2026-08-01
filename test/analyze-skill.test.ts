@@ -1664,3 +1664,62 @@ describe.skipIf(!canSrc)("analyze-skill CLI (source via tsx) — could-not-verif
     }
   }, 60_000);
 });
+
+// --------------------------------------------------------------------------------------------- //
+// Out-of-scope artifact sources must be REPORTED, never silently clean.
+//
+// The bug: `analyze-skill <something>.ts` returned `ok:true`, `findings:[]`, `artifactScanned:[]`,
+// `unscanned:[]`, exit 0 — a clean bill of health on a file the write-back scan never opened, because
+// `.ts`/`.tsx`/`.jsx` are deliberately unparseable by the in-process parser (analyze-artifact.ts's
+// CODE_EXTS). The CLI help string made that reading actively reasonable by claiming those extensions
+// WERE scanned. Reporting the skip is what turns a false clean into a self-diagnosing one.
+// --------------------------------------------------------------------------------------------- //
+
+describe("analyze-skill — an unparseable artifact source is reported, not silently passed", () => {
+  const CLI = resolve(REPO_ROOT, "dist/cli.js");
+  const built = existsSync(CLI);
+
+  function runCli(args: string[]): { code: number; out: string } {
+    const r = spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
+    return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+  }
+
+  it.skipIf(!built)("names a `.ts` target under unscannedArtifactSources, and still exits 0", () => {
+    const d = mkdtempSync(join(tmpdir(), "cc-artifact-scope-"));
+    // a blatant relative write-back — would be an `artifact-write-back-lost` finding in a `.js` file
+    writeFileSync(join(d, "gen.ts"), 'const x: string = "a";\nfetch("./save", {method:"POST", body: x});\n');
+    const r = runCli(["analyze-skill", join(d, "gen.ts"), "--output-format", "json"]);
+    const env = JSON.parse(r.out.trim());
+    expect(env.unscannedArtifactSources).toEqual([resolve(join(d, "gen.ts"))]);
+    // the artifact scan genuinely did not run on it...
+    expect(env.artifactScanned).toEqual([]);
+    // ...but the file IS markdown/contract-scanned, so it must NOT also appear in `unscanned` — the same
+    // path in both lists would be a self-contradictory envelope.
+    expect(env.unscanned).toEqual([]);
+    expect(env.scanned).toEqual([resolve(join(d, "gen.ts"))]);
+    // advisory, not a gate: an out-of-scope extension is not a defect in the skill
+    expect(r.code).toBe(0);
+    expect(env.ok).toBe(true);
+  });
+
+  it.skipIf(!built)("says so in TEXT mode too — a green run must not read as 'no write-backs found'", () => {
+    const d = mkdtempSync(join(tmpdir(), "cc-artifact-scope-text-"));
+    writeFileSync(join(d, "gen.tsx"), 'export const C = () => { fetch("./save", {method:"POST"}); return null; };\n');
+    const r = runCli(["analyze-skill", join(d, "gen.tsx")]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/artifact\/write-back scan SKIPPED/);
+    expect(r.out).toMatch(/says NOTHING about these files/);
+  });
+
+  it.skipIf(!built)("stays QUIET for a directory walk — only an explicitly named target is reported", () => {
+    // A dir walk collects candidates by extension and never reaches a `.ts` file. Announcing every
+    // unrelated `.ts` in a repo would be noise: the user asked about the directory, not those files.
+    const d = mkdtempSync(join(tmpdir(), "cc-artifact-scope-dir-"));
+    writeFileSync(join(d, "SKILL.md"), "---\nname: t\ndescription: t\n---\n\nbody\n");
+    writeFileSync(join(d, "helper.ts"), 'fetch("./save", {method:"POST"});\n');
+    const r = runCli(["analyze-skill", d, "--output-format", "json"]);
+    const env = JSON.parse(r.out.trim());
+    expect(env.unscannedArtifactSources).toEqual([]);
+    expect(r.code).toBe(0);
+  });
+});

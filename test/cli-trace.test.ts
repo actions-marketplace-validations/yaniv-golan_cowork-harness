@@ -99,16 +99,29 @@ describe("renderAnswerHints separates scriptable from non-deterministic answers"
       { question: "External call", chosen: "Yes", by: "external" },
       { question: "LLM call", chosen: "No", by: "llm" },
     ]);
-    // the scriptable bucket: exactly the `first` answer is offered as a pinnable --answer line
-    expect(out).toMatch(/to script, add:/);
+    // the scriptable bucket: exactly the `first` answer is offered as pinnable
+    expect(out).toMatch(/to script, pin each one:/);
     expect(out).toMatch(/--answer "Pick a format=Markdown"/);
-    // the non-deterministic bucket exists and does NOT claim --answer reproduces it
-    expect(out).toMatch(/non-deterministically.*not reproducible via --answer/);
+    // the non-deterministic bucket exists and does NOT claim a scripted answer reproduces it
+    expect(out).toMatch(/non-deterministically.*not reproducible by a scripted answer/);
     expect(out).toMatch(/chose "External call=Yes" \(by external\)/);
     expect(out).toMatch(/chose "LLM call=No" \(by llm\)/);
     // external/agent answers must NOT be presented as scriptable --answer lines
     expect(out).not.toMatch(/--answer "External call=Yes"/);
     expect(out).not.toMatch(/--answer "LLM call=No"/);
+  });
+
+  // This footer renders for `skill` (where `--answer` works) AND for `run`/`record`, which REJECT the flag
+  // (`run --answer` exits "unexpected argument(s)") — yet `run --on-unanswered first` is accepted, so a
+  // SUCCESSFUL `run` reaches here. The hint used to name only `--answer`, handing half its readers a flag
+  // that errors. renderFooter receives no command (only a derived `scaffoldTip?: boolean`), so the fix is a
+  // command-NEUTRAL hint that names both spellings and labels where each applies.
+  it("offers the scenario `answers:` spelling too, so the hint is correct on `run` (which rejects --answer)", () => {
+    const out = footerOutput([{ question: "Pick a format", chosen: "Markdown", by: "first" }]);
+    // the run-safe spelling, with the gate text and choice carried through verbatim
+    expect(out).toMatch(/in answers:\s+- when_question: "Pick a format"\s+->\s+choose: "Markdown"/);
+    // and the skill-only spelling, explicitly labelled as such rather than stated unconditionally
+    expect(out).toMatch(/on `skill`:\s+--answer "Pick a format=Markdown"/);
   });
 });
 

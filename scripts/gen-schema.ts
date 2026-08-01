@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ScenarioObject, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
+import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const SCHEMA_DIR = join(REPO_ROOT, "schema");
@@ -38,6 +39,14 @@ export function buildAssertionKeys(): string {
         // The verdict-modifier subset (no-op assertions that suppress a default-fail). scenario.py keeps a
         // hardcoded copy parity-tested against this; see VERDICT_MODIFIER_KEYS in src/types.ts.
         verdictModifierKeys: [...VERDICT_MODIFIER_KEYS].sort(),
+        // Hook events. `servedHookEvents` is what THIS harness installs on `initialize`;
+        // `knownHookEvents` is every event the agent binary understands. The linter needs both to tell
+        // "a real event we don't serve" (a fidelity gap worth warning about) from "a typo" (an error).
+        // Generated for the same reason as the key lists above: a hand-copied served-set would stop
+        // warning about the very event it was later extended to cover. See SERVED_HOOK_EVENTS in
+        // src/agent/session.ts for why the served set is narrower than production's install.
+        servedHookEvents: [...SERVED_HOOK_EVENTS].sort(),
+        knownHookEvents: [...KNOWN_HOOK_EVENTS].sort(),
       },
       null,
       2,

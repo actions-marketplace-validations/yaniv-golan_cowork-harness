@@ -161,12 +161,12 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   `effectiveFidelity`, which backs the `resolved-tier`/`unverifiable-tier` staleness classes that
   `verify-cassettes`/replay staleness checks report when a `fidelity: cowork` scenario's resolved tier
   drifts — see [../docs/cassette.md](../docs/cassette.md). A module-level `run_scenario(path, …, cli=None)` is
-  exported for the one-call case:
+  exported for the one-call case (runnable as shown, unlike the illustrative resume example below):
   ```python
   from cowork_harness import run_scenario
-  r = run_scenario("scenarios/cap_table.yaml")
+  r = run_scenario("examples/scenarios/csv-metrics.yaml")
   r.assert_success()
-  assert r.effective_fidelity == "hostloop"   # prove which tier ran
+  assert r.effective_fidelity == "container"   # prove which tier ran
   ```
 - `cowork.replay(cassette_path)` → `Result` (deterministic, no token/Docker — content assertions only)
 - A **directory** input to `run_scenario` / `replay` (a `dir/` of scenarios or cassettes) produces more than
@@ -182,7 +182,9 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
 - `Result`: `.assert_success()`, `.assert_transcript_contains(s)`, `.assert_tool_called(name)`,
   `.assert_subagent_dispatched(agent_type)`, `.assert_dispatch_count_max(n)`,
   `.assert_artifact_json(rel_path, predicate)`; plus `.result`, `.out_dir`, `.work_dir`, `.outputs_dir`
-  (the `mnt/outputs` deliverable path), `.subagents`, `.failed_assertions()`, and from the json envelope
+  (the `mnt/outputs` deliverable path), `.subagents`, `.turn` (turn number in a resumed session, see
+  above), `.effective_fidelity` (tier actually run, see above), `.non_deterministic` (True iff the run
+  was answered by an LLM, external, or human decider), `.failed_assertions()`, and from the json envelope
   `.ok` (overall pass) / `.error` (`{category, message, hint?}` if the run threw).
 
 Resume example (checkpoint-gate skill) — **ILLUSTRATIVE**, not runnable as-is: none of the shipped

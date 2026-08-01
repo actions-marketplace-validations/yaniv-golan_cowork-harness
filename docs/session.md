@@ -200,7 +200,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | Field | Maps to | Notes |
 |---|---|---|
 | `plugins.marketplaces[]` | `plugin_marketplaces` / `extraKnownMarketplaces` | git URLs or local paths. |
-| `plugins.local_marketplaces[]` | `claude plugin marketplace add` | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace` flag is the ad-hoc equivalent. |
+| `plugins.local_marketplaces[]` | `claude plugin marketplace add` | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace <dir> --enable name@marketplace` flags are the ad-hoc equivalent — when the marketplace is the only plugin source, `--enable` is required or `skill` fails fast (nothing would be loaded otherwise). |
 | `plugins.enabled[]` | `enabledPlugins` | `name@marketplace`. |
 | `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins/plugin_<id>` (migrated-Cowork uploaded/org-remote shape; the id is a stable hash of the declared source). A skill that references these via `${CLAUDE_PLUGIN_ROOT}` must mind [the two-namespace resolution model](./plugin-root.md) — the token is unset in host-loop VM bash. |
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |

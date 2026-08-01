@@ -96,5 +96,19 @@
     "allow_permissive_auto_allow",
     "allow_stall",
     "allow_undelivered_deliverables"
+  ],
+  "servedHookEvents": [
+    "PreToolUse"
+  ],
+  "knownHookEvents": [
+    "Notification",
+    "PostToolUse",
+    "PreCompact",
+    "PreToolUse",
+    "SessionEnd",
+    "SessionStart",
+    "Stop",
+    "SubagentStop",
+    "UserPromptSubmit"
   ]
 }

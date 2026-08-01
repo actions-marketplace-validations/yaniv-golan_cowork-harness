@@ -60,8 +60,14 @@ cowork-harness skill ~/my-plugin "Render the report" \
   --output-format json &        # run in the background; stdout stays clean JSON
 ```
 
-(`skill` and `run` both accept `--decider-dir`. On `run`, scenarios normally pin answers for
-reproducibility; `--decider-dir` is for the driving-agent workflow and flags the run non-deterministic.)
+(`skill`, `run`, and `record` all accept `--decider-dir`. On `run`, scenarios normally pin answers for
+reproducibility; `--decider-dir` is for the driving-agent workflow and flags the run non-deterministic.
+On `record` it answers gates live during authoring instead of scripting `answers:` up front — single
+scenario only, not a `dir/` batch — see [cassette.md](./cassette.md#answering-gates-during-recording).)
+
+Pin the run's output location up front with the **global** `--run-dir <path>` flag (it must precede the
+subcommand) if the driver will also need to find the run dir once the process is backgrounded — e.g. to
+watch overall progress with `status --follow` alongside the gate stream (see step (b)).
 
 ### (b) Arm one Monitor on the gate stream
 
@@ -78,6 +84,10 @@ Each new pending gate arrives as one JSON line, e.g.:
 ```
 
 A `{"done":true}` line means the run finished — stop watching.
+
+A driver that also wants overall run progress (not just pending gates) can watch
+`cowork-harness status <run-dir> --follow` in parallel — see [run-status.md](./run-status.md):
+`gates --follow` surfaces question content, `status --follow` surfaces run/session lifecycle.
 
 ### (c) Reply to each gate
 
@@ -145,5 +155,8 @@ cowork-harness answer "$GATES" --gate 1 --choose "PDF"
 - [`../README.md`](../README.md) — the answer-channels overview (`--decider-llm` / `--answer-policy` / `--decider-cmd` /
   `--decider-dir`).
 - [`scenario.md`](./scenario.md) — scenario answer rules and `on_unanswered` policies.
+- [`cassette.md`](./cassette.md#answering-gates-during-recording) — `record --decider-dir`, the
+  single-scenario recording variant of this recipe.
+- [`run-status.md`](./run-status.md) — the `status --follow` companion for overall run progress.
 - [`../src/decide/external-channel.ts`](../src/decide/external-channel.ts) — the file-rendezvous
   implementation (`fileChannel`, `streamGates`, `answerGate`).

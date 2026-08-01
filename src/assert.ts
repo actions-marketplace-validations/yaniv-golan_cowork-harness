@@ -298,6 +298,10 @@ export interface AssertContext {
     description?: string;
     output?: string;
     outputTruncated?: boolean; // output was cut at the assert cap — a negative content check is unverifiable
+    /** RunResult.subagents[].reasoning — the on-disk child-transcript channel. Read ONLY by
+     *  `semantic_matches: {include_subagent_text: true}`, which folds the `kind:"text"` turns into the
+     *  judged document. Undefined on replay (the child transcript exists only where the real agent ran). */
+    reasoning?: Array<{ kind: "thinking" | "text"; text: string; redacted?: boolean }>;
   }[]; // dispatch tree (sub-agent assertions)
   gateDeliveries: {
     question: string;
@@ -520,9 +524,21 @@ export async function runSemanticJudges(
   if (!ctx.semanticResults) ctx.semanticResults = new Map();
   if (!ctx.judgeModels) ctx.judgeModels = new Map();
   if (!ctx.judgeInvalid) ctx.judgeInvalid = new Set();
-  const answer = buildJudgedDocument(ctx); // finalMessage + transcript + authored files, scrubbed
+  // The judged document depends on ONE per-assert input (include_subagent_text), so there are at most two
+  // distinct documents per run. Memoize rather than rebuild per assert: composing it scrubs + caps every
+  // section, which is real work on a long run with many authored files.
+  const docCache = new Map<boolean, string>();
+  const judgedDocument = (withSubagents: boolean): string => {
+    let d = docCache.get(withSubagents);
+    if (d === undefined) {
+      d = buildJudgedDocument(ctx, withSubagents); // finalMessage + transcript [+ sub-agent text] + authored files, scrubbed
+      docCache.set(withSubagents, d);
+    }
+    return d;
+  };
   for (const a of assertions) {
     if (a.semantic_matches === undefined) continue;
+    const answer = judgedDocument(a.semantic_matches.include_subagent_text === true);
     const override = a.semantic_matches.judge_model;
     const j = override && judgeFor ? judgeFor(override) : judge;
     // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
@@ -561,12 +577,16 @@ export async function runSemanticJudges(
 const JUDGE_FINAL_CAP = 32 * 1024;
 const JUDGE_TRANSCRIPT_CAP = 128 * 1024;
 const JUDGE_DOC_CAP = 256 * 1024;
+/** Per-dispatch cap for opt-in sub-agent text. Deliberately smaller than the transcript cap: a wide
+ *  fan-out multiplies this by the dispatch count, and the aggregate JUDGE_DOC_CAP backstop would
+ *  otherwise be spent entirely on sub-agent chatter, truncating the final answer out of the document. */
+const JUDGE_SUBAGENT_CAP = 16 * 1024;
 function capForJudge(text: string, cap: number): string {
   if (text.length <= cap) return text;
   return `${text.slice(0, cap)}\n…[${text.length - cap} chars truncated for the judge input budget — evidence beyond this point was NOT shown; do not infer absence from this cut]`;
 }
 
-function buildJudgedDocument(ctx: AssertContext): string {
+function buildJudgedDocument(ctx: AssertContext, includeSubagentText = false): string {
   // SCRUB BEFORE CAP: scrub is exact-string replacement, so a secret straddling a cap boundary would
   // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
   // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
@@ -575,6 +595,27 @@ function buildJudgedDocument(ctx: AssertContext): string {
   const parts: string[] = [];
   if (ctx.finalMessage) parts.push(`## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
   parts.push(`## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
+  // OPT-IN sub-agent text. `ctx.transcript` carries top-level assistant_text ONLY (run.ts drops any
+  // event with a parentToolUseId), so for a fan-out skill the bulk of the actual work is invisible to
+  // the judge. This folds it back in on request. Two deliberate constraints:
+  //   - `kind:"text"` ONLY. A sub-agent THINKING turn arrives with an empty string and redacted:true
+  //     (the SDK suppresses sub-agent thinking, leaving only a signature), so including those would pad
+  //     the document with blank blocks a judge could misread as "the sub-agent did nothing".
+  //   - Opt-in, never default. Enlarging the judged document can re-grade an existing rubric, and a
+  //     silent grade change across an upgrade is exactly the kind of drift a gate must not have.
+  // `reasoning` is undefined on replay (child transcripts exist only where the real agent ran); the
+  // section is then simply absent, which is honest — semantic_matches is live-only anyway.
+  if (includeSubagentText) {
+    for (const [i, sa] of (ctx.subagents ?? []).entries()) {
+      const text = (sa.reasoning ?? [])
+        .filter((t) => t.kind === "text" && t.text)
+        .map((t) => t.text)
+        .join("\n\n");
+      if (!text) continue;
+      const label = sa.description ?? sa.resolvedAgentType ?? sa.dispatchAgentType ?? `#${i + 1}`;
+      parts.push(`## Sub-agent output: ${s(label)}\n${capForJudge(s(text), JUDGE_SUBAGENT_CAP)}`);
+    }
+  }
   for (const f of ctx.authoredFiles ?? [])
     parts.push(`## Authored file: ${s(f.path)}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
   // Surface authored-file incompleteness to the judge so it never reads an omitted/unreadable file's
@@ -1046,10 +1087,15 @@ function check(
       // LANE CHECK FIRST — before every location-based branch below. Placed after the truncated/link
       // branches originally, which let a replayed remote cassette green via the truncated path: the one
       // lane where location proves nothing was the one where the guard could be bypassed.
+      //
+      // The remedy deliberately does NOT say "assert the delivery itself": no remote delivery tool is
+      // modeled (production's is the agent-native SendUserFile), so that advice pointed at a key that does
+      // not exist. Offer the honest proxy instead. Keep in sync with the load-time twin in
+      // src/run/execute.ts — both must retire together when a remote delivery tool ships.
       if (ctx.lane === "remote") {
         results.push(
           fail(
-            `user_visible_artifact asserts LOCATION, which delivers nothing on \`lane: remote\` — a remote container has no auto-delivering outputs dir and is reclaimed at session end. Assert the delivery itself, or use \`lane: local\` if this scenario models the desktop lane`,
+            `user_visible_artifact asserts LOCATION, which delivers nothing on \`lane: remote\` — a remote container has no auto-delivering outputs dir and is reclaimed at session end. Tool-level delivery is NOT YET ASSERTABLE on this lane (no remote delivery tool is modeled). Either assert the written path plus the agent's own statement of it (\`file_exists\` + \`transcript_matches\`), or use \`lane: local\` if this scenario models the desktop lane`,
           ),
         );
       } else if (ctx.linkPaths?.has(rel)) {

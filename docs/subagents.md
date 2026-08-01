@@ -515,22 +515,26 @@ its input) — this seeds `subagents[].dispatchAgentType` (the DISPATCH-INPUT ty
 `dispatchTypeOmitted`. The BINARY-**resolved** child type arrives separately, as a system-subtype event:
 `task_started`, one member of a sibling family the harness tracks as a group (`task_started`,
 `task_progress`, `task_updated`, `task_notification`, `background_tasks_changed`, `thinking_tokens` —
-`src/run/run.ts:37-44`). Only `task_started` is consumed today: joined strictly by `tool_use_id`
-(`src/run/run.ts:830-849`), it sets `subagents[].resolvedAgentType` — "strictly better evidence than
+the `TASK_EVENT_SUBTYPES` constant in `src/run/run.ts`). Only `task_started` is consumed today: joined
+strictly by `tool_use_id` (`Run.drive`'s `case "system_event"` task-event branch in `src/run/run.ts`), it
+sets `subagents[].resolvedAgentType` — "strictly better evidence than
 `dispatchAgentType` for a type-less dispatch" (`schema/run-result.json:662-664`) — and when a dispatch
 had `dispatchTypeOmitted` and resolved to `general-purpose`, the harness warns loudly about the
 wildcard-fallback trap (see [The type-less dispatch trap](#the-type-less-dispatch-trap) above).
 
 **Resolved model and output — the `toolUseResult` envelope / `subagent_result_meta`.** The child's `user`
 message carrying its `tool_result` also carries a TOP-LEVEL sibling field on the raw frame,
-`tool_use_result` (`src/agent/session.ts:1034-1038`) — the wire's `toolUseResult` envelope. When it
-carries `resolvedModel`/`agentType`/`status`, the harness parses it into a `subagent_result_meta` event
-(`src/agent/session.ts:1049-1056`), joined by the paired `tool_result` block's `tool_use_id`. That event
+`tool_use_result` (the `subagent_result_meta` variant of `AgentEvent` in `src/agent/session.ts`) — the
+wire's `toolUseResult` envelope. When it carries `resolvedModel`/`agentType`/`status`, the harness parses
+it into a `subagent_result_meta` event (`parseMessage`'s `case "user"` handling of `msg.tool_use_result`
+in `src/agent/session.ts`), joined by the paired `tool_result` block's `tool_use_id`. That event
 feeds `subagents[].resolvedModel` directly, and only *corroborates* `resolvedAgentType` — it never
-overwrites stronger evidence `task_started` already set (`src/run/run.ts:742-748`). `subagents[].output`
+overwrites stronger evidence `task_started` already set (`Run.drive`'s `case "subagent_result_meta"`
+branch in `src/run/run.ts`). `subagents[].output`
 comes from the same `user` message, but a different content block: the `tool_result` block itself (a
-separate `tool_result` event, `src/agent/session.ts:1064-1078`), joined by the dispatch's own `toolUseId`
-against `RunResult`'s `toolResults` (`src/run/run.ts:1071-1081`, `denormalizeSubagentOutputs`) — the
+separate `tool_result` event, `parseMessage`'s `case "user"` `tool_result` push in `src/agent/session.ts`),
+joined by the dispatch's own `toolUseId`
+against `RunResult`'s `toolResults` (`denormalizeSubagentOutputs` in `src/run/run.ts`) — the
 dispatch's own return value, capped at the assert-text cap (`outputTruncated` records when the cap
 actually cut something, so `subagent_output_contains` reports "unverifiable" rather than a false
 negative). `subagents[].toolsUsed` is **not** part of this envelope — see parent-stream attribution below.
@@ -539,36 +543,41 @@ negative). `subagents[].toolsUsed` is **not** part of this envelope — see pare
 `pathDenials[]` has exactly three filtered producers (`schema/run-result.json:97`):
 
 1. `pretooluse` — the PreToolUse path gate's own hook callback (`HOSTLOOP_PATH_GATE_ID`) firing `block`
-   (`src/run/run.ts:888-910`); host-loop only.
+   (`Run.drive`'s `case "hook_event"` branch in `src/run/run.ts`); host-loop only.
 2. `can_use_tool` — a DENIED `can_use_tool` ask on a gated file tool that carries a path
-   (`src/run/run.ts:1225-1240`) — covers every decider (scripted, parity default, the host-loop gate, or
-   a human).
+   (`Run`'s `recordDecision` method in `src/run/run.ts`) — covers every decider (scripted, parity
+   default, the host-loop gate, or a human).
 3. `permission_denied` — a stream `permission_denied` system event, ingested ONLY when correlated by
    `tool_use_id` to an already-recorded `fileToolAttempts` entry that itself carries a path
-   (`src/run/run.ts:855-877`) — a real `permission_denied` can fire for a non-path tool too (e.g.
+   (`Run.drive`'s `case "system_event"` branch handling `permission_denied` in `src/run/run.ts`) — a real
+   `permission_denied` can fire for a non-path tool too (e.g.
    `present_files`), so it is never ingested unfiltered.
 
 `fileToolAttempts[]` feeds the correlation above and stands on its own as attempt-level (not
 decision-level) telemetry: every gated file-tool `tool_use` — `Read`/`Write`/`Edit`/`Glob`/`Grep`/
-`MultiEdit` (`FILE_ATTEMPT_TOOLS`, `src/run/run.ts:25`) — is recorded regardless of outcome, with
+`MultiEdit` (`FILE_ATTEMPT_TOOLS` in `src/run/run.ts`) — is recorded regardless of outcome, with
 `origin: "main" | "subagent" | "unknown"` set from the same recognized-dispatch membership check the
-attribution branch below uses (`src/run/run.ts:571-588`).
+attribution branch below uses (`Run.drive`'s `case "tool_use"` branch in `src/run/run.ts`).
 
 **Parent-stream attribution, and the thinking gap.** A child's `tool_use`/`text` blocks carry a block- or
-message-level `parent_tool_use_id` (`src/agent/session.ts:946-966`), threaded onto the synthetic
+message-level `parent_tool_use_id` (`parseMessage`'s `case "assistant"` branch in `src/agent/session.ts`),
+threaded onto the synthetic
 `tool_use`/`assistant_text` events as `parentToolUseId`. The recorder uses it to attribute a tool call to
-the dispatch whose `toolUseId` it matches (`src/run/run.ts:635-648`) — this is the sole channel behind
+the dispatch whose `toolUseId` it matches (`Run.drive`'s `case "tool_use"` branch, the sub-agent
+attribution join, in `src/run/run.ts`) — this is the sole channel behind
 both `subagents[].toolsUsed` and the newer `subagents[].referencesRead` (skill reference/script files
 *that sub-agent* Read, same `skillReferenceReadPath()` predicate the main-agent `referencesRead` uses,
 deduped in first-seen order).
 
 HONEST LIMIT, scoped to the **parent SDK stream**: `thinking` blocks arriving on THAT stream are parsed
-**without** a `parentToolUseId` at all. Compare `src/agent/session.ts:967` (`text` → `assistant_text`,
-threads `parentToolUseId`) and `:969` (`tool_use`, threads it) against `:968` (`thinking` — does not);
-the synthetic event type itself has no `parentToolUseId` field on `thinking` (`src/agent/session.ts:94`).
+**without** a `parentToolUseId` at all. Compare `parseMessage`'s `case "assistant"` branch in
+`src/agent/session.ts` — `block.type === "text"` (→ `assistant_text`, threads `parentToolUseId`) and
+`block.type === "tool_use"` (threads it too) against `block.type === "thinking"` there (does not) —
+the synthetic event type itself has no `parentToolUseId` field on `thinking` (the `thinking` variant of
+`AgentEvent` in `src/agent/session.ts`).
 So even where a sub-agent's own reasoning could in principle land on the parent stream, the harness has
 no key to attribute *that copy* to a dispatch — `RunResult.thinking` is populated unconditionally at the
-top level (`src/run/run.ts:716-719`) and is never scoped to a `subagents[]` entry from this channel. This
+top level (`noteThinking` in `src/run/run.ts`) and is never scoped to a `subagents[]` entry from this channel. This
 is still true and unchanged — **a consumer must not expect the top-level `thinking[]` field to carry
 attributable sub-agent reasoning**, an SDK limitation upstream of the harness, not a harness omission.
 It does **not** mean sub-agent reasoning is uncaptured altogether — see the next subsection.
