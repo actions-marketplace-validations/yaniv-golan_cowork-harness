@@ -60,9 +60,13 @@ GitHub-hosted runners, no token/Docker/agent:
 ```yaml
 - run: npm i -g "cowork-harness@>=1.17.0"
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
-- run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
+- run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
 - run: cowork-harness replay cassettes/              # token-free content/structure
 ```
+
+Both lines matter: `replay` alone **warns** on a stale recording and exits 0, so dropping the
+`verify-cassettes` step means a skill edit silently stops being tested. (One command instead of two:
+`replay --fail-on-skill-drift`.)
 
 The rest of this doc explains the lane split, recording, privacy, and the full pipeline + live job.
 

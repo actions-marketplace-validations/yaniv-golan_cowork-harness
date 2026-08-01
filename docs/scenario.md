@@ -349,6 +349,34 @@ without actually running the agent. For **content correctness**, match the asser
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
 if *every* key passes (don't rely on the first; keep one concern per item unless you mean conjunction).
 
+### Which assertion for which question (goal → key)
+
+The full catalog below is a reference, not a chooser — 71 keys, ordered by family rather than by how often
+you need them. Start here instead, then read the row for whichever key you land on. (`cowork-harness
+assertions --list` prints the same set grouped the same way.)
+
+| You want to check that… | Reach for |
+|---|---|
+| the run succeeded at all | `result: success` — the floor under every scenario |
+| a deliverable reached the user | `user_visible_artifact: <path>` — **not** `file_exists`, which misses folder-relative deliverables (+ `no_scratchpad_leak: true` when delivery goes through `present_files`; **`container` only**) |
+| a structured field has the right value | `artifact_json: {artifact, path, equals\|matches\|…}` — phrasing-independent, unlike a transcript regex |
+| the skill said something specific | `transcript_matches: '<rx>'` for stable lexical markers only — never for content the model paraphrases |
+| **a gate still fires at all** | `gate_answer_count_min: 1` — the presence floor. `gate_answers_delivered` alone passes **vacuously** when zero gates fire, so a skill that stops asking stays green; `lint` warns (`vacuous-gate-assert`) if you assert one without a companion |
+| a scripted answer actually reached the model | `gate_answers_delivered: true` — pair it with the floor above |
+| a skill actually **ran** (or must not) | `skill_triggered: <rx>` / `no_skill_triggered: <rx>` — distinct from `skill_available`, which only means it was *offered* |
+| a sub-agent did the work | `subagent_dispatched: <rx>`, `subagent_output_contains: {contains}`, `dispatch_count_max: <N>` |
+| the skill didn't error out of a tool | `tool_no_error: <rx>`, `max_tool_errors: <N>` |
+| it didn't waste repeated identical calls | `max_redundant_tool_calls: <N>` |
+| a to-do workflow finished | `all_tasks_completed: true`, `task_status: {match, status}` |
+| the sandbox actually blocked the network | `egress_denied: <host>` — **live-only**, skipped loud on replay |
+| a pre-existing input wasn't mutated | `input_unmodified: <glob>` (live / `verify-run`) |
+| a hook blocked (or didn't block) a tool | `hook_blocked: <rx>`, `no_hook_blocked: true` — replay needs a `controlOut` cassette |
+| spend stayed inside a ceiling | `max_cost_usd`, `max_tokens`, `max_turns` — on **replay** these assert the *recording's* spend, which never changes |
+
+Two axes decide whether a key you pick actually runs: the **tier** it needs (some are `container`-only) and
+whether it **survives `replay`**. Both are in the key's row below, and the replay classes are summarised in
+[Which assertions survive `replay`](#which-assertions-survive-replay-ci-placement).
+
 | Assertion | Passes when |
 |---|---|
 | `result: success \| error` | the run ended with that status |

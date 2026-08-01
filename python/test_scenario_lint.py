@@ -545,3 +545,58 @@ def test_min_severity_filters_json_identically(tmp_path):
     _, filtered = _lint_cli(tmp_path, "--json", "--min-severity", "WARN")
     assert any(f["rule"] == "manifest-needs-snapshot" for f in json.loads(full))
     assert all(f["severity"] in ("ERROR", "WARN") for f in json.loads(filtered))
+
+
+# --- vacuous-gate-assert: gate_answers_delivered needs a PRESENCE companion -------------------------
+# `gate_answers_delivered` checks that every gate which fired was delivered non-error, and ZERO gates
+# fired passes VACUOUSLY (gate firing is model-dependent). So the assertion that looks like it guards
+# "the skill still asks its questions" stays green when the skill stops asking altogether -- the exact
+# regression a real corpus had sit green for weeks against a 0-gate recording.
+#
+# A companion is any key that FAILS rather than vacuously passes on an empty gate set. The exemption
+# list is load-bearing in both directions: too narrow and the rule reds `scaffold`'s own output (which
+# emits question_asked alongside this key); too wide and it exempts `questions_count_max`, a MAX that
+# passes vacuously at zero and leaves the hole open.
+
+RULE = "vacuous-gate-assert"
+
+
+def test_gate_answers_delivered_alone_warns(tmp_path):
+    assert RULE in _rules("assert:\n  - gate_answers_delivered: true\n", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "companion",
+    [
+        "gate_answer_count_min: 1",  # the explicit floor
+        'question_asked: "which format"',  # fails "no question matched" on an empty set
+        'tool_called: "AskUserQuestion"',  # fails "tool not called"
+    ],
+)
+def test_presence_companion_silences_it(companion, tmp_path):
+    body = f"assert:\n  - gate_answers_delivered: true\n  - {companion}\n"
+    assert RULE not in _rules(body, tmp_path)
+
+
+def test_questions_count_max_is_NOT_a_companion(tmp_path):
+    # A MAX is satisfied by zero gates, so it cannot witness presence -- pairing it must still warn.
+    body = "assert:\n  - gate_answers_delivered: true\n  - questions_count_max: 3\n"
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_tool_called_for_an_unrelated_tool_is_not_a_companion(tmp_path):
+    body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "Bash"\n'
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_tool_called_regex_matching_the_gate_tool_counts(tmp_path):
+    # `tool_called` is a user REGEX over observed tool names, so the check asks whether THEIR pattern
+    # would match the gate tool -- not whether they typed the name exactly.
+    body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "Ask.*Question"\n'
+    assert RULE not in _rules(body, tmp_path)
+
+
+def test_malformed_tool_called_regex_does_not_crash_the_linter(tmp_path):
+    # An uncompilable regex is a different rule's finding; this one must not raise on it.
+    body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "[unclosed"\n'
+    assert RULE in _rules(body, tmp_path)

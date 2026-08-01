@@ -4250,11 +4250,75 @@ function cmdAssert(args: string[]) {
   rejectUnknownFlags("assertions", args, ["--list", "--output-format", "--output-format=json", "--output-format=text"], json);
   const shape = Assertion.shape as Record<string, { description?: string }>;
   const keys = Object.keys(shape).map((k) => ({ key: k, description: shape[k].description ?? "" }));
+  // JSON stays a FLAT list — machine consumers key off `assertions[]`, and grouping is a reading aid,
+  // not a contract. Changing this shape would be a covered-surface break (SPEC §12).
   if (json) return void out(jsonPayloadEnvelope("assertions", true, { assertions: keys }));
   const width = Math.max(...keys.map((k) => k.key.length));
   out(`available assertions (${keys.length}) — use under a scenario's \`assert:\` list:\n`);
-  for (const { key, description } of keys) out(`  ${key.padEnd(width)}  ${description}`);
+  const groups = groupAssertionKeys(keys);
+  for (const { title, members } of groups) {
+    if (!members.length) continue;
+    out(`  ${title}`);
+    for (const { key, description } of members) out(`    ${key.padEnd(width)}  ${description}`);
+    out("");
+  }
 }
+
+/** Reading-aid families for `assertions --list`. A flat 71-line dump is authoritative and unscannable;
+ *  a consumer looking for "how do I prove a gate still fires" should not have to read all of it.
+ *
+ *  ORDER MATTERS — first match wins, so the specific rules sit above the broad ones (`no_vm_path_file_op`
+ *  is path-denial, not "tools", even though a looser `tool_`-ish rule could claim it).
+ *
+ *  The `Other` bucket must stay EMPTY: `test/assertions-families.test.ts` fails when a key lands there, so
+ *  adding an assertion key forces a conscious choice of family instead of silently appending to a dump
+ *  nobody reads. That mirrors how `scenario-docs-sync` already forces a doc row for every new key. */
+export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { title: string; members: T[] }[] {
+  const FAMILIES: { title: string; match: (k: string) => boolean }[] = [
+    { title: "Outcome", match: (k) => k === "result" || k === "compaction_occurred" || k === "semantic_matches" },
+    { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
+    { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
+    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") },
+    {
+      title: "Path denial / VM paths",
+      match: (k) => k.includes("path_denied") || k === "no_vm_path_file_op" || k === "transcript_no_host_path",
+    },
+    { title: "Sub-agents", match: (k) => k.startsWith("subagent_") || k === "dispatch_count_max" },
+    {
+      title: "Tools",
+      match: (k) => k.startsWith("tool_") || k === "no_mcp_error" || k === "max_redundant_tool_calls" || k === "max_tool_errors",
+    },
+    { title: "Skills / connectors", match: (k) => k.includes("skill_") || k === "no_skill_triggered" || k === "connector_available" },
+    { title: "Tasks", match: (k) => k.startsWith("task_") || k === "all_tasks_completed" },
+    { title: "Egress", match: (k) => k.startsWith("egress_") },
+    { title: "Files / artifacts / delivery", match: (k) => FILE_FAMILY.has(k) || k.startsWith("computer_links_") },
+    { title: "Budgets", match: (k) => k.startsWith("max_") },
+    { title: "Verdict modifiers (no-op passes on replay)", match: (k) => k.startsWith("allow_") || k === "replay_protocol_fidelity" },
+  ];
+  const out = FAMILIES.map((f) => ({ title: f.title, members: [] as T[] }));
+  const other: T[] = [];
+  for (const entry of keys) {
+    const i = FAMILIES.findIndex((f) => f.match(entry.key));
+    if (i === -1) other.push(entry);
+    else out[i].members.push(entry);
+  }
+  return other.length ? [...out, { title: "Other", members: other }] : out;
+}
+
+/** Named separately because these share no prefix — delivery/filesystem keys are the one family that
+ *  cannot be matched structurally. A new file-ish key must be added here or the family test reds. */
+const FILE_FAMILY = new Set([
+  "file_exists",
+  "user_visible_artifact",
+  "artifact_json",
+  "no_unexpected_files",
+  "input_unmodified",
+  "no_delete_in_outputs",
+  "no_scratchpad_leak",
+  "present_files_called",
+  "no_lost_write_back",
+  "self_heal_ran",
+]);
 
 function cmdTrace(args: string[]) {
   ensureOutputFormat("trace", args);

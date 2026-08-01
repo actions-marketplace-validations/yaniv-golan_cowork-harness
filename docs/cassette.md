@@ -14,6 +14,25 @@ cowork-harness replay  cassettes/my-test.cassette.json # token-free re-evaluatio
 > Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
 > [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
 
+**In CI, run both commands — `replay` alone does not gate staleness.** A recording describes the skill as
+it was on the day you paid for it; once the skill moves, a bare `replay` prints
+`::warning:: cassette stale` and still **exits 0**. `verify-cassettes` exits **1** on the same tree. The
+split is deliberate — `replay` answers *"do the assertions still hold"*, `verify-cassettes` answers *"is
+this recording still current"* — but running only the first means a skill edit silently stops being
+tested:
+
+```bash
+cowork-harness verify-cassettes cassettes/   # privacy + staleness — FAILS on a stale recording
+cowork-harness replay            cassettes/  # token-free content/structure
+```
+
+That is the order the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) ships. If you
+would rather have one command do both, `replay --fail-on-skill-drift` folds the staleness gate in
+(`--strict` also fails on baseline drift). Two caveats worth knowing either way: a cassette recorded
+before fingerprints existed has nothing to check and passes silently, and a `COWORK_HARNESS_GITSET` /
+`COWORK_HARNESS_AGENT_SCOPE` mismatch between record and CI downgrades real drift to a non-failing
+`format` finding.
+
 Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
 **no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml) *(source checkout only — not shipped in the npm package)*). The walkthrough below assumes `container` fidelity, the common case.
 

@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`lint` now flags a `gate_answers_delivered` with no presence companion** (`vacuous-gate-assert`, WARN).
+  That key checks every gate that *fired* was delivered non-error — and **zero gates fired passes
+  vacuously**, so the assertion that looks like it guards "the skill still asks its questions" stays green
+  when the skill stops asking altogether. A real corpus had a 0-gate recording sit green for weeks against
+  exactly this assertion. Pair it with `gate_answer_count_min: 1` (shipped since 0.25.0), a
+  `question_asked` regex, or `tool_called: "AskUserQuestion"` — anything that *fails* rather than
+  vacuously passes on an empty gate set. `questions_count_max` deliberately does not count: a maximum is
+  satisfied by zero.
+- **`assertions --list` groups its 71 keys by family** (outcome, transcript, gates, hooks, path denial,
+  sub-agents, tools, skills, tasks, egress, files, budgets, verdict modifiers). The JSON envelope stays
+  flat — grouping is a reading aid, not a contract. A new assertion key that matches no family fails
+  `test/assertions-families.test.ts`, so adding one forces a conscious choice instead of appending to a
+  dump nobody reads.
+- **`docs/scenario.md` gains a "goal → key" chooser** between the strategy section and the 71-row catalog:
+  *"a gate still fires at all"* → `gate_answer_count_min: 1`, *"a deliverable reached the user"* →
+  `user_visible_artifact`, and so on. The table previously existed only in the agent-facing skill, so a
+  human reading the docs got a reference with no way in.
+
+### Changed
+
+- **`docs/cassette.md` and the CI recipe now state that `replay` alone does not gate staleness.** A bare
+  `replay` on an edited skill prints `::warning:: cassette stale` and **exits 0**; `verify-cassettes` exits
+  **1** on the same tree. Both belong in CI — that is the order the recipe has always shipped, but the
+  guide led with the single ungated command, so a reader following the headline had a gate that stopped
+  gating the moment their skill moved. Also documents the two ways the drift signal can be silently absent:
+  a pre-fingerprint cassette has nothing to check, and a `COWORK_HARNESS_GITSET` / `COWORK_HARNESS_AGENT_SCOPE`
+  mismatch between record and CI downgrades real drift to a non-failing `format` finding.
+
 ### Fixed
 
 - **`docs/cassette.md` never stated that replay executes nothing.** Every individual fact was documented,
