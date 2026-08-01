@@ -642,7 +642,7 @@ identity keyed on `appVersion` alone cannot see it.
 
 **Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
-`no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
+`semantic_matches`, `no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
 (token + Docker).
 
 Two consequences for CI:
@@ -666,8 +666,9 @@ Two consequences for CI:
 
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`, `requires_capabilities`,
-`expect_denied` and `assert` are all captured at `record` time, and a plain `replay` evaluates **every one
+`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
 
 The on-disk sibling YAML *is* opened — but only to print non-verdict-affecting `::notice::` lines when it

@@ -43,7 +43,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 ```
 
 (Installing globally — `npm install -g cowork-harness` — gives you the `cowork-harness` CLI for your own
-scenarios and cassettes; the bundled example above is replayed from a checkout.)
+scenarios and cassettes; the bundled example above also replays from a global install — see the `$(npm root -g)` path below.)
 
 Full setup → [Quick start](#quick-start).
 
@@ -229,6 +229,8 @@ cowork-harness verify-cassettes examples/replays/   # privacy scan (email/curren
 
 # 5. Lint scenarios before committing (catches silent false-greens in assertion placement)
 #    Needs python3 (the linter shells out to the bundled scenario.py; PyYAML is bundled. exit 127 if python3 is missing).
+#    NOTE: examples/scenarios/ ships in the SOURCE CHECKOUT only — the npm package carries
+#    examples/replays/ but not scenarios/. From an install, point this at your own scenarios/.
 cowork-harness lint examples/scenarios/*.yaml
 ```
 
@@ -393,7 +395,7 @@ fidelity tier you picked).
 
 Recorded cassettes pin the tier a `fidelity: cowork` scenario actually resolved to as `effectiveFidelity`, which backs the `resolved-tier`/`unverifiable-tier` staleness classes — see [docs/cassette.md](./docs/cassette.md).
 
-Set the tier with `fidelity:` in a scenario or `--fidelity` on `skill` or `chat`.
+Set the tier with `fidelity:` in a scenario, or `--fidelity` on `skill` / `chat` / `critique` / `probe-dispatch`.
 
 ---
 

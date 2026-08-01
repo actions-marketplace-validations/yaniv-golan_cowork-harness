@@ -32,8 +32,9 @@ The cassette is NOT a test in isolation — it replays what the agent did in a p
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `lane`, `skills`, `answers`, `execution`, `requires_capabilities`, `expect_denied`
-and `assert` are all captured at record time, and a plain `replay` evaluates every one of them from that
+`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+all captured at record time, and a plain `replay` evaluates every one of them from that
 frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
 change a replay; the sibling is read only to print `::notice::` lines when it has drifted, or when it
 fails to load. **Only `assert:` (+`expect_denied:`) can be opted back to disk** — a changed `lane:`/`fidelity:`/

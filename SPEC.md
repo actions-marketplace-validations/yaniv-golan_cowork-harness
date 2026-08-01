@@ -1,6 +1,6 @@
 # Authoritative spec — cowork-harness
 
-The single source of truth for **what the harness must produce** given its inputs. Golden snapshot tests assert the **contract layer** against this; live contract tests assert the **runtime layer** against the real binary. Anything that contradicts the binary wins over this doc — keep them in sync via `cowork-harness sync` + the [spawn contract](./docs/cowork-spawn-contract-1.12603.1.md).
+The single source of truth for **what the harness must produce** given its inputs. Golden snapshot tests assert the **contract layer** against this; live contract tests assert the **runtime layer** against the real binary. Anything that contradicts the binary wins over this doc — keep them in sync via `cowork-harness sync` + the [spawn contract](./docs/cowork-spawn-contract-1.12603.1.md) (historical, pinned to 1.12603.1 and not updated per release — live values are in `baseline.spawn` / `baselines/desktop-*.json`).
 
 > **Reading this for how-to?** This is the *contract* (envelopes, exit codes, assertion semantics). To
 > author a scenario or run the harness, start at the [README](./README.md) and [docs/](./docs/README.md);
@@ -265,7 +265,7 @@ the Python package's `serve_decider(fn)` is the symmetric pre-built loop (the he
 decision function; the adapter owns readline/parse/answer-envelope/flush). The driving agent arms ONE
 Monitor on `gates --follow` (binary-verified: a Monitor stdout line wakes the persistent session via a
 `task-notification`). The dialog ~6 s auto-cancel is relaxed to ∞ under an external/LLM/prompt terminal
-(`COWORK_HARNESS_DIALOG_TIMEOUT_MS` overrides).
+(`COWORK_HARNESS_DIALOG_TIMEOUT_MS=inf`/`-1` overrides; a FINITE value under an external/LLM/prompt answerer is refused as a usage error, since those answerers are authoritative).
 
 ### 4.3 File provision & session persistence (local fidelity)
 

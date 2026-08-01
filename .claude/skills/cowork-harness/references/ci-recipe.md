@@ -97,12 +97,22 @@ The split is not just about tokens — it decides **where each lane can run**:
 
 - **`replay` / `verify-cassettes` (token-free, agent-free).** Replays a recorded cassette
   (`events.jsonl` + `control-out.jsonl`) and lints the committed cassettes. **No model tokens, no
-  Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions
-  only (`transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`,
-  `no_skill_triggered`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict
-  modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
+  Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions —
+  `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
+  `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
+  `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
-  `gate_answers_delivered` **if** the cassette has `controlOut`). Filesystem/egress assertions are
+  `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
+  (`file_exists` / `user_visible_artifact` / `artifact_json`) **if** it carries an artifact manifest.
+  **That list is illustrative, not the authoritative set** — more keys are replay-checkable than fit a
+  paragraph, and a hand-typed enumeration is exactly what goes stale. For the current set, ask the CLI:
+
+  ```bash
+  cowork-harness assertions --list --output-format json   # every key, with its replay class
+  ```
+
+  Placing a key on this gate from a doc list rather than from `assertions --list` is how a valid
+  replay-lane check ends up left off the PR gate. Filesystem/egress assertions are
   skipped on this token-free lane — loudly: replay emits an `::warning::` annotation whenever it drops
   one (see [docs/cassette.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md)). This is your **always-on PR gate**. With `--output-format json`, read each
   `results[].verdict.{pass,signals}` for **per-cassette** pass/fail and the reason (the top-level `ok`

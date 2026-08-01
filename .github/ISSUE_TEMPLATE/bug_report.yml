@@ -20,7 +20,7 @@ body:
     id: fidelity
     attributes:
       label: Fidelity tier
-      options: [protocol, container, microvm, "n/a"]
+      options: [protocol, container, microvm, hostloop, cowork, "n/a"]
     validations:
       required: true
   - type: input

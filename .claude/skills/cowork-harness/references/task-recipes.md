@@ -48,11 +48,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v10.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v10.json)):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v11.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v11.json)):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version (current: 10) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 11; a `lane: remote` scenario stamps 11, nearly everything else stays 10) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
