@@ -254,7 +254,7 @@ class Skill:
         fidelity: str = "container",
         on_unanswered: str = "fail",
         upload=None,        # str or list → --upload (attach files at mnt/uploads)
-        folder=None,        # str or list → --folder (connect folders at mnt/.projects)
+        folder=None,        # str or list → --folder (connect folders at mnt/<basename>; collision-resolved; older baselines use .projects/<id>)
         session_id: Optional[str] = None,   # pin a stable session (for resume)
         resume: bool = False,               # continue a prior session_id (gated/checkpoint skills)
         decider_cmd: Optional[str] = None,  # answer LIVE questions via a spawned helper (stochastic gates)
@@ -434,10 +434,10 @@ def run_scenario(
     A directory input (multiple scenarios) returns a `BatchResult`; see `Cowork.run_scenario`.
 
         from cowork_harness import run_scenario
-        r = run_scenario("scenarios/cap_table.yaml")  # fidelity/answers live in the YAML
+        r = run_scenario("examples/scenarios/csv-metrics.yaml")  # fidelity/answers live in the YAML
         r.assert_success()
-        assert r.effective_fidelity == "hostloop"   # prove which tier ran (fidelity is the tiebreaker)
-        assert any(a["path"] == "outputs/cap_state.json" for a in r.artifacts)
+        assert r.effective_fidelity == "container"   # prove which tier ran (fidelity is the tiebreaker)
+        assert any(a["path"] == "outputs/metrics.json" for a in r.artifacts)
 
     Fidelity and answers are scenario-authored (the scenario YAML's `fidelity:` / `answers:` fields);
     the `run` command rejects `--fidelity` / `--answer`, so they are not wrapper arguments.

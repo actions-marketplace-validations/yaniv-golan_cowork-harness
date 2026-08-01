@@ -101,6 +101,21 @@ export const PlatformBaseline = z.looseObject({
       promptTemplate: z.string().optional(),
       subagentAppend: z.string().optional(),
       subagentAppendHostLoop: z.string().optional(),
+      // The hook bundle real Cowork installs on the agent `initialize`, keyed by event name, each entry
+      // identifying ONE hook by its matcher plus a short note on what it does. Recorded as a DRIFT
+      // TRIPWIRE, not as an emulation source: the harness serves only `PreToolUse:Task` (see
+      // SERVED_HOOK_EVENTS in src/agent/session.ts for why), so this field's job is to make a future
+      // Desktop release that adds, drops, or re-matchers a hook show up as baseline drift instead of
+      // being discovered by a consumer months later — which is exactly how the gap it records was found.
+      //
+      // `matcher: null` means the hook carries no matcher (production's UserPromptSubmit hook is not
+      // tool-scoped). Optional, so every baseline synced before this field existed stays valid.
+      hooks: z
+        .record(
+          z.string(),
+          z.array(z.object({ matcher: z.string().nullable(), note: z.string().optional(), served: z.boolean().optional() })),
+        )
+        .optional(),
     })
     .partial()
     .optional(),
@@ -599,7 +614,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise",
+      "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise. ALSO suppresses the sibling `delivery_unobservable` WARN on `lane: remote` (where delivery cannot be measured at all because no remote delivery tool is modeled) — on that lane this key means 'I know delivery is unverifiable here and accept it', NOT 'the files were delivered'",
     ),
   replay_protocol_fidelity: z
     .boolean()
@@ -642,9 +657,17 @@ export const Assertion = z.strictObject({
         .optional()
         .describe("how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)"),
       judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
+      include_subagent_text: z
+        .boolean()
+        .optional()
+        .describe(
+          "default false: also send each sub-agent's TEXT turns (RunResult.subagents[].reasoning, kind:'text' only) to the judge. Opt-in because it enlarges the judged document, which can re-grade an existing rubric. Use for a fan-out skill whose real work happens in sub-agents — their text is otherwise invisible to the judge. Sub-agent THINKING is excluded: it arrives empty with redacted:true, so including it would pad the document with blanks",
+        ),
     })
     .optional()
-    .describe("LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*)"),
+    .describe(
+      "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*). The judged document is finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — no tool_use/tool_result, and no sub-agent text (even fork-scoped) unless include_subagent_text is set. A rubric claim about whether a TOOL was called can therefore never grade true; use tool_called/present_files_called/subagent_dispatched for that",
+    ),
 });
 export type Assertion = z.infer<typeof Assertion>;
 
@@ -1205,7 +1228,8 @@ export interface RunResult {
         | "prompt_asset_missing"
         | "scan_unavailable"
         | "ended_with_question"
-        | "undelivered_deliverables";
+        | "undelivered_deliverables"
+        | "delivery_unobservable";
       severity: "fail" | "warn";
       message: string;
     }>;

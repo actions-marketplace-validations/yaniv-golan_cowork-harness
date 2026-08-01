@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.16.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.17.0` (baseline `desktop-1.24012.9`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -131,7 +131,8 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
 1. **Author a suite of Q&A scenarios — one per representative question.** Each installs your skill and
    asserts the answer with a rubric. The judge grades the **union of the agent's final answer, the
    transcript, and any files it wrote**, so a claim about content your skill leads the agent to *write to a
-   file* grades as reliably as one about inlined prose — you don't have to force an inline answer:
+   file* grades as reliably as one about inlined prose — you don't have to force an inline answer.
+   **But "the transcript" is narrower than it sounds — see step 2a before writing a claim about tool use:**
    ```yaml
    session: ./_session.yaml      # plugins.local_plugins + enabled: [<your-skill>@local]
    fidelity: container
@@ -142,6 +143,20 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
            - <one discrete, checkable claim a correct answer MUST make>
            - <another>
    ```
+2a. **NEVER write a claim about whether a TOOL was called — the judge cannot see tool calls.** The
+   "transcript" the judge receives is **top-level assistant prose only**. It excludes every `tool_use`
+   and `tool_result`, and it excludes **all sub-agent text** (including `Skill` and `Agent(fork)`
+   dispatches, whose *tool* calls the harness does attribute to the main agent — the text path does not).
+   Sub-agent text is captured in `RunResult.subagents[].reasoning` but is **not** sent to the judge
+   unless you opt in with `include_subagent_text: true`.
+
+   So a rubric claim like *"the agent used a tool to surface the file, or said none was available"* has a
+   first branch that **can never grade true**, no matter how the skill behaves — the evidence simply
+   isn't in the document. Such a claim looks reasonable, survives drafting, and silently caps your pass
+   rate. Assert tool use with the structural keys instead (`tool_called`, `present_files_called`,
+   `subagent_dispatched`, `hook_blocked`), and reserve `semantic_matches` for what the agent *said* or
+   *wrote*. For a fan-out skill whose real work happens in sub-agents, add `include_subagent_text: true`.
+
 2. **Write DISCRIMINATING claims, and verify each against ground truth — not memory.** A claim that
    contradicts how the tool actually behaves can *never* pass (the correct skill will contradict it), and
    it silently poisons the gate. Check each claim against the code/docs. Decompose into single,

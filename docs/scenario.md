@@ -405,7 +405,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `path_denied: {tool?, path_matches?, source?, agent_scope?}` | **`fidelity: hostloop` only** — a path denial matching **all** given matchers was recorded (`tool` glob, `path_matches` regex, `source` ∈ pretooluse/can_use_tool/permission_denied, `agent_scope` ∈ main/subagent/any — subagent means the binary's `agent_id` attribution is present); decision-level — needs `controlOut` on replay; any other tier **FAILS** ("cannot verify") |
 | `no_path_denied: true` | **`fidelity: hostloop` only** — NO path denial was recorded at all (the channel is already path-scoped, unlike `no_hook_blocked`'s indiscriminate reject); decision-level — needs `controlOut` on replay; any other tier **FAILS** ("cannot verify"); **only `true` is valid** |
 | `max_peak_rss_bytes: <N>` | peak sampled RSS of the agent sandbox ≤ N bytes — **live lane only** (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS |
-| `semantic_matches: {rubric, min_pass?, judge_model?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the agent's final message, the transcript, and any files it authored — so a claim about written-file content grades like one about inlined prose; passes iff ≥ `min_pass` claims pass (default: all) — **live lane only** (an LLM judge call); skipped-loud on replay. Authored-file evidence is captured on every live sandbox tier including **microvm** (its session tree is snapshotted from the VM into the run dir) — but can be **incomplete** on any of them (a file dropped at the capture-size cap, or unreadable at read-back), and the incomplete case fails **evidence unavailable** rather than trusting a judge grade against a partial document. `judge_model` pins the grading model (flag/env precedence: per-assertion `judge_model` > `COWORK_HARNESS_JUDGE_MODEL` env > the harness default, `claude-opus-4-8`) — pin it for a reproducible before/after comparison. |
+| `semantic_matches: {rubric, min_pass?, judge_model?, include_subagent_text?}` | a pinned LLM judge grades each fixed `rubric` claim against the run's answer — the agent's final message, the transcript, and any files it authored — so a claim about written-file content grades like one about inlined prose. **What "the transcript" contains, exactly:** top-level `assistant_text` only. It **excludes every `tool_use`/`tool_result`**, and **excludes all sub-agent-originated text** (including fork-scoped `Skill`/`Agent(fork)` dispatches, which the tool-attribution path *does* treat as main-agent flow — the text path does not). ⚠️ **A rubric claim about whether a tool was called is therefore unassertable — that branch can never grade true regardless of behaviour.** Use the structural keys (`tool_called`, `present_files_called`, `subagent_dispatched`, `hook_blocked`) for tool claims. Sub-agent text lives in `RunResult.subagents[].reasoning` and reaches the judge only with `include_subagent_text: true` (opt-in; `kind:"text"` turns only, since sub-agent *thinking* arrives empty+redacted — see [subagents.md](./subagents.md)). Passes iff ≥ `min_pass` claims pass (default: all) — **live lane only** (an LLM judge call); skipped-loud on replay. Authored-file evidence is captured on every live sandbox tier including **microvm** (its session tree is snapshotted from the VM into the run dir) — but can be **incomplete** on any of them (a file dropped at the capture-size cap, or unreadable at read-back), and the incomplete case fails **evidence unavailable** rather than trusting a judge grade against a partial document. `judge_model` pins the grading model (flag/env precedence: per-assertion `judge_model` > `COWORK_HARNESS_JUDGE_MODEL` env > the harness default, `claude-opus-4-8`) — pin it for a reproducible before/after comparison. |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1 (this is a decision-load budget, not a per-tool-call count); `trace --view questions`'s footer total is computed the same way, so it always matches what this key compares against |
 | `gate_answers_delivered: true` | every answered AskUserQuestion gate's answer actually reached the model — requires a positive, observed `tool_result` (an **unobserved** delivery fails too, not only an errored one — no silent false-green); **zero gates fired passes vacuously** (gate firing is model-dependent) — pair with `gate_answer_count_min` to also require a gate |
@@ -415,7 +415,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. On `replay` the modifier is a no-op pass — there's no live tier to probe, so it neither suppresses nor triggers anything there. |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
-| `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap |
+| `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap. Also suppresses the sibling `delivery_unobservable` WARN on `lane: remote` (where delivery can't be measured at all — no remote delivery tool is modeled); on that lane the key means "I know delivery is unverifiable here and accept it", **not** "the files were delivered" |
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -472,7 +472,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only six codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only seven codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -503,9 +503,18 @@ pass/fail):
   evidence cannot answer the question** — no workspace walk (`workspaceFiles` absent), or a tier that runs
   no scratchpad walk, absent delivery telemetry, or a resumed turn (the scratchpad still holds files
   delivered on an earlier turn, since `present_files` copies rather than moves) — because "cannot tell"
-  must never read as "clean". Fix by writing deliverables under `outputs/` (or a connected folder), or
-  delivering them explicitly; opt out with `allow_undelivered_deliverables: true` when the leftovers are
+  must never read as "clean". **The fix is lane-dependent:** on `lane: local`, write deliverables under
+  `outputs/` (or a connected folder), or deliver them explicitly. **On `lane: remote`, moving a file
+  under `outputs/` does NOT clear this signal** — nothing is delivered by location there, so only an
+  explicit delivery counts. Opt out with `allow_undelivered_deliverables: true` when the leftovers are
   intentional.
+- `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
+  be assessed at all, because the harness serves no delivery tool on that lane (see
+  [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion
+  to `undelivered_deliverables`: rather than reporting every remote file as undelivered (which the
+  evidence cannot support) or staying silent (which would read as clean), the run says the question was
+  unanswerable. It is mutually exclusive with `undelivered_deliverables` by construction, and stays quiet
+  on a run that produced nothing to deliver.
 
 See the skill reference [`scenario-schema.md`](../.claude/skills/cowork-harness/references/scenario-schema.md) for the full signal list.
 
@@ -843,6 +852,17 @@ cowork-harness run examples/scenarios/                    # every *.yaml in the 
 Exit code is non-zero if any assertion fails or the run errors — CI-ready. (In your own skill repo
 you'd keep these at the root, e.g. `run scenarios/`; the harness ships them under `examples/`.)
 
+`run` takes exactly one `<scenario.yaml | dir/>` plus **common flags only** — it loudly rejects `--fidelity`
+(the tier comes from the scenario's own `fidelity:` field, not a flag), `--answer`/`--answer-policy` (answers
+are scripted in the YAML's `answers:` block instead), and any other flag not documented on this page, with
+`unexpected argument(s): …`. Two flags `run` *does* accept beyond the common set:
+
+- `--decider-model <id>` — overrides the answering model for `on_unanswered: llm` scenarios (flag >
+  `COWORK_HARNESS_DECIDER_MODEL` env > Sonnet default); a no-op for scenarios that don't use the model
+  terminal.
+- `--ablate-skill` — negative control: re-runs the same prompt with the skill(s)-under-test removed, to
+  check whether the agent "succeeds" even without them.
+
 Already have a run you like the shape of? `cowork-harness scaffold <run-id | run-dir>` turns a **kept**
 run (`--keep`, or a `--session-id` run) into a starter scenario YAML — auto-filled from what it observed
 (gates→answers, artifacts→file_exists) — instead of copying an existing example by hand and editing it to
@@ -980,7 +1000,9 @@ It reconstructs the assert context (transcript, tool calls, egress, artifacts, q
 persisted `result.json` + sidecars and uses the **same verdict path as a live record**. Two limits: it needs a
 **kept** run dir (`--keep`, or a `--session-id` run), and filesystem assertions (`file_exists` /
 `user_visible_artifact` / `artifact_json`) need the run's work dir still on disk — if it has been torn down,
-`verify-run` refuses rather than reporting a false failure.
+`verify-run` refuses rather than reporting a false failure. (`--keep` is a `skill`-only flag; a plain
+`cowork-harness run` already qualifies without it — `run` always keeps its runs under the runs root, so
+`verify-run` can point straight at one.)
 
 **Answer-coverage (when the scenario declares `answers:`).** The check is **gate-centric**: verify-run
 confirms that **every gate the run actually fired** (parsed from the kept run's `events.jsonl`, which retains
@@ -1044,7 +1066,7 @@ exploratory loop.
 
 ### Shipped examples to read
 
-The repo ships runnable scenarios you can copy from, under [`examples/`](../examples/) — each pairs with an `examples/sessions/*.yaml` and, for the skills, a folder under `examples/skills/`. (The harness's own fidelity self-tests live separately in `e2e/`.)
+The repo ships runnable scenarios you can copy from, under [`examples/`](../examples/) — each pairs with an `examples/sessions/*.yaml` and, for the skills, a folder under `examples/skills/`. (The harness's own fidelity self-tests live separately in `e2e/`.) A few to start with:
 
 | Scenario | Shows |
 |---|---|
@@ -1052,6 +1074,10 @@ The repo ships runnable scenarios you can copy from, under [`examples/`](../exam
 | `examples/scenarios/csv-metrics.yaml` | a non-trivial skill running a **bundled producer** end-to-end, writing a structured `outputs/metrics.json` + a `summary.md` (paired with `python/test_csv_metrics_lane.py` for a JSON-content predicate) |
 | `examples/scenarios/csv-fx-normalize.yaml` | **graceful degradation** under default-deny egress — the skill's real network step is blocked, so `egress_denied` is backed by genuine behavior and the skill falls back instead of crashing |
 | `examples/scenarios/skill-loads.yaml` | an acceptance check that a local skill loads and the python toolchain is present |
+
+This is illustrative, not the full set — [`examples/README.md`](../examples/README.md) is the canonical,
+complete inventory (it also covers the `hostloop` and trigger-accuracy-sweep examples); check there first
+so this table doesn't need to stay in sync with it.
 
 ## The `microvm` tier — `vm init` prerequisites & troubleshooting
 

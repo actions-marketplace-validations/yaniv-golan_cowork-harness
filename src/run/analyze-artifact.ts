@@ -238,7 +238,7 @@ function expandSourceGlob(pattern: string): { files: string[]; failures: Analysi
 }
 
 /** Resolve ONE target — an individual file, a standalone skill dir, a plugin root, a nested-plugin skill
- *  dir, or a `*`-bearing glob — to the union of `.html/.htm/.js/.mjs/.ts/.jsx/.tsx/.py` SOURCE files in
+ *  dir, or a `*`-bearing glob — to the union of `.html/.htm/.js/.mjs/.py` SOURCE files in
  *  scope, per §B2's source-collection contract. This is this module's OWN collection primitive — it does
  *  NOT reuse `analyze-skill.ts`'s `resolveSkillTarget` (that walker is markdown-only and deliberately
  *  never reaches `scripts/*.py`); it reuses only the SHAPE of the sibling-exclusion boundary

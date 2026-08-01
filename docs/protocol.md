@@ -160,3 +160,12 @@ least one vector.
   2.1.202 → 2.1.205). The `v1` control-protocol facts are expected unchanged — the native 2.1.205
   binary already passed the 2026-07-11 `hostloop` live lane — but the 2.1.205 in-VM ELF has had no
   dedicated protocol pass; the 2026-07-11 verification stays scoped to 1.20186.0 (not restamped).
+- **2026-08-01** — baseline set extended through `desktop-1.24012.9`, covering six baselines shipped
+  since the entry above (`1.20186.9`, `1.21459.0`, `1.22209.3`, `1.24012.0`, `1.24012.1`, `1.24012.9`),
+  two of which moved the staged agent ELF to `2.1.219`. Each was verified the cheaper way described in
+  DESIGN.md's "Scope of that claim" note — `sync` reporting no unknown deltas, asar analysis, and a full
+  local test-suite pass — **not** by re-running the live `protocol`/`container`/`hostloop` tiers. No
+  additive control-protocol discovery surfaced by that verification method across these six bumps; this
+  entry records that inheritance explicitly rather than leaving the gap ambiguous between "nothing
+  additive was observed" and "nobody updated this file." The last **live** end-to-end control-protocol
+  pass remains `2026-07-11 / desktop-1.20186.0` (see DESIGN.md).

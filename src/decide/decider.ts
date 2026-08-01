@@ -268,14 +268,25 @@ export class FailDecider implements Decider {
         // Slice the raw text FIRST, then escape — escaping first and slicing at a fixed index can sever an
         // escape pair (a special char's `\` lands at index 39, the char drops) leaving a dangling trailing
         // `\` that makes the suggested `--answer` regex uncompilable. Slicing the source makes that impossible.
-        return `  • "${text}"  options: ${opts}\n    add: --answer "${escapeRx(text.slice(0, 40))}=<choice>"`;
+        //
+        // COMMAND-NEUTRAL by construction. This decider is shared by `skill` (which takes `--answer`) and
+        // `run`/`record` (which REJECT it — `run --answer` exits "unexpected argument(s)"), and it cannot
+        // tell them apart: `RunContext` carries no command, so naming one mechanism unconditionally means
+        // handing `run` users a flag that errors. Both spellings are offered, each labelled with where it
+        // works, so the hint is correct on every command without the decider needing to know which it is on.
+        const rx = escapeRx(text.slice(0, 40));
+        return (
+          `  • "${text}"  options: ${opts}\n` +
+          `    in a scenario's answers: - when_question: "${rx}"  ->  choose: "<choice>"\n` +
+          `    on \`skill\`:              --answer "${rx}=<choice>"`
+        );
       });
-      // --answer is the primary fix (deterministic, reproducible); the tip below is a secondary escape valve
-      // for the case --answer can't solve — gate wording that drifts run-to-run, where a regex chases a
-      // moving target. Deliberately says "in the scenario YAML": `--on-unanswered llm` is REJECTED on the
-      // CLI (kept in the --decider-* family instead), so a bare mention would point at a spelling that fails.
-      // Appended into `lines` (not tacked onto message alone) so it reaches both `.message` and `.hint` —
-      // the CLI prints `.hint`, not `.message`, on this path.
+      // A scripted answer is the primary fix (deterministic, reproducible); the tip below is a secondary
+      // escape valve for what scripting can't solve — gate wording that drifts run-to-run, where a regex
+      // chases a moving target. Deliberately says "in the scenario YAML": `--on-unanswered llm` is REJECTED
+      // on the CLI (kept in the --decider-* family instead), so a bare mention would point at a spelling
+      // that fails. Appended into `lines` (not tacked onto message alone) so it reaches both `.message` and
+      // `.hint` — the CLI prints `.hint`, not `.message`, on this path.
       const tip =
         "(if the gate's wording varies run-to-run, `on_unanswered: llm` in the scenario YAML answers it dynamically — non-deterministic, one model call per gate)";
       const body = `${lines.join("\n")}\n${tip}`;

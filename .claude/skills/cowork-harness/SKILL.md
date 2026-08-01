@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.16.0
-  tracks-harness: cowork-harness 1.16.0 (baseline desktop-1.24012.9)
+  version: 1.17.0
+  tracks-harness: cowork-harness 1.17.0 (baseline desktop-1.24012.9)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.16.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.17.0` (baseline
 > `desktop-1.24012.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.16.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.16.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.16.0"`. **Pin `@>=1.16.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.17.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.17.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.17.0"`. **Pin `@>=1.17.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -197,7 +197,7 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   `egress_*`, `file_exists`, `user_visible_artifact`, `result`) are robust. Free-text content is
   not: match prose with `transcript_matches` / `transcript_contains` (stable lexical markers only —
   not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
-  `artifact_json` (or the pytest lane for complex predicates), not via a transcript substring.
+  `artifact_json` (or the [pytest lane](https://github.com/yaniv-golan/cowork-harness/blob/main/python/README.md) for complex predicates), not via a transcript substring.
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
   **content keys** evaluate; filesystem / egress keys are skipped (live-only) — loudly, via an
   `::warning::` annotation, not a silent no-op. A key
@@ -430,9 +430,17 @@ Recognize these before "fixing" a non-bug:
   only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
   **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
   scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
-  Fix by writing deliverables under `outputs/` or a connected folder, or delivering them explicitly; assert
+  **The fix is lane-dependent.** On `lane: local`, write deliverables under `outputs/` or a connected
+  folder, or deliver them explicitly. **On `lane: remote`, moving a file under `outputs/` does NOT help** —
+  nothing is delivered by location there, so only an explicit delivery counts. Assert
   **`allow_undelivered_deliverables: true`** when the leftovers are intentional (intermediates, caches,
   downloaded inputs) rather than a delivery gap.
+- **`delivery_unobservable`** (`WARN`, `lane: remote` only) — the run produced file(s) but the harness
+  serves **no delivery tool on that lane**, so whether they reached the user is unanswerable. This is the
+  honest cannot-verify companion to `undelivered_deliverables`: reporting every remote file as undelivered
+  would claim more than the evidence supports, and staying silent would read as clean. Mutually exclusive
+  with `undelivered_deliverables`, and quiet on a run that produced nothing to deliver. Not a skill defect —
+  a harness coverage gap (see the *File delivery* section of fidelity-gaps).
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored

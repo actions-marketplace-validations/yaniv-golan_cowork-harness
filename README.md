@@ -26,7 +26,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
 >   - **A Claude token** — real per-run cost, runs take minutes; mint one with `claude setup-token` (needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`).
 >   - **A runtime** — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`.
->   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `doctor --tier <t>` to check exactly what a given tier needs.
+>   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `cowork-harness doctor --tier <t>` to check exactly what a given tier needs.
 > - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below.
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
@@ -91,7 +91,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@>=1.16.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@>=1.17.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -101,7 +101,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=1.16.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=1.17.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -126,7 +126,7 @@ claude plugin marketplace add yaniv-golan/cowork-harness
 claude plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.16.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 22). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.17.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 22). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://agentskills.io) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) via [`npx skills`](https://github.com/vercel-labs/skills) (Vercel Labs' CLI implementation of that spec):
 
@@ -141,13 +141,14 @@ npx skills add yaniv-golan/cowork-harness --skill cowork-harness
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
 | Committed replay fixtures (`examples/replays/`) | ✓ | ✓ |
+| `python/` (the `cowork` pytest lane helper package) | ✓ | ✓ |
 | Runnable worked examples on disk (`examples/scenarios/`, `examples/skills/`, `examples/data/`) | ✗ | ✓ |
 
 A global install is enough for CI `lint`, reading the teaching skill, and replaying the committed cassettes.
 To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
-above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=1.16.0"` — see
+above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=1.17.0"` — see
 [above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
 
 ### Prerequisites for anything above `protocol` fidelity
@@ -186,7 +187,7 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
      brew install lima
      cowork-harness vm init   # one-time: provisions the Lima VM image
      ```
-     `doctor --tier microvm` checks for Lima (not Docker) and warns — non-fatally — if `vm init` hasn't run yet (a live run self-provisions on first use, just with extra VM-boot latency).
+     `cowork-harness doctor --tier microvm` checks for Lima (not Docker) and warns — non-fatally — if `vm init` hasn't run yet (a live run self-provisions on first use, just with extra VM-boot latency).
 
 > The `pytest` lane (`python/README.md`) has its own, slightly different prerequisite list (adds `pytest`
 > + package importability) — see there if you're driving tests via `pytest` instead of the CLI directly.
@@ -232,6 +233,8 @@ cowork-harness verify-cassettes examples/replays/   # privacy scan (email/curren
 #    NOTE: examples/scenarios/ ships in the SOURCE CHECKOUT only — the npm package carries
 #    examples/replays/ but not scenarios/. From an install, point this at your own scenarios/.
 cowork-harness lint examples/scenarios/*.yaml
+#    (non-recursive: this glob skips subdirectory scenarios like examples/scenarios/trigger-accuracy-sweep/;
+#    lint that one explicitly if you copy it)
 ```
 
 > **Privacy:** a cassette snapshots the transcript and the `outputs/` JSON bodies, so it's committed PII
@@ -333,7 +336,7 @@ see *what it did*, not just a green; `run` is verdict-first but prints the faili
 cowork-harness skill ~/my-plugin "..." --plugin ~/other-plugin
 ```
 
-**Test a specific local marketplace version** — point at the marketplace dir (the one with `.claude-plugin/marketplace.json`); the harness reads its `marketplace.json` and **mounts** the referenced plugins at the Cowork plugin path (passing `--plugin-dir`) — the marketplace registry is inert in cowork mode, so there is no `claude plugin marketplace add`, clone, or cache:
+**Test a specific local marketplace version** — point at the marketplace dir (the one with `.claude-plugin/marketplace.json`) with `--marketplace`, and name what to load with `--enable name@marketplace`; the harness reads its `marketplace.json` and **mounts** the referenced plugins at the Cowork plugin path — the marketplace registry is inert in cowork mode, so there is no `claude plugin marketplace add`, clone, or cache:
 ```bash
 cowork-harness skill --marketplace ~/my-marketplace --enable my-skill@my-marketplace "Use my-skill"
 ```
@@ -439,7 +442,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 **Flags worth knowing** (the full list is always `<command> --help`):
 - `run`: a decider (`--decider-cmd <helper>`/`--decider-dir <dir>`, or a scenario's `on_unanswered: llm` — a scenario-YAML key, not a CLI flag; `run` rejects `--on-unanswered llm`) can answer unscripted gates; `--repeat N` (2-100) runs each scenario N times and aggregates a variance rollup instead of a single pass/fail (`--min-pass-rate`, `--stop-on-diverge`, `--max-budget-usd` tune the batch verdict/loop — and `--max-budget-usd` applies without `--repeat` too, as a pre-flight refusal from the scenario's cost history); `--matrix <matrix.yaml>` runs ONE scenario across the cross-product of baseline/model/skill_dir axes (worked example: `examples/matrices/csv-metrics-matrix.yaml`; `--max-cells`/`--concurrency` tune the cap/pool — any cell failing, assertion or infra, fails the run); `--compact`/`--demo` trim `run`/`skill` output for shareable screenshots/GIFs; `--label <tag>` (both `run` and `skill`) stamps a generation name for the iterate-across-fixes loop — surfaced in `result.json` (`runLabel`), the run-index row, `inspect`, and `status.json`, alongside the auto-recorded `skillCommit` (git provenance) and the authoritative `fingerprint.skillHash` a harvest step should pair critiques by.
 - `record`/`replay`: `replay --explain` prints the evidence trail behind every passing assert (the flagship false-green tool — text mode; `--output-format json` already carries `assertions[].evidence`); `--decider-llm`/`--decider-dir` answer gates live during recording; `record <dir/>` is itself a first-class batch input (recording a whole directory of scenarios), and `--rerecord-stale` re-records everything stale in one pass — `--concurrency <N>` bounds the parallelism for either; `--assert-from <scenario.yaml>`/`--reassert` re-check the on-disk `assert:` instead of the frozen one; `--strict`/`--fail-on-skill-drift` control staleness handling on replay; `--no-redact` skips record-time redaction; `--allow-failing` relaxes the post-run verdict gate; `--dry-run` resolves without recording — it runs the REAL loader, so it is also the token-free way to check whether a scenario still loads (exit 2 on a schema error for a single file; a directory reports each broken file and exits 1); `--max-budget-usd <x>` refuses before spending when prior-run history says this scenario — or, on a batch, the whole batch — has cost more than x (at `--concurrency 1` a running total also stops the batch once x is reached; above that it is a pre-flight estimate only, and says so); `--force` overrides the refusal to overwrite a default-path cassette that belongs to a *different* scenario (a slug collision) — not a general overwrite-anything flag; `replay --best-effort-future-cassette` lets a cassette from a newer format version replay anyway (warn instead of the default hard error).
-- `verify-cassettes`: privacy scan (email/currency/domain/path/machine-inventory) + staleness — exit 1 when verification RAN and found a real problem (a finding, a genuine drift, or scenario-prompt drift), exit 3 when it could NOT complete (an unverifiable-class staleness finding, a too-new cassette format, or a read error); whole-token allows via `--allow <regex>` (a pattern) / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-machine-inventory` / `--allow-patterns-file <path>` (a **file** of patterns, one regex per line); `--skip-privacy` or `--skip-staleness` runs only part of the gate; a diverged scenario `prompt` vs. the cassette's frozen prompt is also a hard fail (its own `scenarioDrift` bucket), opt out with `--skip-scenario-drift`; `--margins` adds a per-cassette recorded-vs-budget report for count-bound assertions (a single-sample estimate — diagnostic only, never changes the gate verdict).
+- `verify-cassettes`: privacy scan (email/currency/domain/path/machine-inventory) + staleness — exit 1 when verification RAN and found a real problem (a finding, a genuine drift, or scenario-prompt drift), exit 3 when it could NOT complete (an unverifiable-class staleness finding, a too-new cassette format, or a read error); whole-token allows via `--allow <regex>` (a pattern) / class-scoped `--allow-domain` / `--allow-email` / `--allow-path` / `--allow-machine-inventory` / `--allow-patterns-file <path>` (a **file** of patterns, one regex per line); `--skip-privacy` or `--skip-staleness` runs only part of the gate; a diverged scenario `prompt` vs. the cassette's frozen prompt is also a hard fail (its own `scenarioDrift` bucket), opt out with `--skip-scenario-drift`; `--margins` adds a per-cassette recorded-vs-budget report for count-bound assertions (a single-sample estimate — diagnostic only, never changes the gate verdict); `--allow-empty` makes an **existing but cassette-free directory** exit 0 instead of the default loud exit 2 — for a repo that deliberately commits no cassettes (a *missing* path still fails, so the flag can never green a typo'd path).
 - `stats`: reads `<runsRoot>/index.jsonl`, written automatically at every result; `--since`/`--baseline`/`--branch` filter; `--skill-hash <prefix>`/`--label <tag>` narrow to one generation of the iterate-across-fixes loop and `--group-by scenario|skill-hash|label|fidelity` splits per generation — or per effective fidelity tier — instead of aggregating across them (a window spanning >1 generation or >1 tier warns; under `skill-hash`/`label` grouping, rows lacking the field are excluded from grouping and counted, never bucketed blank — the `fidelity` key is total, so nothing is ever excluded under that grouping); `--runs` lists the individual runs behind each summary with their `skillHash`/`runLabel` (each `runs[]` entry also carries `fidelity` — the tier that run actually executed at, `effectiveFidelity ?? fidelity` — in the `--output-format json` envelope only; the text listing is unchanged); `--last <n>` windows per-group; `--reindex` rebuilds the index from the physical run-dir tree (the migration path for pre-index runs), reconstructing each critique's cost roll-up from its run dir along the way.
 - `diff`: `--changelog` renders known-field prose for a baseline diff; `--view tools|transcript|artifacts|meta` narrows a run/cassette diff to one section; normalization (default on) masks per-run noise (ids/timestamps/session markers/host paths) so two runs of the same scenario diff as identical — `--no-normalize` compares raw values.
 
@@ -640,7 +643,7 @@ It is informational — it never changes the verdict. The block is a live/`parti
 - **AgentSession** speaks the Agent SDK control protocol over stream-json, emitting a typed event
   stream. When the agent emits a decision request (a tool permission, an `AskUserQuestion`, or a
   `request_user_dialog`/`elicitation`), the **Decider** resolves it — scripted `answers:` first, then
-  the cowork/strict permission default, then the `on_unanswered` policy (fail/prompt/first) — and
+  the cowork/strict permission default, then the `on_unanswered` policy (fail/prompt/first/llm) — and
   **Run** drives the turn loop and builds the `RunRecord` (decisions, the sub-agent dispatch tree,
   egress, cost).
 - **Egress proxy** (L1/L2) enforces the synced allowlist; default-deny. Domains come from the baseline, plus per-scenario `extra_allow`.
@@ -702,7 +705,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=1.16.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). See [`action.yml`](./action.yml) for the full input reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=1.17.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](./action.yml) for the full input/output reference.
 
 The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs an **eight-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 
@@ -737,7 +740,7 @@ Unit tests cover the scripted-answer logic, the egress allowlist matcher, the se
 
 ### Reproducibility knobs
 
-Most runs need **none** of these — the defaults are correct. They're grouped by theme below (container/runtime, networking/loop, strictness, staleness, secret-scrubbing, L2 microVM, `skill`/`chat` defaults); reach for one only when a default doesn't fit. Every var name is `COWORK_*` / `CLAUDE_*`, so a search across this section finds it fast.
+Most runs need **none** of these — the defaults are correct. They're grouped by theme below (container/runtime, networking/loop, strictness, staleness, secret-scrubbing, L2 microVM, `skill`/`chat` defaults); reach for one only when a default doesn't fit. Every var name is `COWORK_*` / `CLAUDE_*` — except `PYTHON` (see "Advanced / internal escape hatches" below) — so a search across this section finds nearly all of it fast.
 
 - `COWORK_LOCKDOWN=off` — relax container hardening for debugging (default `on`). With it `on`, an L2 microVM whose guest egress firewall fails to apply **aborts loudly** rather than running un-isolated.
 - `COWORK_CONTAINER_RUNTIME=podman` — use Podman instead of Docker.

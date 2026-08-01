@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
 import { AnswerRule, Assertion, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
 const PY = process.env.PYTHON ?? "python3";
@@ -146,6 +147,28 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
   it.skipIf(!HAVE_PY)("scenario.py _CLASSIFIED_KEYS equals the generated assert keys", () => {
     const gen = (JSON.parse(buildAssertionKeys()).keys as string[]).slice().sort();
     expect(pyKeySet("_CLASSIFIED_KEYS")).toEqual(gen);
+  });
+
+  // Hook events, same single-source discipline as the key lists above. The served set is the one that
+  // MUST NOT drift silently: it decides which declared hook the linter warns about, so a stale copy would
+  // keep warning about an event the harness had since started serving (or, worse, stop warning about one
+  // it dropped). Both directions are covered — generated-vs-source and python-fallback-vs-generated.
+  it("servedHookEvents matches SERVED_HOOK_EVENTS and is a subset of KNOWN_HOOK_EVENTS", () => {
+    const gen = JSON.parse(buildAssertionKeys()).servedHookEvents as string[];
+    expect([...gen].sort()).toEqual([...SERVED_HOOK_EVENTS].sort());
+    expect(KNOWN_HOOK_EVENTS).toEqual(expect.arrayContaining(gen));
+  });
+  it("knownHookEvents matches KNOWN_HOOK_EVENTS", () => {
+    const gen = JSON.parse(buildAssertionKeys()).knownHookEvents as string[];
+    expect([...gen].sort()).toEqual([...KNOWN_HOOK_EVENTS].sort());
+  });
+  it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_SERVED_HOOK_EVENTS equals the generated servedHookEvents", () => {
+    const gen = (JSON.parse(buildAssertionKeys()).servedHookEvents as string[]).slice().sort();
+    expect(pyKeySet("_FALLBACK_SERVED_HOOK_EVENTS")).toEqual(gen);
+  });
+  it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_KNOWN_HOOK_EVENTS equals the generated knownHookEvents", () => {
+    const gen = (JSON.parse(buildAssertionKeys()).knownHookEvents as string[]).slice().sort();
+    expect(pyKeySet("_FALLBACK_KNOWN_HOOK_EVENTS")).toEqual(gen);
   });
 });
 

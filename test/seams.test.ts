@@ -107,6 +107,27 @@ describe("Decider — fallbacks + chain", () => {
   it("FirstOptionDecider throws on a gate with no options (cannot fabricate one)", async () => {
     await expect(new FirstOptionDecider().decide(ask("Q", []), ctx)).rejects.toBeInstanceOf(UnansweredError);
   });
+  // The `fail` hint is shared by `skill` (which takes `--answer`) and `run`/`record` (which REJECT it —
+  // `run --answer` exits "unexpected argument(s)"), and it cannot tell them apart: `RunContext` carries no
+  // command. It used to name `--answer` unconditionally, so the CI-default policy on the CI-default command
+  // told users to add a flag that errors. Both spellings are now offered, each labelled with where it works.
+  it("the `fail` hint names the run-safe `answers:` spelling, not just the skill-only `--answer` flag", async () => {
+    const err: UnansweredError = await new FailDecider()
+      .decide(ask("Pick a format", ["Markdown", "HTML"]), ctx)
+      .then(() => {
+        throw new Error("FailDecider resolved instead of throwing");
+      })
+      .catch((e: unknown) => e as UnansweredError);
+    // the hint (not just the message) is what the CLI prints on this path
+    for (const text of [err.message, (err as unknown as { hint: string }).hint]) {
+      expect(text).toContain('when_question: "Pick a format"');
+      expect(text).toContain('choose: "<choice>"');
+      // --answer is still offered, but explicitly scoped to the command that accepts it
+      expect(text).toMatch(/on `skill`:\s+--answer "Pick a format=<choice>"/);
+      // the gate's options are still echoed so the user can see what was on offer
+      expect(text).toContain("Markdown | HTML");
+    }
+  });
   it("PromptDecider routes gate prompts through the INJECTED asker (one shared stdin interface)", async () => {
     const orig = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });

@@ -90,6 +90,7 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
 - Open PRs against `main`. CI runs an eight-stage pipeline (`build`, `test`, `action-self-test`, `python`, `boundary`, `scenarios`, `parity-drift`, `floor` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
+- **Which stages actually block a merge is narrower than the pipeline.** The branch ruleset requires status *contexts*, not jobs, and the `ci-green` aggregator that carries the `typecheck · test · build` context declares `needs: [build, test, floor]` — so `action-self-test`, `python`, `boundary`, `scenarios`, and `parity-drift` run and report but do **not** gate. Read a red one as a real signal anyway: `boundary` in particular is the secrets-free proof that the sandbox enforces Cowork's limits. `ci.yml`'s comment above `ci-green` is the authority on the current wiring.
 - Describe *what changed and why*; link issues.
 
 ## Reporting issues
