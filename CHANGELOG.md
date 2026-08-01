@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-08-01
+
 Reported by two consumer skills against published 1.16.0, plus a 54-item documentation review against the
 source (32 findings valid). If you relied on the `semantic_matches` or `undelivered_deliverables`
 documentation, re-check against the corrected text below.
