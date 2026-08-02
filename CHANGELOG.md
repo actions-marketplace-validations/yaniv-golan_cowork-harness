@@ -8,6 +8,32 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`record` reports what changed vs the cassette it replaced.** Re-recording is the only moment where
+  "did my edit change what the agent does?" is observable — replay re-checks a frozen transcript and is
+  structurally blind to it — and until now that answer was discarded: you paid for a re-record and got an
+  opaque new file. An overwrite now prints e.g. `gates 2 → 0, tool calls 5 → 4`, or says explicitly that
+  behaviour is unchanged. Gate count leads because a skill that silently stops asking is the regression
+  this exists to surface. First records print nothing (no prior to compare), and an unreadable prior is
+  simply no delta — never a failed record.
+- **`replay --mutate` measures whether your assertions actually test anything.** It perturbs each recorded
+  JSON artifact value (`total: 42 → 43`, `"USD" → "__MUTATED__"`), re-runs the same assertions against the
+  same evidence, and reports every perturbation that **nothing caught** — each one a field your skill
+  produces that no assertion verifies. Cheap: replay has already materialized the artifacts and
+  `evaluate()` is pure, so there is no model call and no sandbox. **Reporting only** — it never changes the
+  verdict or exit code, because an unguarded field is a gap in the scenario rather than a failure of the
+  run. A corpus of 21 cassettes was found to contain seven scenarios asserting nothing meaningful, and only
+  because someone wrote a throwaway script to look.
+- **Gate option labels are now fingerprinted against the skill's own prose.** At record time the harness
+  stamps which emitted `AskUserQuestion` labels appear **verbatim** in the skill source, per file, **in the
+  order they appear in that file**; staleness re-checks them. This catches two things `skillHash` cannot:
+  a catalog **reorder** (every label still exists, so an existence check passes by construction — eight
+  cassettes once replayed green through exactly that), and drift in prose that is **delivered to the agent
+  but excluded from the hash** via `.cowork-hashignore` / session `staleness.hash_ignore`, which is outside
+  `skillHash` permanently. Only verbatim-sourced labels are stamped — a model-paraphrased label was never
+  in the prose, so it cannot regress and is never checked. Reported in the existing `skill` drift class, so
+  it rides `--fail-on-skill-drift` / `--strict` rather than adding a severity nobody configured; cassettes
+  recorded before the stamp existed skip the check.
+
 - **`lint` now flags a `gate_answers_delivered` with no presence companion** (`vacuous-gate-assert`, WARN).
   That key checks every gate that *fired* was delivered non-error — and **zero gates fired passes
   vacuously**, so the assertion that looks like it guards "the skill still asks its questions" stays green

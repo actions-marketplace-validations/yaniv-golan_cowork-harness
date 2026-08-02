@@ -827,6 +827,16 @@ export interface Fingerprint {
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
+  // v11+: gate option labels this run emitted that were found VERBATIM in the skill's own prose, recorded
+  // per source file IN THE ORDER THEY APPEAR IN THAT FILE. Two things it catches that `skillHash` cannot:
+  //   1. a catalog REORDER (all labels still exist, so an existence check passes by construction — the
+  //      order stored here is what makes it detectable);
+  //   2. a change to prose that is DELIVERED to the agent but excluded from the hash (`.cowork-hashignore`
+  //      / session `staleness.hash_ignore`) — outside skillHash forever, so nothing else sees it.
+  // Only verbatim-sourced labels are stamped: a model-PARAPHRASED label was never in the prose, so it
+  // cannot regress from absent to absent, and checking it would fire on every run. Absent on cassettes
+  // recorded before this existed, and on runs where no gate fired — both simply skip the check.
+  labelProvenance?: Array<{ file: string; labels: string[] }>;
   // the boundary used for skillHash — "git" (git-tracked set — the DEFAULT unless COWORK_HARNESS_GITSET=0,
   // and every dir is a git work tree) or "raw" (filesystem walk; used when GITSET=0 OR any dir is not a
   // repo). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
