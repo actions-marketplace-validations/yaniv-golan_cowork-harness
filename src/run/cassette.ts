@@ -1916,7 +1916,19 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
   if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken || linksDestroyed) {
     let detail: string;
     if (verdictMismatch) {
-      detail = `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`;
+      // Name WHAT changed, not just that something did. Two diffs, because either can be the cause and
+      // only one is usually non-empty: the failing-assertion set, and the verdict SIGNAL codes.
+      // `computeVerdict` folds in non-assertion signals (result_error / transport_error /
+      // requiresCapabilityUnmet / …), so a verdict can flip with an UNCHANGED failing-assertion set —
+      // printing only the key diff would then read `[] → []` and send the operator to the wrong layer.
+      const bf = failedKeys(basePairs);
+      const rf = failedKeys(redactedPairs);
+      const bs = vb.signals.map((s) => s.code);
+      const rs = vr.signals.map((s) => s.code);
+      detail =
+        `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}; ` +
+        `failing assertions: [${bf.join(", ")}] → [${rf.join(", ")}]; ` +
+        `verdict signals: [${bs.join(", ")}] → [${rs.join(", ")}]`;
     } else if (pairsMismatch) {
       const bf = failedKeys(basePairs);
       const rf = failedKeys(redactedPairs);
