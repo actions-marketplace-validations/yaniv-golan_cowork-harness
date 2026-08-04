@@ -212,14 +212,6 @@ All notable changes to this project are documented here. The format is based on
   0 — so a CI job running `replay` alone does not gate a skill that moved. Both are now stated in the
   mental model and next to the drift flags, with the division of labor between the two commands named.
 
-- **A committed example cassette carried the recording machine's own tool inventory.**
-  `examples/replays/example-multiselect-gate.cassette.json` was recorded at `protocol` tier, which inherits
-  the host environment, and froze that machine's MCP server names and account org into the fixture. It
-  shipped that way. The fixture is now sanitized, and the `host-inventory` finding class above exists so the
-  class of mistake fails the gate rather than reaching a public repo again. No credentials were exposed, so
-  nothing needs rotating. If you vendored or forked the repo at 1.17.0 or earlier, that file in your copy
-  still contains it.
-
 ## [1.17.0] — 2026-08-01
 
 Reported by two consumer skills against published 1.16.0, plus a 54-item documentation review against the
