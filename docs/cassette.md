@@ -786,8 +786,9 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   **What it does NOT cover.** Only the name fields above are checked. The catalogs — `slash_commands[]`,
   `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated: `slash_commands` legitimately
   varies between clean fixtures and descriptions are unbounded free text, so there is no clean predicate,
-  only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **1% of the
-  removed bytes** and the registry command catalog was ~79%. The check would have caught that fixture (18
+  only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **11% of the
+  removed bytes** and the ungated catalogs about **89%** (the registry command catalog alone ~80%);
+  both measured the same way, as whole JSON values. The check would have caught that fixture (18
   foreign server names, plus the account org) — but a host recording with *no* configured MCP servers, a
   plain `account`, and only built-in agents will still pass while carrying the host's full command and skill
   catalogs. Treat it as a backstop against the demonstrated failure, not as proof a cassette is clean.
