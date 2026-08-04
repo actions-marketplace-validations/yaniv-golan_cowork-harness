@@ -2222,3 +2222,26 @@ describe("toDecisionRequest — replay lane surfaces the SDK deny-reason fields 
     expect((ev as { request: { decisionReason?: string } }).request.decisionReason).toBe("Path is outside allowed working directories");
   });
 });
+
+// `no_delete_in_outputs` asserts no delete touched outputs; `allow_outputs_delete` accepts one. Asserting
+// both is a contradiction whose resolution would be arbitrary, so it is rejected at load. The check must
+// live on the SCENARIO (not on Assertion), because the two keys can sit in SEPARATE array entries — which
+// an Assertion-level refinement can never see.
+describe("no_delete_in_outputs / allow_outputs_delete mutual exclusion", () => {
+  it("accepts either key alone", () => {
+    expect(() => Scenario.parse({ prompt: "x", assert: [{ no_delete_in_outputs: true }] })).not.toThrow();
+    expect(() => Scenario.parse({ prompt: "x", assert: [{ allow_outputs_delete: true }] })).not.toThrow();
+  });
+
+  it("rejects both in ONE assertion entry", () => {
+    expect(() => Scenario.parse({ prompt: "x", assert: [{ no_delete_in_outputs: true, allow_outputs_delete: true }] })).toThrow(
+      /mutually exclusive/,
+    );
+  });
+
+  it("rejects both across SEPARATE assertion entries", () => {
+    expect(() => Scenario.parse({ prompt: "x", assert: [{ no_delete_in_outputs: true }, { allow_outputs_delete: true }] })).toThrow(
+      /mutually exclusive/,
+    );
+  });
+});

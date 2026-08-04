@@ -164,6 +164,7 @@ VERDICT_MODIFIER_KEYS = {
     "allow_missing_capability",
     "allow_stall",
     "allow_undelivered_deliverables",
+    "allow_outputs_delete",
 }
 
 # Every key the replay-class logic knows how to handle. `replay_protocol_fidelity` is valid-but-not-authorable

@@ -521,13 +521,16 @@ export const Assertion = z.strictObject({
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
-  // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect). To allow
-  // deletes, OMIT the assertion entirely rather than writing `false`.
+  // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect), so it is
+  // rejected. OMITTING the key does NOT permit deletes either: a detected delete still fails the run via the
+  // `outputs_delete` verdict signal, which fires precisely BECAUSE the key was not authored. Authoring it
+  // makes the failure an explicit assertion instead of a signal. To accept a delete, use
+  // `allow_outputs_delete: true`.
   no_delete_in_outputs: z
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
+      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not mount-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))
@@ -591,6 +594,15 @@ export const Assertion = z.strictObject({
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
+    ),
+  // Mutually exclusive with `no_delete_in_outputs` — asserting "no delete happened" AND "a delete is
+  // fine here" is a contradiction, rejected at parse time on the whole `assert:` array (see
+  // ScenarioObject's superRefine; an Assertion-level check cannot see sibling array entries).
+  allow_outputs_delete: z
+    .literal(true)
+    .optional()
+    .describe(
+      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. WAIVES the harness's post-hoc detection; it does NOT model production's allow_cowork_file_delete approval handshake, so a skill relying on the live EPERM still behaves differently here. Mutually exclusive with no_delete_in_outputs",
     ),
   allow_l0_plugin_divergence: z
     .literal(true)
@@ -685,6 +697,7 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_l0_plugin_divergence",
   "allow_stall",
   "allow_undelivered_deliverables",
+  "allow_outputs_delete",
 ] as const satisfies readonly (keyof Assertion)[];
 
 /** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
@@ -808,7 +821,27 @@ export const ScenarioObject = z.strictObject({
       "required consent for `fidelity: hostloop` with a writable connected folder (mode rw/rwd) — the agent gets real, software-checked-only host filesystem access there, no container sandbox; read-only/folder-less hostloop runs need no opt-in",
     ),
 });
-export const Scenario = ScenarioObject;
+/** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key
+ *  minimum-format map) and it is the schema `gen:schema` emits. Cross-key rules live here instead, on the
+ *  parsed form. Note a refinement is INVISIBLE to `z.toJSONSchema`, so any rule added here must be mirrored
+ *  into the generated JSON Schema by hand (see scripts/gen-schema.ts) or editors/CI validating against the
+ *  published schema will accept what the loader rejects. */
+export const Scenario = ScenarioObject.superRefine((s, ctx) => {
+  // Asserting "no delete happened" AND "a delete is acceptable" is a contradiction, and silently
+  // letting one win would make the scenario's intent unreadable. Must be checked across the WHOLE
+  // `assert:` array — the two keys can sit in separate entries, which an Assertion-level refinement
+  // could never see.
+  const denies = s.assert.some((a) => a.no_delete_in_outputs !== undefined);
+  const allows = s.assert.some((a) => a.allow_outputs_delete === true);
+  if (denies && allows)
+    ctx.addIssue({
+      code: "custom",
+      path: ["assert"],
+      message:
+        "no_delete_in_outputs and allow_outputs_delete are mutually exclusive — the first asserts no delete " +
+        "touched mnt/outputs, the second accepts one. Keep whichever matches the scenario's intent.",
+    });
+});
 export type Scenario = z.infer<typeof ScenarioObject>;
 
 /** Skill/plugin staleness fingerprint, recorded at run time. Stamped into a cassette (staleness tripwire)

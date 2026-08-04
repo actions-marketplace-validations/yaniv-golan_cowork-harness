@@ -194,3 +194,29 @@ describe("execution field (location axis, orthogonal to fidelity)", () => {
     expect([...VERDICT_MODIFIER_KEYS]).not.toContain("execution");
   });
 });
+
+// A zod `.superRefine` has no JSON Schema representation, so `z.toJSONSchema` drops it silently. The
+// loader would then reject a scenario the PUBLISHED schema accepts — an editor or a schema-validating CI
+// step would green a file that cannot run. gen-schema mirrors the rule by hand; this validates the emitted
+// schema with a real validator so a forgotten mirror fails loudly instead of drifting.
+describe("published scenario schema enforces cross-key rules the loader enforces", () => {
+  const compiled = (): ((d: unknown) => boolean) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Ajv = require("ajv");
+    const schema = JSON.parse(buildSchemas()["scenario.schema.json"]);
+    // strict mode on purpose — the same bar test/schema-ajv.test.ts holds the whole schema to.
+    return new Ajv({ strict: true }).compile(schema) as (d: unknown) => boolean;
+  };
+
+  it("accepts either outputs-delete key alone", () => {
+    const v = compiled();
+    expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true }] })).toBe(true);
+    expect(v({ prompt: "x", assert: [{ allow_outputs_delete: true }] })).toBe(true);
+  });
+
+  it("rejects the mutually exclusive pair, in one entry OR across entries", () => {
+    const v = compiled();
+    expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true, allow_outputs_delete: true }] })).toBe(false);
+    expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true }, { allow_outputs_delete: true }] })).toBe(false);
+  });
+});

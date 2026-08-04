@@ -4,6 +4,7 @@
     "all_tasks_completed",
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
+    "allow_outputs_delete",
     "allow_permissive_auto_allow",
     "allow_stall",
     "allow_undelivered_deliverables",
@@ -93,6 +94,7 @@
   "verdictModifierKeys": [
     "allow_l0_plugin_divergence",
     "allow_missing_capability",
+    "allow_outputs_delete",
     "allow_permissive_auto_allow",
     "allow_stall",
     "allow_undelivered_deliverables"
