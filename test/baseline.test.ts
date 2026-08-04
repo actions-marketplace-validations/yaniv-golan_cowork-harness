@@ -22,6 +22,10 @@ import {
   checkMountModeFacts,
   checkWebFetchFacts,
   readMainBundle,
+  readMainBundleFiles,
+  normalizeBundleQuotes,
+  exportLocalOf,
+  resolveNamespaceRef,
   checkSubagentOverrideGate,
   checkCodeTripwires,
   PINNED_GATES,
@@ -1091,7 +1095,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     if (!bundle) return;
     const gates = decodeFcacheGates();
     if (!gates) return; // no live fcache on this machine
-    const { env, flags } = deriveSpawnEnv(bundle, gates);
+    const { env, flags } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
     expect(flags).toEqual([]);
     expect(env).toEqual(golden);
   });
@@ -1100,7 +1104,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   it("structural regression: checkSpawnContractFacts(real asar) is clean", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
-    expect(checkSpawnContractFacts(bundle)).toEqual([]);
+    expect(checkSpawnContractFacts(bundle, readRealBundleFilesOrSkip() ?? undefined)).toEqual([]);
   });
 
   // 12. Baseline lockstep: REQUIRED_SPAWN_KEYS ⊆ keys(latest committed baseline spawn.env).
@@ -1252,11 +1256,24 @@ function readRealBundleOrSkip(): string | null {
   return realBundleMemo;
 }
 
+// Desktop 1.25927.0 split the bundle 101 → 341 chunks and mangled export names, so the cross-chunk
+// resolvers need the per-chunk MAP, not just the joined text. Extraction is expensive, so the map is
+// memoised alongside the joined string from the same extraction.
+let realFilesMemo: Map<string, string> | null | undefined;
+function readRealBundleFilesOrSkip(): Map<string, string> | null {
+  if (realBundleMemo === undefined) realBundleMemo = extractRealBundle();
+  return realFilesMemo ?? null;
+}
+
 function extractRealBundle(): string | null {
   const override = process.env.COWORK_ASAR_BUNDLE;
   if (override) {
     try {
-      return readFileSync(override, "utf8");
+      // Normalize the override the same way the production read does, so a bundle captured from a
+      // backtick-emitting build behaves identically here.
+      const one = normalizeBundleQuotes(readFileSync(override, "utf8"));
+      realFilesMemo = new Map([["index.js", one]]);
+      return one;
     } catch {
       /* fall through to the live-install path */
     }
@@ -1268,7 +1285,8 @@ function extractRealBundle(): string | null {
   try {
     realBundleTmpDir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
     execFileSync("npx", ["--yes", "@electron/asar", "extract", LIVE_ASAR, realBundleTmpDir], { stdio: "ignore" });
-    return readMainBundle(realBundleTmpDir);
+    realFilesMemo = readMainBundleFiles(realBundleTmpDir);
+    return [...realFilesMemo.values()].join("");
   } catch (e) {
     return skipRealBundle(`asar extraction failed: ${(e as Error).message}`);
   }
@@ -1575,5 +1593,147 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       consuming: (s) => s.replace('.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"]', '.SOME_OTHER_SET,"MultiEdit"]'),
     });
     expect(checkPathHookFacts(f).some((x) => /install site/.test(x))).toBe(true);
+  });
+});
+
+// ==========================================================================================
+// Desktop 1.25927.0 changed the BUNDLER, not the product: plain string literals became backtick
+// templates, export names were mangled to 1-2 chars, and the graph split 101 -> 341 chunks. That
+// voided 22 literal anchors at once. These tests pin the two mechanisms that absorb it — quote
+// normalization and scoped cross-chunk export resolution — and, crucially, prove the widened guards
+// STILL FAIL on a real violation rather than having been loosened into rubber stamps.
+// ==========================================================================================
+describe("1.25927.0 bundler change: normalizeBundleQuotes", () => {
+  it("rewrites a substitution-free backtick string to the double-quoted form", () => {
+    expect(normalizeBundleQuotes("settingSources:[`user`],a:`b`")).toBe('settingSources:["user"],a:"b"');
+  });
+
+  it("keeps an interpolated template a template, but normalizes strings INSIDE its ${}", () => {
+    // The CLAUDE_CODE_TAGS shape: the outer template must survive (the value deriver matches on it),
+    // while the nested plain string inside the interpolation has to be normalized.
+    expect(normalizeBundleQuotes("`lam_session_type:${i.sessionType??`chat`}`")).toBe('`lam_session_type:${i.sessionType??"chat"}`');
+  });
+
+  it("does not mis-pair backticks across an interpolated template (the naive-regex defect)", () => {
+    // A naive /`([^`]*)`/g pairs the CLOSING backtick of the template with the OPENING backtick of the
+    // NEXT string, corrupting both. This exact input produced a false "settingSources is gone".
+    expect(normalizeBundleQuotes("`a${x}b`,settingSources:[`user`]")).toBe('`a${x}b`,settingSources:["user"]');
+  });
+
+  it("leaves double-quoted strings, comments and regex literals untouched", () => {
+    const src = 'a="keep",b=/`notastring`/g,c=1;//`nor this`\n';
+    expect(normalizeBundleQuotes(src)).toBe(src);
+  });
+
+  it("does not convert a template containing a double quote (would produce nested quotes)", () => {
+    expect(normalizeBundleQuotes('x=`say "hi"`')).toBe('x=`say "hi"`');
+  });
+
+  it("is idempotent", () => {
+    const once = normalizeBundleQuotes("k:[`a`],t:`p${q}`");
+    expect(normalizeBundleQuotes(once)).toBe(once);
+  });
+
+  it("preserves a multi-line template body verbatim (prompt bodies must not move)", () => {
+    const src = "x=`line1\nline2`";
+    expect(normalizeBundleQuotes(src)).toBe(src);
+  });
+});
+
+describe("1.25927.0 bundler change: exportLocalOf / resolveNamespaceRef", () => {
+  it("resolves the mangled CJS-interop export shape", () => {
+    const chunk = 'var B=["TaskCreate"];Object.defineProperty(exports,"vt",{enumerable:!0,get:function(){return B}});';
+    expect(exportLocalOf(chunk, "vt")).toBe("B");
+  });
+
+  it("resolves the readable arrow export shape", () => {
+    expect(exportLocalOf("x={HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se,z:()=>q}", "HOST_LOOP_PATH_GATED_BUILTIN_TOOLS")).toBe("Se");
+  });
+
+  it("follows a require() binding from the reference chunk to the defining chunk", () => {
+    const defining = 'var V=[];Object.defineProperty(exports,"i",{enumerable:!0,get:function(){return V}});';
+    const site = 'var E=require("./index.chunk-DEF.js");tools:[...E.i]';
+    const files = new Map([
+      ["index.chunk-DEF.js", defining],
+      ["index.chunk-SITE.js", site],
+    ]);
+    const ref = resolveNamespaceRef("E.i", site, files);
+    expect(ref?.local).toBe("V");
+    expect(ref?.chunk).toBe(defining);
+  });
+
+  it("returns null when the namespace is unbound and the export is absent — never a silent wrong hop", () => {
+    // The pre-fix behaviour hopped on a bare 1-2 char name across the joined bundle and captured an
+    // unrelated `f=`; that mis-resolution is what wrongly reported "resolved to null not 31999".
+    expect(resolveNamespaceRef("E.nope", 'var E=require("./missing.js");', new Map())).toBeNull();
+  });
+});
+
+describe("1.25927.0 bundler change: MUTATION — widened guards still fail on real violations", () => {
+  const realFiles = () => readRealBundleFilesOrSkip();
+  const joined = (f: Map<string, string>) => [...f.values()].join("");
+  // Mutate the chunk that DEFINES a fact, keeping the reference site intact, so the assertion is
+  // exercised through the same cross-chunk resolution path production uses.
+  const mutateDefining = (f: Map<string, string>, needle: string, replacement: string): Map<string, string> | null => {
+    const out = new Map(f);
+    for (const [k, v] of f) {
+      if (v.includes(needle)) {
+        out.set(k, v.replace(needle, replacement));
+        return out;
+      }
+    }
+    return null;
+  };
+
+  it("MUTATION: the Task-tools array changes in its defining chunk → S7 flags", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, '["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"]', '["TaskCreate","TaskUpdate"]');
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S7 Task-tools spread/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: maxThinkingTokens const changes in its defining chunk → S4 flags", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, "=31999", "=12345");
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S4 maxThinkingTokens/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the empty-ANTHROPIC_* delete helper removed → S14a flags (the let-widening did not blunt it)", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, '"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"', '"SOMETHING_ELSE"');
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the gated 5-set changes → path-hook install-site spread flags", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, '["Read","Write","Edit","Glob","Grep"]', '["Read","Write"]');
+    expect(m).not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the shared resolver's hard-block text removed → path-hook flags (graph-wide search still binds)", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, "Refusing to resolve non-regular file", "Allowing anything at all");
+    expect(m).not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /resolver hard-block/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: MCP_TOOL_TIMEOUT's inline numeric fallback changes → the derived value follows it", () => {
+    const f = realFiles();
+    if (!f) return;
+    const gates = decodeFcacheGates();
+    if (!gates) return;
+    const m = mutateDefining(f, "mcpToolTimeoutMs??18e4", "mcpToolTimeoutMs??7e4");
+    expect(m).not.toBeNull();
+    const { env } = deriveSpawnEnv(joined(m!), gates, m!);
+    // Proves the literal is genuinely RESOLVED, not hardcoded or waved through by the shape check.
+    expect(env?.MCP_TOOL_TIMEOUT).toBe("70000");
   });
 });

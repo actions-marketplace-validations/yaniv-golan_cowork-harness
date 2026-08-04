@@ -5,7 +5,7 @@
     "W2_OnA": "return{CLAUDE_CODE_ENTRYPOINT ... .sessionEnvVars()} — the base-env helper",
     "W3_Zrn": "return{DISABLE_AUTOUPDATER:\"1\" ...} — the shared-env helper spread by OnA",
     "gates_live": "66187241 off, 714014285 ON(force), 434204418 off, 1936081873 ON, 1129419822 dark, 451382573 dark, 4153934152 off",
-    "consts": "MCP_TOOL_TIMEOUT=String(Zv()) -> Zv body ??zae -> zae=kGt -> kGt=6e4 -> 60000; API_TIMEOUT_MS=String(Sde) -> Sde=9e5 -> 900000",
+    "consts": "Desktop 1.25927.0 re-read by hand: MCP_TOOL_TIMEOUT=String(A.f()) -> A=require(index.chunk-BWZJyht8) -> export \"f\" -> local s -> `function s(){return r.a()?.mcpToolTimeoutMs??18e4}` -> 180000 (was 60000 through 1.24012.11, whose chain was String(Zv()) -> ??zae -> kGt=6e4; the DEFAULT changed, 60s -> 180s); API_TIMEOUT_MS=String(j) -> j=9e5 -> 900000 (unchanged; the arg is now a chunk-local const rather than the module-level Sde)",
     "session_model": "standard 1p prod chat localAgent session (t.type!=3p, oauth env=prod, disableCron=true, localAgent=true, sessionType=chat)"
   },
   "env": {
@@ -27,7 +27,7 @@
     "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES": "",
     "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING": "1",
     "DISABLE_AUTOUPDATER": "1",
-    "MCP_TOOL_TIMEOUT": "60000",
+    "MCP_TOOL_TIMEOUT": "180000",
     "USE_LOCAL_OAUTH": "",
     "USE_STAGING_OAUTH": ""
   }
