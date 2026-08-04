@@ -189,3 +189,42 @@ export function applyMutation(body: string, m: Mutation): string {
   (cursor as any)[lastKey] = m.after;
   return JSON.stringify(parsed, null, 2);
 }
+
+/** Explain WHY a mutation plan came out empty, from the cassette's own artifact manifest.
+ *
+ *  `--mutate` is diagnostic and exits 0 either way, so "no perturbable values" is the one output a
+ *  reader is most likely to misread as "the feature is broken" — it looks identical whether the
+ *  cassette is unsuitable, the JSON is unparseable, or the bodies were deliberately left out. Every
+ *  cassette in this repo's own example corpus hits this path, so the terse form was actively
+ *  misleading. `truncationReason` already records why each body is absent (`buildManifest`), so the
+ *  precise remedy is derivable without re-walking anything.
+ *
+ *  `inlinedJsonCount` is the count of artifacts that survived the caller's own body filter AND end in
+ *  `.json`; a non-zero value with an empty plan means the bodies are present but hold no perturbable
+ *  leaf (empty object, or all-null). */
+export function explainNoMutations(
+  artifacts: { path: string; truncated?: boolean; truncationReason?: string }[],
+  inlined: { path: string; body: string }[],
+): string {
+  const jsonAll = artifacts.filter((a) => a.path.toLowerCase().endsWith(".json"));
+  const inlinedJsonCount = inlined.filter((a) => a.path.toLowerCase().endsWith(".json")).length;
+  const head = "no perturbable values";
+  if (jsonAll.length === 0) {
+    const n = artifacts.length;
+    return `${head} — this cassette records ${n} artifact(s), none of them .json. Mutation coverage perturbs recorded JSON values, so it needs a scenario whose skill writes a JSON deliverable (e.g. outputs/report.json) and an assertion over it.`;
+  }
+  if (inlinedJsonCount === 0) {
+    // Every .json artifact is body-less. `truncationReason` names which remedy applies.
+    const why = [...new Set(jsonAll.map((a) => a.truncationReason ?? "unknown"))];
+    const remedy: Record<string, string> = {
+      size: "over the body cap — re-record with a larger --max-artifact-bytes",
+      readonly: "under a read-only mount, which is never inlined",
+      input: "an upload, which is deliberately never inlined",
+      unreadable: "unreadable at record time",
+      unknown: "body absent for an unrecorded reason",
+    };
+    const detail = why.map((w) => `${w} (${remedy[w] ?? remedy.unknown})`).join(", ");
+    return `${head} — ${jsonAll.length} .json artifact(s) present but none carries an inlined body: ${detail}.`;
+  }
+  return `${head} — ${inlinedJsonCount} inlined .json artifact(s) parsed, but none contains a perturbable leaf (an empty document, or only null values).`;
+}

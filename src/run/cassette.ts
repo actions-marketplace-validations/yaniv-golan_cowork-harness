@@ -63,7 +63,7 @@ import { isVmSessionsPath } from "../vm-paths.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields, type AssertContext } from "../assert.js";
-import { planMutations, applyMutation } from "./mutate.js";
+import { planMutations, applyMutation, explainNoMutations } from "./mutate.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
@@ -5473,7 +5473,7 @@ export async function replayCassette(
         }
       }
       mutationReport = { planned: plan.length, uncaught };
-      if (!plan.length) log("::notice:: [mutate] no perturbable values — mutation coverage needs an inlined JSON artifact in the cassette");
+      if (!plan.length) log(`::notice:: [mutate] ${explainNoMutations(cassette.artifacts ?? [], inlined)}`);
       else if (uncaught.length) {
         log(`::warning:: [mutate] ${uncaught.length}/${plan.length} perturbation(s) CAUGHT BY NOTHING — these fields are unguarded:`);
         for (const u of uncaught) log(`    ${u}`);

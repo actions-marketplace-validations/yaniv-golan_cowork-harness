@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { planMutations, planMutationsWithStats, applyMutation, type Mutation } from "../src/run/mutate.js";
+import { planMutations, planMutationsWithStats, applyMutation, explainNoMutations, type Mutation } from "../src/run/mutate.js";
 
 function artifact(path: string, doc: unknown) {
   return { path, body: JSON.stringify(doc) };
@@ -192,5 +192,55 @@ describe("planMutations — real cassette", () => {
     // The assertion is on the reason, not just the emptiness: every artifact fails the .json-path gate.
     expect(artifacts.every((a) => !a.path.toLowerCase().endsWith(".json"))).toBe(true);
     expect(plan).toEqual([]);
+  });
+});
+
+// `--mutate` is diagnostic and exits 0 either way, so the empty-plan message is the ONE output a
+// reader is likely to misread as "the feature is broken". Every cassette in this repo's own example
+// corpus takes this path, so a terse line was actively misleading — each distinct cause needs a
+// distinct, actionable message.
+describe("explainNoMutations — the empty plan says WHY", () => {
+  it("distinguishes 'no JSON artifacts at all' and names what a suitable scenario looks like", () => {
+    const m = explainNoMutations([{ path: "outputs/report.md" }], []);
+    expect(m).toMatch(/none of them \.json/);
+    expect(m, "must tell the reader what to do, not just what is missing").toMatch(/JSON deliverable/);
+  });
+
+  it("reports the artifact count so an EMPTY manifest is distinguishable from a wrong-type one", () => {
+    expect(explainNoMutations([], [])).toMatch(/records 0 artifact\(s\)/);
+    expect(explainNoMutations([{ path: "a.md" }, { path: "b.txt" }], [])).toMatch(/records 2 artifact\(s\)/);
+  });
+
+  it("maps each truncationReason to its own remedy — the reasons are NOT interchangeable", () => {
+    const size = explainNoMutations([{ path: "outputs/r.json", truncated: true, truncationReason: "size" }], []);
+    expect(size).toMatch(/--max-artifact-bytes/); // actionable: re-record bigger
+
+    const input = explainNoMutations([{ path: "uploads/x.json", truncated: true, truncationReason: "input" }], []);
+    expect(input).toMatch(/deliberately never inlined/); // NOT actionable: by design, don't chase it
+    expect(input, "an upload must not suggest raising the byte cap").not.toMatch(/--max-artifact-bytes/);
+  });
+
+  it("lists every distinct reason when a cassette mixes them, without duplicates", () => {
+    const m = explainNoMutations(
+      [
+        { path: "a.json", truncationReason: "size" },
+        { path: "b.json", truncationReason: "readonly" },
+        { path: "c.json", truncationReason: "size" },
+      ],
+      [],
+    );
+    expect(m).toMatch(/size/);
+    expect(m).toMatch(/readonly/);
+    expect(m.match(/over the body cap/g) ?? []).toHaveLength(1); // deduped
+  });
+
+  it("separates 'body present but no perturbable leaf' from 'no body' — different fixes", () => {
+    const m = explainNoMutations([{ path: "outputs/e.json" }], [{ path: "outputs/e.json", body: "{}" }]);
+    expect(m).toMatch(/parsed, but none contains a perturbable leaf/);
+    expect(m, "the body IS inlined here, so a truncation remedy would mislead").not.toMatch(/inlined body/);
+  });
+
+  it("never claims a reason it wasn't given", () => {
+    expect(explainNoMutations([{ path: "a.json" }], [])).toMatch(/unrecorded reason/);
   });
 });
