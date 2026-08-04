@@ -2727,7 +2727,24 @@ async function cmdSync(args: string[]) {
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the
   // fcache here makes a re-sync refresh them and surfaces real drift instead of silently carrying stale.
-  const baseProvenance = (base.provenance ?? {}) as Record<string, unknown>;
+  // `eipcChannelUuid` is DROPPED rather than carried forward. It claimed via its own $comment to be
+  // "per-build", but nothing ever recomputed it: there is no extractor anywhere, so it arrived only via
+  // the `...baseProvenance` spread below and was copied unchanged into every baseline — one distinct
+  // value across all 20, matching no shipped asar. The real Desktop EIPC channel DOES rotate per build,
+  // so the field was not merely stale, it was structurally incapable of drifting. Nothing reads, types,
+  // or asserts it (absent from PlatformBaseline and from schema/), so removing it breaks no consumer.
+  // Adding an extractor was the alternative and was rejected: it would manufacture a per-build fact with
+  // no consumer, and the harness does not use Desktop IPC. The hazard was the comment, not the value —
+  // a promise of per-build freshness invites a provenance tripwire on ground that cannot move.
+  // Historical baselines keep their recorded value; they are per-release snapshots, not live claims.
+  const { eipcChannelUuid: _droppedEipcChannelUuid, ...provenanceWithoutEipc } = (base.provenance ?? {}) as Record<string, unknown>;
+  // `provenance.$comment` exists solely to annotate eipcChannelUuid, so it goes with the field — an
+  // orphaned "eipcChannelUuid is per-build" note is the exact bait being removed. Conditioned on the text
+  // rather than dropped outright, so a future $comment repurposed for something else survives a re-sync.
+  const baseProvenance =
+    typeof provenanceWithoutEipc.$comment === "string" && provenanceWithoutEipc.$comment.includes("eipcChannelUuid")
+      ? (({ $comment: _droppedEipcComment, ...rest }) => rest)(provenanceWithoutEipc)
+      : provenanceWithoutEipc;
   const baseGates = (baseProvenance.gates ?? {}) as Record<string, unknown>;
   let nextGates: Record<string, unknown> = baseGates;
   if (res.gates) {
