@@ -984,11 +984,26 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // is no baseline (preRunPaths undefined — the scenario asserted neither key that triggers capture, or a
     // tier that can't capture); the regex backstop still runs in that case, same as before this change.
     if (preRunPaths) {
-      const preOutputs = new Set(preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/")));
       // Path walk (matching the pre-run baseline): it emits symlink/hardlink paths too, so a pre-existing
       // link under outputs that survives is present on BOTH sides and is not falsely reported as removed.
-      const postOutputs = new Set(collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path));
-      for (const p of preOutputs) if (!postOutputs.has(p)) scan.outputsDeletes.push(`[fs-diff] output file removed post-run: ${p}`);
+      const postOutputs = collectArtifactPaths(workRoot, ["outputs"]).map((e) => e.path);
+      scan.outputsDeletes.push(
+        ...outputsRemovedByFsDiff(preRunPaths, postOutputs, {
+          preRunHashes,
+          // sha256 hex, matching the pre-run manifest's format so the two sides are comparable. Only
+          // called for paths that are NEW under outputs, and only when something actually vanished, so
+          // the ordinary run pays nothing. Unreadable ⇒ null ⇒ no rename proven ⇒ the removal reports.
+          hashPostPath: (rel) => {
+            try {
+              return createHash("sha256")
+                .update(readFileSync(join(workRoot, rel)))
+                .digest("hex");
+            } catch {
+              return null;
+            }
+          },
+        }),
+      );
     }
 
     // Salvage path: the run exited on an unanswered gate. Persist a PARTIAL result.json (+ run.jsonl/trace) so
@@ -2275,6 +2290,57 @@ function mvDeletesOutputs(stmt: string): boolean {
  * tool (a sub-agent that hits a real outputs-delete EPERM should call that, not silently fail) — this scan
  * only feeds the `no_delete_in_outputs` assertion, it never blocks execution.
  */
+/** The SECOND outputs-delete detector: a pre/post path diff, independent of the command scanner.
+ *  Any path the pre-run manifest recorded under `outputs/` that is absent from the post-run walk is
+ *  reported as removed — regardless of HOW it went, which is the point: this one sees a delete via a
+ *  script file, a renamed binary, or any non-bash tool that `scanEvents` structurally cannot.
+ *
+ *  Pure and exported so its semantics are testable without an agent run; `executeScenario` supplies the
+ *  two walks. Both inputs are workRoot-relative paths.
+ *
+ *  A vanished PATH is not the same as a deletion. Production permits a rename WITHIN outputs (measured:
+ *  only `unlink`/`rmdir` fail EPERM; renames succeed), so treating "this path is gone" as a delete would
+ *  be stricter than the product — the same defect the command scanner had. The predicate is therefore:
+ *  absent post-run AND its content does not reappear at a path that is NEW under outputs.
+ *
+ *  "New" is load-bearing. Matching content anywhere would let an unrelated pre-existing file with
+ *  identical bytes mask a real delete; only a path that did not exist before can be the rename's
+ *  destination.
+ *
+ *  Overwrite and truncate never reach the rename check at all — the path is still present, so it is
+ *  never a candidate. That matters because in-place rewriting is the most common thing a skill does.
+ *
+ *  Hashing is LAZY: with no vanished paths (the overwhelmingly common case) `hashPostPath` is never
+ *  called. Fail-safe throughout — a missing pre-run hash, an unhashable candidate, or absent hashing
+ *  support all fall back to reporting the removal, because a rename cannot then be proven.
+ *
+ *  Residual, accepted: a rename FOLLOWED BY a content edit (`mv a b && echo x >> b`) leaves no matching
+ *  content, so it still reports. Production permits that sequence, so this stays marginally strict —
+ *  narrow, and it errs toward flagging rather than missing a delete. */
+export function outputsRemovedByFsDiff(
+  preRunPaths: string[],
+  postOutputsPaths: string[],
+  opts?: { preRunHashes?: Record<string, string | null>; hashPostPath?: (relPath: string) => string | null },
+): string[] {
+  const post = new Set(postOutputsPaths);
+  const preOutputs = preRunPaths.filter((p) => p === "outputs" || p.startsWith("outputs/"));
+  const vanished = preOutputs.filter((p) => !post.has(p));
+  const say = (p: string): string => `[fs-diff] output file removed post-run: ${p}`;
+  if (vanished.length === 0) return [];
+  const { preRunHashes, hashPostPath } = opts ?? {};
+  if (!preRunHashes || !hashPostPath) return vanished.map(say); // can't prove a rename ⇒ report
+
+  // Only paths that did NOT exist pre-run can be a rename destination.
+  const preSet = new Set(preOutputs);
+  const newContent = new Set<string>();
+  for (const p of postOutputsPaths) {
+    if (preSet.has(p)) continue;
+    const h = hashPostPath(p);
+    if (h) newContent.add(h);
+  }
+  return vanished.filter((p) => !(preRunHashes[p] && newContent.has(preRunHashes[p] as string))).map(say);
+}
+
 export function isOutputsDelete(cmd: string): boolean {
   // TWO views on purpose. `expanded` keeps comments and is used ONLY for the co-occurrence fast path,
   // which is a gate rather than a finding: that preserves the prefer-a-false-positive case where the
