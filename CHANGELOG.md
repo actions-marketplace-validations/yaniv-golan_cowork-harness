@@ -22,24 +22,13 @@ All notable changes to this project are documented here. The format is based on
   What it does *not* cover is documented in [docs/cassette.md](./docs/cassette.md): the command/skill/plugin
   catalogs and command descriptions are ungated (no clean predicate, only an arbitrary threshold), so treat
   this as a backstop against a known failure, not proof a cassette is clean.
+
 - **`record` refuses, before spending, to write a host-inheriting recording into a repo-visible path.**
   Refusing afterwards would be worse than useless — the tokens are gone and the tempting fix is to commit it
   anyway. The message names the tier, the fix (record at `container`, or `--out` outside the repo — the
   default `cassettes/` dir is gitignored), and the override `--allow-host-inventory-fixture`. Re-recording an
   *existing* committed fixture in place **warns** rather than refuses, so `--rerecord-stale` keeps working
   and the override does not become reflexive; the finding class above still hard-gates the result.
-
-### Fixed
-
-- **`cls: "binary"` was missing from the published `verify-cassettes` schema.** The artifact path has been
-  emitting it, so a consumer validating that output against `schema/verify-cassettes.json` would reject a
-  valid envelope. Added, along with a test asserting every emitted `cls` literal is present in both the
-  schema and SPEC.md — the enum is hand-maintained in three places and had already drifted once.
-- **The pre-commit cassette check only ran when a *baseline* was staged.** A baseline moves `latest` and
-  stales the fixtures, which is why the check started there — but the commit that adds or re-records a
-  cassette is the one that can introduce a leak, and it stages no baseline, so it skipped the check entirely
-  (including the host-inventory warning printed inside that branch). It now also triggers on a staged
-  `*.cassette.json`.
 
 - **Platform baseline `desktop-1.24012.11`, and the proactive skill-suggest mode is now modeled ON.**
   The Desktop bump itself is near-empty: the staged agent ELF is unchanged (`2.1.219`, same sha), the
@@ -52,24 +41,10 @@ All notable changes to this project are documented here. The format is based on
   third production effect — a swapped guidance line inside Desktop's generated `<skills_instructions>`
   block — is **not** modeled, because the harness renders no such section; that is recorded in
   `docs/fidelity-gaps.md` rather than left implicit.
+
 - **A dark drift sentinel for the `1p-direct-mcp` gate**, new in `1.24012.11`. It arms a Desktop-side
   direct-MCP pool for MDM-managed 1P servers, is inert for a standard unmanaged account, and is pinned
   (not modeled) so a production rollout surfaces as a `sync` diff instead of silent widening.
-
-### Fixed
-
-- **The proactive `suggest_skills` branch now matches production.** Its empty-catalog `note` used to
-  branch proactive-vs-not and return a bare "continue silently", suppressing the `search_plugins` chain
-  production emits for *every* trigger state — silence is only the `proactive` tail. And because
-  `trigger` is optional, a trigger-omitted call is a distinct third path that must not be told to
-  forward a trigger it never supplied; it was previously grouped with `user_asked`. The proactive
-  description also carried the permission to suggest without the constraints that fence it, so the
-  modeled agent over-suggested relative to production.
-- **`provenance.eipcChannelUuid` is no longer carried into new baselines.** It advertised itself as
-  "per-build" but no extractor ever existed, so it was copied forward unchanged into all 20 baselines —
-  one value, matching no shipped asar — and was structurally incapable of ever reporting drift. Nothing
-  read, typed, or asserted it. The hazard was the comment: a promise of per-build freshness invites a
-  provenance tripwire on ground that cannot move. Historical baselines keep their recorded value.
 
 - **`record` reports what changed vs the cassette it replaced.** Re-recording is the only moment where
   "did my edit change what the agent does?" is observable — replay re-checks a frozen transcript and is
@@ -78,6 +53,7 @@ All notable changes to this project are documented here. The format is based on
   behaviour is unchanged. Gate count leads because a skill that silently stops asking is the regression
   this exists to surface. First records print nothing (no prior to compare), and an unreadable prior is
   simply no delta — never a failed record.
+
 - **`replay --mutate` measures whether your assertions actually test anything.** It perturbs each recorded
   JSON artifact value (`total: 42 → 43`, `"USD" → "__MUTATED__"`), re-runs the same assertions against the
   same evidence, and reports every perturbation that **nothing caught** — each one a field your skill
@@ -86,6 +62,7 @@ All notable changes to this project are documented here. The format is based on
   verdict or exit code, because an unguarded field is a gap in the scenario rather than a failure of the
   run. A corpus of 21 cassettes was found to contain seven scenarios asserting nothing meaningful, and only
   because someone wrote a throwaway script to look.
+
 - **Gate option labels are now fingerprinted against the skill's own prose.** At record time the harness
   stamps which emitted `AskUserQuestion` labels appear **verbatim** in the skill source, per file, **in the
   order they appear in that file**; staleness re-checks them. This catches two things `skillHash` cannot:
@@ -105,15 +82,12 @@ All notable changes to this project are documented here. The format is based on
   `question_asked` regex, or `tool_called: "AskUserQuestion"` — anything that *fails* rather than
   vacuously passes on an empty gate set. `questions_count_max` deliberately does not count: a maximum is
   satisfied by zero.
-- **`assertions --list` groups its 71 keys by family** (outcome, transcript, gates, hooks, path denial,
-  sub-agents, tools, skills, tasks, egress, files, budgets, verdict modifiers). The JSON envelope stays
-  flat — grouping is a reading aid, not a contract. A new assertion key that matches no family fails
-  `test/assertions-families.test.ts`, so adding one forces a conscious choice instead of appending to a
-  dump nobody reads.
+
 - **`docs/scenario.md` gains a "goal → key" chooser** between the strategy section and the 71-row catalog:
   *"a gate still fires at all"* → `gate_answer_count_min: 1`, *"a deliverable reached the user"* →
   `user_visible_artifact`, and so on. The table previously existed only in the agent-facing skill, so a
   human reading the docs got a reference with no way in.
+
 - **`allow_outputs_delete: true` accepts an outputs delete you meant to happen.** Until now there was no
   way to say so: asserting `no_delete_in_outputs` fails, writing `false` is schema-rejected, and *omitting*
   the key permits nothing either — a detected delete still fails the run via the `outputs_delete` signal,
@@ -124,6 +98,14 @@ All notable changes to this project are documented here. The format is based on
   still behaves differently. Mutually exclusive with `no_delete_in_outputs`, rejected at load and in the
   published JSON Schema (a zod refinement has no schema representation, so the rule is mirrored by hand and
   validated by a test — otherwise an editor would green a scenario the loader rejects).
+
+- **`replay --mutate` now says WHY it found nothing to perturb.** It is diagnostic and exits 0 either
+  way, so `no perturbable values` was the one output most easily misread as "the feature is broken" — it
+  looked identical whether the cassette held no JSON at all, held JSON whose bodies were deliberately not
+  inlined, or held a document with nothing perturbable in it. Three situations, three different fixes, one
+  of which is "nothing, that's by design". The manifest already knew: `truncationReason` records why each
+  body is absent, so the message now names the cause and the remedy — `size` says raise
+  `--max-artifact-bytes`, while an upload says uploads are never inlined, i.e. don't chase it.
 
 ### Changed
 
@@ -150,7 +132,53 @@ All notable changes to this project are documented here. The format is based on
   pass**; a skill emptying a deliverable is a content bug, catchable with content assertions, not a
   containment violation.
 
+- **A rename inside `outputs/` is no longer reported as a deletion by the filesystem diff.** The
+  outputs-delete guard has two independent detectors — the command scanner and a pre/post path diff — and
+  only the scanner was corrected above. The path diff still treated a vanished name as a removal, so
+  `mv outputs/a.md outputs/b.md` (which production permits) could be flagged. It now clears a vanished path
+  whose content reappears at a **new** path under `outputs/`; "new" is load-bearing, since matching content
+  anywhere would let an unrelated pre-existing file mask a real delete. Overwrite and truncate never reach
+  the check at all — the path is still present. Hashing is lazy, so a run with nothing vanished pays
+  nothing, and every unprovable case still reports.
+
+- **The CI recipe and README now lint with `--strict --min-severity WARN`.** Without `--strict` the lint
+  step **cannot fail** on a WARN-class rule: it prints the finding and exits 0. So the recommended
+  invocation could not enforce `vacuous-gate-assert` — a guard against silent false-greens that was itself
+  a silent false-green. `--min-severity WARN` is the other half: bare `--strict` also fails on the advisory
+  INFO class. If you copied the previous recipe, add both flags.
+
+- **`assertions --list` groups its 71 keys by family** (outcome, transcript, gates, hooks, path denial,
+  sub-agents, tools, skills, tasks, egress, files, budgets, verdict modifiers). The JSON envelope stays
+  flat — grouping is a reading aid, not a contract. A new assertion key that matches no family fails
+  `test/assertions-families.test.ts`, so adding one forces a conscious choice instead of appending to a
+  dump nobody reads.
+
 ### Fixed
+
+- **`cls: "binary"` was missing from the published `verify-cassettes` schema.** The artifact path has been
+  emitting it, so a consumer validating that output against `schema/verify-cassettes.json` would reject a
+  valid envelope. Added, along with a test asserting every emitted `cls` literal is present in both the
+  schema and SPEC.md — the enum is hand-maintained in three places and had already drifted once.
+
+- **The pre-commit cassette check only ran when a *baseline* was staged.** A baseline moves `latest` and
+  stales the fixtures, which is why the check started there — but the commit that adds or re-records a
+  cassette is the one that can introduce a leak, and it stages no baseline, so it skipped the check entirely
+  (including the host-inventory warning printed inside that branch). It now also triggers on a staged
+  `*.cassette.json`.
+
+- **The proactive `suggest_skills` branch now matches production.** Its empty-catalog `note` used to
+  branch proactive-vs-not and return a bare "continue silently", suppressing the `search_plugins` chain
+  production emits for *every* trigger state — silence is only the `proactive` tail. And because
+  `trigger` is optional, a trigger-omitted call is a distinct third path that must not be told to
+  forward a trigger it never supplied; it was previously grouped with `user_asked`. The proactive
+  description also carried the permission to suggest without the constraints that fence it, so the
+  modeled agent over-suggested relative to production.
+
+- **`provenance.eipcChannelUuid` is no longer carried into new baselines.** It advertised itself as
+  "per-build" but no extractor ever existed, so it was copied forward unchanged into all 20 baselines —
+  one value, matching no shipped asar — and was structurally incapable of ever reporting drift. Nothing
+  read, typed, or asserted it. The hazard was the comment: a promise of per-build freshness invites a
+  provenance tripwire on ground that cannot move. Historical baselines keep their recorded value.
 
 - **A comment could be read as an executable outputs delete.** `splitStatements` is quote-blind, so the
   body of a `python3 -c "…"` or `perl -e '…'` program string is shredded into pseudo-statements and scanned
@@ -162,17 +190,20 @@ All notable changes to this project are documented here. The format is based on
   *does* continue and the `#` line is an argument. Both are false negatives if mishandled and both are
   pinned by tests. The comment-bearing text still feeds the co-occurrence fast path, so
   `# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags on the rm's own unprovable target.
+
 - **The outputs-delete guard reported `ok` while a delete had been detected.** The roster derived its
   status from whether the *signal* fired, and the signal is suppressed whenever the scenario authored
   `no_delete_in_outputs` — so a scenario that authored the key and **failed** it showed a green guard. It
   now derives from the evidence: `fired` whenever a delete was detected, `ok` only on a clean scan,
   `unverified` when the scan did not run.
+
 - **A redaction-induced verdict flip now names what flipped.** The self-check reported
   `pre-redaction pass=true → redacted pass=false` and stopped, so diagnosing it meant replaying both copies
   by hand. It now appends the failing-assertion diff (already computed, but surfaced only in a branch that
   is unreachable on a flip) **and** the verdict signal codes — both are needed, because `computeVerdict`
   folds in non-assertion signals, so a verdict can flip with an unchanged assertion set and a key-only diff
   would read `[] → []`.
+
 - **`docs/cassette.md` never stated that replay executes nothing.** Every individual fact was documented,
   but two consequences a reader has to assemble were not. First: a skill's bundled scripts are **not run**
   on replay — a `Bash` call and its result are frozen text, and `artifact_json` reads the recorded
@@ -180,6 +211,14 @@ All notable changes to this project are documented here. The format is based on
   Second: staleness is enforced by **`verify-cassettes` (exit 1)**, not by `replay`, which warns and exits
   0 — so a CI job running `replay` alone does not gate a skill that moved. Both are now stated in the
   mental model and next to the drift flags, with the division of labor between the two commands named.
+
+- **A committed example cassette carried the recording machine's own tool inventory.**
+  `examples/replays/example-multiselect-gate.cassette.json` was recorded at `protocol` tier, which inherits
+  the host environment, and froze that machine's MCP server names and account org into the fixture. It
+  shipped that way. The fixture is now sanitized, and the `host-inventory` finding class above exists so the
+  class of mistake fails the gate rather than reaching a public repo again. No credentials were exposed, so
+  nothing needs rotating. If you vendored or forked the repo at 1.17.0 or earlier, that file in your copy
+  still contains it.
 
 ## [1.17.0] — 2026-08-01
 

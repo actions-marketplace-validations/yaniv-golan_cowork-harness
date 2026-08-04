@@ -232,7 +232,7 @@ cowork-harness verify-cassettes examples/replays/   # privacy scan (email/curren
 #    Needs python3 (the linter shells out to the bundled scenario.py; PyYAML is bundled. exit 127 if python3 is missing).
 #    NOTE: examples/scenarios/ ships in the SOURCE CHECKOUT only — the npm package carries
 #    examples/replays/ but not scenarios/. From an install, point this at your own scenarios/.
-cowork-harness lint examples/scenarios/*.yaml
+cowork-harness lint examples/scenarios/*.yaml --strict --min-severity WARN
 #    (non-recursive: this glob skips subdirectory scenarios like examples/scenarios/trigger-accuracy-sweep/;
 #    lint that one explicitly if you copy it)
 ```

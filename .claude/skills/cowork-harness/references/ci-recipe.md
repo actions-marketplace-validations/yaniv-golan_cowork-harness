@@ -59,7 +59,12 @@ GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
 - run: npm i -g "cowork-harness@>=1.17.0"
-- run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
+- run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
+                                                    # no silent false-greens. WITHOUT --strict this
+                                                    # step cannot fail on a WARN-class rule (e.g.
+                                                    # vacuous-gate-assert) — it would print the
+                                                    # finding and still exit 0. --min-severity WARN
+                                                    # keeps the advisory INFO class advisory.
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
                                                     # ALSO fails on a leaked host inventory: recording at
                                                     # protocol/hostloop freezes YOUR machine's MCP servers,
