@@ -107,6 +107,14 @@ All notable changes to this project are documented here. The format is based on
   body is absent, so the message now names the cause and the remedy — `size` says raise
   `--max-artifact-bytes`, while an upload says uploads are never inlined, i.e. don't chase it.
 
+- **Platform baseline `desktop-1.25927.0` (agent ELF `2.1.221`), with one behavioural change: the MCP
+  tool timeout default tripled, `60000` → `180000` ms.** If you have a long-running MCP tool that used to
+  be cut off at 60s under emulation, it now gets 180s — matching production. `spawn.env.MCP_TOOL_TIMEOUT`
+  carries the new value; pin `baseline:` explicitly in a scenario to stay on the old one. Everything else
+  holds: the Cowork system prompt is byte-identical, the sub-agent append, mount layout, egress allowlist
+  and the remaining spawn env are unchanged, and all three committed cassettes replay clean (re-stamped,
+  not re-recorded — their recorded behaviour did not move).
+
 ### Changed
 
 - **`docs/cassette.md` and the CI recipe now state that `replay` alone does not gate staleness.** A bare
@@ -154,6 +162,26 @@ All notable changes to this project are documented here. The format is based on
   dump nobody reads.
 
 ### Fixed
+
+- **`sync` could not read Desktop 1.25927.0 at all — it reported 25 unknown deltas and refused to write.**
+  Desktop changed its *bundler*, not its behaviour: plain string literals are now emitted with backticks
+  (``settingSources:[`user`]``), export names are mangled to one or two characters (`...o.TASK_TOOL_NAMES`
+  became `...E.vt`), and the bundle split from 101 chunks into 341. Every literal anchor broke at once.
+  `sync` now normalizes substitution-free template literals back to the quoted form before matching, and
+  resolves an exported name by following the referencing chunk's own `require()` binding into the chunk
+  that defines it. Both matter for correctness, not just for getting a green: the old single-bundle regex
+  hop on a two-character name landed on unrelated text and produced two **false** reports — that
+  `CLAUDE_DESIGN_TOOLS` was no longer empty, and that `maxThinkingTokens` no longer resolved to 31999.
+  Both facts were verified unchanged in the asar by hand. This is why the run refused rather than writing:
+  the refusal was right even though most of its reasons were wrong.
+
+- **One path-hook ordering check had been failing open.** The qt-before-containment order guard — which
+  catches a blanket early-allow shape in the PreToolUse hook — located its scan offset with the readable
+  export name. Once that name was mangled the offset became `-1`, and the guard was written to *skip* on a
+  negative offset rather than flag, so it silently stopped running instead of reporting anything. It now
+  reuses the same shape-based anchor used to find the install site, and flags if the two ever disagree.
+  The install-site check itself is now stronger than before: rather than matching a name, it resolves the
+  spread and requires it to still be the gated `Read/Write/Edit/Glob/Grep` set.
 
 - **`cls: "binary"` was missing from the published `verify-cassettes` schema.** The artifact path has been
   emitting it, so a consumer validating that output against `schema/verify-cassettes.json` would reject a
