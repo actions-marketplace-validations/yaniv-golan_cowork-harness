@@ -141,7 +141,8 @@ export function spawnHostLoop(
     /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
      *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
     suggestSkillsEnabled?: boolean;
-    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ default false). Only
+    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ the synced baseline gate,
+     *  which is ON from the 1.24012.11 baseline; the fallback for an older baseline is false). Only
      *  consulted when `suggestSkillsEnabled` is true. */
     proactiveSkillSuggestEnabled?: boolean;
   } = {},

@@ -344,10 +344,19 @@ over the control protocol (`sdkMcpServers` in `initialize`, tunneled as `mcp_mes
 `list_skills` returns no match, and the result renders an "Add" card. The call has **no side effect**
 (nothing installs; the user's Add click happens out of band). Ground truth: these tools appear in the
 `system/init` `tools` array of real on-disk sessions (`local-agent-mode-sessions/**/audit.jsonl`); the
-`suggestSkillsEnabled` gate `245679952` is on. (A proactive-suggestion mode exists behind a second
-gate `1598976391` (`proactiveSkillSuggestEnabled`) that is off for a standard account; with it off,
-`suggest_skills` keeps its base description and the model suggests only when the conversation invites
-it — with it on, the tool gains a `trigger` parameter and a proactive-suggestion description.)
+`suggestSkillsEnabled` gate `245679952` is on. A proactive-suggestion mode sits behind a second gate
+`1598976391` (`proactiveSkillSuggestEnabled`), which is **served ON** for a standard account as of the
+`1.24012.11` baseline — by a server-side rollout, not a Desktop change (the gate reads ON on earlier
+Desktop versions too). With it off, `suggest_skills` keeps its base description and the model suggests
+only when the conversation invites it. With it on, the tool gains an optional `trigger` parameter
+(`user_asked` | `proactive`), a proactive description that also carries production's *constraints* (a
+do-not-call list, a suggest-at-most-once-per-conversation rule, a no-lead-in rule, and forwarding the
+same keywords **and trigger** to `search_plugins`), and an empty-catalog `note` that chains into
+`search_plugins` for every trigger state — silence is only the `proactive` tail, and a trigger the model
+never supplied is never forwarded back to it. One production effect is **not** modeled: the flag is also
+passed into Desktop's `generateSkillsSystemPrompt`, where it swaps a guidance line inside the generated
+`<skills_instructions>` block. The harness renders no such section at all, so that effect lands in an
+already-unmodeled surface.
 
 **Harness behaviour:** `container` and `hostloop` (and `cowork`, which resolves to one of those) now
 declare a `skills` and a `plugins` SDK-MCP server alongside `cowork`/`workspace` (`combineSdkMcp`,
@@ -359,8 +368,11 @@ result (the real add/install catalog is Anthropic's live library, out of scope a
 empty result with an honest `note` is the faithful stub, not a bug). The two gates are read from the
 synced baseline (`readGateBool`, bare-boolean shape — distinct from the sub-flag gates `readGateFlag`
 reads) with a session-level override (`skills.suggest_enabled` / `skills.proactive_suggest_enabled`, see
-[session.md](./session.md)); defaults mirror production (`suggestSkillsEnabled` on, `proactiveSkillSuggestEnabled`
-off).
+[session.md](./session.md)). Precedence is knob ▸ baseline gate ▸ hardcoded fallback, and the three are
+distinct: omit the knob and the value comes from the **synced baseline** (on `latest` that is
+`suggestSkillsEnabled` on and `proactiveSkillSuggestEnabled` **on**, mirroring what production serves);
+the hardcoded fallback, which applies only to a baseline old enough to predate the gate entirely, stays
+on for `suggestSkillsEnabled` and **off** for `proactiveSkillSuggestEnabled`.
 
 **How exact is the model?** Not uniformly — and the difference matters, so it is stated plainly. The
 tool **inventory** (which five tools exist), their **inputSchemas**, the **gating** semantics, and the

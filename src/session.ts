@@ -131,8 +131,10 @@ export const SessionConfig = z.strictObject({
         .optional()
         .describe(
           "override for gate 1598976391 (proactiveSkillSuggestEnabled): when true (and suggest_enabled is not " +
-            "false), suggest_skills swaps to the proactive description and gains a `trigger` enum param. Omit " +
-            "to use the synced baseline gate (default false).",
+            "false), suggest_skills swaps to the proactive description, gains an optional `trigger` enum param, " +
+            "and chains its empty-catalog note into search_plugins. Omit to use the synced baseline gate — on " +
+            "from the 1.24012.11 baseline, matching what production serves; the fallback for a baseline that " +
+            "predates the gate is false.",
         ),
     })
     .default({ local: [] }),

@@ -158,7 +158,7 @@ plugins:
 skills:
   local: []                      # extra host skill dirs
   suggest_enabled: true          # gate 245679952 override — `mcp__skills__suggest_skills` on/off (default true)
-  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param (default false)
+  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param; unset = synced baseline gate (ON from 1.24012.11)
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map)
   enabled: []
