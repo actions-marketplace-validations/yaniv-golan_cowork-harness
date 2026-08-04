@@ -158,6 +158,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       "1129419822": { id: "1129419822", name: "enableToolSearchAuto", on: false, source: "absent", value: undefined },
       "4200321681": { id: "4200321681", name: "autoModeOverridesAlwaysAllow", on: false, source: "absent", value: undefined },
       "1447478638": { id: "1447478638", name: "scheduledTaskToolsApprovableByAutoMode", on: false, source: "absent", value: undefined },
+      "4074604942": { id: "4074604942", name: "1p-direct-mcp", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -206,6 +207,17 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     // can't repeat unnoticed. That it is NOT dark is already pinned by the exact-match assertion on
     // decodeFcacheGates' absent-marker set above, which does not list this id.
     expect(PINNED_GATES["1824824999"]).toBe("canProposeSkills");
+  });
+
+  it("PINNED_GATES tracks 1p-direct-mcp, new in 1.24012.11 — and it MUST be dark, or the pin is vacuous", () => {
+    // This gate is absent from a standard fcache, so decodeFcacheGates would skip it entirely without a
+    // DARK_GATES entry: PINNED_GATES alone would never round-trip through sync and the sentinel would
+    // guard nothing while looking pinned. The absent-marker exact-match assertion above is what actually
+    // proves the round-trip — it lists this id, and being a toEqual it cannot pass if DARK_GATES drops it.
+    expect(PINNED_GATES["4074604942"]).toBe("1p-direct-mcp");
+    // Not the GrowthBook flag name: the asar passes the bare id and the name appears nowhere, so it is
+    // unrecoverable. Kebab-case (the subsystem's log tag) marks it as unverified vs the camelCase names.
+    expect(PINNED_GATES["4074604942"]).not.toMatch(/^[a-z]+[A-Z]/);
   });
 });
 

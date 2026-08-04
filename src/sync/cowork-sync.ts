@@ -131,6 +131,18 @@ export const PINNED_GATES: Record<string, string> = {
   // render-only sibling. Pinned so a production flip surfaces as a sync diff instead of silently widening
   // the tool set the way canSaveSkill's did.
   "1824824999": "canProposeSkills",
+  // New in Desktop 1.24012.11 (0 occurrences in 1.24012.9's asar, 1 in .11) and DARK — absent from a
+  // standard fcache, hence the DARK_GATES entry below; without it the pin would never round-trip through
+  // sync and this sentinel would guard nothing. Arms a Desktop-side direct-MCP pool for MDM-managed 1P
+  // servers, which short-circuits on an empty managed-server list before the gate is consulted, so it is
+  // inert for a standard unmanaged account and outside the harness's modelled agent surface. Pinned on the
+  // canProposeSkills principle: a production flip should surface as a sync diff, not silent widening.
+  // NAME CAVEAT: unlike every other entry here, this is NOT the GrowthBook flag name — the call site
+  // passes the bare id (`const c="4074604942"; isFeatureEnabled(c)`), and the name appears nowhere in the
+  // asar, so it is unrecoverable (and the gate is absent from the fcache, which is the other place a name
+  // would come from). The value below is the subsystem's own log tag, deliberately kebab-case so it does
+  // not read as a verified camelCase flag name. Replace it if the real name ever surfaces in an fcache.
+  "4074604942": "1p-direct-mcp",
 };
 
 /**
@@ -148,6 +160,9 @@ const DARK_GATES = new Set([
   "4200321681", // autoModeOverridesAlwaysAllow — absent from a standard 1.22209.0 fcache at pin time (dark);
   //                pinned so a rollout (absent→present) surfaces as a visible diff.
   "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale.
+  "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11 and absent from a standard fcache (dark).
+  //                Without this entry the PINNED_GATES pin above would never round-trip and the sentinel
+  //                would be vacuous — it would silently guard nothing.
 ]);
 
 /**
