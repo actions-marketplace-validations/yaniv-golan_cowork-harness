@@ -2,11 +2,17 @@ import { defineConfig } from "vitest/config";
 
 // Live suites only (need real infra; token-gated cases need CLAUDE_CODE_OAUTH_TOKEN). `npm run test:live`.
 // live-contract: Docker + the staged binary. live-matrix: `protocol` fidelity only — a live token, no Docker.
+// live-resume-continuity: Docker + image + staged binary + token.
 // LOCAL-ONLY lane: CI runners can never satisfy live-contract's Docker + macOS-staged-agent skipIf, so a
 // green CI run carries ZERO coverage from this config — never count it as CI-verified.
+//
+// A GLOB, matching `vitest.config.ts`'s exclude glob. A hand-maintained file list drifts silently in the
+// worst possible direction: `live-resume-continuity` was absent here while also being skip-gated in the
+// default lane, so its assertions executed NOWHERE. Adding a live suite must never require remembering
+// two edits.
 export default defineConfig({
   test: {
-    include: ["test/live-contract.test.ts", "test/live-matrix.test.ts"],
+    include: ["test/live-*.test.ts"],
     testTimeout: 180000,
   },
 });

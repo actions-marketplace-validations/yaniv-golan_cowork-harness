@@ -1,7 +1,18 @@
 import { defineConfig } from "vitest/config";
 
-// The fast unit lane excludes the live contract suite (needs Docker + the staged binary
-// + a token). Run that separately: `npm run test:live`.
+// The fast unit lane excludes EVERY live suite (they need Docker + the staged binary + a token).
+// Run those separately: `npm run test:live`.
+//
+// The exclusion is a GLOB, not a filename list, and that is load-bearing. Naming files individually
+// left `live-matrix` and `live-resume-continuity` in this lane, where they were held back only by
+// their own `describe.skipIf(!CAN)`. On a normal dev machine (Docker up, image pulled, agent staged)
+// the ONLY false leg of `CAN` is the token — so plain `npm test` was one `export
+// CLAUDE_CODE_OAUTH_TOKEN=…` away from spending real money. Note the live suites read that token from
+// `process.env` or `~/.cowork-harness-token` and NOT from the repo `.env` (vitest loads no dotenv), so
+// checking `.env` is the wrong way to reassure yourself here.
+//
+// Keep this glob and `vitest.config.live.ts`'s `include` glob in sync: excluding here without
+// including there would strand a live suite in neither lane.
 export default defineConfig({
   test: {
     // Give every test process its own runs root so nothing writes into the developer's real
@@ -10,13 +21,6 @@ export default defineConfig({
     // `runs/` is ephemeral live-lane output (gitignored); it can hold permission-restricted agent artifacts
     // (e.g. macOS IPC semaphore files) that crash vitest's test-file walk with EACCES. It is never test
     // source, so exclude it from discovery.
-    exclude: [
-      "**/node_modules/**",
-      "**/dist/**",
-      "**/runs/**",
-      "test/live-contract.test.ts",
-      "**/.claude/worktrees/**",
-      "**/.worktrees/**",
-    ],
+    exclude: ["**/node_modules/**", "**/dist/**", "**/runs/**", "test/live-*.test.ts", "**/.claude/worktrees/**", "**/.worktrees/**"],
   },
 });
