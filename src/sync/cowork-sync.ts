@@ -112,7 +112,15 @@ export const PINNED_GATES: Record<string, string> = {
   // (`resolveSkillDiscoveryGates`), so a flip here CHANGES the declared tool set on container/hostloop
   // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
-  "1598976391": "proactiveSkillSuggestEnabled", // off/defaultValue — proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with this gate OFF, so it only swaps suggest_skills's description and adds `trigger`.)
+  // proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate
+  // the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with
+  // this gate OFF.) It has THREE effects, not two: it swaps suggest_skills's description, adds `trigger`,
+  // AND is passed into generateSkillsSystemPrompt, where it swaps the suggest-guidance line inside the
+  // dynamically-generated `<skills_instructions>` block (plus a once-per-conversation sentence). A prior
+  // version of this comment claimed "only swaps the description and adds `trigger`" — that was wrong about
+  // the product. The harness models the first two and renders no `<skills_instructions>` section at all,
+  // so the prompt effect is a disclosed gap, not a modelled surface (same shape as canSaveSkill below).
+  "1598976391": "proactiveSkillSuggestEnabled",
   // Flipped off/defaultValue -> ON/force server-side (fcache) as of 2026-07-25, i.e. for current users on
   // any Desktop version — NOT a Desktop change; the machinery already shipped in 1.24012.1 gated off. ON
   // adds a `save_skill` tool to the session's SDK-MCP inventory AND is passed into

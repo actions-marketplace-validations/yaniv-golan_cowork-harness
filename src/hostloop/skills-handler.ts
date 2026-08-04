@@ -61,13 +61,28 @@ const SUGGEST_SKILLS_DESC_BASE =
   "Suggest skills the user could add but has not yet installed. Call this when the user asks for skill " +
   "recommendations, or when list_skills returned no matches. When search_plugins is available, also " +
   "call it with the same keywords.";
+// Production's proactive variant is materially richer than the base one: besides the trigger param it
+// carries POSITIVE call conditions, a NEGATIVE do-not-call list (including a once-per-conversation
+// dedup), a no-lead-in rule, and trigger-forwarding to search_plugins. A thinner reconstruction makes
+// the emulated model over-suggest relative to production, so the constraints are modeled, not just the
+// permission. Prose is a paraphrase (the repo does not bundle Anthropic's verbatim text).
 const SUGGEST_SKILLS_DESC_PROACTIVE =
-  "Suggest skills the user could add but has not yet installed — either because they asked, or " +
-  "proactively when the conversation suggests a skill they don't have would help. Set trigger to " +
-  '"user_asked" when the user explicitly asked for suggestions, or "proactive" when you are raising ' +
-  "this on your own initiative. Call this when the user asks for skill recommendations, when " +
-  "list_skills returned no matches, or proactively when relevant. When search_plugins is available, " +
-  "also call it with the same keywords.";
+  "Render an interactive widget of standalone skills the user can add — org, shared, or Anthropic " +
+  "skills that are not yet enabled — each with an Add button. Call this when the user's task is the " +
+  "kind a skill would make repeatable (drafting to a house style, reviewing against a playbook or " +
+  "checklist, recurring reports, a domain workflow they will do again) and nothing they have installed " +
+  "covers it; the user does not have to ask about skills first. Also call it when they ask for " +
+  "recommendations outright, ask about a domain they have nothing installed for, or when list_skills " +
+  "came back with no matches. For skills they already have, use list_skills instead.\n" +
+  "Do NOT call this when: the task is a one-off you can simply answer; you are not confident a skill " +
+  "would genuinely help; or you already rendered a suggestion earlier in this conversation and the " +
+  "user did not engage with it.\n" +
+  "Pass keywords taken from the task itself rather than generic terms, and set trigger — " +
+  '"proactive" when you raised this from task context, "user_asked" when the user asked. This covers ' +
+  "standalone skills only, so when search_plugins is available call it too, with the same keywords " +
+  "and the same trigger (a relevant skill may live inside an uninstalled plugin). Do NOT write a " +
+  "lead-in before calling this — pass context_label for the header instead. The result may come back " +
+  "empty; its note field tells you what to do next.";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -91,8 +106,14 @@ export interface MakeSkillsHandlerOptions {
   /** Gate 245679952 (readGateBool ▸ session knob ▸ default true) — whether `suggest_skills` is declared
    *  at all. */
   suggestSkillsEnabled: boolean;
-  /** Gate 1598976391 (readGateBool ▸ session knob ▸ default false) — only consulted when
-   *  `suggestSkillsEnabled` is true; swaps `suggest_skills`'s description and adds `trigger`. */
+  /** Gate 1598976391 (readGateBool ▸ session knob ▸ the synced baseline's value) — only consulted when
+   *  `suggestSkillsEnabled` is true. In the harness it swaps `suggest_skills`'s description, adds
+   *  `trigger`, and re-shapes the empty-catalog `note`. In PRODUCTION it has a third effect the harness
+   *  does not model: the flag is also passed into Desktop's `generateSkillsSystemPrompt`, where it swaps
+   *  the suggest-guidance line inside the dynamically-generated `<skills_instructions>` block and appends
+   *  a suggest-at-most-once-per-conversation sentence. The harness renders no `<skills_instructions>`
+   *  section at all, so that effect lands in an already-unmodeled surface — recorded here so the gap is
+   *  disclosed rather than implied absent. */
   proactiveSkillSuggestEnabled: boolean;
   /** TEST SEAM — called for every `tools/call`, before dispatch. Deliberately not wired by
    *  container.ts/hostloop.ts (there is no run-telemetry sink for discovery calls today, and the
@@ -190,12 +211,34 @@ export function makeSkillsHandler(opts: MakeSkillsHandlerOptions): McpHandler {
     // a no-op while the array is empty. The cap is exported and pinned by a test so that a later change
     // which POPULATES this array cannot quietly drop the production cap.
     const resolvedSkills: Array<{ name: string; description?: string; skill_id: string; is_user_created: boolean }> = [];
-    const note =
-      trigger === "proactive"
-        ? "No addable standalone skills matched — the widget did not render. Continue silently; do not " + "mention this to the user."
-        : "No addable standalone skills matched — the widget did not render. Call search_plugins with the " +
-          "same keywords; call list_skills instead if the user has relevant installed skills; otherwise " +
-          "tell the user nothing new was found.";
+    // Production composes this note from three conditionals, NOT a proactive-vs-not branch: the
+    // search_plugins chain is emitted for EVERY trigger state (it is keyed on plugins being available,
+    // which is always true here — the plugins SDK-MCP server is unconditionally present, so the
+    // plugins-disabled variants of these fragments are unreachable and deliberately not modeled).
+    // What the trigger actually keys:
+    //   - forwarding ("and the same trigger") — present for `user_asked` AND `proactive`, ABSENT when
+    //     trigger is omitted. `trigger` is optional, so omitted is a real third path; grouping it with
+    //     `user_asked` would wrongly tell the model to forward a trigger it never supplied.
+    //   - the tail — silence only on `proactive`; every other state discloses the empty search.
+    // An earlier reconstruction returned a bare "continue silently" on `proactive`, which suppressed the
+    // chain production performs and is the divergence this models away.
+    const forwarding = trigger ? " and the same trigger" : "";
+    const isProactive = trigger === "proactive";
+    const chain =
+      `${isProactive ? "Call" : "Now call"} search_plugins with the same keywords${forwarding} ` +
+      "(a relevant skill may live inside an uninstalled plugin); render any matches via " +
+      "suggest_plugin_install.";
+    const installed = isProactive
+      ? " If the user already has installed skills clearly relevant to the task, call list_skills so they " +
+        "render as a Try-it card (do NOT list them as plain text)."
+      : " If the user already has matching skills installed, also call list_skills so they render as a " +
+        "Try-it card (do NOT list them as plain text).";
+    const tail = isProactive
+      ? " Otherwise continue the task without mentioning that you searched."
+      : " In your follow-up after the card(s), explicitly tell the user you searched for new skills to " +
+        "add but found nothing beyond what is already installed. Do not re-list the card's skill names " +
+        "inline.";
+    const note = `No addable standalone skills matched — the widget did not render. ${chain}${installed}${tail}`;
 
     return {
       result: {
