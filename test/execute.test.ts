@@ -444,6 +444,33 @@ describe("isOutputsDelete — mv direction + target-based safe-prefix suppressio
     expect(isOutputsDelete("shred outputs/f\necho -u done")).toBe(false);
   });
 
+  it("a whole-line comment is prose, never an executable delete", () => {
+    expect(isOutputsDelete("# rm /mnt/outputs/x")).toBe(false);
+    expect(isOutputsDelete("echo ok\n# rm outputs/x")).toBe(false);
+    expect(isOutputsDelete("# mv outputs/a /tmp/a")).toBe(false);
+    // quote-blind splitting shreds a -c program body; a comment line in it must not be evidence
+    expect(isOutputsDelete('python3 -c "import sys\n# rm the old outputs/x rows\nprint(1)"')).toBe(false);
+    // the commented `cd` must not short-circuit past a statement whose own target is provably safe
+    expect(isOutputsDelete("# cd outputs\nrm /tmp/x")).toBe(false);
+  });
+
+  // Comment stripping interacts with line continuations in BOTH directions. Getting either wrong is a
+  // false NEGATIVE — a real delete that stops being flagged — so both are pinned here.
+  it("comment stripping is continuation-aware in both directions", () => {
+    // bash does not continue a comment: the `rm` on the next line RUNS.
+    expect(isOutputsDelete("# note \\\nrm outputs/x")).toBe(true);
+    // here the backslash DOES continue, so `# outputs/x` is an argument to rm, not a comment.
+    expect(isOutputsDelete("rm \\\n# outputs/x")).toBe(true);
+  });
+
+  it("comment stripping preserves the prefer-a-false-positive co-occurrence case", () => {
+    // the outputs reference is only in prose, but the rm's own target is unprovable → still flags
+    expect(isOutputsDelete('# stage to outputs\nrm -rf "$UNRESOLVED"')).toBe(true);
+    // a TRAILING comment leaves the statement starting with `rm`, so it is untouched
+    expect(isOutputsDelete("rm outputs/x # cleanup")).toBe(true);
+    expect(isOutputsDelete("cd outputs && rm -rf *")).toBe(true);
+  });
+
   // The reported false-positive classes: prose containing a retired token, near an outputs path.
   it("prose mentioning a non-delete op near outputs is not a delete", () => {
     expect(isOutputsDelete("echo truncate note >> /mnt/outputs/log.md")).toBe(false); // an APPEND

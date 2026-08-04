@@ -2091,6 +2091,35 @@ function joinLineContinuations(cmd: string): string {
   return cmd.replace(/\\\r?\n[ \t]*/g, " ");
 }
 
+/** Drop whole-line `#` comments, so prose can never be read as an executable delete. `splitStatements`
+ *  is quote-blind, so the body of a `python3 -c "…"` / `perl -e '…'` program string is shredded into
+ *  pseudo-statements and scanned as shell — which turned an English comment mentioning a delete word
+ *  into "evidence" of a delete. A `#`-leading line is non-executable in sh AND is a comment in
+ *  python/perl/awk/ruby, i.e. every `-c`/`-e` context the splitter shreds, so dropping it cannot hide a
+ *  real command.
+ *
+ *  MUST run BEFORE `joinLineContinuations`, and must be continuation-aware, because the two interact in
+ *  both directions:
+ *    `# note \` + `rm outputs/x`  — bash does NOT treat a backslash inside a comment as a continuation;
+ *        the comment ends at the newline and the `rm` RUNS. Joining first would fuse them into one
+ *        `#`-leading pseudo-statement and drop the real delete — a false negative.
+ *    `rm \` + `# outputs/x`       — here the backslash DOES continue, so `# outputs/x` is an argument to
+ *        `rm`, not a comment, and the delete is real. Hence a `#` line is only dropped when the previous
+ *        kept line did not end in a continuation. */
+function stripCommentLines(cmd: string): string {
+  const kept: string[] = [];
+  let prevContinues = false;
+  for (const line of cmd.split(/\r?\n/)) {
+    if (/^[ \t]*#/.test(line) && !prevContinues) {
+      prevContinues = false; // a comment ends the logical line; the next line starts fresh
+      continue;
+    }
+    kept.push(line);
+    prevContinues = /\\$/.test(line);
+  }
+  return kept.join("\n");
+}
+
 /** Substitute simple `NAME=VALUE` assignments into later `$NAME`/`${NAME}` uses. Conservative: skips
  *  command-substituted values (`$(...)`/backticks) so an unresolved indirect target is never treated as
  *  resolved (and therefore never "provably safe"). */
@@ -2247,12 +2276,21 @@ function mvDeletesOutputs(stmt: string): boolean {
  * only feeds the `no_delete_in_outputs` assertion, it never blocks execution.
  */
 export function isOutputsDelete(cmd: string): boolean {
+  // TWO views on purpose. `expanded` keeps comments and is used ONLY for the co-occurrence fast path,
+  // which is a gate rather than a finding: that preserves the prefer-a-false-positive case where the
+  // outputs reference lives in a comment but the delete target is genuinely unprovable
+  // (`# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags, on the rm's own unprovable target).
+  // `code` has comments removed and is what every statement-level DECISION reads, so prose can never
+  // itself be the operative delete.
   const expanded = resolveMktempVars(expandSimpleVars(cmd));
-  for (const stmt of splitStatements(expanded)) if (mvDeletesOutputs(stmt)) return true; // mv: always-on, direction-aware
+  const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
+  for (const stmt of splitStatements(code)) if (mvDeletesOutputs(stmt)) return true; // mv: always-on, direction-aware
   if (!DELETE_TOKEN.test(expanded) || !TOUCHES_OUTPUTS.test(expanded)) return false; // rm-family fast path
   const prefixes = [...defaultSafePrefixes(), ...safePrefixes()];
-  if (CD_INTO_OUTPUTS.test(expanded)) return true; // a cwd-relative delete could hit outputs
-  for (const stmt of splitStatements(expanded)) {
+  // per-statement, on `code`: a COMMENTED `# cd outputs` must not short-circuit past a statement whose
+  // own target is provably safe (`# cd outputs` + `rm /tmp/x` is not a delete).
+  if (splitStatements(code).some((s) => CD_INTO_OUTPUTS.test(s))) return true; // a cwd-relative delete could hit outputs
+  for (const stmt of splitStatements(code)) {
     if (!DELETE_TOKEN.test(stmt)) continue;
     if (TOUCHES_OUTPUTS.test(stmt)) return true; // a delete statement itself names outputs
     const targets = nonFlagArgs(stmt);
@@ -2285,7 +2323,10 @@ function outputsDeleteSnippet(cmd: string): string {
   // Iterate var expansion to a fixed point so CHAINED assignments (ARTIFACTS_ROOT → ANALYSIS_DIR → rm) fully
   // resolve in the displayed path. (Detection keeps the single-pass `expandSimpleVars` — its semantics are
   // pinned by tests; multi-pass here only sharpens the finding, never changes what gets flagged.)
-  let expanded = cmd;
+  // Comments stripped FIRST (see stripCommentLines): a comment is never the operative delete, so it must
+  // not be displayed as one — in the ops-found path OR in the whole-command fallback below, which would
+  // otherwise print comment prose as the finding when the flag came from the co-occurrence fast path.
+  let expanded = stripCommentLines(cmd);
   for (let i = 0; i < 5; i++) {
     const next = expandSimpleVars(expanded);
     if (next === expanded) break;
