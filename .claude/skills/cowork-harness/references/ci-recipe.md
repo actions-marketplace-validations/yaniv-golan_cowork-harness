@@ -61,6 +61,10 @@ GitHub-hosted runners, no token/Docker/agent:
 - run: npm i -g "cowork-harness@>=1.17.0"
 - run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
+                                                    # ALSO fails on a leaked host inventory: recording at
+                                                    # protocol/hostloop freezes YOUR machine's MCP servers,
+                                                    # agents and account org into the cassette. Record
+                                                    # committed fixtures at `container` (sealed) to avoid it.
 - run: cowork-harness replay cassettes/              # token-free content/structure
 ```
 

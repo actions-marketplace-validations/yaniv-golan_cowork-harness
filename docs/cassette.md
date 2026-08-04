@@ -764,10 +764,35 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
   path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
   clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /
-  `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-patterns-file <path>` is a
+  `--allow-machine-inventory` / `--allow-host-inventory` scope an allow to a single finding class, while `--allow-patterns-file <path>` is a
   different thing — it loads allows from a version-controlled **file of patterns** (one regex per line, `#`
   comments), not a path to allow directly. Multi-word proper
-  names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
+  names are **not** a default class (too noisy).
+
+- **`host-inventory` — a structural class, not a regex.** A cassette recorded at a **host-inheriting** tier
+  (`protocol`, `hostloop`, or `cowork` when it resolves to hostloop) freezes the recording *machine's* own
+  inventory into its `system/init` and command-registry events. Committed to a public repo, that publishes
+  your tool stack — this has actually happened here. The text net above cannot see it: an MCP server that
+  never connected (`status: pending`/`needs-auth`/`failed`) **declares no tools**, so no `mcp__<server>__<tool>`
+  token is ever written and `grep mcp__` over the cassette reads clean. The inventory lives in **name
+  fields**. So this check reads specific name fields of the decoded events and flags: an `mcp_servers[].name`
+  outside the harness's own servers, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
+  `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
+  `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
+  `KNOWN_COWORK_SERVERS` instead of allowing it.
+  **Tier-gated on purpose:** at `container` the agent is sealed (`HOME=/tmp`), so a foreign server name there
+  can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
+  it would fail a legitimate fixture.
+  **What it does NOT cover.** Only the name fields above are checked. The catalogs — `slash_commands[]`,
+  `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated: `slash_commands` legitimately
+  varies between clean fixtures and descriptions are unbounded free text, so there is no clean predicate,
+  only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **1% of the
+  removed bytes** and the registry command catalog was ~79%. The check would have caught that fixture (18
+  foreign server names, plus the account org) — but a host recording with *no* configured MCP servers, a
+  plain `account`, and only built-in agents will still pass while carrying the host's full command and skill
+  catalogs. Treat it as a backstop against the demonstrated failure, not as proof a cassette is clean.
+
+`verify-cassettes` also runs the **staleness**
   check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
   `skillHash` (you edited the skill but didn't re-record) fails the gate.
   A third, always-on check compares a committed scenario's `prompt` against the cassette's frozen

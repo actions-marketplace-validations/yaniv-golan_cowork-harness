@@ -655,7 +655,7 @@ verdict logic a finding doesn't have) — it emits its own, published as
   "ok": true,                       // false if any real finding, staleness drift, unverifiable staleness, version mismatch, or unreadable cassette
   "coverage": { "privacy": true, "staleness": true },  // which scans ran (false under --skip-privacy / --skip-staleness)
   "results": [ { "file": "string",
-                 "findings": [ { "where": "string", "cls": "email|currency|domain|path|machine-inventory|unscanned", "sample": "string" } ],
+                 "findings": [ { "where": "string", "cls": "email|currency|domain|path|machine-inventory|host-inventory|unscanned|binary", "sample": "string" } ],
                  "staleness": [ "string" ],   // GENUINE drift: a StalenessFinding whose class is NOT `unverifiable-*` (gate failure, exit 1)
                  "unverifiable": [ "string" ],// a StalenessFinding whose class IS `unverifiable-*` — could not verify (exit 3, unless the SAME run also has a `staleness`/`findings`/`scenarioDrift` entry, which wins exit 1)
                  "notes": [ "string" ],       // NON-failing informational channel (never affects ok/exit) — e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output: a `·`-prefixed row.

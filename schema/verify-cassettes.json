@@ -45,7 +45,7 @@
                 "where": { "type": "string" },
                 "cls": {
                   "type": "string",
-                  "enum": ["email", "currency", "domain", "path", "machine-inventory", "unscanned"]
+                  "enum": ["email", "currency", "domain", "path", "machine-inventory", "host-inventory", "unscanned", "binary"]
                 },
                 "sample": { "type": "string" }
               }

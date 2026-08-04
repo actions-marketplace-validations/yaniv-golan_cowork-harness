@@ -2,7 +2,7 @@ import { z } from "zod";
 import { warn, writeAllSync } from "../io.js";
 import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, isAbsolute, resolve, sep, extname } from "node:path";
 import {
@@ -75,7 +75,16 @@ import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrubField } from "../secrets.js";
-import { scanText, DEFAULT_SCAN_PATTERNS, MANIFEST_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
+import {
+  scanText,
+  scanHostInventory,
+  DEFAULT_SCAN_PATTERNS,
+  MANIFEST_SCAN_PATTERNS,
+  HOST_INVENTORY_CLS,
+  type ScanFinding,
+  type AllowInput,
+  type AllowPattern,
+} from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
 // Synchronous fd writes (match cli.ts): a `process.stdout.write` + `process.exit()` pair truncates the
@@ -952,6 +961,11 @@ function isCapabilityManifest(line: string): boolean {
   return false;
 }
 
+/** Tiers whose recordings inherit the host environment, so their transcripts can carry the recording
+ *  machine's own inventory. `cowork` is included because it resolves to container OR hostloop via a baseline
+ *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
+const HOST_INHERITING_TIERS: ReadonlySet<string> = new Set(["protocol", "hostloop", "cowork"]);
+
 export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
@@ -972,6 +986,32 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   cassette.controlOut?.forEach((l, i) =>
     findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? MANIFEST : FULL)),
   );
+  // Structural host-inventory scan — the text net above cannot see this class. A recording made at a
+  // host-inheriting tier freezes the recording MACHINE's inventory (its MCP servers, agents, account org)
+  // into the init + command-registry events; committed to a public repo that publishes the operator's tool
+  // stack. It escaped the text net because an unconnected server declares no tools, so no `mcp__*` token is
+  // ever written and a `grep mcp__` reads clean — the inventory lives in NAME fields.
+  //
+  // TIER-GATED, and that gate is load-bearing: `mcp.config`/`mcp.enabled` is a documented, supported way to
+  // attach an MCP server to a session under test, and the cassette freezes only the session PATH, so the
+  // scan cannot subtract what a scenario declared on purpose. At `container` the agent is sealed and no host
+  // inventory can reach it, so a foreign server name there is necessarily scenario-declared and must not be
+  // flagged. `cowork` is treated as host-inheriting because it resolves to container OR hostloop via a
+  // baseline gate — fail closed rather than resolve a baseline inside the privacy scan.
+  if (HOST_INHERITING_TIERS.has(cassette.scenario.fidelity as string)) {
+    const structural = (lines: string[] | undefined, key: string) =>
+      lines?.forEach((l, i) => {
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(l);
+        } catch {
+          return; // a non-JSON transcript line has no name fields to read
+        }
+        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow));
+      });
+    structural(cassette.events, "events");
+    structural(cassette.controlOut, "controlOut");
+  }
   // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
     findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
@@ -2091,6 +2131,10 @@ interface RecordOpts {
   // (a per-scenario warning under pMapBounded fires after siblings already paid, and a shared empty
   // policy would emit N interleaved duplicates) — they set this so the per-record preflight doesn't re-fire.
   skipRedactionPreflight?: boolean;
+  // --allow-host-inventory-fixture: proceed with a host-inheriting record into a repo-tracked path. Named
+  // distinctly from verify-cassettes' `--allow-host-inventory <regex>` (a value-taking class allow) so the
+  // two cannot be confused: this one is a boolean consent to RECORD, not a finding suppressor.
+  allowHostInventoryFixture?: boolean;
   // Live-decider plumbing: answer gates DURING the recording instead of pre-scripting them.
   // `onUnanswered` = --on-unanswered fail|first ("llm" when --decider-llm); `externalChannel` = --decider-dir
   // file rendezvous; `llmIntent` = --decider-llm one-line intent; `deciderChannel` labels the authoring stamp.
@@ -2123,6 +2167,68 @@ export function resolvePreflightTier(scenario: Scenario): string {
  *  Callers emit it BEFORE the agent spawns (that timing is the point). Returns null when nothing is risky.
  *  A malformed .cowork-redact.json THROWS here — pre-spawn, before the run is paid for (strictly earlier
  *  than the post-run load that would throw anyway). */
+/** Tiers whose RECORDING inherits the host environment. Mirrors HOST_INHERITING_TIERS but resolves `cowork`
+ *  for real via resolvePreflightTier, which is cheap and exact pre-spawn. */
+function isHostInheritingRecord(scenario: Scenario): boolean {
+  const tier = resolvePreflightTier(scenario);
+  // "unresolvable" = the baseline failed to load. Stay quiet and let the record itself fail loudly on the
+  // same load moments later — the precedent resolvePreflightTier already documents. Guessing a tier here
+  // would mis-refuse a run that was never going to start.
+  return tier === "protocol" || tier === "hostloop";
+}
+
+/** Is `p` inside a git work tree AND not ignored? Tracked-ness is the wrong test: a brand-new
+ *  `--out examples/replays/new.json` is untracked at this moment and is exactly how a fixture gets created.
+ *  Runs git from the TARGET's own directory, not the process cwd — this repo works in `.worktrees/`, which is
+ *  itself gitignored, so a cwd-relative check would call a worktree path "ignored" and skip the refusal. */
+function isRepoVisiblePath(p: string): boolean {
+  const abs = resolve(p);
+  const dir = dirname(abs);
+  const inTree = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return false;
+  const ignored = spawnSync("git", ["-C", dir, "check-ignore", "-q", abs], { encoding: "utf8" });
+  return ignored.status !== 0; // exit 0 = ignored
+}
+
+/**
+ * Decide whether a record may write a host-inheriting transcript to this path.
+ *
+ * REFUSE only for a path that is not already a committed cassette. Refusing an in-place refresh would break
+ * this repo's own `--rerecord-stale` workflow on every host-inheriting fixture, and the predictable result is
+ * that everyone passes the escape flag by reflex — turning the guard off exactly where it matters. For an
+ * existing fixture we warn and let the Layer A scan hard-gate the RESULT at commit/CI time.
+ */
+export function hostInventoryPreflight(
+  scenario: Scenario,
+  plannedCassettePath: string,
+  allowed: boolean,
+): { kind: "ok" } | { kind: "warn"; message: string } | { kind: "refuse"; message: string } {
+  if (allowed) return { kind: "ok" };
+  if (!isHostInheritingRecord(scenario)) return { kind: "ok" };
+  if (!isRepoVisiblePath(plannedCassettePath)) return { kind: "ok" };
+  const tier = resolvePreflightTier(scenario);
+  const why =
+    `fidelity '${tier}' inherits the host environment, so the recording will freeze THIS machine's ` +
+    `MCP servers, agents and account metadata into the cassette`;
+  if (existsSync(plannedCassettePath)) {
+    return {
+      kind: "warn",
+      message:
+        `::warning:: [record] re-recording a repo-tracked cassette at ${tier}: ${why}. ` +
+        `Verify with 'verify-cassettes' before committing — it fails on a host-inventory finding.\n`,
+    };
+  }
+  return {
+    kind: "refuse",
+    message:
+      `refusing to record into a repo-visible path at ${tier} — ${why}, and committing that publishes it.\n` +
+      `  path: ${plannedCassettePath}\n` +
+      `  Fix: record at 'container' fidelity (sealed, HOME=/tmp), or --out a path outside the repo ` +
+      `(the default 'cassettes/' dir is gitignored).\n` +
+      `  Override with --allow-host-inventory-fixture if this session has no personal MCP servers or plugins.`,
+  };
+}
+
 export function redactionPreflightMessage(items: Array<{ scenario: Scenario; policyDirs: string[] }>): string | null {
   const risky: string[] = [];
   for (const it of items) {
@@ -2233,6 +2339,7 @@ export const RECORD_BOOLEAN_FLAGS = [
   "--verbose",
   "--dry-run",
   "--decider-llm",
+  "--allow-host-inventory-fixture",
 ] as const;
 export const RECORD_VALUE_FLAGS = [
   "--out",
@@ -2253,8 +2360,8 @@ export const RECORD_VALUE_FLAGS = [
 // P9 generalizes this to `replay` and `verify-cassettes`, which had the same two-hand-maintained-strings
 // problem `record` had (see the RECORD_USAGE comment below) AND no coverage guard at all. Generalizing
 // surfaced two things a record-only shape couldn't represent:
-//   - `verify-cassettes` accepts SIX `repeated:` flags (`--allow`/`--allow-domain`/`--allow-email`/
-//     `--allow-path`/`--allow-machine-inventory`/`--allow-patterns-file`, see cmdVerifyCassettes below).
+//   - `verify-cassettes` accepts SEVEN `repeated:` flags (`--allow`/`--allow-domain`/`--allow-email`/
+//     `--allow-path`/`--allow-machine-inventory`/`--allow-host-inventory`/`--allow-patterns-file`, see cmdVerifyCassettes below).
 //     `repeated` is NOT `values` — parseArgs (src/cli-args.ts) collects repeated flags into
 //     `p.repeated[]` (every occurrence kept); a plain `values` flag is last-write-wins (every earlier
 //     occurrence silently discarded). Folding `repeatedFlags` into `valueFlags` here would make the
@@ -2331,7 +2438,8 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>]\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture]\n" +
+  "       --allow-host-inventory-fixture: proceed when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette would freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. Use only when the session has no personal MCP servers or plugins.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
   "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
   "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
@@ -2373,6 +2481,7 @@ export async function cmdRecord(args: string[]) {
     maxArtifactBytes = n;
   }
   const noRedact = p.flags["--no-redact"] ?? false;
+  const allowHostInventoryFixture = p.flags["--allow-host-inventory-fixture"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
   const allowFailing = p.flags["--allow-failing"] ?? false;
   const force = p.flags["--force"] ?? false;
@@ -2719,6 +2828,7 @@ export async function cmdRecord(args: string[]) {
             cassettePath: cp,
             maxArtifactBytes,
             skipRedactionPreflight: true,
+            allowHostInventoryFixture,
           });
         } else if (!fromEmbedded) {
           // No on-disk scenario resolved. Re-recording from the embedded snapshot silently DROPS any edits
@@ -2736,7 +2846,7 @@ export async function cmdRecord(args: string[]) {
           const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
-            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true },
+            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true, allowHostInventoryFixture },
           );
         }
         staleBudget.add(budgetFields(r.result).costUsd);
@@ -2840,7 +2950,14 @@ export async function cmdRecord(args: string[]) {
       }
       log(`${tag} recording ${f}…`);
       try {
-        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, skipRedactionPreflight: true, ...liveDecider });
+        const r = await recordScenarioFile(f, {
+          noRedact,
+          allowFailing,
+          maxArtifactBytes,
+          skipRedactionPreflight: true,
+          allowHostInventoryFixture,
+          ...liveDecider,
+        });
         batchBudget.add(budgetFields(r.result).costUsd);
         log(`  ✓ ${tag} → ${r.cassettePath} (${r.result.result})`);
         // the re-record delta (only present when this overwrote a prior cassette) — see describeBehaviourDelta
@@ -2884,6 +3001,7 @@ export async function cmdRecord(args: string[]) {
       force,
       cassettePath,
       maxArtifactBytes,
+      allowHostInventoryFixture,
       externalChannel: channel,
       ...liveDecider,
     });
@@ -2944,6 +3062,16 @@ async function recordScenarioObject(
       { scenario, policyDirs: [process.cwd(), ...extraPolicyDirs, dirname(plannedCassettePath)] },
     ]);
     if (preflight) warn(preflight);
+  }
+  // Host-inventory preflight — ALSO before the paid spawn. A host-inheriting tier freezes the recording
+  // machine's own inventory into the transcript, so writing that to a repo-tracked path publishes the
+  // operator's tool stack (this has happened). Refusing after the run would be strictly worse: the tokens
+  // are already spent and the tempting fix is to commit it anyway.
+  {
+    const plannedCassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
+    const verdict = hostInventoryPreflight(scenario, plannedCassettePath, opts.allowHostInventoryFixture === true);
+    if (verdict.kind === "refuse") return fail("record", "usage", verdict.message, undefined, isJsonOutput(process.argv)) as never;
+    if (verdict.kind === "warn") warn(verdict.message);
   }
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
@@ -4124,6 +4252,7 @@ export const VERIFY_CASSETTES_REPEATED_FLAGS = [
   "--allow-email",
   "--allow-path",
   "--allow-machine-inventory",
+  "--allow-host-inventory",
   "--allow-patterns-file",
 ] as const;
 
@@ -4139,7 +4268,7 @@ export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
 // recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
 export const VERIFY_CASSETTES_USAGE =
-  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
   "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
   "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.";
@@ -4230,6 +4359,7 @@ export async function cmdVerifyCassettes(args: string[]) {
   for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
   for (const src of p.repeated["--allow-path"] ?? []) addAllow(src, "path", "--allow-path");
   for (const src of p.repeated["--allow-machine-inventory"] ?? []) addAllow(src, "machine-inventory", "--allow-machine-inventory");
+  for (const src of p.repeated["--allow-host-inventory"] ?? []) addAllow(src, HOST_INVENTORY_CLS, "--allow-host-inventory");
   for (const file of p.repeated["--allow-patterns-file"] ?? []) {
     let body: string;
     try {

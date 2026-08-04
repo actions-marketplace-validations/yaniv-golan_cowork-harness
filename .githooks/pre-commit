@@ -51,7 +51,11 @@ fi
 # (`verify-cassettes examples/replays/` in .github/workflows/ci.yml), so it fires at commit time
 # instead of at release time.
 #
-baseline_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^baselines/desktop-.*\.json$' || true)
+# ALSO trigger on a staged cassette, not just a staged baseline. A baseline moves `latest` and stales the
+# committed fixtures — that's why this started here — but the commit that ADDS or re-records a cassette is
+# the one that can introduce a host-inventory leak, and it stages no baseline at all, so it used to skip
+# this check entirely (the host-inventory warning below was unreachable on exactly that commit).
+baseline_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(baselines/desktop-.*|.*\.cassette)\.json$' || true)
 if [ -n "$baseline_files" ]; then
   if [ ! -f dist/cli.js ]; then
     echo "⚠ pre-commit: dist/cli.js not built (run 'npm run build') — skipping cassette staleness check."

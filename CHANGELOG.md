@@ -8,6 +8,39 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`verify-cassettes` now fails on a leaked host inventory (`host-inventory` finding class).** A cassette
+  recorded at a host-inheriting tier (`protocol`, `hostloop`, or `cowork` resolving to hostloop) freezes the
+  recording *machine's* own inventory into its `system/init` and command-registry events; committed to a
+  public repo that publishes your tool stack. The existing text scanner could not see it, and neither can
+  `grep`: an MCP server that never connected declares no tools, so no `mcp__<server>__<tool>` token is ever
+  written — the inventory lives in **name fields**. This check reads those fields structurally and flags a
+  foreign `mcp_servers[].name`, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
+  `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
+  `--allow-host-inventory <regex>`; if the name is a genuine Cowork server, add it to `KNOWN_COWORK_SERVERS`
+  instead. **Tier-gated deliberately** — at `container` the agent is sealed, so a foreign server name there
+  can only be one your scenario attached via `mcp.config`, and flagging it would fail a legitimate fixture.
+  What it does *not* cover is documented in [docs/cassette.md](./docs/cassette.md): the command/skill/plugin
+  catalogs and command descriptions are ungated (no clean predicate, only an arbitrary threshold), so treat
+  this as a backstop against a known failure, not proof a cassette is clean.
+- **`record` refuses, before spending, to write a host-inheriting recording into a repo-visible path.**
+  Refusing afterwards would be worse than useless — the tokens are gone and the tempting fix is to commit it
+  anyway. The message names the tier, the fix (record at `container`, or `--out` outside the repo — the
+  default `cassettes/` dir is gitignored), and the override `--allow-host-inventory-fixture`. Re-recording an
+  *existing* committed fixture in place **warns** rather than refuses, so `--rerecord-stale` keeps working
+  and the override does not become reflexive; the finding class above still hard-gates the result.
+
+### Fixed
+
+- **`cls: "binary"` was missing from the published `verify-cassettes` schema.** The artifact path has been
+  emitting it, so a consumer validating that output against `schema/verify-cassettes.json` would reject a
+  valid envelope. Added, along with a test asserting every emitted `cls` literal is present in both the
+  schema and SPEC.md — the enum is hand-maintained in three places and had already drifted once.
+- **The pre-commit cassette check only ran when a *baseline* was staged.** A baseline moves `latest` and
+  stales the fixtures, which is why the check started there — but the commit that adds or re-records a
+  cassette is the one that can introduce a leak, and it stages no baseline, so it skipped the check entirely
+  (including the host-inventory warning printed inside that branch). It now also triggers on a staged
+  `*.cassette.json`.
+
 - **Platform baseline `desktop-1.24012.11`, and the proactive skill-suggest mode is now modeled ON.**
   The Desktop bump itself is near-empty: the staged agent ELF is unchanged (`2.1.219`, same sha), the
   Cowork system-prompt constant is byte-identical, the sub-agent append is unchanged, and spawn env /
