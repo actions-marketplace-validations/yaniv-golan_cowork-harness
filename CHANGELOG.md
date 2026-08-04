@@ -81,6 +81,16 @@ All notable changes to this project are documented here. The format is based on
   *"a gate still fires at all"* → `gate_answer_count_min: 1`, *"a deliverable reached the user"* →
   `user_visible_artifact`, and so on. The table previously existed only in the agent-facing skill, so a
   human reading the docs got a reference with no way in.
+- **`allow_outputs_delete: true` accepts an outputs delete you meant to happen.** Until now there was no
+  way to say so: asserting `no_delete_in_outputs` fails, writing `false` is schema-rejected, and *omitting*
+  the key permits nothing either — a detected delete still fails the run via the `outputs_delete` signal,
+  which fires precisely **because** the key was not authored. Three doors, all locked, and the docs pointed
+  at the one that does not open (that sentence is now corrected everywhere it appeared). The new key is a
+  **waiver of the harness's post-hoc detection**, not a model of Cowork's `allow_cowork_file_delete`
+  approval handshake — the agent never sees an `EPERM` here, so a skill that would catch one and escalate
+  still behaves differently. Mutually exclusive with `no_delete_in_outputs`, rejected at load and in the
+  published JSON Schema (a zod refinement has no schema representation, so the rule is mirrored by hand and
+  validated by a test — otherwise an editor would green a scenario the loader rejects).
 
 ### Changed
 
@@ -92,8 +102,44 @@ All notable changes to this project are documented here. The format is based on
   a pre-fingerprint cassette has nothing to check, and a `COWORK_HARNESS_GITSET` / `COWORK_HARNESS_AGENT_SCOPE`
   mismatch between record and CI downgrades real drift to a non-failing `format` finding.
 
+- **`no_delete_in_outputs` no longer flags operations Cowork permits.** The guard treated `truncate`,
+  a statement-leading `> file`, and bare `shred` as deletes. Probing a real outputs mount directly with raw
+  syscalls — in a folder-connected session and a folder-less one, which agree on every operation — shows
+  outputs is a **FUSE** mount whose policy is narrower than that: `unlink` and `rmdir` fail `EPERM`, and
+  **nothing else does**. `truncate(f,0)`, `O_TRUNC`, `> f`, renaming within outputs, and renaming onto an
+  existing destination all succeed. The harness was therefore **stricter than the product it emulates** —
+  a fidelity defect pointing the opposite way from the usual concern, and a large false-positive source
+  since `truncate` is ordinary English in a comment. The token set now covers only operations that unlink:
+  `rm`/`unlink`/`rmdir`, `find -delete`, the python equivalents, and `shred` **with** `-u`/`--remove`
+  (bare `shred` overwrites in place and never unlinks). `mv` is unchanged and was already correct — a move
+  out of outputs fails (`EXDEV`, then `EPERM` on the copy-then-unlink fallback) and stays flagged, while a
+  move within outputs is permitted and is not. **Runs that previously failed on an in-place truncation now
+  pass**; a skill emptying a deliverable is a content bug, catchable with content assertions, not a
+  containment violation.
+
 ### Fixed
 
+- **A comment could be read as an executable outputs delete.** `splitStatements` is quote-blind, so the
+  body of a `python3 -c "…"` or `perl -e '…'` program string is shredded into pseudo-statements and scanned
+  as shell — an English comment mentioning a delete then became evidence of one, and a read-only pipeline
+  could fail a run for touching nothing. Whole-line `#` comments are now dropped before any statement-level
+  decision. The ordering is load-bearing in **both** directions: bash does not treat a backslash inside a
+  comment as a continuation, so `# note \` followed by `rm outputs/x` really does run the `rm` (stripping
+  after joining would have hidden a real delete); while in `rm \` followed by `# outputs/x` the backslash
+  *does* continue and the `#` line is an argument. Both are false negatives if mishandled and both are
+  pinned by tests. The comment-bearing text still feeds the co-occurrence fast path, so
+  `# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags on the rm's own unprovable target.
+- **The outputs-delete guard reported `ok` while a delete had been detected.** The roster derived its
+  status from whether the *signal* fired, and the signal is suppressed whenever the scenario authored
+  `no_delete_in_outputs` — so a scenario that authored the key and **failed** it showed a green guard. It
+  now derives from the evidence: `fired` whenever a delete was detected, `ok` only on a clean scan,
+  `unverified` when the scan did not run.
+- **A redaction-induced verdict flip now names what flipped.** The self-check reported
+  `pre-redaction pass=true → redacted pass=false` and stopped, so diagnosing it meant replaying both copies
+  by hand. It now appends the failing-assertion diff (already computed, but surfaced only in a branch that
+  is unreachable on a flip) **and** the verdict signal codes — both are needed, because `computeVerdict`
+  folds in non-assertion signals, so a verdict can flip with an unchanged assertion set and a key-only diff
+  would read `[] → []`.
 - **`docs/cassette.md` never stated that replay executes nothing.** Every individual fact was documented,
   but two consequences a reader has to assemble were not. First: a skill's bundled scripts are **not run**
   on replay — a `Bash` call and its result are frozen text, and `artifact_json` reads the recorded

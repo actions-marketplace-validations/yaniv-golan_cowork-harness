@@ -701,11 +701,17 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
    (write-but-no-delete on `outputs/` / connected folders) is *not* mount-enforced **in the harness** —
    `rm` succeeds and is only caught post-hoc by `no_delete_in_outputs`. **Real Cowork enforces it live:**
-   `rm` under `outputs/` fails `Operation not permitted`, and a skill must request approval via
-   `allow_cowork_file_delete` to delete. Two consequences: a skill should not stage disposable scratch
+   outputs is a FUSE mount, and `unlink`/`rmdir` fail `Operation not permitted`; a skill must request
+   approval via `allow_cowork_file_delete` (which re-mounts the folder `rwd` mid-session) to delete.
+   **Only unlinking is denied.** Emptying a file in place — `truncate -s 0`, `> file`, `shred` without
+   `-u` — and renaming *within* outputs both SUCCEED in production, so the harness does not flag them
+   either. Renaming a file OUT of outputs fails (`EXDEV`, then `EPERM` on the copy-then-unlink
+   fallback), so that stays a delete. Two consequences: a skill should not stage disposable scratch
    under `outputs/` (in production, cleanup there costs an approval prompt), and a skill's
    "catch-EPERM-then-request-approval" branch cannot be exercised at any harness tier (the `rm` just
    succeeds here). Do not read this gotcha as "delete-deny may not be real in production" — it is real.
+   If a scenario's deletion IS intended, assert `allow_outputs_delete: true` rather than dropping
+   `no_delete_in_outputs` — omitting it does not permit anything.
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >

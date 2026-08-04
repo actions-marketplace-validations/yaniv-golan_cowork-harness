@@ -192,7 +192,7 @@ default `{}`) hashes identically to one authored before this field existed.
 For an ad-hoc `skill` run (no session file), the CLI flags **`--upload <file>`** and **`--folder <dir>`**
 are the equivalents of `uploads[]` and `folders[]`.
 
-`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md)).
+`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md), which records what production denies: `unlink`/`rmdir` only, not in-place emptying).
 
 ### Discovery
 See [discovery.md](./discovery.md) for the full model. In short: the harness builds a clean `CLAUDE_CONFIG_DIR` with a generated `settings.json`, mounts plugins at the Cowork paths, and wires `--mcp-config` — every field here is an override knob.
