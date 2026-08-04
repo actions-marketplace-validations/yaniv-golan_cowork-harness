@@ -107,7 +107,7 @@ jobs:
         # `cmd_lint` exits non-zero only on `has_error or (strict and findings)`, so a rule like
         # vacuous-gate-assert could fire on the corpus and CI would still be green. Bare --strict
         # would red today on 6 pre-existing INFOs.
-        run: node dist/cli.js lint examples/scenarios/*.yaml examples/scenarios/trigger-accuracy-sweep/*.yaml --strict --min-severity WARN
+        run: node dist/cli.js lint examples/scenarios/*.yaml examples/scenarios/trigger-accuracy-sweep/*.yaml e2e/scenarios/*.yaml --strict --min-severity WARN
 
   # ── Stage 1a: the heavy unit suite, SHARDED across parallel runners (the former `unit` 15-min pole).
   # 4328 tests; ~45 files gate CLI-integration cases on dist/cli.js via describe.skipIf — each shard

@@ -11,3 +11,10 @@ answers:
 assert:
   - result: success
   - transcript_contains: "Kiwi"
+  # The gate-assertion IDIOM, demonstrated where a gate reliably fires. `gate_answers_delivered`
+  # alone passes VACUOUSLY when zero gates fire — it would stay green if this scenario stopped
+  # asking altogether, which is the regression it looks like it guards. `gate_answer_count_min: 1`
+  # is the presence floor that makes it mean something. `lint` warns (`vacuous-gate-assert`) when
+  # the first appears without a companion, and CI now runs that lint with --strict.
+  - gate_answer_count_min: 1
+  - gate_answers_delivered: true
