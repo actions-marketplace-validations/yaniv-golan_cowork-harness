@@ -2034,14 +2034,24 @@ export function hostPathLeaked(text: string): boolean {
   return normalized !== text && re.test(normalized);
 }
 
-// rm-family deletes PLUS shell empty-truncation idioms that wipe a file as destructively as `rm`:
-// a STATEMENT-LEADING bare `>` (`> outputs/x`, `make && > outputs/x`) and zero-arg `echo >`. The
-// redirect `>` is anchored to a statement boundary (start / `\n` / `;` / `|` / `&&` / `||` — the same
-// boundaries splitStatements splits on) so a normal deliverable WRITE (`jq … > outputs/f`, where `>`
-// follows a command) is NOT flagged; `(?!>)` excludes append (`>>`) and `&>` carries a single `&` that
-// is not in the boundary set.
+// Operations that UNLINK a name. Scoped to match the real product's enforcement, which was measured
+// directly against the outputs mount with raw syscalls (not shell commands, which mask the syscall
+// behind fallbacks): `unlink` and `rmdir` fail EPERM; every other operation succeeds, including
+// content destruction and renames. So the token set here is deliberately NARROW.
+//
+// Deliberately NOT delete tokens, because the product permits them:
+//   - `truncate -s 0 f` / `open(f,"w")` / a statement-leading `> f` — these EMPTY a file without
+//     unlinking it. Verified permitted. (They were flagged here previously, which made the harness
+//     STRICTER than the product it emulates — the reverse of a sandbox-escape risk, but still an
+//     infidelity, and a large false-positive source since `truncate` is ordinary prose in a comment.)
+//   - `shred f` WITHOUT `-u`/`--remove` — overwrites in place, never unlinks. `shred -u` does unlink,
+//     so it stays a delete and needs the flag shape to be told apart.
+//   - `mv` within outputs, and `mv` onto an existing destination — both permitted; `mv` direction is
+//     handled separately by `mvDeletesOutputs` (a move OUT of outputs fails, so it stays flagged).
+// A skill that empties a deliverable is a content bug, catchable with content assertions — not a
+// containment violation, and asserting it here would red runs the real product would allow.
 const DELETE_TOKEN =
-  /\b(rm|unlink|rmdir|shred|truncate)\b|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(|(?:^|[\n;|]|&&|\|\|)\s*>(?!>)|\becho\s*>(?!>)/;
+  /\b(rm|unlink|rmdir)\b|\bshred\b[^\n;|&]*[ \t](?:-[a-zA-Z]*u\b|--remove\b)|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
 // `outputs` MENTIONED as a path segment (followed by `/` or a boundary) — broad, used for the conservative
 // rm co-occurrence + ambiguous-mv branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
 const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
@@ -2050,8 +2060,8 @@ const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
 const UNDER_OUTPUTS = /(^|\/)(mnt\/)?outputs(\/|$)/;
 const CD_INTO_OUTPUTS = /\b(cd|pushd)\s+["']?(mnt\/)?outputs(?![\w.])/;
 
-/** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY by the
- *  resolved target's mount (the `outputs` mount is `rw` without the delete bit) — a delete whose target
+/** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY at the
+ *  resolved target's mount — outputs is a FUSE mount that fails `unlink`/`rmdir` with EPERM — a delete whose target
  *  provably lands under `/tmp` (or the literal, unexpanded `$TMPDIR`/`${TMPDIR}` idiom) is genuinely never
  *  an outputs delete in production, so treating it as scratch here is MORE faithful, not less safe. (Prior
  *  rationale for leaving this opt-in — "`/tmp` is NOT assumed scratch" — predated that binary finding.) */
@@ -2217,9 +2227,10 @@ function mvDeletesOutputs(stmt: string): boolean {
 }
 
 /**
- * A bash command deletes in outputs when (a) an `mv` moves a file OUT of outputs, or (b) an rm-family
- * delete (`rm/unlink/rmdir/shred/truncate`, `find … -delete`, python os.remove/unlink/rmdir/shutil.rmtree,
- * pathlib `.unlink()`) targets something under outputs. mv-direction is always evaluated (fixes the
+ * A bash command deletes in outputs when (a) an `mv` moves a file OUT of outputs, or (b) an unlinking
+ * delete (`rm/unlink/rmdir`, `shred -u`, `find … -delete`, python os.remove/unlink/rmdir/shutil.rmtree,
+ * pathlib `.unlink()`) targets something under outputs. Emptying a file in place is NOT a delete — see
+ * DELETE_TOKEN for which operations the real product permits and why. mv-direction is always evaluated (fixes the
  * move-INTO false positive without losing the move-OUT true positive). For the rm family this mirrors real
  * Cowork's own enforcement, which is STRUCTURAL (a delete syscall's resolved target's mount), not
  * command-text co-occurrence: BY DEFAULT, each rm-family delete statement's own target(s) are inspected —

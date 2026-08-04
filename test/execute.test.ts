@@ -421,11 +421,34 @@ describe("isOutputsDelete — mv direction + target-based safe-prefix suppressio
     expect(isOutputsDelete('rm -rf "$UNDEFINED/data" ; cp a mnt/outputs/b')).toBe(true); // unresolved var
   });
 
-  it("redirect truncation: a statement-leading bare `>` into outputs is a delete", () => {
-    expect(isOutputsDelete("echo > outputs/report.json")).toBe(true);
-    expect(isOutputsDelete("make && > outputs/report.json")).toBe(true);
-    expect(isOutputsDelete("> outputs/report.json")).toBe(true);
-    expect(isOutputsDelete("cat x.csv ; > outputs/data.csv")).toBe(true);
+  // Measured directly against the real outputs mount with raw syscalls: `unlink`/`rmdir` fail EPERM;
+  // truncate(f,0), open(f,"w"), and rename all SUCCEED. Emptying a file is not a containment
+  // violation there, so flagging it here would red runs the real product allows.
+  it("emptying a file in place is NOT a delete — the real product permits it", () => {
+    expect(isOutputsDelete("echo > outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("make && > outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("> outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("cat x.csv ; > outputs/data.csv")).toBe(false);
+    expect(isOutputsDelete("truncate -s 0 mnt/outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("truncate --size=0 outputs/f")).toBe(false);
+    expect(isOutputsDelete("shred mnt/outputs/secret.txt")).toBe(false); // overwrites, never unlinks
+  });
+
+  it("shred unlinks ONLY with -u/--remove, so the flag shape is what makes it a delete", () => {
+    expect(isOutputsDelete("shred -u mnt/outputs/secret.txt")).toBe(true);
+    expect(isOutputsDelete("shred -zu mnt/outputs/secret.txt")).toBe(true); // bundled short opts
+    expect(isOutputsDelete("shred outputs/f -u")).toBe(true); // flag after the operand
+    expect(isOutputsDelete("shred --remove mnt/outputs/secret.txt")).toBe(true);
+    expect(isOutputsDelete("shred --remove=wipesync outputs/f")).toBe(true);
+    // the flag shape must not be satisfied from a LATER statement
+    expect(isOutputsDelete("shred outputs/f\necho -u done")).toBe(false);
+  });
+
+  // The reported false-positive classes: prose containing a retired token, near an outputs path.
+  it("prose mentioning a non-delete op near outputs is not a delete", () => {
+    expect(isOutputsDelete("echo truncate note >> /mnt/outputs/log.md")).toBe(false); // an APPEND
+    expect(isOutputsDelete('cat /mnt/outputs/a.csv | python3 -c "import sys # truncate old rows" | head')).toBe(false);
+    expect(isOutputsDelete("truncate large sections for display in mnt/outputs/report.md")).toBe(false);
   });
   it("redirect truncation: a normal deliverable WRITE / append is NOT a delete", () => {
     expect(isOutputsDelete("jq '.' input.json > outputs/report.json")).toBe(false);
