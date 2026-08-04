@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { scanHostInventory, KNOWN_COWORK_SERVERS, KNOWN_BUILTIN_AGENTS, HOST_INVENTORY_CLS, DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
 import { makeSkillsHandler } from "../src/hostloop/skills-handler.js";
 import { makePluginsHandler } from "../src/hostloop/plugins-handler.js";
+import { makeWorkspaceHandler } from "../src/hostloop/workspace-handler.js";
+import { makeCoworkHandler } from "../src/hostloop/cowork-handler.js";
 
 // A cassette recorded at a host-inheriting tier freezes the recording MACHINE's inventory into its init and
 // command-registry events. One such fixture shipped publicly carrying 18 personal MCP server names, the
@@ -131,18 +133,25 @@ describe("scanHostInventory — allow scoping", () => {
 describe("host-inventory — drift guards", () => {
   // KNOWN_COWORK_SERVERS is a literal in scan.ts to avoid a scan->hostloop dependency. This asserts it
   // against what the handlers actually report, so the two cannot drift apart silently.
-  it("KNOWN_COWORK_SERVERS contains every server name the handlers report via initialize", async () => {
+  it("KNOWN_COWORK_SERVERS equals exactly what the handlers report via initialize", async () => {
     const handlers = [
       makeSkillsHandler({ mountedSkills: [], mountedPluginNames: [], suggestSkillsEnabled: true, proactiveSkillSuggestEnabled: false }),
       makePluginsHandler({ mountedPlugins: [] }),
+      makeWorkspaceHandler({ runDir: tmpdir(), sessionRoot: tmpdir(), egress: { allowDomains: [] } } as never),
+      makeCoworkHandler({ userVisibleRoots: [] } as never),
     ];
+    const reported = new Set<string>();
     for (const h of handlers) {
       // McpHandler is (server, jsonrpcRequest) => McpResult
       const res: any = await h(undefined as never, { method: "initialize", params: {} } as never);
       const name = res?.result?.serverInfo?.name;
       expect(typeof name).toBe("string");
-      expect(KNOWN_COWORK_SERVERS.has(name)).toBe(true);
+      reported.add(name);
     }
+    // EQUALITY, not containment. Containment only catches a handler the set forgot (a false POSITIVE, noisy
+    // but safe). A stale EXTRA entry in the set is the dangerous direction — it silently exempts a server
+    // the harness no longer serves, i.e. a miss — and only equality catches that.
+    expect([...reported].sort()).toEqual([...KNOWN_COWORK_SERVERS].sort());
   });
 
   // The `cls` enum is hand-maintained in THREE places and had already rotted before this class existed:
@@ -203,6 +212,20 @@ describe("host-inventory — reachable through the verify-cassettes CLI", () => 
   // a session under test, and the cassette freezes only the session PATH — so the scan cannot tell a declared
   // server from a leaked one. At container the agent is sealed, so it must be exempt or this reds legitimate
   // fixtures. Same injected payload, only the tier differs.
+  // REGRESSION (fail-open): `fidelity` is NOT required by the cassette shape, so a cassette that omits it
+  // used to skip the whole check — a silent pass on exactly the file a leak arrives in. Unknown tier must
+  // scan, same fail-closed reasoning as `cowork`.
+  it("a cassette with NO scenario.fidelity still gets scanned (unknown tier fails closed)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hostinv-nofid-"));
+    const p = inject(dir, "hostloop-computer-links.cassette.json");
+    const c = JSON.parse(readFileSync(p, "utf8"));
+    delete c.scenario.fidelity;
+    delete c.effectiveFidelity;
+    writeFileSync(p, JSON.stringify(c, null, 2));
+    const r = spawnSync(process.execPath, [CLI, "verify-cassettes", dir], { encoding: "utf8" });
+    expect(r.stdout + r.stderr).toContain(HOST_INVENTORY_CLS);
+  });
+
   it("the same payload in a container-tier cassette does NOT fail — a sealed run's server was declared", () => {
     const dir = mkdtempSync(join(tmpdir(), "hostinv-ok-"));
     inject(dir, "example-pdf-skill.cassette.json"); // container = sealed
@@ -242,8 +265,23 @@ describe("hostInventoryPreflight — Layer B", () => {
     expect(hostInventoryPreflight(scn("container"), repoPath, false).kind).toBe("ok");
   });
 
+  // REGRESSION (fail-open): the gitignored-path case must exercise `git check-ignore` for real. The dir is
+  // created first because `cassettes/` is gitignored and therefore absent in a fresh clone — without it this
+  // test passes through the nonexistent-ancestor branch instead, and the check-ignore call could be deleted
+  // entirely with the test still green.
   it("allows a gitignored in-repo path (the default cassettes/ dir) at protocol", () => {
+    mkdirSync(dirname(ignoredPath), { recursive: true });
+    expect(existsSync(dirname(ignoredPath)), "the gitignored dir must exist or this asserts nothing").toBe(true);
     expect(hostInventoryPreflight(scn("protocol"), ignoredPath, false).kind).toBe("ok");
+  });
+
+  // REGRESSION (fail-open): a first-ever record into a NEW subdirectory. `git -C <nonexistent>` exits 128,
+  // and reading that as "not a repo" let the most dangerous case through — the path by which a brand-new
+  // fixture is created. Must resolve the nearest existing ancestor and still refuse.
+  it("REFUSES a repo path whose parent directory does not exist yet", () => {
+    const nested = resolve(__dirname, "../examples/replays/brand-new-dir/deep/x.cassette.json");
+    expect(existsSync(dirname(nested))).toBe(false);
+    expect(hostInventoryPreflight(scn("protocol"), nested, false).kind).toBe("refuse");
   });
 
   it("allows a path outside any work tree at protocol", () => {

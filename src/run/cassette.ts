@@ -998,7 +998,12 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // inventory can reach it, so a foreign server name there is necessarily scenario-declared and must not be
   // flagged. `cowork` is treated as host-inheriting because it resolves to container OR hostloop via a
   // baseline gate — fail closed rather than resolve a baseline inside the privacy scan.
-  if (HOST_INHERITING_TIERS.has(cassette.scenario.fidelity as string)) {
+  // An UNKNOWN tier scans too. `fidelity` is not required by the cassette shape (scenario is a looseObject
+  // over prompt/session/assert), so a cassette that simply omits it would otherwise skip this check
+  // entirely — a silent fail-open on exactly the file a leak would arrive in. Only a tier we can positively
+  // identify as sealed (`container`, `microvm`) is exempt. Same fail-closed reasoning as `cowork`.
+  const tier = (cassette.effectiveFidelity ?? cassette.scenario.fidelity) as string | undefined;
+  if (tier === undefined || HOST_INHERITING_TIERS.has(tier)) {
     const structural = (lines: string[] | undefined, key: string) =>
       lines?.forEach((l, i) => {
         let decoded: unknown;
@@ -2183,11 +2188,26 @@ function isHostInheritingRecord(scenario: Scenario): boolean {
  *  itself gitignored, so a cwd-relative check would call a worktree path "ignored" and skip the refusal. */
 function isRepoVisiblePath(p: string): boolean {
   const abs = resolve(p);
-  const dir = dirname(abs);
+  // Walk up to the nearest EXISTING ancestor before asking git anything. `git -C <nonexistent>` exits 128,
+  // and treating that as "not in a repo" failed OPEN on the most dangerous case there is: the first-ever
+  // record into a new directory (`--out examples/replays/sub/x.json`), which is precisely how a fresh
+  // fixture gets created. The target itself never exists yet, so the parent is always the starting point.
+  let dir = dirname(abs);
+  while (!existsSync(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return false; // walked off the filesystem root — nothing to ask git about
+    dir = up;
+  }
   const inTree = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return false;
+  // A git that is absent or erroring (status null / non-zero with no usable answer) is NOT evidence that the
+  // path is safe. Only a definitive "false" — git ran and said this is not a work tree — clears the check.
+  if (inTree.status === null) return true; // git missing/failed to spawn: fail CLOSED
+  if (inTree.status !== 0) return false; // git ran and said "not a work tree"
+  if (inTree.stdout.trim() !== "true") return false;
   const ignored = spawnSync("git", ["-C", dir, "check-ignore", "-q", abs], { encoding: "utf8" });
-  return ignored.status !== 0; // exit 0 = ignored
+  // check-ignore: 0 = ignored, 1 = not ignored, 128 = error. Only a clean 0 clears it; an error means we
+  // could not prove the path is ignored, so treat it as repo-visible.
+  return ignored.status !== 0;
 }
 
 /**
