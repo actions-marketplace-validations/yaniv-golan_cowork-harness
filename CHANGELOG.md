@@ -8,6 +8,36 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Platform baseline `desktop-1.24012.11`, and the proactive skill-suggest mode is now modeled ON.**
+  The Desktop bump itself is near-empty: the staged agent ELF is unchanged (`2.1.219`, same sha), the
+  Cowork system-prompt constant is byte-identical, the sub-agent append is unchanged, and spawn env /
+  mount layout / egress allowlist / `bgEnvStrip` do not move. The one substantive delta is
+  `proactiveSkillSuggestEnabled` flipping ON — by a **server-side** rollout, not a Desktop change (it
+  reads ON on earlier Desktop versions too), so an omitted `skills.proactive_suggest_enabled` now
+  resolves ON and `suggest_skills` declares its proactive description plus an optional `trigger` param
+  by default. `skills.proactive_suggest_enabled: false` restores the old surface per session. The gate's
+  third production effect — a swapped guidance line inside Desktop's generated `<skills_instructions>`
+  block — is **not** modeled, because the harness renders no such section; that is recorded in
+  `docs/fidelity-gaps.md` rather than left implicit.
+- **A dark drift sentinel for the `1p-direct-mcp` gate**, new in `1.24012.11`. It arms a Desktop-side
+  direct-MCP pool for MDM-managed 1P servers, is inert for a standard unmanaged account, and is pinned
+  (not modeled) so a production rollout surfaces as a `sync` diff instead of silent widening.
+
+### Fixed
+
+- **The proactive `suggest_skills` branch now matches production.** Its empty-catalog `note` used to
+  branch proactive-vs-not and return a bare "continue silently", suppressing the `search_plugins` chain
+  production emits for *every* trigger state — silence is only the `proactive` tail. And because
+  `trigger` is optional, a trigger-omitted call is a distinct third path that must not be told to
+  forward a trigger it never supplied; it was previously grouped with `user_asked`. The proactive
+  description also carried the permission to suggest without the constraints that fence it, so the
+  modeled agent over-suggested relative to production.
+- **`provenance.eipcChannelUuid` is no longer carried into new baselines.** It advertised itself as
+  "per-build" but no extractor ever existed, so it was copied forward unchanged into all 20 baselines —
+  one value, matching no shipped asar — and was structurally incapable of ever reporting drift. Nothing
+  read, typed, or asserted it. The hazard was the comment: a promise of per-build freshness invites a
+  provenance tripwire on ground that cannot move. Historical baselines keep their recorded value.
+
 - **`record` reports what changed vs the cassette it replaced.** Re-recording is the only moment where
   "did my edit change what the agent does?" is observable — replay re-checks a frozen transcript and is
   structurally blind to it — and until now that answer was discarded: you paid for a re-record and got an

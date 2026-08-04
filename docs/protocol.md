@@ -169,3 +169,12 @@ least one vector.
   entry records that inheritance explicitly rather than leaving the gap ambiguous between "nothing
   additive was observed" and "nobody updated this file." The last **live** end-to-end control-protocol
   pass remains `2026-07-11 / desktop-1.20186.0` (see DESIGN.md).
+- **2026-08-04** — baseline set extended through `desktop-1.24012.11`. No control-protocol change:
+  `can_use_tool`, `control_request`/`control_response`, `permissionDecision`, `sdkMcpServers`, `hooks`,
+  `present_files` and the whole skills/plugins discovery region were occurrence-counted identical between
+  the 1.24012.9 and 1.24012.11 asars, the staged agent ELF is unchanged (`2.1.219`, same sha), and the
+  Cowork system-prompt constant is byte-identical (same sha256, code-point and section-tag counts — only
+  the minifier-assigned constant id moved). The only substantive delta is a **server-side** GrowthBook
+  flip of `proactiveSkillSuggestEnabled:1598976391`, which changes the `skills` SDK-MCP tool surface but
+  not the control protocol. Verified the cheaper way, as above — **not** by re-running the live tiers, so
+  the `2026-07-11 / desktop-1.20186.0` live scope above is unchanged.
