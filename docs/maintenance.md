@@ -158,11 +158,54 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
    entry (BOTH `hl` and `vm` are mandatory — a partial entry is itself a hard-fail), then re-run
    `cowork-harness sync`.
 
+   **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
+   `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named
+   variant, and which the harness does not model. (It is distinct from the paraphrased-append gap in
+   [docs/fidelity-gaps.md](./fidelity-gaps.md#system-prompt-reconstruction), and is not itself listed
+   there.) It pins the channel's presence (its **absence** is itself
+   a finding: either the channel went away or the extractor stopped seeing it — neither may pass quietly),
+   the mode vocabulary as a **closed set** (`replace`/`append` — a third mode would change what a served
+   variant can do to the prompt, so this is the highest-value anchor here), the
+   `<name>(.replace|.append)?` key grammar, the startup throw requiring `{{promptCacheBoundary}}` in a
+   replace-mode variant, and the `hit`/`invalid_entry`/`missing_boundary` resolution statuses. Mind the
+   scope split, because it is the reason the sentinel exists at all: the startup throw guards the
+   **built-in** variants table only. A **server-supplied** entry is validated later, on the resolution
+   path, which **degrades instead of throwing** — a boundary-less `replace` resolves to
+   `missing_boundary`, the session gets a different prompt, and nothing errors anywhere. The anchors pin
+   the loud half so the quiet half cannot move unobserved.
+
+   **Includes the mount-mode sentinel.** `checkMountModeFacts` pins five facts about
+   `mountLayout.mounts[].mode`: the delete-deny resolver (`…?"rwd":"rw"`, which is what makes `outputs`
+   and each connected folder `rw`, or `rwd` once approved), plus four mounts whose mode is **hardcoded**
+   `"ro"` at the mount-set builder rather than resolved — `uploads`, `.claude/skills`, `.claude/projects`,
+   and the per-uuid project attachment `.projects/<uuid>`. Each is pinned individually because a mount
+   silently moving from `ro` to a writable mode is a containment change the harness would otherwise model
+   wrongly with nothing failing. Two notes worth carrying: the `.projects/<uuid>` anchor is the fact that
+   settles why a project mount is **not** in the delete-denied set (it is not writable at all, so there is
+   nothing to deny); and the builder runs on two lanes — VM-loop once at spawn, host-loop as
+   `computeBashMounts`, recomputed **per bash call** with a live approved-list read. The hardcoded modes
+   are identical either way, which is why one set of anchors covers both, but "spawn-time" is the wrong
+   mental model for half of it.
+
 2. **`asarFingerprint` → a `--diff` tripwire (separate).** `sync` also records a fingerprint over the
    cowork-relevant code regions (`sliceCowork` tokens). It does **not** itself raise an unknown delta — a
    change just surfaces as a field diff under `sync --diff`, a hint to re-verify the extractor even when
    extraction still *succeeded* (the layout near a token shifted; the regex might be matching the wrong
    thing now).
+
+   **`provenance.fcache` → the same kind of tripwire, for the gate snapshot.** Gate states come from the
+   feature cache, not the asar, so they move on their own schedule. A baseline records
+   `{ content16, embeddedTimestamp, featureCount }` for the payload it read. **`content16` is the
+   identity; `embeddedTimestamp` is metadata and must never be used as one.** The payload refetches
+   irregularly (measured intervals of 3.7–20.8 min across five fetches), so a whole-file hash tracks the
+   *fetch* — gzip framing and the timestamp field — and reports drift on every refetch even when nothing
+   changed. `content16` hashes the canonicalised `features` object instead, so it moves only when the
+   content does; verified across four reads, where the content hash held while the file hash moved every
+   time. `featureCount` alone is not sufficient either: membership churns **count-neutrally** (one gate
+   observed going absent → force while another went present → absent, count pinned at 241 both times).
+   `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
+   and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
+   key silently falls back to a code default that need not match production.
 
 ### Maintainer fix
 Extraction broke because Anthropic moved something the extractor parses. Update the relevant part of
