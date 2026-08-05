@@ -1012,6 +1012,11 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
   const envOutputFormat = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
   const defaultOutput: "text" | "json" = envOutputFormat === "json" ? "json" : "text";
   const flags: CommonFlags = { output: defaultOutput, quiet: false, verbose: false };
+  // INVARIANT for every `fail()` inside this loop: pass `isJsonOutput(args)`, never `flags.output`.
+  // `flags.output` is only populated once the loop REACHES `--output-format`, so reading it here makes
+  // the error envelope depend on flag ORDER — the same bad command line answered a JSON consumer with
+  // plain text when the offending flag came first. `isJsonOutput` scans all of argv and falls back to
+  // COWORK_HARNESS_OUTPUT_FORMAT, so it is correct at any point in the parse.
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     // resolve the equals form generically so every common value-flag accepts `--flag=value`, not
@@ -1048,20 +1053,19 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
     else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
-        fail(commandName, "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
+        fail(commandName, "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
       flags.deciderCmd = v;
     } else if (name === "--decider-dir") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
-        fail(commandName, "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
+        fail(commandName, "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
       flags.deciderDir = v;
     } else if (name === "--label") {
       const v = readVal();
       // A generation tag, not free text: reject newlines and cap length so it stays a clean, index-scannable key.
       if (v.includes("\n") || v.includes("\r"))
-        fail(commandName, "usage", "--label must be a single line (no newlines)", undefined, flags.output === "json");
-      if (v.length > 200)
-        fail(commandName, "usage", `--label is too long (${v.length} chars; max 200)`, undefined, flags.output === "json");
+        fail(commandName, "usage", "--label must be a single line (no newlines)", undefined, isJsonOutput(args));
+      if (v.length > 200) fail(commandName, "usage", `--label is too long (${v.length} chars; max 200)`, undefined, isJsonOutput(args));
       flags.label = v;
     } else rest.push(a);
   }
