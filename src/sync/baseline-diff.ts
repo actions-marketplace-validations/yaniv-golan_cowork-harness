@@ -90,9 +90,36 @@ export function renderChangelog(entries: BaselineDiffEntry[]): string {
     "provenance.asarFingerprint": (e) =>
       e.kind === "scalar" ? `- cowork-relevant asar regions changed (fingerprint \`${e.from}\` → \`${e.to}\`)` : undefined,
     capturedAt: (e) => (e.kind === "scalar" ? `- baseline captured: \`${e.from}\` → \`${e.to}\`` : undefined),
+    // The fcache snapshot identity. Only `content16` means the payload's CONTENT moved; the timestamp
+    // and count move on refetches that changed nothing, so they are reported as the weaker signal.
+    "provenance.fcache.content16": (e) =>
+      e.kind === "scalar"
+        ? `- fcache CONTENT changed (\`${e.from}\` → \`${e.to}\`) — gate membership and/or values moved`
+        : e.kind === "added"
+          ? `- fcache snapshot id recorded: \`${e.to}\``
+          : undefined,
+    "provenance.fcache.embeddedTimestamp": (e) =>
+      e.kind === "scalar" ? `- fcache refetched (timestamp only; see content16 for whether it mattered)` : undefined,
+    "provenance.fcache.featureCount": (e) => (e.kind === "scalar" ? `- fcache feature count: \`${e.from}\` → \`${e.to}\`` : undefined),
   };
 
   for (const e of notable) {
+    // A value gate's SERVED KEY SET changing. Distinct from a value change, and previously invisible:
+    // the gate regex below only matches paths ENDING at on|source|value, so a key appearing inside
+    // `value` fell through to the generic renderer. It matters because an unserved key resolves to a
+    // CODE default, which production may define as `true` — so a withdrawn key silently changes
+    // behaviour with the gate still present and `on`. Observed for real: `pluginsFullSyncStalenessMs`
+    // was served from 1.21459.0 and withdrawn at 1.24012.0.
+    const servedKey = e.path.match(/^provenance\.gates\.([^.]+)\.value\.([^.]+)$/);
+    if (servedKey && (e.kind === "added" || e.kind === "removed")) {
+      const [, gate, key] = servedKey;
+      lines.push(
+        e.kind === "added"
+          ? `- gate \`${gate}\`: now SERVES key \`${key}\` (\`${JSON.stringify(e.to)}\`) — previously fell back to the code default`
+          : `- gate \`${gate}\`: STOPPED serving key \`${key}\` (was \`${JSON.stringify(e.from)}\`) — now falls back to the code default, which may not be the same value`,
+      );
+      continue;
+    }
     // gate flips: provenance.gates.<name>.on|source|value|note
     const gateMatch = e.path.match(/^provenance\.gates\.([^.]+)\.(on|source|value)$/);
     if (gateMatch) {

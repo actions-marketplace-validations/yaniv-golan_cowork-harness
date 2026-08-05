@@ -26,6 +26,8 @@ import {
   normalizeBundleQuotes,
   exportLocalOf,
   resolveNamespaceRef,
+  fcacheContentHash,
+  decodeFcacheProvenance,
   checkSubagentOverrideGate,
   checkCodeTripwires,
   PINNED_GATES,
@@ -1735,5 +1737,52 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     const { env } = deriveSpawnEnv(joined(m!), gates, m!);
     // Proves the literal is genuinely RESOLVED, not hardcoded or waved through by the shape check.
     expect(env?.MCP_TOOL_TIMEOUT).toBe("70000");
+  });
+});
+
+// ==========================================================================================
+// fcache snapshot identity. The payload refetches irregularly and its membership churns
+// count-neutrally, so `capturedAt` (a date) cannot identify a read. `content16` can — provided it is
+// computed the same way everywhere, which is what these pin.
+// ==========================================================================================
+describe("fcacheContentHash — snapshot identity", () => {
+  it("ignores the fetch timestamp: identical features hash identically", () => {
+    const features = { "123": { on: true, source: "force" }, "456": { on: false, source: "defaultValue" } };
+    expect(fcacheContentHash(features)).toBe(fcacheContentHash({ ...features }));
+  });
+
+  it("changes when a gate's VALUE changes", () => {
+    const a = { "123": { on: true, source: "force" } };
+    const b = { "123": { on: false, source: "force" } };
+    expect(fcacheContentHash(a)).not.toBe(fcacheContentHash(b));
+  });
+
+  it("changes when MEMBERSHIP churns count-neutrally (one in, one out)", () => {
+    // The real 2026-08-05 case: 4074604942 arrived, 2403605075 left, count pinned at 241 both times.
+    const before = { "4074604942": undefined as unknown, "2403605075": { on: true } };
+    delete (before as Record<string, unknown>)["4074604942"];
+    const after = { "4074604942": { on: false } };
+    expect(Object.keys(before).length).toBe(Object.keys(after).length); // count-neutral
+    expect(fcacheContentHash(before)).not.toBe(fcacheContentHash(after));
+  });
+
+  it("REGRESSION: integer-like keys sort lexicographically, not numerically", () => {
+    // Gate ids are integer-like strings. A JS object enumerates those in ascending NUMERIC order
+    // regardless of insertion order, so canonicalising by rebuilding an object (Object.fromEntries over
+    // sorted pairs) silently discards the sort — the first implementation did exactly that and produced
+    // a self-consistent but cross-project-incomparable hash. Python's sort_keys is LEXICOGRAPHIC:
+    // "1004628546" sorts BEFORE "17519066". Pinned against the reference implementation's output.
+    expect(fcacheContentHash({ "17519066": 1, "1004628546": 2 })).toBe(
+      // sha256('{"1004628546":2,"17519066":1}')[:16] — lexicographic order
+      createHash("sha256").update('{"1004628546":2,"17519066":1}', "utf8").digest("hex").slice(0, 16),
+    );
+  });
+
+  it("escapes non-ASCII to \\uXXXX, matching Python's ensure_ascii default", () => {
+    expect(fcacheContentHash({ k: "café" })).toBe(createHash("sha256").update('{"k":"caf\\u00e9"}', "utf8").digest("hex").slice(0, 16));
+  });
+
+  it("decodeFcacheProvenance returns null rather than throwing when there is no fcache", () => {
+    expect(decodeFcacheProvenance(join(tmpdir(), "cowork-harness-no-such-fcache"))).toBeNull();
   });
 });

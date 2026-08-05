@@ -153,13 +153,27 @@ export const PINNED_GATES: Record<string, string> = {
  * The re-key guard below excludes `source:"absent"` entries from its "did anything match" count,
  * so this marker can't mask a wholesale GrowthBook id re-key (see test/baseline.test.ts).
  */
+/* Membership here means "tolerate absence from the fcache", NOT "this gate is permanently absent".
+ *
+ * "Dark" is a TIMESTAMPED OBSERVATION, never a property. Three states, and the middle one is the trap:
+ *   absent                  — not in the payload; genuinely unevaluated
+ *   present + defaultValue  — evaluated, no server rule matched (looks like "off", is not "unevaluated")
+ *   present + force         — a server rule actively matched
+ * Gates move between these on the server's own schedule: three of the five entries below were recorded
+ * as absent and are present today. That is why the comments name a DATE for every observation.
+ *
+ * Entries are never removed on becoming present. Force rules are server-evaluated and can be
+ * segment-targeted, so another account may still see a gate absent; dropping its entry would turn that
+ * account's sync into a spurious hard-fail. Tolerating absence is the entry's whole job — without it the
+ * PINNED_GATES pin never round-trips and the sentinel guards nothing. */
 const DARK_GATES = new Set([
   "2614807392",
   "1129419822", // enableToolSearchAuto — a spawn-env gate absent from a standard fcache (dark); pinned so an
   //                absent→present flip on the ENABLE_TOOL_SEARCH conditional surfaces as a visible diff.
-  "4200321681", // autoModeOverridesAlwaysAllow — absent from a standard 1.22209.0 fcache at pin time (dark);
-  //                pinned so a rollout (absent→present) surfaces as a visible diff.
-  "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale.
+  "4200321681", // autoModeOverridesAlwaysAllow — dark at pin time (absent from a standard 1.22209.0 fcache).
+  //                Observed 2026-08-05 as PRESENT + `force` + ON. Kept per the rule below.
+  "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale; observed 2026-08-05 as PRESENT +
+  //                `defaultValue` + off.
   "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11, and dark (absent from a standard fcache) when
   //                pinned. Observed 2026-08-05 as SERVED (`source:"force"`, `value:false`) — still off, so
   //                nothing it arms is reachable. The entry STAYS: force rules are server-evaluated and can
@@ -175,6 +189,77 @@ const DARK_GATES = new Set([
  * `{ timestamp, features: { <id>: { value, on, off, source, ruleId } } }`.
  * Returns the pinned gates' states, or null if the cache is absent/unreadable (caller flags it).
  */
+/** Snapshot identity for a decoded fcache payload.
+ *
+ *  `content16` is the IDENTITY; `embeddedTimestamp` is metadata and must never be used as one. The
+ *  payload refetches irregularly (measured intervals of 3.7–20.8 min across five fetches) and its
+ *  membership churns COUNT-NEUTRALLY — we observed `4074604942` go absent → force while `2403605075`
+ *  went present → absent, with the feature count pinned at 241 both times. A whole-file sha256 tracks
+ *  the FETCH (gzip framing + the timestamp field), so it reports drift on every refetch even when
+ *  nothing changed; hashing the canonicalised `features` object instead reports drift only when the
+ *  content actually moves. Verified across four reads: the content hash held while the file hash moved
+ *  every time. */
+export type FcacheProvenance = { content16: string; embeddedTimestamp: number | null; featureCount: number };
+
+/** Escape to `\uXXXX` so the output matches Python's default `ensure_ascii=True`; without it the two
+ *  implementations diverge the moment a feature value carries a non-ASCII character. */
+function jsonStringAscii(s: string): string {
+  return JSON.stringify(s).replace(/[-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
+/** Serialise to the exact byte sequence of `json.dumps(v, sort_keys=True, separators=(',',':'))`.
+ *
+ *  Emits directly rather than building a key-sorted clone and calling `JSON.stringify`. That obvious
+ *  approach is WRONG here and fails silently: gate ids are integer-like strings, and a JS object always
+ *  enumerates integer-like keys in ascending NUMERIC order regardless of insertion order — so
+ *  `Object.fromEntries(sortedPairs)` discards the sort and yields `"17519066"` before `"1004628546"`,
+ *  where Python's lexicographic `sort_keys` yields the reverse. Self-consistent, and cross-project
+ *  incomparable. Serialising the sorted key list directly is the only way to keep both true. */
+function canonicalJson(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "string") return jsonStringAscii(v);
+  if (typeof v === "number") return Number.isFinite(v) ? JSON.stringify(v) : "null";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (Array.isArray(v)) return "[" + v.map(canonicalJson).join(",") + "]";
+  if (typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    const keys = Object.keys(o).sort(); // lexicographic, matching Python's sort_keys
+    return "{" + keys.map((k) => jsonStringAscii(k) + ":" + canonicalJson(o[k])).join(",") + "}";
+  }
+  return "null";
+}
+
+/** sha256 over the canonical form above — 16 hex chars. */
+export function fcacheContentHash(features: unknown): string {
+  return createHash("sha256").update(canonicalJson(features), "utf8").digest("hex").slice(0, 16);
+}
+
+/** Decode the fcache payload's snapshot identity. Same read + shape checks as `decodeFcacheGates`. */
+export function decodeFcacheProvenance(path = join(SUPPORT, "fcache")): FcacheProvenance | null {
+  if (!existsSync(path)) return null;
+  let buf: Buffer;
+  try {
+    buf = readFileSync(path);
+  } catch {
+    return null;
+  }
+  if (buf.length < 9 || buf.subarray(0, 3).toString("latin1") !== "CLF") return null;
+  try {
+    const parsed = JSON.parse(gunzipSync(buf.subarray(8)).toString("utf8")) as {
+      timestamp?: unknown;
+      features?: Record<string, unknown>;
+    };
+    const features = parsed?.features ?? {};
+    return {
+      content16: fcacheContentHash(features),
+      embeddedTimestamp: typeof parsed?.timestamp === "number" ? parsed.timestamp : null,
+      featureCount: Object.keys(features).length,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
