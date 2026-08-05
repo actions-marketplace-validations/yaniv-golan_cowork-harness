@@ -1513,7 +1513,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         ? undefined
         : {
             outputsDeletes: scan.outputsDeletes,
-            mountDeletes: scan.mountDeletes,
             // Omitted when empty so an unchanged run's result.json is byte-identical to before.
             ...(scan.mountDeletes.length ? { mountDeletes: scan.mountDeletes } : {}),
             hostPathLeaked: scan.hostPathLeaked,
