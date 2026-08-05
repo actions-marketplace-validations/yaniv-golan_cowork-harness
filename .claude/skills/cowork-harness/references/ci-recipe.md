@@ -315,11 +315,13 @@ scenario = `result === "success" && assertions.every(pass)`. Exit code is non-ze
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
 
-**Stdout carries the machine envelope and nothing else.** Without `--output-format json` a command
-writes its whole human rendering — warnings, verdict, `status`'s summary line — to **stderr**, and
-stdout stays empty. A wrapper that captures only stdout gets an empty log and, if it greps that for a
-state, a silent false negative. Capture stderr for the human trail (`2> run.stderr.log`), or ask for
-JSON and parse stdout.
+**For the commands in this recipe, stdout carries the machine envelope and nothing else.** Without
+`--output-format json`, `run` / `record` / `replay` / `verify-cassettes` / `status` write their whole
+human rendering — warnings, verdict, `status`'s summary line — to **stderr**, and stdout stays empty.
+A wrapper that captures only stdout gets an empty log and, if it greps that for a state, a silent false
+negative. Capture stderr for the human trail (`2> run.stderr.log`), or ask for JSON and parse stdout.
+(Commands whose whole job is to print a value — `--version`, `assertions --list`, `scaffold`, `gates`,
+`skill --dry-run` — write it to stdout by design, with or without the flag.)
 
 `verify-cassettes` emits its **own** envelope (`{command, ok, coverage, results[]}` with per-file
 `findings`/`staleness`/`unverifiable`/`notes`/`version`/`error`), published as
