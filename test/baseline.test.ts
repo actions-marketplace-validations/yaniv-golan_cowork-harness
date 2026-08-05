@@ -28,6 +28,7 @@ import {
   resolveNamespaceRef,
   fcacheContentHash,
   decodeFcacheProvenance,
+  checkSyspromptMapFacts,
   checkSubagentOverrideGate,
   checkCodeTripwires,
   PINNED_GATES,
@@ -1784,5 +1785,56 @@ describe("fcacheContentHash — snapshot identity", () => {
 
   it("decodeFcacheProvenance returns null rather than throwing when there is no fcache", () => {
     expect(decodeFcacheProvenance(join(tmpdir(), "cowork-harness-no-such-fcache"))).toBeNull();
+  });
+});
+
+// ==========================================================================================
+// coworkSyspromptMap — a SERVER-DRIVEN system-prompt patch channel the harness models nowhere.
+// `replace` mode discards the computed default section, so an active replace variant is a structural
+// divergence from our preset-plus-append model. Sentinel only: we cannot see what the server serves,
+// but we can pin the shape that determines what it is ABLE to do.
+// ==========================================================================================
+describe("checkSyspromptMapFacts — prompt-patch channel sentinel", () => {
+  const CLEAN = new Map([
+    [
+      "chunk.js",
+      'x.coworkSyspromptMap;function fn(e){return e==="replace"||e==="append"}' +
+        "var re=/^[A-Za-z0-9_-]{1,128}(\\.(replace|append))?$/;" +
+        "throw Error(`SP_VARIANTS.${e}: replace-mode text must contain {{promptCacheBoundary}}`)",
+    ],
+  ]);
+
+  it("clean bundle → no flags", () => {
+    expect(checkSyspromptMapFacts(CLEAN)).toEqual([]);
+  });
+
+  it("MUTATION: a THIRD mode appears → mode-predicate flags", () => {
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace('e==="append"}', 'e==="append"||e==="prepend"}'));
+    expect(checkSyspromptMapFacts(m).some((f) => /mode predicate/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the key grammar moves → flags", () => {
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace("(replace|append)", "(replace|append|prepend)"));
+    expect(checkSyspromptMapFacts(m).some((f) => /key grammar/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the promptCacheBoundary startup invariant is dropped → flags", () => {
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace("replace-mode text must contain {{promptCacheBoundary}}", "ok"));
+    expect(checkSyspromptMapFacts(m).some((f) => /boundary invariant/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the channel disappears entirely → flags once, and does NOT vacuously pass", () => {
+    const flags = checkSyspromptMapFacts(new Map([["chunk.js", "unrelated();"]]));
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/channel/);
+  });
+
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkSyspromptMapFacts(files)).toEqual([]);
   });
 });

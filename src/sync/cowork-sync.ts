@@ -651,6 +651,7 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
+    for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
     // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
     const { deltas: tripwireDeltas, notes: tripwireNotes } = partitionSpawnFlags(checkCodeTripwires(bundle));
     for (const f of tripwireDeltas) flag(unknown, f);
@@ -805,6 +806,45 @@ export function checkWebFetchFacts(bundle: string): string[] {
  *  CONSUMING chunk (found by the matcher install site) for the hook body, deny texts, topology,
  *  ordering, and the canUseTool chain. Each tool-set array is bound to its EXPORT NAME (not "some
  *  matching array exists"), and the install site must reference the same export property. */
+/** Drift sentinel for `coworkSyspromptMap` — a SERVER-DRIVEN system-prompt patch channel the harness
+ *  models nowhere.
+ *
+ *  Why it is a sentinel and not a model: the map's entries come from the server, per session, so we
+ *  cannot know what any given session is served. What we CAN pin is its shape, and the shape is what
+ *  makes it dangerous — `replace` mode DISCARDS the computed default section and emits
+ *  `[text, ...appends].join("\n\n")`. The harness models the system prompt as an append onto the
+ *  `claude_code` preset, so an active `replace` variant is a STRUCTURAL divergence: we would retain a
+ *  section production dropped entirely. If the mode vocabulary widens (a third mode), or the key grammar
+ *  moves, or the boundary invariant disappears, that changes what the channel can do to the prompt and
+ *  we need to know before a user hits it.
+ *
+ *  Present in 1.24012.1, 1.24012.11 and 1.25927.0 alike — long-standing, not new. */
+export function checkSyspromptMapFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const bundle = [...files.values()].join("");
+  const miss = (what: string, why: string) =>
+    flags.push(`syspromptMap: ${what} anchor missing — ${why}; re-derive checkSyspromptMapFacts in cowork-sync.ts`);
+
+  if (!/coworkSyspromptMap/.test(bundle)) {
+    // Absence is itself a finding: either the channel was removed (good for us, but a modeled fact
+    // changed) or the extractor stopped seeing it. Either way, do not silently pass.
+    miss("channel", "coworkSyspromptMap is gone from the asar — the prompt-patch channel changed shape or was removed");
+    return flags;
+  }
+  // The mode vocabulary as a CLOSED SET. A third mode would change what a served variant can do to the
+  // prompt, so this is the highest-value anchor here.
+  if (!/function [\w$]+\([\w$]+\)\{return [\w$]+==="replace"\|\|[\w$]+==="append"\}/.test(bundle))
+    miss("mode predicate", 'the two-mode membership test (`m==="replace"||m==="append"`) moved — a THIRD MODE may exist');
+  // Mode is encoded in the key suffix (`07_16_2026.replace`), which is how a served entry selects it.
+  if (!/\^\[A-Za-z0-9_-\]\{1,128\}\(\\\.\(replace\|append\)\)\?\$/.test(bundle))
+    miss("key grammar", "the `<name>(.replace|.append)?` key-name regex moved");
+  // A `replace` variant must carry the cache boundary or the build throws at startup. If that invariant
+  // is dropped, a served replace-variant can silently reshape the prompt with no structural guard.
+  if (!/replace-mode text must contain \{\{promptCacheBoundary\}\}/.test(bundle))
+    miss("boundary invariant", "the startup throw requiring {{promptCacheBoundary}} in a replace-mode variant is gone");
+  return flags;
+}
+
 export function checkPathHookFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
