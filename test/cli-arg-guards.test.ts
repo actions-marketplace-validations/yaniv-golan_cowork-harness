@@ -343,6 +343,21 @@ describe.skipIf(!can)("global-flag position hint", () => {
     expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
   });
 
+  // The COMMA form is the shape that separates the two guards, and it is the reason `run`'s
+  // leftover-positional error carries its pointer in the MESSAGE rather than in fail()'s `hint`: a
+  // caller-supplied hint WINS over the auto-derived one (`hint ?? misplacedGlobalHint(…)`), and
+  // `--dotenv,foo` slips past cmdRun's strayGlobal pre-check (which terminates on `(=|$)`) while still
+  // matching misplacedGlobalHint (which also terminates on `[\s,]`) — so it lands here with the hint
+  // intact. Nothing covered this before; a future refactor onto `hint` would silently swallow it.
+  it("run: a comma-suffixed global reaches the leftover-positional path and KEEPS the hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--dotenv,foo"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/unexpected argument\(s\): --dotenv,foo/);
+    expect(r.out).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+  });
+
   // The flag name inside a quoted VALUE is being reported as a value, not parsed as a flag.
   it("a flag-looking value containing --dotenv gets NO hint", () => {
     const d = mkdtempSync(join(tmpdir(), "gf-"));
@@ -631,5 +646,22 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
     writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
     const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--decider-dir", d], d);
     expect(r.out).not.toMatch(/cannot be combined with --decider-dir/);
+  });
+});
+
+// A rejected flag on a PAID command should answer the question the rejection raises: "then how do I check
+// this without spending?" `run` takes no --dry-run (skill/record/rehash/prune do, and critique rejects it
+// WITH its reason), so reaching for it there is consistent with the tool's own surface rather than user
+// error — and the bare rejection left the user with nowhere to go. Two different checks, deliberately both
+// named: `record --dry-run` answers "does it LOAD" (the strict loader), `lint` answers "are the assertions
+// sane" (lenient — a WARN there still may not run).
+describe.skipIf(!can)("run: the leftover-positional rejection points at the token-free checks", () => {
+  it("names both `record --dry-run` and `lint`", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-dryrun-"));
+    const r = run(["run", "x.yaml", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/unexpected argument\(s\): --dry-run/);
+    expect(r.out).toMatch(/record <file\.yaml> --dry-run/);
+    expect(r.out).toMatch(/lint <file\.yaml>/);
   });
 });

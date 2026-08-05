@@ -90,6 +90,20 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", ()
   }
 });
 
+// Which STREAM carries what is load-bearing for anyone scripting a poll, and it is invisible from the
+// output itself: `status <dir>` prints its summary to stderr and leaves stdout EMPTY, so the obvious
+// `until ! status "$D" | grep -q running` loop matches nothing, exits 1, and returns instantly against a
+// live run — a silent false "done" (measured in the field at 21s against a run with ~1260s left). The
+// help is where someone writing that loop looks, so pin the statement there.
+describe.skipIf(!can)("cli --help: status names its output streams", () => {
+  it("`status --help` says the text form is stderr and json/--follow are stdout", () => {
+    const { code, text } = help("status");
+    expect(code).toBe(0);
+    expect(text).toContain("text summary goes to stderr");
+    expect(text).toContain("--output-format json and --follow write to stdout");
+  });
+});
+
 // `runs-gc.ts` implements `--pinned-older-than` for real, but the flag was invisible in `prune --help`
 // — pin it so a future flag lands in help too.
 describe.skipIf(!can)("cli --help: prune documents --pinned-older-than", () => {

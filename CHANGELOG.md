@@ -117,6 +117,26 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`status --help`, the `--output-format` help, and the docs state which stream carries what.** Human
+  output goes to stderr and stdout carries the machine envelope — a deliberate convention, stated in the
+  README and `docs/scenario.md` but absent from every `--help`, which is where someone writing a poll loop
+  looks. The gap has a sharp edge: `cowork-harness status <dir>` writes its summary to stderr and leaves
+  stdout **empty**, so `until ! status "$D" | grep -q '● running'; do sleep 30; done` matches nothing, exits
+  1, and returns instantly against a live run — a silent false "done" (measured in the field returning at
+  21s against a run with ~1260s left). `status --help` now names the streams and points at `--follow`;
+  `docs/run-status.md`, the skill's liveness section, and the CI recipe carry the anti-pattern beside the
+  working form. No behaviour change — `--follow` (JSON lines on stdout until a terminal state) and
+  `--output-format json` already answered this; they were just unfindable from the help.
+
+- **`run`'s unexpected-argument error says how to check a scenario without spending.** `run` takes no
+  `--dry-run` (`skill`, `record`, `rehash`, and `prune` do, and `critique` rejects it *with* its reason), so
+  reaching for it there follows the tool's own surface — and the rejection left the reader nowhere to go on a
+  command that costs real money. It now names both token-free checks, which answer different questions:
+  `record <file.yaml> --dry-run` (does the loader accept it) and `lint <file.yaml>` (assertion invariants —
+  lenient, so a WARN there may still not run). `run --help` states the same. The pointer lives in the message
+  rather than the error's `hint` field on purpose: a caller-supplied hint wins over the auto-derived
+  "that global flag goes before the subcommand" guidance, which a token like `--dotenv,foo` still needs.
+
 - **`docs/cassette.md` and the CI recipe now state that `replay` alone does not gate staleness.** A bare
   `replay` on an edited skill prints `::warning:: cassette stale` and **exits 0**; `verify-cassettes` exits
   **1** on the same tree. Both belong in CI — that is the order the recipe has always shipped, but the

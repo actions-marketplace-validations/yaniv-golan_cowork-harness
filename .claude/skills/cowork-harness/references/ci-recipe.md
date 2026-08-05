@@ -315,6 +315,12 @@ scenario = `result === "success" && assertions.every(pass)`. Exit code is non-ze
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
 
+**Stdout carries the machine envelope and nothing else.** Without `--output-format json` a command
+writes its whole human rendering — warnings, verdict, `status`'s summary line — to **stderr**, and
+stdout stays empty. A wrapper that captures only stdout gets an empty log and, if it greps that for a
+state, a silent false negative. Capture stderr for the human trail (`2> run.stderr.log`), or ask for
+JSON and parse stdout.
+
 `verify-cassettes` emits its **own** envelope (`{command, ok, coverage, results[]}` with per-file
 `findings`/`staleness`/`unverifiable`/`notes`/`version`/`error`), published as
 `schema/verify-cassettes.json` in the npm package. `ok:false` doesn't say *why* — read the buckets, or <!-- npm-only-ok -->

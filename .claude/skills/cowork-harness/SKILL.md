@@ -319,6 +319,8 @@ When the scenario declares `answers:`, verify-run **also** checks they still mat
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
+`run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
+`cowork-harness record <file.yaml> --dry-run`; `lint` checks the assertion invariants (both above).
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
@@ -491,6 +493,19 @@ passed to `--run-dir` (a directory without its own `status.json`): it scans up t
 newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
 payload; `cowork-harness status --help` has the flags.)
+
+**Poll with `--follow`, not with a shell loop over `status`'s stdout.** The one-shot text form prints to
+**stderr** and writes nothing to stdout; `--output-format json` (one envelope) and `--follow` (one JSON
+line per status change) are the **stdout** forms. A poll that greps `status`'s stdout therefore matches
+nothing, exits 1, and returns instantly against a run with minutes left to go — a silent false "done":
+
+```bash
+# WRONG — stdout is empty, so grep exits 1, `!` inverts it, and the loop never sleeps.
+until ! cowork-harness status "$D" | grep -q '● running'; do sleep 30; done
+
+# RIGHT — the harness owns the poll loop and exits when the run reaches a terminal state.
+cowork-harness status "$D" --follow
+```
 
 **A multi-minute `record`/`run` outlives a short-lived wrapper.** Don't launch a long record from a
 subagent that returns before it finishes — the returning agent tears down its process tree and kills the

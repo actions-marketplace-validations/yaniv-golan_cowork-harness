@@ -357,7 +357,7 @@ Questions:
                                    'answer <dir> --gate N --choose <label>' writes the reply atomically.
 
 Output:
-  --output-format text|json        text = live stream + footer (default); json = one stdout envelope
+  --output-format text|json        text = live stream + footer, written to stderr (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
   --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
                                    line (a raw host path). The probe + hard-fail stay; status.json is still
@@ -404,6 +404,8 @@ const RUN_HELP = `cowork-harness run <scenario.yaml | dir/>
 
   Run one authored scenario, or every *.yaml/*.yml in a directory, with assertions and a CI-ready exit
   code. Verdict-first: on FAIL the failing transcript is printed inline (no spelunking runs/…).
+  ('run' takes no --dry-run: 'record <file.yaml> --dry-run' checks that a scenario LOADS without
+   spending; 'lint <file.yaml>' checks the assertion invariants. Both are token-free.)
 
 Input policy:
   --on-unanswered fail|first       policy for an unscripted question (default: fail — deterministic).
@@ -467,7 +469,7 @@ Matrix testing — one scenario × a cross-product of axes, in one run:
                                                           # a mismatched basename is rejected, not silently renamed)
 
 Output:
-  --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
+  --output-format text|json        text = verdict + failing transcript, written to stderr (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
   --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
                                    line (a raw host path). The probe + hard-fail stay; status.json is still
@@ -538,6 +540,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   status:
     "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n" +
     "       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n" +
+    "       streams: the text summary goes to stderr and stdout stays empty; --output-format json and --follow write to stdout\n" +
+    "                (so `status <dir> | grep …` matches nothing and exits instantly — poll with --follow, not a shell loop)\n" +
     '       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)\n' +
     "usage: status --latest-for <scenario-name-or-slug> [--output-format text|json]   (resolve the newest run dir for a scenario by actual run time, NOT `ls -td`'s directory mtime — see docs/scenario.md#output)\n" +
     "       prints the resolved outDir (the canonical run-dir handle); --output-format json emits {scenario, outDir, createdAt, verdict?} (verdict present only once the kept run's result.json carries one)\n" +
@@ -1504,7 +1508,13 @@ async function cmdRun(rawArgs: string[]) {
     fail(
       "run",
       "usage",
-      `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag.`,
+      // The pointer is appended to the MESSAGE, deliberately not passed as fail()'s `hint`: `hint` WINS over
+      // the auto-derived misplaced-global-flag guidance (`hint ?? misplacedGlobalHint(...)` in envelope.ts), and
+      // a token like `--dotenv,foo` reaches this path while still matching that helper (strayGlobal above
+      // terminates on `(=|$)`, misplacedGlobalHint on `(=|$|[\s,])`). A hint here would silently swallow the
+      // "put it before the subcommand" answer for exactly those tokens.
+      `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag. ` +
+        `To check a scenario without spending: \`record <file.yaml> --dry-run\` (does it load) or \`lint <file.yaml>\` (assertion invariants).`,
       undefined,
       flags.output === "json",
     );
