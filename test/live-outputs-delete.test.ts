@@ -229,13 +229,34 @@ describe.skipIf(!CAN)("live: the outputs-delete guard matches the real product",
   for (const c of CASES) {
     it(
       c.name,
-      () => {
+      (ctx) => {
         const dir = mkdtempSync(join(tmpdir(), "cwh-od-"));
         const out = runCase(c, dir);
 
         // EVIDENCE FIRST. Without this a green verdict can mean the agent refused, reformatted the
         // command, or targeted a different path — see this file's header for a case where it did.
         const ev = provenExecuted(out.outDir, c.cmd, c.sentinel);
+        // ZERO Bash calls is NOT a guard failure — it is a non-verification, and reporting it as red
+        // ("expected +0 to be 1") pointed at a guard that never got to observe anything. Measured
+        // across two runs: the agent declines some destructive pinned command each time, and WHICH one
+        // varies (two `rm` cases on one run, `rename OUT of outputs` on the next) — so failing on it
+        // makes this suite permanently, movingly red for a reason outside the harness.
+        //
+        // Skip LOUDLY instead, matching this file's own precondition convention (the `::warning:: …
+        // SKIPPED — NOT live-validated` banner above). A skip is honest here in a way both green and
+        // red are not: the case genuinely exercised nothing. It cannot hide a real break either — if
+        // the bash path itself regressed, EVERY case skips with this warning, which is louder than one
+        // red among passes.
+        if (ev.bashCalls === 0) {
+          process.stderr.write(
+            `::warning:: live-outputs-delete SKIPPED "${c.name}" — the agent issued NO Bash call: it declined to run the ` +
+              `pinned command, so the guard observed nothing. This is a MODEL-BEHAVIOUR miss, not a guard defect. ` +
+              `If it persists for this case across runs, the model has stopped being willing to execute that command — ` +
+              `make the scenario's intent unambiguous, or retire the case.\n`,
+          );
+          ctx.skip();
+          return;
+        }
         expect(ev.bashCalls, "the scenario pins exactly one bash call; extra calls make the scan ambiguous").toBe(1);
         expect(ev.exact, `the agent did not reproduce the pinned command verbatim (${c.name})`).toBe(true);
         expect(ev.ok, "the pinned command's own result must be non-error and carry the sentinel").toBe(true);
