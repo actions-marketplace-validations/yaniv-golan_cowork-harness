@@ -149,12 +149,21 @@ const ACCOUNT_IDENTITY_KEYS = ["email", "organization", "subscriptionType"] as c
  * necessarily one the scenario attached on purpose via `mcp.config` — a documented, supported feature —
  * and flagging it would red CI on a legitimate fixture.
  */
-export function scanHostInventory(decoded: unknown, where: string, allow: AllowInput[]): ScanFinding[] {
+export function scanHostInventory(
+  decoded: unknown,
+  where: string,
+  allow: AllowInput[],
+  declaredPlugins: readonly string[] = [],
+): ScanFinding[] {
   const out: ScanFinding[] = [];
   const norm = allow.map(normAllow);
   const push = (sample: string, detail: string) => {
     if (!allowed(sample, HOST_INVENTORY_CLS, norm)) out.push({ where: `${where} ${detail}`, cls: HOST_INVENTORY_CLS, sample });
   };
+  // Plugin names the SCENARIO mounted. `declaredPlugins` covers payloads with no sibling `plugins[]` —
+  // notably the registry `control_response`, whose agents arrive as `{name,description,model}` with no
+  // plugin list beside them; the caller harvests those names from the events array and passes them here.
+  const declared = new Set(declaredPlugins);
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -185,11 +194,33 @@ export function scanHostInventory(decoded: unknown, where: string, allow: AllowI
       const acct = o.account as Record<string, unknown>;
       for (const k of ACCOUNT_IDENTITY_KEYS) if (acct[k] !== undefined) push(k, `account.${k}`);
     }
-    // A4 — an agent outside the built-in roster.
+    // A4 — an agent outside the built-in roster, EXCEPT one the scenario itself mounted.
+    //
+    // A plugin contributes its agents to the roster, and at `hostloop` — the tier a fleet actually
+    // records at — that roster is the fixture, not the recording machine's inventory. This is the same
+    // carve-out A1 makes for an `mcp.config`-attached server, and without it every plugin-with-agents
+    // consumer hits a wall of false positives whose only documented remedy is inventing a regex.
+    //
+    // The provenance is in the payload already: `plugins[]` sits beside `agents[]` in the same init
+    // object, and a plugin's agents are namespaced `<plugin>:<agent>`. So the subtraction is derivable
+    // at scan time from an ALREADY-RECORDED cassette — no new cassette field, and no re-record.
+    //
+    // Deliberate residual: a host-leaked plugin's agents are namespaced too, so this trades a narrow
+    // false-negative for the false-positive. That is the right trade — this check exists to catch a
+    // FOREIGN machine's inventory, and an agent the scenario mounted is by construction not that.
     if (Array.isArray(o.agents)) {
+      const local = new Set(declared);
+      if (Array.isArray(o.plugins))
+        for (const p of o.plugins) {
+          const n = typeof p === "string" ? p : (p as Record<string, unknown> | null)?.name;
+          if (typeof n === "string") local.add(n);
+        }
       for (const a of o.agents) {
         const name = typeof a === "string" ? a : (a as Record<string, unknown> | null)?.name;
-        if (typeof name === "string" && !KNOWN_BUILTIN_AGENTS.has(name)) push(name, "agents[]");
+        if (typeof name !== "string" || KNOWN_BUILTIN_AGENTS.has(name)) continue;
+        const sep = name.indexOf(":");
+        if (sep > 0 && local.has(name.slice(0, sep))) continue; // scenario-declared plugin agent
+        push(name, "agents[]");
       }
     }
     for (const v of Object.values(o)) visit(v);

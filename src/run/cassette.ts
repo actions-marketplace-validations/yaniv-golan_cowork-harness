@@ -966,6 +966,39 @@ function isCapabilityManifest(line: string): boolean {
  *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
 const HOST_INHERITING_TIERS: ReadonlySet<string> = new Set(["protocol", "hostloop", "cowork"]);
 
+/** Plugin names the scenario mounted, harvested from anywhere in the event stream.
+ *
+ *  `system/init` carries `plugins[]` beside `agents[]`, so that surface is self-sufficient — but the
+ *  registry `control_response` lists agents with NO plugin array of its own. Collecting once over the
+ *  whole stream and passing the result into every scan covers both, and keeps `scanHostInventory` a pure
+ *  function of one payload plus explicit context. Tolerant by construction: a non-JSON line, a missing
+ *  `plugins`, or a bare-string entry are all normal, not errors. */
+export function collectDeclaredPlugins(events: string[] | undefined): string[] {
+  const names = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const v of node) visit(v);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const o = node as Record<string, unknown>;
+    if (Array.isArray(o.plugins))
+      for (const p of o.plugins) {
+        const n = typeof p === "string" ? p : (p as Record<string, unknown> | null)?.name;
+        if (typeof n === "string" && n) names.add(n);
+      }
+    for (const v of Object.values(o)) visit(v);
+  };
+  for (const line of events ?? []) {
+    try {
+      visit(JSON.parse(line));
+    } catch {
+      continue; // a non-JSON transcript line declares no plugins
+    }
+  }
+  return [...names];
+}
+
 export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
@@ -1004,6 +1037,11 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // identify as sealed (`container`, `microvm`) is exempt. Same fail-closed reasoning as `cowork`.
   const tier = (cassette.effectiveFidelity ?? cassette.scenario.fidelity) as string | undefined;
   if (tier === undefined || HOST_INHERITING_TIERS.has(tier)) {
+    // Harvest the plugin names the SCENARIO mounted, once, across the whole event stream — then hand them
+    // to every scan. `system/init` carries `plugins[]` beside `agents[]` so it is self-sufficient, but the
+    // registry `control_response` lists agents with no plugin array of its own; without this pre-pass that
+    // surface keeps flagging the scenario's own plugin agents. See scanHostInventory's A4.
+    const declaredPlugins = collectDeclaredPlugins(cassette.events);
     const structural = (lines: string[] | undefined, key: string) =>
       lines?.forEach((l, i) => {
         let decoded: unknown;
@@ -1012,7 +1050,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
         } catch {
           return; // a non-JSON transcript line has no name fields to read
         }
-        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow));
+        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins));
       });
     structural(cassette.events, "events");
     structural(cassette.controlOut, "controlOut");

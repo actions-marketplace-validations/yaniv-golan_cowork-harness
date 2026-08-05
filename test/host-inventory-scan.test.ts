@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { scanHostInventory, KNOWN_COWORK_SERVERS, KNOWN_BUILTIN_AGENTS, HOST_INVENTORY_CLS, DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
+import { collectDeclaredPlugins } from "../src/run/cassette.js";
 import { makeSkillsHandler } from "../src/hostloop/skills-handler.js";
 import { makePluginsHandler } from "../src/hostloop/plugins-handler.js";
 import { makeWorkspaceHandler } from "../src/hostloop/workspace-handler.js";
@@ -300,5 +301,75 @@ describe("hostInventoryPreflight — Layer B", () => {
     const v = hostInventoryPreflight(scn("hostloop"), existing, false);
     expect(v.kind).toBe("warn");
     if (v.kind === "warn") expect(v.message).toContain("verify-cassettes");
+  });
+});
+
+// A plugin mounted BY the scenario contributes its own agents to the roster — at `hostloop` that is the
+// fixture, not a leak of the recording machine's inventory. The sibling check A1 already carves out the
+// equivalent case for `mcp.config`-attached servers; A4 flagged every plugin-with-agents consumer on
+// upgrade and left them to invent a regex.
+//
+// The provenance is already in the payload: `plugins[]` sits beside `agents[]` in the same init object,
+// and a plugin's agents are namespaced `<plugin>:<agent>` (the two cases above encode that convention).
+// So the subtraction is derivable at scan time from an already-recorded cassette — no re-record.
+describe("scanHostInventory — scenario-declared plugin agents", () => {
+  it("does NOT flag an agent namespaced to a plugin the same init declares", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "codex" }], agents: ["Plan", "codex:codex-rescue"] }), "events[0]", []);
+    expect(f).toEqual([]);
+  });
+
+  it("still flags an agent namespaced to a plugin that is NOT declared", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "codex" }], agents: ["hookify:conversation-analyzer"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["hookify:conversation-analyzer"]);
+  });
+
+  it("still flags a non-namespaced foreign agent even when plugins are declared", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "codex" }], agents: ["some-host-agent"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["some-host-agent"]);
+  });
+
+  it("applies to the {name} object shape too", () => {
+    const f = scanHostInventory(
+      init({ plugins: [{ name: "hookify" }], agents: [{ name: "hookify:conversation-analyzer" }] }),
+      "events[0]",
+      [],
+    );
+    expect(f).toEqual([]);
+  });
+
+  // The registry `control_response` carries agents with no sibling `plugins[]`, so the caller harvests
+  // plugin names from the events array and passes them in. Without that, this surface keeps false-positiving.
+  it("accepts externally-harvested plugin names for payloads with no sibling plugins[]", () => {
+    const noSibling = { response: { response: { agents: [{ name: "codex:codex-rescue" }] } } };
+    expect(scanHostInventory(noSibling, "events[0]", [])).toHaveLength(1); // no context → still flagged
+    expect(scanHostInventory(noSibling, "events[0]", [], ["codex"])).toEqual([]);
+  });
+});
+
+// The registry `control_response` lists agents with no sibling `plugins[]`, so the plugin names are
+// harvested once from the whole event stream and handed to every scan. A per-event scan alone would
+// leave that surface false-positiving on the scenario's own plugin agents.
+describe("collectDeclaredPlugins", () => {
+  const line = (o: unknown) => JSON.stringify(o);
+
+  it("collects plugin names from a system/init event", () => {
+    const names = collectDeclaredPlugins([line({ type: "system", subtype: "init", plugins: [{ name: "my-pdf-skill" }] })]);
+    expect(names).toEqual(["my-pdf-skill"]);
+  });
+
+  it("dedupes across events and tolerates a plugins[] of bare strings", () => {
+    const names = collectDeclaredPlugins([
+      line({ plugins: [{ name: "a" }, "b"] }),
+      line({ plugins: [{ name: "a" }, { name: "c" }] }),
+    ]).sort();
+    expect(names).toEqual(["a", "b", "c"]);
+  });
+
+  it("skips non-JSON lines and events without plugins instead of throwing", () => {
+    expect(collectDeclaredPlugins(["not json", line({ type: "assistant" })])).toEqual([]);
+  });
+
+  it("returns empty for undefined events (a cassette may carry none)", () => {
+    expect(collectDeclaredPlugins(undefined)).toEqual([]);
   });
 });

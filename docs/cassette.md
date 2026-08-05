@@ -803,6 +803,11 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
   `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
   `KNOWN_COWORK_SERVERS` instead of allowing it.
+  **A plugin the scenario mounted is not host inventory.** Its agents join the roster — at `hostloop`,
+  that roster *is* the fixture — so an agent namespaced `<plugin>:<agent>` whose plugin the same recording
+  declares in `plugins[]` is exempt, exactly as an `mcp.config`-attached server is. The provenance comes
+  from the cassette itself, so this applies to recordings you already have; no re-record, and no allow
+  regex to invent. A foreign agent, or one namespaced to a plugin the run never mounted, still flags.
   **`record` carries its own preflight for the same risk.** Recording at a host-inheriting tier
   (`protocol`, `hostloop`, or `cowork` resolving to hostloop) into a repo-visible cassette path is
   refused by default — that recording would freeze this machine's MCP servers, agents, and account
