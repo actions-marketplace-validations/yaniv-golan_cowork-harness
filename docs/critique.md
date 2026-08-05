@@ -102,7 +102,7 @@ ignored.
 | `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
 | `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
 | `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
-| `--decider-llm` / `--intent` / `--decider-model` / `--decider-cmd` / `--decider-dir` | answer live gates in the graded run |
+| `--decider-llm` / `--intent` / `--decider-model` / `--decider-cmd` / `--decider-dir` | answer live gates in the graded run (these forward to the graded `skill` turn, which accepts all of them — `run` and `record` each accept a narrower subset, see [decider-dir.md → Decider flags by command](./decider-dir.md#decider-flags-by-command-run-vs-record-vs-skill)) |
 
 **Critique's own**
 
@@ -186,7 +186,10 @@ It does **not** record their contents — see Known limitations.
   See [stats.md](./stats.md).
 - **container** needs Docker/Lima; **hostloop** needs Docker (the bash/web_fetch sidecar) **plus** the
   staged native agent binary, and writes to the real host filesystem — a writable `--folder` there requires
-  `--allow-host-writes`. Both tiers need an authenticated `claude` CLI on PATH.
+  `--allow-host-writes`. Both tiers need a `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY` as a CI
+  fallback) in the environment or `.env` — the graded turns self-spawn the installed CLI, which runs the
+  staged agent binary rather than a host `claude`. The two evaluator passes are what need an authenticated
+  `claude` CLI on PATH, overridable via `COWORK_HARNESS_CLAUDE_BIN`.
 
 ### Research, egress, and the lean image
 

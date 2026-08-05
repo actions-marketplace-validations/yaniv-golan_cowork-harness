@@ -88,7 +88,7 @@ describe("critique roll-up tier — single source of truth for the resolveGroups
     expect(
       callSites.map((c) => `${c.file}:${c.line}: ${c.text}`),
       "a second call site is an unreviewed path that could stamp a roll-up's tier differently from its turns' — this precondition test would then need re-deriving for that site too",
-    ).toEqual(["src/critique/command.ts:1707: appendCritiqueRollupRow(runsWriteRoot(), {"]);
+    ).toEqual(["src/critique/command.ts:1710: appendCritiqueRollupRow(runsWriteRoot(), {"]);
   });
 
   it("the graded turn's own result.json is the ONLY source both the row and the roll-up read effectiveFidelity from", () => {
