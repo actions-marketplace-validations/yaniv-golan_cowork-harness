@@ -99,6 +99,40 @@ All notable changes to this project are documented here. The format is based on
   published JSON Schema (a zod refinement has no schema representation, so the rule is mirrored by hand and
   validated by a test — otherwise an editor would green a scenario the loader rejects).
 
+- **Delete detection now covers every delete-denied mount, not just `outputs` — with `no_delete_in_mounts`
+  and `allow_delete_in` to assert on it.** Production denies `unlink`/`rmdir` on `outputs` *and* on every
+  `rw` connected folder until per-mount approval; the harness only ever looked at `outputs`, so a skill
+  deleting inside a connected folder passed here and would have hit `EPERM` in Cowork. The post-run scan
+  now covers all of them and records each hit in `result.json`'s `scan.mountDeletes` (`{mount, command}`;
+  `outputsDeletes` is unchanged, and the new array is a superset). Assert `no_delete_in_mounts: true` to
+  fail on any unwaived delete in a delete-denied mount; waive per mount by name with
+  `allow_delete_in: ["reports"]`, the mount-scoped analogue of `allow_outputs_delete` and a mirror of
+  production's `fileDeleteApprovedMounts`. Listing `"outputs"` there conflicts with `no_delete_in_outputs`
+  and is rejected at load and in the JSON Schema. An unwaived delete outside `outputs` raises the new
+  `mount_delete` signal at **warn**, not fail — deliberately, because production *enforces* with `EPERM`
+  while the harness only *detects after the fact*, and a warn says "this diverges" without failing a run
+  the harness cannot actually adjudicate. `no_delete_in_mounts` is live-only (the scan needs real bash
+  commands), so `lint` flags it on a replay-only scenario.
+
+- **A session can model Cowork's connected *Projects*, not just connected folders.** `projects: [{uuid,
+  from}]` maps to production's `userSelectedProjectUuids` and mounts each one **read-only** at
+  `mnt/.projects/<uuid>` — distinct from `folders:` (`userSelectedFolders`), which can be writable. There
+  is no `mode:` knob by design: production hardcodes `ro` for these, and offering a writable option would
+  model something Cowork does not do. A project never becomes the session cwd — `{{workspaceFolder}}`
+  stays at `outputs`. Pre-run input hashing covers projects too, so `input_unmodified` sees them.
+
+- **`sync` gained three new hard-fail anchors, so a Desktop change cannot pass unnoticed.** The
+  `coworkSyspromptMap` channel is sentinelled: its mode vocabulary is pinned as a closed set
+  (`replace`/`append` — a third mode matters because `replace` *discards* the computed prompt section),
+  along with the key grammar, the `{{promptCacheBoundary}}` startup invariant, and the resolution-status
+  machine that governs server-supplied variants, which degrade **silently** rather than throwing. The
+  mount-mode check widened from 2 pinned anchors to 5, adding `.claude/skills`, `.claude/projects` and the
+  per-uuid project mount — a Desktop build quietly making one writable now fails `sync` instead of
+  slipping through. And a baseline records `provenance.fcache` (content hash, embedded timestamp, feature
+  count), so `sync --diff` can say whether a gate snapshot genuinely moved or was merely refetched, and
+  can name a gate that starts or stops *serving* a key — an unserved key silently falls back to a code
+  default that may not match production.
+
 - **`replay --mutate` now says WHY it found nothing to perturb.** It is diagnostic and exits 0 either
   way, so `no perturbable values` was the one output most easily misread as "the feature is broken" — it
   looked identical whether the cassette held no JSON at all, held JSON whose bodies were deliberately not
@@ -111,9 +145,12 @@ All notable changes to this project are documented here. The format is based on
   tool timeout default tripled, `60000` → `180000` ms.** If you have a long-running MCP tool that used to
   be cut off at 60s under emulation, it now gets 180s — matching production. `spawn.env.MCP_TOOL_TIMEOUT`
   carries the new value; pin `baseline:` explicitly in a scenario to stay on the old one. Everything else
-  holds: the Cowork system prompt is byte-identical, the sub-agent append, mount layout, egress allowlist
-  and the remaining spawn env are unchanged, and all three committed cassettes replay clean (re-stamped,
-  not re-recorded — their recorded behaviour did not move).
+  holds: the Cowork system prompt is byte-identical, the sub-agent append, egress allowlist and the
+  remaining spawn env are unchanged, and all three committed cassettes replay clean (re-stamped, not
+  re-recorded — their recorded behaviour did not move). The recorded mount layout carries one correction
+  rather than a Desktop change: the decorative `projects` row reads `mode: "r"`, read from the asar, where
+  it was previously `"rw"` from a probe. Cowork mounts a connected project read-only in both versions, so
+  no emulated behaviour moved — the older baseline simply recorded the fact wrongly.
 
 ### Changed
 
@@ -182,6 +219,16 @@ All notable changes to this project are documented here. The format is based on
   dump nobody reads.
 
 ### Fixed
+
+- **A plain `npm test` could spend real money.** The fast lane excluded live suites by *filename*, so
+  `live-matrix` and `live-resume-continuity` sat in it, held back only by their own `describe.skipIf`. On a
+  normal dev machine — Docker up, image pulled, agent staged — the single false leg of that check is the
+  token, which put `npm test` one `export CLAUDE_CODE_OAUTH_TOKEN=…` away from a paid run with no warning.
+  The same hand-maintained list had already drifted the other way: `live-resume-continuity` was missing
+  from the live config's `include`, so its assertions ran in **neither** lane. Both configs now use a
+  `test/live-*.test.ts` glob, so adding a live suite never requires remembering two edits. (Note that the
+  live suites read the token from `process.env` or `~/.cowork-harness-token`, **not** the repo `.env` —
+  vitest loads no dotenv — so an empty `.env` was never the reassurance it looked like.)
 
 - **`sync` could not read Desktop 1.25927.0 at all — it reported 25 unknown deltas and refused to write.**
   Desktop changed its *bundler*, not its behaviour: plain string literals are now emitted with backticks
