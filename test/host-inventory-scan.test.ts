@@ -373,3 +373,50 @@ describe("collectDeclaredPlugins", () => {
     expect(collectDeclaredPlugins(undefined)).toEqual([]);
   });
 });
+
+// 240 findings printed as 240 indistinguishable lines. A consumer had to pipe through `uniq -c` to learn
+// they were all one class with one cause — a detour that a single header line removes. Additive on
+// purpose: the per-file rows are the audit trail and the rationale at the `notes` loop is right that
+// collapsing them would destroy attribution, so the rollup PRECEDES the list and replaces nothing.
+describe("verify-cassettes — findings rollup", () => {
+  const CLI = resolve(__dirname, "../dist/cli.js");
+  const FIXTURES = resolve(__dirname, "../examples/replays");
+
+  /** Two host-inheriting cassettes, each carrying a foreign server ⇒ several findings of ONE class. */
+  const twoBadCassettes = (dir: string) => {
+    for (const n of ["a", "b"]) {
+      const c = JSON.parse(readFileSync(join(FIXTURES, "hostloop-computer-links.cassette.json"), "utf8"));
+      const i = c.events.findIndex((l: string) => typeof l === "string" && l.includes('"mcp_servers"'));
+      const ev = JSON.parse(c.events[i]);
+      ev.mcp_servers = [...(ev.mcp_servers ?? []), { name: "plaud", status: "pending" }];
+      c.events[i] = JSON.stringify(ev);
+      writeFileSync(join(dir, `${n}.cassette.json`), JSON.stringify(c, null, 2));
+    }
+  };
+
+  it("prints a per-class count before the per-finding list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rollup-"));
+    twoBadCassettes(dir);
+    const r = spawnSync(process.execPath, [CLI, "verify-cassettes", dir], { encoding: "utf8" });
+    const out = r.stdout + r.stderr;
+    expect(out).toMatch(new RegExp(`findings by class:.*${HOST_INVENTORY_CLS} \\d+`));
+    // The rollup is additive — every per-file row survives, so attribution is not lost.
+    expect(out).toContain("a.cassette.json");
+    expect(out).toContain("b.cassette.json");
+  });
+
+  // It summarizes the findings list as it stands, INFORMATIONAL classes included. `unscanned` is a
+  // finding (the `·` rows), so counting it is what makes the header agree with the list beneath it —
+  // and "what did this sweep decline to scan" is worth a number of its own. A gate-passing cassette
+  // therefore still gets a rollup; only a genuinely finding-free one has nothing to print.
+  it("counts informational classes too, so the header agrees with the list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rollup-clean-"));
+    writeFileSync(join(dir, "ok.cassette.json"), readFileSync(join(FIXTURES, "example-pdf-skill.cassette.json"), "utf8"));
+    const r = spawnSync(process.execPath, [CLI, "verify-cassettes", dir], { encoding: "utf8" });
+    const out = r.stdout + r.stderr;
+    expect(out).toMatch(/findings by class: unscanned 1/);
+    const rollup = out.split("\n").findIndex((l) => l.startsWith("findings by class:"));
+    const firstRow = out.split("\n").findIndex((l) => l.includes("[unscanned]"));
+    expect(rollup, "the rollup must precede the rows it summarizes").toBeLessThan(firstRow);
+  });
+});

@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`verify-cassettes` opens with a per-class count.** `findings by class: host-inventory 240` prints
+  before the per-file listing. A sweep surfacing hundreds of findings of a single class read as hundreds
+  of separate problems — a consumer piped the output through `uniq -c` to discover 240 findings were one
+  class with one cause. Additive: every per-file row still prints, because which file carries which
+  finding is what a per-file audit is for. JSON consumers already had `findings[].cls`.
+
 ### Fixed
 
 - **`replay --mutate` reported a sample as if it were the whole corpus.** The plan is capped (10 values

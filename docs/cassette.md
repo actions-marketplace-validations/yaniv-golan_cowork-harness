@@ -890,6 +890,13 @@ leak/drift":
 |---|---|---|
 | `0` | clean | none |
 | `1` | **verification RAN and found a real problem** | `findings[]` (a PII/privacy match), `staleness[]` (a genuine, non-`unverifiable-*` drift finding), and/or `scenarioDrift[]` |
+
+> **Triage first, then read the rows.** Text output opens with a per-class count —
+> `findings by class: host-inventory 240` — before the per-file listing. A sweep that surfaces hundreds
+> of findings of one class reads as hundreds of separate problems until you know that; the header says
+> what kind and how many in one line. It is additive: every per-file row still prints, because which
+> file carries which finding is the answer a per-file audit exists to give. JSON consumers already have
+> `findings[].cls` and need no rollup.
 | `2` | usage error (e.g. `--skip-privacy`+`--skip-staleness` together, zero cassettes under a dir) | n/a |
 | `3` | **verification could NOT complete** | `unverifiable[]` (an `unverifiable-*`-class staleness finding), `version[]` (the cassette is from a newer harness than this one understands), and/or `error` (a malformed/unreadable cassette, or a per-file crash) |
 

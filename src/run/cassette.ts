@@ -4626,6 +4626,20 @@ export async function cmdVerifyCassettes(args: string[]) {
     if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
     if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
     if (!doScenarioDrift) log("⚠ cowork-harness: --skip-scenario-drift: scenario prompt-drift check was skipped");
+    // A per-class count, printed ONCE ahead of the per-file rows. A sweep that surfaces hundreds of
+    // findings of a single class reads as hundreds of separate problems; a consumer piped the output
+    // through `uniq -c` to discover 240 findings were one class with one cause. This is additive — every
+    // per-file row below still prints, so the attribution the `notes` rationale protects is untouched.
+    // It answers "what kind, and how many" before the reader starts scrolling, not instead of it.
+    const byClass = new Map<string, number>();
+    for (const r of results) for (const f of r.findings) byClass.set(f.cls, (byClass.get(f.cls) ?? 0) + 1);
+    if (byClass.size)
+      log(
+        `findings by class: ${[...byClass.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([cls, n]) => `${cls} ${n}`)
+          .join(" · ")}`,
+      );
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
