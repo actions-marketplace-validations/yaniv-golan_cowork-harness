@@ -401,3 +401,30 @@ describe("web_fetch DNS-rebind SSRF backstop — Path A (provenance), and litera
     expect(called).toBe(false); // literal IP never hits the resolver
   });
 });
+
+// ==========================================================================================
+// DELIBERATE FIDELITY, NOT A BUG. Production's `webFetchAllowedUrls` is populated by scraping
+// dotted tokens out of conversation/code text and parsing them as hostnames — so a Python source
+// listing lands `os.unlink` in a network allowlist. Observed first-party in a live Cowork session's
+// persisted config: ["https://os.unlink/","https://os.rmdir/","https://os.truncate/",
+// "https://os.rename/","https://errno.errorcode.get/","https://e.strerror/"].
+//
+// Our `uen` port reproduces it. This test exists because that reads as a bug in OUR extractor and
+// would otherwise get "fixed" into a divergence from the product. If production ever narrows its
+// extractor, this test should fail and BE UPDATED — it is not asserting that the behaviour is good.
+// ==========================================================================================
+describe("webFetchAllowedUrls — bare dotted identifiers are scraped as hosts (matches production)", () => {
+  it("turns Python attribute access into allowlist entries, as production does", () => {
+    const pySource = "import os, errno\nos.unlink(p)\nos.rmdir(d)\nerrno.errorcode.get(e)\ne.strerror";
+    expect(extractUrls(pySource)).toEqual([
+      "https://os.unlink/",
+      "https://os.rmdir/",
+      "https://errno.errorcode.get/",
+      "https://e.strerror/",
+    ]);
+  });
+
+  it("still requires a plausible TLD shape — a bare word or a trailing dot is not a host", () => {
+    expect(extractUrls("just some prose, and a trailing dot. plus x")).toEqual([]);
+  });
+});
