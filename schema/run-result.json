@@ -35,11 +35,11 @@
     },
     "ablated": {
       "type": "boolean",
-      "description": "True when the run was ablated (--ablate-skill): the skill(s)-under-test were removed so the same prompt runs with no skill — a negative control for skill-lift measurement. Never read an ablated run as a real (with-skill) pass."
+      "description": "True when the run was ablated (--ablate-skill): the skill(s)-under-test were removed so the same prompt runs with no skill \u2014 a negative control for skill-lift measurement. Never read an ablated run as a real (with-skill) pass."
     },
     "finalMessage": {
       "type": "string",
-      "description": "The agent's final answer text — the SDK result message's designated answer, not the joined transcript of every assistant turn. Absent when no result event carried text (a spawn/exit error before the result)."
+      "description": "The agent's final answer text \u2014 the SDK result message's designated answer, not the joined transcript of every assistant turn. Absent when no result event carried text (a spawn/exit error before the result)."
     },
     "resources": {
       "type": "object",
@@ -162,7 +162,7 @@
       "items": {
         "type": "object"
       },
-      "description": "present_files promotions ({from, to, promoted, leaked}) — scratch→outputs deliverable surfacing (container tier)."
+      "description": "present_files promotions ({from, to, promoted, leaked}) \u2014 scratch\u2192outputs deliverable surfacing (container tier)."
     },
     "mode": {
       "type": "string",
@@ -170,7 +170,7 @@
         "run",
         "chat"
       ],
-      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed — treat absent as 'run'."
+      "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed \u2014 treat absent as 'run'."
     },
     "command": {
       "type": "string",
@@ -181,7 +181,7 @@
         "chat",
         "replay"
       ],
-      "description": "The CLI command that produced this result — finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
+      "description": "The CLI command that produced this result \u2014 finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
     },
     "scenario": {
       "type": "string"
@@ -208,7 +208,10 @@
     },
     "lane": {
       "type": "string",
-      "enum": ["local", "remote"],
+      "enum": [
+        "local",
+        "remote"
+      ],
       "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because Cowork's lane is a per-session human choice that leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
     },
     "execution": {
@@ -235,7 +238,7 @@
       "required": [
         "location"
       ],
-      "description": "Execution location taxonomy — orthogonal to fidelity (a privilege/sandbox tier, all local). Stamped location:'local' on every locally-executed run so a future cloud-run artifact's differing/absent stamp is a detectable signal, never a silent mislabel. environmentId is the cloud environment_id (bridge sessions); taskKind distinguishes an interactive run from a scheduled-trigger run. ABSENCE IS NOT A POSITIVE 'local' SIGNAL: absent means either a pre-taxonomy result or the error-replay lane (no environment recoverable)."
+      "description": "Execution location taxonomy \u2014 orthogonal to fidelity (a privilege/sandbox tier, all local). Stamped location:'local' on every locally-executed run so a future cloud-run artifact's differing/absent stamp is a detectable signal, never a silent mislabel. environmentId is the cloud environment_id (bridge sessions); taskKind distinguishes an interactive run from a scheduled-trigger run. ABSENCE IS NOT A POSITIVE 'local' SIGNAL: absent means either a pre-taxonomy result or the error-replay lane (no environment recoverable)."
     },
     "resultErrorKind": {
       "type": "string",
@@ -244,7 +247,7 @@
         "agent",
         "usage_limit"
       ],
-      "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)"
+      "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted \u2014 an is_error result with HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)"
     },
     "errorSource": {
       "type": "string",
@@ -257,19 +260,19 @@
         "no_result",
         "timeout"
       ],
-      "description": "How the run terminated in error — the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
+      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
       "type": "string",
-      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
+      "description": "The SDK result message's subtype verbatim (e.g. error_max_turns, error_during_execution, success) \u2014 a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution error without the harness inventing a taxonomy."
     },
     "stderrLogPath": {
       "type": "string",
-      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only — absent on replay."
+      "description": "Absolute path to the agent's full stderr log (<outDir>/agent.stderr.log), surfaced so an OOM/crash debugger knows where to look. Live path only \u2014 absent on replay."
     },
     "stalledOnQuestion": {
       "type": "boolean",
-      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
+      "description": "H2/H3: the run ended on a question having done no productive tool work after its last gate (the agent asked for input and stopped \u2014 incl. re-asking in plain text after answering an AskUserQuestion) while result==='success'. computeVerdict fails on this (a 'stalled' signal) unless the scenario asserts allow_stall."
     },
     "capabilityProbe": {
       "type": "string",
@@ -278,7 +281,7 @@
         "unverified",
         "skipped"
       ],
-      "description": "Fix 6h: capability-probe outcome — definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
+      "description": "Fix 6h: capability-probe outcome \u2014 definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
     },
     "requiresCapabilityUnmet": {
       "type": "object",
@@ -325,7 +328,7 @@
           },
           "requestId": {
             "type": "string",
-            "description": "request_id (UUID) of a question gate — pairs a decision to its event row by id."
+            "description": "request_id (UUID) of a question gate \u2014 pairs a decision to its event row by id."
           },
           "model": {
             "type": "string"
@@ -336,7 +339,7 @@
           },
           "questions": {
             "type": "array",
-            "description": "Full AskUserQuestion option set as originally offered — present only on kind:'question' decisions.",
+            "description": "Full AskUserQuestion option set as originally offered \u2014 present only on kind:'question' decisions.",
             "items": {
               "type": "object",
               "required": [
@@ -381,11 +384,11 @@
       "additionalProperties": {
         "type": "number"
       },
-      "description": "Truthful per-tool CALL-COUNT map: a plain number per tool name (NOT usage.server_tool_use, which is host-routed-blind in cowork). Shape is always {tool: number} — for per-tool error counts use the separately-shaped toolErrors ({tool: {calls, errors}}); for per-tool timing use toolDurations ({tool: {calls, totalMs, maxMs}}). Do not expect an object value here."
+      "description": "Truthful per-tool CALL-COUNT map: a plain number per tool name (NOT usage.server_tool_use, which is host-routed-blind in cowork). Shape is always {tool: number} \u2014 for per-tool error counts use the separately-shaped toolErrors ({tool: {calls, errors}}); for per-tool timing use toolDurations ({tool: {calls, totalMs, maxMs}}). Do not expect an object value here."
     },
     "infraErrors": {
       "type": "array",
-      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died — a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'hostloop-exec' is a single failed container exec: the tool call failed, the run did not, so it only warns.",
+      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'hostloop-exec' is a single failed container exec: the tool call failed, the run did not, so it only warns.",
       "items": {
         "type": "object",
         "required": [
@@ -498,7 +501,7 @@
     },
     "thinking": {
       "type": "array",
-      "description": "main-loop reasoning blocks (capped at the last 50). NOTE: on newer models (Opus 4.8, Sonnet 5) the API defaults the thinking display mode to 'omitted', so blocks arrive with empty text + a signature and are surfaced as {text:'', redacted:true} — read that as 'reasoned, text omitted by request', NOT 'no reasoning'. The harness passes no --thinking-display (faithful to real Cowork); the fenced debug.thinking_display:'summarized' opt-in can surface summarized (never raw) text. redacted is omitted (not false) on blocks that carry text.",
+      "description": "main-loop reasoning blocks (capped at the last 50). NOTE: on newer models (Opus 4.8, Sonnet 5) the API defaults the thinking display mode to 'omitted', so blocks arrive with empty text + a signature and are surfaced as {text:'', redacted:true} \u2014 read that as 'reasoned, text omitted by request', NOT 'no reasoning'. The harness passes no --thinking-display (faithful to real Cowork); the fenced debug.thinking_display:'summarized' opt-in can surface summarized (never raw) text. redacted is omitted (not false) on blocks that carry text.",
       "items": {
         "type": "object",
         "properties": {
@@ -539,7 +542,7 @@
     },
     "modelUsage": {
       "type": "object",
-      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (§4.7, M3) — cumulative for the whole run. Field names match the real observed SDK payload.",
+      "description": "Per-model cost/token breakdown, denormalized from the SDK result message's own modelUsage field (\u00a74.7, M3) \u2014 cumulative for the whole run. Field names match the real observed SDK payload.",
       "additionalProperties": {
         "type": "object",
         "properties": {
@@ -652,7 +655,7 @@
     },
     "verdict": {
       "type": "object",
-      "description": "The overall run/asserted-lane verdict: computeVerdict's full return value, persisted VERBATIM (the same shape the --output-format json stdout envelope attaches to every result, since envelope.ts calls computeVerdict too) so the persisted and streamed channels can never diverge. pass/exitCode are the SAME values every verdict site (the run/skill exit, the footer, the JSON envelope ok) routes through computeVerdict for. signals[]/guards[] are the raw verdict inputs; failures[] collapses signals into a flat, jq-friendly list — names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY — absent (undefined) on a chat result, and on a result.json written before this field existed.",
+      "description": "The overall run/asserted-lane verdict: computeVerdict's full return value, persisted VERBATIM (the same shape the --output-format json stdout envelope attaches to every result, since envelope.ts calls computeVerdict too) so the persisted and streamed channels can never diverge. pass/exitCode are the SAME values every verdict site (the run/skill exit, the footer, the JSON envelope ok) routes through computeVerdict for. signals[]/guards[] are the raw verdict inputs; failures[] collapses signals into a flat, jq-friendly list \u2014 names the failing assertion key when a failure traces to one, else carries just a hard-verdict guard reason (infra error, unanswered gate, scan-based host-path leak, etc.); empty on a pass. Run/asserted lane ONLY \u2014 absent (undefined) on a chat result, and on a result.json written before this field existed.",
       "properties": {
         "pass": {
           "type": "boolean"
@@ -713,7 +716,7 @@
         },
         "guards": {
           "type": "array",
-          "description": "the \"guards active this run\" roster — one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
+          "description": "the \"guards active this run\" roster \u2014 one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
           "items": {
             "type": "object",
             "required": [
@@ -779,19 +782,19 @@
           },
           "parentToolUseId": {
             "type": "string",
-            "description": "the dispatching parent's toolUseId — reconstructs the nested dispatch tree (#16)"
+            "description": "the dispatching parent's toolUseId \u2014 reconstructs the nested dispatch tree (#16)"
           },
           "dispatchAgentType": {
             "type": "string",
-            "description": "the DISPATCH-INPUT type (\"unknown\" when the input omitted subagent_type) — unchanged meaning, renamed from the ambiguous agentType now that a resolved type lands beside it"
+            "description": "the DISPATCH-INPUT type (\"unknown\" when the input omitted subagent_type) \u2014 unchanged meaning, renamed from the ambiguous agentType now that a resolved type lands beside it"
           },
           "resolvedAgentType": {
             "type": "string",
-            "description": "the BINARY-resolved child type from task_started (incl. the general-purpose fallback) — strictly better evidence than dispatchAgentType for a type-less dispatch"
+            "description": "the BINARY-resolved child type from task_started (incl. the general-purpose fallback) \u2014 strictly better evidence than dispatchAgentType for a type-less dispatch"
           },
           "dispatchTypeOmitted": {
             "type": "boolean",
-            "description": "the dispatch input carried no subagent_type at all (proven by the full input parse) — the wildcard-fallback trap fired"
+            "description": "the dispatch input carried no subagent_type at all (proven by the full input parse) \u2014 the wildcard-fallback trap fired"
           },
           "declaredTools": {
             "type": "array",
@@ -832,7 +835,7 @@
           },
           "dispatchModel": {
             "type": "string",
-            "description": "the DISPATCHING message's model (ex-\"model\" — renamed when resolvedModel landed beside it)"
+            "description": "the DISPATCHING message's model (ex-\"model\" \u2014 renamed when resolvedModel landed beside it)"
           },
           "resolvedModel": {
             "type": "string",
@@ -843,14 +846,14 @@
           },
           "outputTruncated": {
             "type": "boolean",
-            "description": "the dispatch output was cut at the assert cap — a negative content check is unverifiable, not a proven absence (#9)"
+            "description": "the dispatch output was cut at the assert cap \u2014 a negative content check is unverifiable, not a proven absence (#9)"
           },
           "attributedSkillId": {
             "type": "string"
           },
           "reasoning": {
             "type": "array",
-            "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded — already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only — undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch. NOTE: sub-agent thinking TEXT is empty by default — the harness's non-interactive spawn forces the API's thinking.display to 'omitted' for sub-agent turns, so the model returns empty thinking blocks (signature-only) that the transcript records; a thinking turn is surfaced as {kind:'thinking', text:'', redacted:true}. `redacted:true` means the sub-agent reasoned here but the text was omitted by request — do NOT read empty text as 'no reasoning.' TEXT turns are never redacted (they persist verbatim). An opt-in --thinking-display summarized lever could surface summarized (never raw) sub-agent thinking, but the 'omitted' default is real-Cowork-faithful.",
+            "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded \u2014 already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only \u2014 undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch. NOTE: sub-agent thinking TEXT is empty by default \u2014 the harness's non-interactive spawn forces the API's thinking.display to 'omitted' for sub-agent turns, so the model returns empty thinking blocks (signature-only) that the transcript records; a thinking turn is surfaced as {kind:'thinking', text:'', redacted:true}. `redacted:true` means the sub-agent reasoned here but the text was omitted by request \u2014 do NOT read empty text as 'no reasoning.' TEXT turns are never redacted (they persist verbatim). An opt-in --thinking-display summarized lever could surface summarized (never raw) sub-agent thinking, but the 'omitted' default is real-Cowork-faithful.",
             "items": {
               "type": "object",
               "required": [
@@ -870,18 +873,18 @@
                 },
                 "redacted": {
                   "type": "boolean",
-                  "description": "present and true ONLY on a thinking turn whose text was stripped upstream (empty thinking + non-empty signature in the child transcript) — 'the sub-agent reasoned here, text withheld upstream.' Omitted (not false) on turns with text and on all TEXT turns."
+                  "description": "present and true ONLY on a thinking turn whose text was stripped upstream (empty thinking + non-empty signature in the child transcript) \u2014 'the sub-agent reasoned here, text withheld upstream.' Omitted (not false) on turns with text and on all TEXT turns."
                 }
               }
             }
           },
           "reasoningElided": {
             "type": "number",
-            "description": "count of reasoning turns dropped by the cap (oldest-first) — mirrors thinkingElided"
+            "description": "count of reasoning turns dropped by the cap (oldest-first) \u2014 mirrors thinkingElided"
           },
           "webSearches": {
             "type": "array",
-            "description": "the sub-agent's OWN WebSearch calls (query + the paired tool_result's text, bounded), read from the same child session transcript as `reasoning` (LIVE/record lane only — undefined on replay). Sub-agent searches never enter the top-level webSearches[] (main-agent/fork-scoped) or toolCounts, so this is the only place a sub-agent's research is grounded. RAW bounded text rather than the top-level field's parsed {title,url} shape: grounding needs the content the sub-agent actually saw. Absent = never captured OR the dispatch made no searches; a present array is 1+ captured searches.",
+            "description": "the sub-agent's OWN WebSearch calls (query + the paired tool_result's text, bounded), read from the same child session transcript as `reasoning` (LIVE/record lane only \u2014 undefined on replay). Sub-agent searches never enter the top-level webSearches[] (main-agent/fork-scoped) or toolCounts, so this is the only place a sub-agent's research is grounded. RAW bounded text rather than the top-level field's parsed {title,url} shape: grounding needs the content the sub-agent actually saw. Absent = never captured OR the dispatch made no searches; a present array is 1+ captured searches.",
             "items": {
               "type": "object",
               "required": [
@@ -904,7 +907,7 @@
           },
           "webSearchesElided": {
             "type": "number",
-            "description": "count of WebSearch entries dropped past the per-dispatch cap (oldest-first) — mirrors reasoningElided"
+            "description": "count of WebSearch entries dropped past the per-dispatch cap (oldest-first) \u2014 mirrors reasoningElided"
           }
         }
       }
@@ -996,7 +999,7 @@
             "git",
             "raw"
           ],
-          "description": "the file-set boundary used for skillHash — \"git\" (git-tracked set — the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
+          "description": "the file-set boundary used for skillHash \u2014 \"git\" (git-tracked set \u2014 the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
         },
         "agentScope": {
           "type": "string",
@@ -1006,7 +1009,7 @@
         },
         "promptAssetsHash": {
           "type": "string",
-          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Absent on a run recorded before this field existed → informational note, never a finding."
+          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Absent on a run recorded before this field existed \u2192 informational note, never a finding."
         }
       }
     },
@@ -1024,14 +1027,14 @@
       "items": {
         "type": "string"
       },
-      "description": "The user-visible mount roots (relative to mnt/) for this run — `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
+      "description": "The user-visible mount roots (relative to mnt/) for this run \u2014 `outputs` plus each connected work folder's resolved mount name. Plugins are not included (read-only inputs, never artifact roots)."
     },
     "readonlyFolderRoots": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts — inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
+      "description": "Subset of userVisibleRoots that are read-only (mode:\"r\") connected-folder mounts \u2014 inputs, not deliverables. `artifacts` excludes them so `scaffold` doesn't emit file_exists for an input."
     },
     "artifacts": {
       "type": "array",
@@ -1053,7 +1056,7 @@
     },
     "workspaceFiles": {
       "type": "array",
-      "description": "Working folder panel's canonical file model (§6.3, M6) — every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",
+      "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",
       "items": {
         "type": "object",
         "required": [
@@ -1092,11 +1095,11 @@
       "items": {
         "type": "string"
       },
-      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) — the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
+      "description": "workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured post-staging, pre-spawn) \u2014 the baseline `no_unexpected_files` diffs against. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
     "preRunLinkAware": {
       "type": "boolean",
-      "description": "true iff preRunPaths was captured with the link-aware walk (manifest v2+); absent/false ⇒ a pre-#38 baseline, no_unexpected_files then excludes link entries from the post walk. Live/verify-run only."
+      "description": "true iff preRunPaths was captured with the link-aware walk (manifest v2+); absent/false \u21d2 a pre-#38 baseline, no_unexpected_files then excludes link entries from the post walk. Live/verify-run only."
     },
     "preRunHashes": {
       "type": "object",
@@ -1151,6 +1154,25 @@
         },
         "selfHealRan": {
           "type": "boolean"
+        },
+        "mountDeletes": {
+          "type": "array",
+          "description": "Per-mount delete detections across every delete-denied (rw) user-visible mount, including outputs. Superset of outputsDeletes, which is unchanged. Reported, not verdict-moving.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mount": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "mount",
+              "command"
+            ]
+          }
         }
       }
     },
@@ -1167,7 +1189,7 @@
         "string",
         "null"
       ],
-      "description": "Best-effort git HEAD shared by the session's skill source dirs — commit provenance, not a grouping key; null if dirs span >1 repo / non-git / unresolved"
+      "description": "Best-effort git HEAD shared by the session's skill source dirs \u2014 commit provenance, not a grouping key; null if dirs span >1 repo / non-git / unresolved"
     },
     "fidelityWarnings": {
       "type": "array",
@@ -1185,7 +1207,7 @@
       "items": {
         "type": "string"
       },
-      "description": "capability families the agent image omits but the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability"
+      "description": "capability families the agent image omits but the skill used (live built-image tiers) \u2014 computeVerdict fails unless allow_missing_capability"
     },
     "gateProvenance": {
       "type": "object",
@@ -1236,11 +1258,11 @@
     },
     "skillToolAvailable": {
       "type": "boolean",
-      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" — false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
+      "description": "Wave 1 / E8: whether the agent's init tool list included \"Skill\" \u2014 false means skill_triggered/no_skill_triggered cannot be evaluated (agent-version tool-name drift)."
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC §11 for per-class semantics.",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
         "required": [
@@ -1305,14 +1327,14 @@
           },
           "assertTextTruncated": {
             "type": "boolean",
-            "description": "assertText was cut at the 10 KB assert cap — a substring miss is unverifiable, not a proven absence (#9)"
+            "description": "assertText was cut at the 10 KB assert cap \u2014 a substring miss is unverifiable, not a proven absence (#9)"
           }
         }
       }
     },
     "tasks": {
       "type": "array",
-      "description": "Progress panel (§6.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum — this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
+      "description": "Progress panel (\u00a76.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum \u2014 this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
       "items": {
         "type": "object",
         "required": [
@@ -1342,7 +1364,7 @@
     },
     "context": {
       "type": "object",
-      "description": "Context/Connectors panel (§6.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
+      "description": "Context/Connectors panel (\u00a76.2, M6). mcpServers is SDK-owned pass-through data (loosely typed). availableSkills is a later addition to this same field.",
       "properties": {
         "tools": {
           "type": "array",
@@ -1352,7 +1374,7 @@
         },
         "mcpServers": {
           "type": "array",
-          "description": "SDK-owned per-server shape, pass-through — deliberately left loosely typed (open object) so extra SDK keys are preserved, not rejected.",
+          "description": "SDK-owned per-server shape, pass-through \u2014 deliberately left loosely typed (open object) so extra SDK keys are preserved, not rejected.",
           "items": {
             "type": "object"
           }

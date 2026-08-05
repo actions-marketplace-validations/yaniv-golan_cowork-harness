@@ -1437,7 +1437,16 @@ export interface RunResult {
   permissiveAutoAllow?: string[];
   /** Post-run scan signals (live lane only). computeVerdict default-fails on `outputsDeletes`/`hostPathLeaked`
    *  when the scenario did NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
-  scan?: { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean };
+  scan?: {
+    outputsDeletes: string[];
+    /** Per-mount delete detections across every delete-denied (`rw`) user-visible mount, including
+     *  `outputs`. A SUPERSET of `outputsDeletes`, which is unchanged: production denies unlink/rmdir on
+     *  every such mount, so a delete in a connected folder is a real detection that used to produce no
+     *  signal at all. Reported, not verdict-moving — the harness detects where production ENFORCES. */
+    mountDeletes?: { mount: string; command: string }[];
+    hostPathLeaked: boolean;
+    selfHealRan: boolean;
+  };
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
   /** Run-identity metadata for the iterate-across-fixes loop. `runLabel`: the user's `--label` generation

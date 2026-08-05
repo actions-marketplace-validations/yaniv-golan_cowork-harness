@@ -26,6 +26,7 @@ import {
   buildLaunchPlan,
   userVisibleRootsFromPlan,
   readonlyFolderRootsFromPlan,
+  deleteDeniedRootsFromPlan,
   pluginSkillRootsFromPlan,
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
@@ -927,10 +928,24 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }
     }
 
-    const scan = scanEvents(join(outDir, "events.jsonl"));
+    // Detect deletes across every DELETE-DENIED mount, not just outputs — production's denial is a
+    // property of the mount class, so a connected `rw` folder is in scope too.
+    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan));
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
     const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
+    // A delete outside `outputs` used to produce NO signal whatsoever, because detection was scoped to
+    // the literal `outputs`. Production denies unlink/rmdir on every delete-denied mount, so this is a
+    // real divergence: the agent proceeded where production would have returned EPERM. Reported as a
+    // warning rather than a verdict signal — the harness DETECTS what production ENFORCES, and promoting
+    // it to a failure would silently re-verdict existing runs.
+    if (!scanUnavailable) {
+      const nonOutputs = scan.mountDeletes.filter((d) => d.mount !== "outputs");
+      for (const d of nonOutputs)
+        warn(
+          `::warning:: [scan] delete detected in mount "${d.mount}" — production denies unlink/rmdir there until approved: ${d.command}\n`,
+        );
+    }
     if (scan.sidecarMissing)
       warn(
         `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / delete-in-outputs / self-heal cannot be verified)\n`,
@@ -1494,7 +1509,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // verify-run's `scanMissing = result.scan === undefined` fires and the dependent assertions fail loud.
       scan: scanUnavailable
         ? undefined
-        : { outputsDeletes: scan.outputsDeletes, hostPathLeaked: scan.hostPathLeaked, selfHealRan: scan.selfHealRan },
+        : {
+            outputsDeletes: scan.outputsDeletes,
+            // Omitted when empty so an unchanged run's result.json is byte-identical to before.
+            ...(scan.mountDeletes.length ? { mountDeletes: scan.mountDeletes } : {}),
+            hostPathLeaked: scan.hostPathLeaked,
+            selfHealRan: scan.selfHealRan,
+          },
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
       l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins
@@ -2067,13 +2088,33 @@ export function hostPathLeaked(text: string): boolean {
 // containment violation, and asserting it here would red runs the real product would allow.
 const DELETE_TOKEN =
   /\b(rm|unlink|rmdir)\b|\bshred\b[^\n;|&]*[ \t](?:-[a-zA-Z]*u\b|--remove\b)|\bfind\b[^\n]*-delete\b|\bos\.(remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\.unlink\(/;
-// `outputs` MENTIONED as a path segment (followed by `/` or a boundary) — broad, used for the conservative
-// rm co-occurrence + ambiguous-mv branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
-const TOUCHES_OUTPUTS = /(^|[\s"'`(/])(mnt\/)?outputs(?![\w.])/;
-// `outputs` as a real path COMPONENT (preceded by start/`/`, followed by `/` or end) — used for mv direction
-// so a dst like `/tmp/outputs-backup` is NOT mistaken for being inside outputs/.
-const UNDER_OUTPUTS = /(^|\/)(mnt\/)?outputs(\/|$)/;
-const CD_INTO_OUTPUTS = /\b(cd|pushd)\s+["']?(mnt\/)?outputs(?![\w.])/;
+/** Per-mount matchers. Production denies `unlink`/`rmdir` on EVERY writable Cowork FUSE mount, not just
+ *  `outputs` — a connected folder shows the identical default, and approval is strictly per-mount. So the
+ *  three matchers below are built per mount NAME rather than hardcoding the literal `outputs`.
+ *
+ *  The mount name is regex-escaped: names come from user-connected folder basenames and can contain `.`,
+ *  `+`, `(` and friends. The right boundary `(?![\w.])` is kept exactly as-is and is correct for dotted
+ *  names in BOTH directions: for a mount `v1.2`, `v1.2/x` matches (next char `/`) while `v1.2.3` does not
+ *  (next char `.`, a different path); for a mount `data`, `data.json` correctly does not match. */
+type MountMatchers = { touches: RegExp; under: RegExp; cdInto: RegExp };
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const MOUNT_MATCHERS = new Map<string, MountMatchers>();
+function mountMatchers(name: string): MountMatchers {
+  const hit = MOUNT_MATCHERS.get(name);
+  if (hit) return hit;
+  const n = escapeRe(name);
+  const m: MountMatchers = {
+    // MENTIONED as a path segment — broad, used for the conservative rm co-occurrence + ambiguous-mv
+    // branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
+    touches: new RegExp(`(^|[\\s"'\`(/])(mnt/)?${n}(?![\\w.])`),
+    // A real path COMPONENT (preceded by start/`/`, followed by `/` or end) — used for mv direction so a
+    // dst like `/tmp/outputs-backup` is NOT mistaken for being inside outputs/.
+    under: new RegExp(`(^|/)(mnt/)?${n}(/|$)`),
+    cdInto: new RegExp(`\\b(cd|pushd)\\s+["']?(mnt/)?${n}(?![\\w.])`),
+  };
+  MOUNT_MATCHERS.set(name, m);
+  return m;
+}
 
 /** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY at the
  *  resolved target's mount — outputs is a FUSE mount that fails `unlink`/`rmdir` with EPERM — a delete whose target
@@ -2257,17 +2298,17 @@ function nonFlagArgs(stmt: string): string[] {
 /** An `mv` statement is a delete-from-outputs when it moves a file OUT of outputs (src UNDER outputs, dst
  *  NOT under outputs). Moving INTO outputs is not a delete. Ambiguous mv (`-t`/`--target-directory`, ≠2
  *  operands) → flag only if it mentions outputs (conservative — never a false negative). */
-function mvDeletesOutputs(stmt: string): boolean {
+function mvDeletesOutputs(stmt: string, mm: MountMatchers): boolean {
   if (!/\bmv\b/.test(stmt)) return false;
-  if (/(^|\s)(-t|--target-directory)\b/.test(stmt)) return TOUCHES_OUTPUTS.test(stmt);
+  if (/(^|\s)(-t|--target-directory)\b/.test(stmt)) return mm.touches.test(stmt);
   const ops = nonFlagArgs(stmt);
-  if (ops.length < 2) return TOUCHES_OUTPUTS.test(stmt);
+  if (ops.length < 2) return mm.touches.test(stmt);
   // N-ary `mv src… dst`: the last operand is the destination, the rest are sources. A delete-from-
   // outputs is when some source is UNDER outputs and the destination is NOT (reduces to the src/dst
   // logic at length 2). `mv a.pdf b.pdf outputs/` (moving INTO outputs) is therefore not a delete.
   const dst = ops[ops.length - 1];
   const sources = ops.slice(0, -1);
-  return sources.some((src) => UNDER_OUTPUTS.test(src)) && !UNDER_OUTPUTS.test(dst);
+  return sources.some((src) => mm.under.test(src)) && !mm.under.test(dst);
 }
 
 /**
@@ -2341,43 +2382,64 @@ export function outputsRemovedByFsDiff(
   return vanished.filter((p) => !(preRunHashes[p] && newContent.has(preRunHashes[p] as string))).map(say);
 }
 
-export function isOutputsDelete(cmd: string): boolean {
+/** Which of `mounts` a command deletes in. Same logic per mount as the original outputs-only detector —
+ *  `detectMountDeletes(cmd, ["outputs"])` is byte-equivalent to the old `isOutputsDelete(cmd)`, pinned by
+ *  test. Returns the matching mount NAMES so a finding can say which mount, since production's approval
+ *  is per-mount and a caller needs to distinguish `outputs` from a connected folder. */
+export function detectMountDeletes(cmd: string, mounts: string[]): string[] {
   // TWO views on purpose. `expanded` keeps comments and is used ONLY for the co-occurrence fast path,
   // which is a gate rather than a finding: that preserves the prefer-a-false-positive case where the
-  // outputs reference lives in a comment but the delete target is genuinely unprovable
+  // mount reference lives in a comment but the delete target is genuinely unprovable
   // (`# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags, on the rm's own unprovable target).
   // `code` has comments removed and is what every statement-level DECISION reads, so prose can never
   // itself be the operative delete.
   const expanded = resolveMktempVars(expandSimpleVars(cmd));
   const code = resolveMktempVars(expandSimpleVars(stripCommentLines(cmd)));
-  for (const stmt of splitStatements(code)) if (mvDeletesOutputs(stmt)) return true; // mv: always-on, direction-aware
-  if (!DELETE_TOKEN.test(expanded) || !TOUCHES_OUTPUTS.test(expanded)) return false; // rm-family fast path
+  // Mount-independent, so hoisted out of the per-mount loop rather than recomputed per mount. Both are
+  // pure, so this is a cost change only — the per-mount decisions below are byte-identical to the
+  // original outputs-only detector.
+  const stmts = splitStatements(code);
   const prefixes = [...defaultSafePrefixes(), ...safePrefixes()];
-  // per-statement, on `code`: a COMMENTED `# cd outputs` must not short-circuit past a statement whose
-  // own target is provably safe (`# cd outputs` + `rm /tmp/x` is not a delete).
-  if (splitStatements(code).some((s) => CD_INTO_OUTPUTS.test(s))) return true; // a cwd-relative delete could hit outputs
-  for (const stmt of splitStatements(code)) {
-    if (!DELETE_TOKEN.test(stmt)) continue;
-    if (TOUCHES_OUTPUTS.test(stmt)) return true; // a delete statement itself names outputs
-    const targets = nonFlagArgs(stmt);
-    // A prefix match only PROVES safety if the remainder after the prefix is itself inert: no `..`
-    // path segment (could walk back out of the safe root, e.g. `/tmp/a/../b` → `/tmp/b`... or worse,
-    // `/tmp/../outputs/x`) and no unexpanded `$` (an unresolved var/command-subst suffix, e.g.
-    // `/tmp/${TARGET}` or `/tmp/$(get)`, whose real resolved path is unknown). Either makes the
-    // remainder itself unprovable, so the whole target falls through to the "unprovable → flag" path
-    // below rather than being cleared by the prefix match.
-    const isProvablySafe = (t: string): boolean =>
-      prefixes.some((pre) => {
-        if (!t.startsWith(pre)) return false;
-        const remainder = t.slice(pre.length);
-        if (/(^|\/)\.\.(\/|$)/.test(remainder)) return false;
-        if (remainder.includes("$")) return false;
-        return true;
-      });
-    const allSafe = targets.length > 0 && targets.every(isProvablySafe);
-    if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars, `..` traversal) → flag
-  }
-  return false; // every rm delete is provably under a safe prefix; outputs ref was non-delete only
+
+  const deletesIn = (mount: string): boolean => {
+    const mm = mountMatchers(mount);
+    for (const stmt of stmts) if (mvDeletesOutputs(stmt, mm)) return true; // mv: always-on, direction-aware
+    if (!DELETE_TOKEN.test(expanded) || !mm.touches.test(expanded)) return false; // rm-family fast path
+    // per-statement, on `code`: a COMMENTED `# cd outputs` must not short-circuit past a statement whose
+    // own target is provably safe (`# cd outputs` + `rm /tmp/x` is not a delete).
+    if (stmts.some((st) => mm.cdInto.test(st))) return true; // a cwd-relative delete could hit the mount
+    for (const stmt of stmts) {
+      if (!DELETE_TOKEN.test(stmt)) continue;
+      if (mm.touches.test(stmt)) return true; // a delete statement itself names the mount
+      const targets = nonFlagArgs(stmt);
+      // A prefix match only PROVES safety if the remainder after the prefix is itself inert: no `..`
+      // path segment (could walk back out of the safe root, e.g. `/tmp/a/../b` → `/tmp/b`... or worse,
+      // `/tmp/../outputs/x`) and no unexpanded `$` (an unresolved var/command-subst suffix, e.g.
+      // `/tmp/${TARGET}` or `/tmp/$(get)`, whose real resolved path is unknown). Either makes the
+      // remainder itself unprovable, so the whole target falls through to the "unprovable → flag" path
+      // below rather than being cleared by the prefix match.
+      const isProvablySafe = (t: string): boolean =>
+        prefixes.some((pre) => {
+          if (!t.startsWith(pre)) return false;
+          const remainder = t.slice(pre.length);
+          if (/(^|\/)\.\.(\/|$)/.test(remainder)) return false;
+          if (remainder.includes("$")) return false;
+          return true;
+        });
+      const allSafe = targets.length > 0 && targets.every(isProvablySafe);
+      if (!allSafe) return true; // unprovable (incl. unexpanded/command-subst vars, `..` traversal) → flag
+    }
+    return false; // every rm delete is provably under a safe prefix; the mount ref was non-delete only
+  };
+
+  return mounts.filter(deletesIn);
+}
+
+/** The original outputs-only predicate, preserved verbatim in behaviour as the single-mount case. Kept
+ *  because `no_delete_in_outputs`, its verdict signal and every committed cassette are defined in terms
+ *  of it — widening detection must not move any of them. */
+export function isOutputsDelete(cmd: string): boolean {
+  return detectMountDeletes(cmd, ["outputs"]).length > 0;
 }
 
 /** the operative delete statement(s) within a command that `isOutputsDelete` flagged — for a readable
@@ -2385,7 +2447,7 @@ export function isOutputsDelete(cmd: string): boolean {
  *  preceded it (the finding then showed only the assignment block). This surfaces the delete/mv itself, with
  *  simple `VAR=literal` assignments resolved so the real target path is visible. Falls back to the whole
  *  (expanded) command if no single statement isolates the delete. Bounded length for the stored finding. */
-function outputsDeleteSnippet(cmd: string): string {
+function outputsDeleteSnippet(cmd: string, mount = "outputs"): string {
   // Iterate var expansion to a fixed point so CHAINED assignments (ARTIFACTS_ROOT → ANALYSIS_DIR → rm) fully
   // resolve in the displayed path. (Detection keeps the single-pass `expandSimpleVars` — its semantics are
   // pinned by tests; multi-pass here only sharpens the finding, never changes what gets flagged.)
@@ -2398,13 +2460,23 @@ function outputsDeleteSnippet(cmd: string): string {
     if (next === expanded) break;
     expanded = next;
   }
-  const ops = splitStatements(expanded).filter((s) => mvDeletesOutputs(s) || DELETE_TOKEN.test(s));
+  const mm = mountMatchers(mount);
+  const ops = splitStatements(expanded).filter((s) => mvDeletesOutputs(s, mm) || DELETE_TOKEN.test(s));
   return (ops.length ? ops.join("; ") : expanded).trim().slice(0, 160);
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
-export function scanEvents(file: string): {
+export function scanEvents(
+  file: string,
+  /** Writable (`rw`) user-visible mount names to attribute deletes to. Production denies unlink/rmdir on
+   *  EVERY such mount, not just `outputs`. Defaults to outputs-only so existing callers are unchanged. */
+  rwMounts: string[] = ["outputs"],
+): {
   outputsDeletes: string[];
+  /** Per-mount delete detections across ALL writable mounts, including `outputs`. A superset of
+   *  `outputsDeletes`, which stays exactly as it was because `no_delete_in_outputs`, its verdict signal
+   *  and every committed cassette are defined in terms of it. */
+  mountDeletes: { mount: string; command: string }[];
   hostPathLeaked: boolean;
   selfHealRan: boolean;
   // events.jsonl was absent/unreadable — the scan produced NO evidence. Distinct from a clean scan:
@@ -2414,7 +2486,15 @@ export function scanEvents(file: string): {
   // line could have been silently dropped. >0 makes the scan untrustworthy, treated as evidence-unavailable.
   malformedLines: number;
 } {
-  const out = { outputsDeletes: [] as string[], hostPathLeaked: false, selfHealRan: false, sidecarMissing: false, malformedLines: 0 };
+  const mounts = rwMounts.includes("outputs") ? rwMounts : ["outputs", ...rwMounts];
+  const out = {
+    outputsDeletes: [] as string[],
+    mountDeletes: [] as { mount: string; command: string }[],
+    hostPathLeaked: false,
+    selfHealRan: false,
+    sidecarMissing: false,
+    malformedLines: 0,
+  };
   let lines: string[] = [];
   try {
     // CURRENT TURN ONLY. Whole-file scanning made a turn-1 delete fail turn 2's verdict on every
@@ -2457,7 +2537,13 @@ export function scanEvents(file: string): {
       // input shape. Missing the MCP name was a host-loop blind-spot in the post-hoc backstop.
       if (block.type === "tool_use" && (block.name === "Bash" || block.name === "mcp__workspace__bash") && msg.type === "assistant") {
         const cmd = String(block.input?.command ?? "");
-        if (isOutputsDelete(cmd)) out.outputsDeletes.push(outputsDeleteSnippet(cmd));
+        // One detection pass over every writable mount; `outputsDeletes` is then the `outputs` slice of
+        // it, so the two can never disagree about outputs the way two separate passes could.
+        const hits = detectMountDeletes(cmd, mounts);
+        for (const m of hits) out.mountDeletes.push({ mount: m, command: outputsDeleteSnippet(cmd, m) });
+        // `outputsDeletes` is the `outputs` slice of THIS command's hits — one detection pass feeds both,
+        // so they cannot disagree about outputs the way two separate passes could.
+        if (hits.includes("outputs")) out.outputsDeletes.push(outputsDeleteSnippet(cmd));
         if (selfHealRe.test(cmd)) out.selfHealRan = true;
       }
       if (block.type === "text" && typeof block.text === "string" && hostPathLeaked(block.text)) out.hostPathLeaked = true;

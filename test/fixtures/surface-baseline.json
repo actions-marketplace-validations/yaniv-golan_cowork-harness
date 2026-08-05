@@ -1931,6 +1931,20 @@
       ".scan.hostPathLeaked": {
         "type": "boolean"
       },
+      ".scan.mountDeletes": {
+        "type": "array"
+      },
+      ".scan.mountDeletes[]": {
+        "type": "object"
+      },
+      ".scan.mountDeletes[].command": {
+        "type": "string",
+        "required": true
+      },
+      ".scan.mountDeletes[].mount": {
+        "type": "string",
+        "required": true
+      },
       ".scan.outputsDeletes": {
         "type": "array"
       },

@@ -10,6 +10,7 @@ import {
   parseDialogTimeout,
   slugForPath,
   isOutputsDelete,
+  detectMountDeletes,
   collectArtifacts,
   readSessionManifest,
   parseEnvPort,
@@ -769,5 +770,70 @@ describe("classifyWorkspaceFiles", () => {
     const got = classifyWorkspaceFiles(root, ["outputs"], []);
     const entry = got.find((f) => f.path === "outputs/hashed.txt");
     expect(entry?.sha256).toBe(expected);
+  });
+});
+
+// ==========================================================================================
+// Delete detection is per-MOUNT, not outputs-only. Production denies unlink/rmdir on every
+// delete-denied (`rw`) Cowork FUSE mount — a connected folder shows the identical default, and
+// approval is strictly per-mount. Detection was scoped to the literal `outputs`, so a delete in a
+// connected folder produced NO signal at all.
+// ==========================================================================================
+describe("detectMountDeletes — per-mount scope and attribution", () => {
+  // The whole safety argument for widening rests on this: `outputs` behaviour must not move, because
+  // no_delete_in_outputs, its verdict signal and every committed cassette are defined on it.
+  it("EQUIVALENCE: detectMountDeletes(cmd, ['outputs']) matches isOutputsDelete for every shape", () => {
+    const cases = [
+      "rm -rf outputs/report.pdf",
+      "rm -rf /tmp/scratch",
+      "mv outputs/a.pdf /tmp/b.pdf",
+      "mv /tmp/a.pdf outputs/",
+      "cd outputs && rm -f x",
+      '# stage to outputs\nrm -rf "$UNRESOLVED"',
+      "rm -rf outputs.txt",
+      "rm -rf myoutputs/x",
+      "python -c 'import os; os.remove(\"outputs/x\")'",
+      "echo outputs",
+      "find outputs -name '*.tmp' -delete",
+      "truncate -s 0 outputs/a.txt",
+    ];
+    for (const c of cases) {
+      expect(detectMountDeletes(c, ["outputs"]).length > 0, `case: ${c}`).toBe(isOutputsDelete(c));
+    }
+  });
+
+  it("attributes a delete to the connected folder it actually touches", () => {
+    expect(detectMountDeletes("rm -rf reports/old.pdf", ["outputs", "reports"])).toEqual(["reports"]);
+    expect(detectMountDeletes("rm -rf outputs/a.pdf", ["outputs", "reports"])).toEqual(["outputs"]);
+  });
+
+  it("a folder delete is detected — the case that previously produced NO signal at all", () => {
+    expect(isOutputsDelete("rm -rf reports/old.pdf")).toBe(false); // old scope: silent
+    expect(detectMountDeletes("rm -rf reports/old.pdf", ["outputs", "reports"])).toEqual(["reports"]);
+  });
+
+  it("reports every mount a single command deletes in", () => {
+    expect(detectMountDeletes("rm -rf outputs/a reports/b", ["outputs", "reports"]).sort()).toEqual(["outputs", "reports"]);
+  });
+
+  it("a mount NOT in the list is not attributed", () => {
+    expect(detectMountDeletes("rm -rf reports/old.pdf", ["outputs"])).toEqual([]);
+  });
+
+  it("mount names are regex-escaped and dot-boundaries hold in both directions", () => {
+    // A name with a `.` must be matched literally, not as `any char`…
+    expect(detectMountDeletes("rm -rf v1.2/x", ["v1.2"])).toEqual(["v1.2"]);
+    expect(detectMountDeletes("rm -rf v1X2/x", ["v1.2"])).toEqual([]);
+    // …and the right boundary must still reject a LONGER dotted path that merely starts with the name.
+    expect(detectMountDeletes("rm -rf v1.2.3/x", ["v1.2"])).toEqual([]);
+    expect(detectMountDeletes("rm -rf data.json", ["data"])).toEqual([]);
+    // regex metacharacters in a folder name must not blow up or over-match
+    expect(detectMountDeletes("rm -rf a+b/x", ["a+b"])).toEqual(["a+b"]);
+    expect(detectMountDeletes("rm -rf aXb/x", ["a+b"])).toEqual([]);
+  });
+
+  it("mv direction stays per-mount: moving INTO a mount is not a delete from it", () => {
+    expect(detectMountDeletes("mv /tmp/a.pdf reports/", ["reports"])).toEqual([]);
+    expect(detectMountDeletes("mv reports/a.pdf /tmp/", ["reports"])).toEqual(["reports"]);
   });
 });

@@ -337,6 +337,17 @@ export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
  *  `RunResult.artifacts` (an input is not something `scaffold`/`file_exists` should treat as output).
  *  Does NOT change `userVisibleRootsFromPlan` — `no_unexpected_files` and `computer_links_resolve`
  *  still enumerate these roots; only their captured content changes shape. */
+/** User-visible roots whose mode is `rw` — i.e. writable, and in production DELETE-DENIED (`unlink` /
+ *  `rmdir` return EPERM until per-mount approval). This is the detector's scope: production denies on
+ *  EVERY such mount, not just `outputs`, and a connected folder shows the identical default.
+ *
+ *  Excludes `mode:"r"` (nothing to delete — the bind is read-only) and `mode:"rwd"` (delete-approved by
+ *  authoring, the modelled equivalent of `fileDeleteApprovedMounts`). `outputs` is always included: it is
+ *  `rw` in every baseline and the existing `no_delete_in_outputs` contract is defined on it. */
+export function deleteDeniedRootsFromPlan(plan: LaunchPlan): string[] {
+  return ["outputs", ...plan.mounts.filter((m) => m.kind === "folder" && m.mode === "rw").map((m) => m.mountPath)];
+}
+
 export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
   return plan.mounts.filter((m) => m.kind === "folder" && m.mode === "r").map((m) => m.mountPath);
 }
