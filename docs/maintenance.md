@@ -160,9 +160,10 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
 
    **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
    `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named
-   variant, and which the harness does not model. (It is distinct from the paraphrased-append gap in
-   [docs/fidelity-gaps.md](./fidelity-gaps.md#system-prompt-reconstruction), and is not itself listed
-   there.) It pins the channel's presence (its **absence** is itself
+   variant, and which the harness does not model — a disclosed gap, distinct from the paraphrased-append
+   one, in
+   [docs/fidelity-gaps.md](./fidelity-gaps.md#server-driven-system-prompt-patches-coworksyspromptmap).
+   It pins the channel's presence (its **absence** is itself
    a finding: either the channel went away or the extractor stopped seeing it — neither may pass quietly),
    the mode vocabulary as a **closed set** (`replace`/`append` — a third mode would change what a served
    variant can do to the prompt, so this is the highest-value anchor here), the

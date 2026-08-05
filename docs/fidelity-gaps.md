@@ -83,6 +83,18 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 ---
 
+## Server-driven system-prompt patches (`coworkSyspromptMap`)
+
+**Real Cowork behaviour:** Desktop carries a **server-driven, per-session** patch channel for the cowork prompt section. Entries are keyed `<name>(.replace|.append)?`, and the suffix picks the mode. `append` adds text after the computed section. **`replace` discards the computed section entirely** and emits `[text, ...appends].join("\n\n")`. Built-in variants are validated at startup — a replace-mode variant must contain `{{promptCacheBoundary}}` or Desktop throws. A **server-supplied** entry is validated later, on the resolution path, which **degrades instead of throwing**: a boundary-less `replace` resolves to `missing_boundary`, the session gets a different prompt, and nothing errors. The channel is long-standing, present in 1.24012.1, 1.24012.11 and 1.25927.0 alike.
+
+**Harness behaviour:** modeled nowhere. The harness always renders the section above as an append onto the `claude_code` preset from its per-baseline reconstruction asset. No variant is ever applied, and there is no flag to simulate one.
+
+**Why it can't be replicated:** the entries come from the server, per session. There is no static artifact to reconstruct and no way to know what any given live session was served — a baseline can only record what is *in the asar*, and the patch content is not. What *can* be pinned is the channel's **shape**, and the shape is what makes it consequential: `checkSyspromptMapFacts` (see [maintenance.md](./maintenance.md#drift-detection--two-independent-signals)) hard-fails `sync` if the mode vocabulary widens past the closed `replace`/`append` set, the key grammar moves, the boundary invariant disappears, or the resolution-status machine changes. That guarantees a change in what the channel *can do* is caught before a user hits it; it does not tell you what any session was served.
+
+**What this means for a test result:** if a live session is served an active `replace` variant, production drops the computed cowork section and the harness keeps it — a **structural** divergence, not a wording one. A skill whose behaviour leans on something that section says can pass here and behave differently live. There is no workaround at the harness level; treat a prompt-sensitive result as tier-limited evidence, the same way you would a paraphrase-sensitive one.
+
+---
+
 ## Browser↔webview↔human-interaction boundary (interactive artifacts)
 
 **Real Cowork behaviour:** Desktop can render a self-contained HTML/React artifact in an embedded
