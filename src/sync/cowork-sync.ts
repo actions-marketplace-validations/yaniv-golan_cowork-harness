@@ -795,10 +795,25 @@ export function checkMountModeFacts(bundle: string): string[] {
     flags.push(
       'mountLayout: the delete-deny resolver (IX `…?"rwd":"rw"`) is gone from the asar — outputs/projects default mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)',
     );
-  if (!/\("uploads"\)\][^}]{0,90}mode:\s*"ro"/.test(bundle))
-    flags.push(
-      'mountLayout: the uploads read-only ("ro") mount is gone from the asar — uploads mode may have changed; re-derive mountLayout.mounts[name=uploads].mode',
-    );
+  // Every mount whose mode is HARDCODED at the spawn-time mount builder, rather than resolved through
+  // the delete-deny resolver above. Read first-party from the builder, which assembles the whole set:
+  // outputs and each connected folder go through the resolver (`rw`, or `rwd` once approved) while these
+  // are pinned `"ro"`. Worth pinning individually because a mount silently moving from `ro` to a
+  // writable mode is a containment change we would otherwise model wrongly with nothing failing.
+  const hardcodedRo: [string, RegExp][] = [
+    ["uploads", /\("uploads"\)\][^}]{0,90}mode:\s*"ro"/],
+    [".claude/skills", /\("\.claude\/skills"\)\][^}]{0,120}mode:\s*"ro"/],
+    [".claude/projects", /\("\.claude\/projects"\)\][^}]{0,120}mode:\s*"ro"/],
+    // Project ATTACHMENTS (`userSelectedProjectUuids`) — one mount per uuid, read-only. This is the fact
+    // that settles whether a project mount belongs in the delete-denied set: it does not, because it is
+    // not writable at all.
+    [".projects/<uuid>", /\(`\.projects\/\$\{[^}]+\}`\)\][^}]{0,90}mode:\s*"ro"/],
+  ];
+  for (const [name, re] of hardcodedRo)
+    if (!re.test(bundle))
+      flags.push(
+        `mountLayout: the read-only ("ro") mount for ${name} is gone from the asar — its mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)`,
+      );
   return flags;
 }
 

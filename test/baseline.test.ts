@@ -328,9 +328,15 @@ describe("cowork-sync platform guard", () => {
 });
 
 describe("checkMountModeFacts (mount-mode drift guard for the hand-authored baseline)", () => {
-  // a synthetic bundle carrying both binary-verified mode facts (the IX delete-deny resolver + uploads ro)
-  const ok = 'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}';
-  it("returns no flags when both mode facts are present", () => {
+  // A synthetic bundle carrying every binary-verified mode fact: the delete-deny resolver plus each
+  // mount whose mode is hardcoded `"ro"` at the spawn-time builder. Widened from two facts to five once
+  // the builder was read in full — `.claude/skills`, `.claude/projects` and the per-uuid project
+  // ATTACHMENT mount are all pinned read-only there.
+  const ok =
+    'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}' +
+    ';l[Es(".claude/skills")]={path:x,mode:"ro"};l[Es(".claude/projects")]={path:y,mode:"ro"}' +
+    ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}';
+  it("returns no flags when every mode fact is present", () => {
     expect(checkMountModeFacts(ok)).toEqual([]);
   });
   it("flags when the IX delete-deny resolver is gone (outputs/projects default may have changed)", () => {
@@ -339,9 +345,9 @@ describe("checkMountModeFacts (mount-mode drift guard for the hand-authored base
     expect(flags.some((f) => f.includes("delete-deny resolver"))).toBe(true);
   });
   it("flags when uploads is no longer read-only", () => {
-    const drifted = ok.replace('mode:"ro"', 'mode:"rw"');
+    const drifted = ok.replace('("uploads")]={path:wa(i),mode:"ro"', '("uploads")]={path:wa(i),mode:"rw"');
     const flags = checkMountModeFacts(drifted);
-    expect(flags.some((f) => f.includes("uploads read-only"))).toBe(true);
+    expect(flags.some((f) => f.includes("uploads"))).toBe(true);
   });
 });
 
@@ -1816,6 +1822,40 @@ describe("fcacheContentHash — snapshot identity", () => {
 // divergence from our preset-plus-append model. Sentinel only: we cannot see what the server serves,
 // but we can pin the shape that determines what it is ABLE to do.
 // ==========================================================================================
+describe("checkMountModeFacts — hardcoded mount modes", () => {
+  // The spawn-time mount builder assembles the whole set: outputs and each connected folder go through
+  // the delete-deny resolver (`rw`, or `rwd` once approved); everything else is pinned `"ro"` inline.
+  // A mount silently moving from `ro` to writable is a containment change we would otherwise model
+  // wrongly with nothing failing, so each is pinned individually.
+  const CLEAN =
+    'p[r.a("uploads")]={path:x,mode:"ro"},p[r.a(".claude/skills")]={path:y,mode:"ro"};' +
+    'p[r.a(".claude/projects")]={path:z,mode:"ro"};' +
+    'p[r.a(`.projects/${e.uuid}`)]={path:w,mode:"ro"};' +
+    'let m=n?"rw":t?.includes(e)?"rwd":"rw";';
+
+  it("clean bundle → no flags", () => {
+    expect(checkMountModeFacts(CLEAN)).toEqual([]);
+  });
+
+  it.each([
+    [".projects/<uuid>", ".projects/${", ".projectsX/${"],
+    [".claude/projects", '(".claude/projects")]', '(".claude/projectsX")]'],
+    [".claude/skills", '(".claude/skills")]', '(".claude/skillsX")]'],
+    ["uploads", '("uploads")]', '("uploadsX")]'],
+    ["delete-deny resolver", '?"rwd":"rw"', '?"rw":"rw"'],
+  ])("MUTATION: %s moving → flags", (_label, from, to) => {
+    const mutated = CLEAN.split(from).join(to);
+    expect(mutated).not.toBe(CLEAN); // the mutation actually applied — a no-op mutation proves nothing
+    expect(checkMountModeFacts(mutated).length).toBeGreaterThan(0);
+  });
+
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkMountModeFacts([...files.values()].join(""))).toEqual([]);
+  });
+});
+
 describe("checkSyspromptMapFacts — prompt-patch channel sentinel", () => {
   const CLEAN = new Map([
     [
