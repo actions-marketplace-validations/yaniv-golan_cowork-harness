@@ -21,6 +21,19 @@ forward from the previous baseline untouched)
     permissionMode, maxThinkingTokens, effortDefault), the prompt-asset pointers, and every $comment*
 ```
 
+> **`mountLayout.mounts[].mode` is documentary, and older baselines carry a stale `projects` row.**
+> Nothing reads that array at run time: `resolveMounts()` spreads it, but container/microvm/hostloop each
+> take only `cwd` and `mntRoot` from the result, and the one `mode === "r"` filter reads the launch plan's
+> mounts, not the baseline's. The `projects` row reads `mode: "rw"` in every baseline before
+> `desktop-1.25927.0`, which is **not uniformly wrong**: below `MOUNT_BARE_NAME_MIN_VERSION` (1.14271.0)
+> `.projects/<name>` really was the connected-folder namespace, and folders are resolver-driven `rw`. From
+> that boundary on, folders moved to `mnt/<basename>` and `.projects/<uuid>` became the project-attachment
+> namespace, which Cowork mounts **read-only** — so the row is stale in the 18 baselines between the
+> boundary and 1.25927.0. They are deliberately left as frozen per-release records: correcting them
+> honestly means re-verifying each against its own asar, a blanket edit would put a wrong value into the
+> three pre-boundary files, and nothing consumes the field either way. New baselines carry the corrected
+> `r`, which `sync` merges forward.
+
 The two generated `spawn` families are **all-or-nothing**: if `deriveSpawnEnv` or
 `extractModelEffortConfig` hard-fails, `sync` preserves the previous baseline's values rather than writing
 a partial map, and reports the failure as an unknown delta. That is why a green `sync` is meaningful — a
