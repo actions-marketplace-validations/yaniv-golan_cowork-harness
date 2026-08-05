@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--dry-run` on `skill` validated nothing it previewed.** The dry-run early return sat above four
+  guards, so `skill … --on-unanswered banana --dry-run` exited 0 — as did a `--decider-dir` +
+  `--decider-cmd` pair and both `--repeat` conflicts. `--dry-run` is the advertised pre-flight check, so
+  a guard it skips green-lights an invalid command line. Root cause: `resolvePolicy` both *validated*
+  the flag value and *resolved* the effective policy, and every path that legitimately skipped
+  resolution — the dry-run return, the `externalChannel ? "fail" : …` short-circuit — skipped validation
+  with it. Validation now runs at flag-parse time, so no downstream return can bypass it, and the
+  channel/`--repeat` conflicts moved above the return. The preview also reports the resolved
+  `on_unanswered` and decider channel, which it previously omitted.
+- **`--on-unanswered` alongside `--decider-dir`/`--decider-cmd` is now a usage error** on `run`,
+  `record`, `skill` and `probe-dispatch`. The channel is the terminal, so the policy terminal is never
+  constructed and the flag was silently inert — the same conflict `--decider-llm` already rejected.
+- **`record` rejects a scenario whose YAML sets `on_unanswered: prompt`**, matching `run`. `record`'s
+  `--on-unanswered` enum already excluded `prompt` for determinism, but the scenario field outranks the
+  flag, so a TTY wait stayed reachable on the command that writes a committed fixture.
+- **`probe-dispatch` usage errors named `skill` as the command.** `resolvePolicy`'s signature could only
+  express `run | skill`, so `probe-dispatch` passed `"skill"` and every error envelope it raised carried
+  another command's name.
+
 ### Added
 
 - **`verify-cassettes` now fails on a leaked host inventory (`host-inventory` finding class).** A cassette

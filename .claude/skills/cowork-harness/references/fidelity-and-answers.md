@@ -74,7 +74,7 @@ regressions.
 | **Spawned helper** | `--decider-cmd '<helper>'` | depends on the helper |
 | **In-band (driving agent)** | `--decider-dir <dir>` (+ a Monitor that writes responses) | depends |
 
-Scripted `answers:` and a terminal (`--decider-llm` / `--decider-cmd` / `--decider-dir` / `on_unanswered`) compose as a normal Chain — scripted rules resolve matched gates, the terminal answers whatever's left. What's mutually exclusive is picking **two terminals** at once (e.g. `--decider-llm` with `--decider-cmd`, or `--decider-llm` with an explicit `--on-unanswered`) — the CLI rejects that combination. The in-band path's Monitor drives two
+Scripted `answers:` and a terminal (`--decider-llm` / `--decider-cmd` / `--decider-dir` / `on_unanswered`) compose as a normal Chain — scripted rules resolve matched gates, the terminal answers whatever's left. What's mutually exclusive is picking **two terminals** at once — the CLI rejects every such pairing: two channels (`--decider-dir` with `--decider-cmd`), a model terminal with a channel or a policy (`--decider-llm` with either), and a channel with a policy (`--decider-dir`/`--decider-cmd` with `--on-unanswered`). A channel or the LLM decider *is* the terminal, so an accompanying `--on-unanswered` could only ever be inert — the chain never reaches the policy terminal. The in-band path's Monitor drives two
 subcommands: `gates <dir>` (stream the pending questions) and `answer <dir> --gate N …` (reply to one).
 
 **The `--decider-llm` answer protocol.** The answering model is shown the gate's options **numbered** and

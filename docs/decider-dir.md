@@ -176,6 +176,14 @@ cowork-harness answer "$GATES" --gate 1 --choose "PDF"
   decider there.
 - **`run` additionally rejects `--on-unanswered prompt`** (it would break determinism), narrowing its
   accepted set to `fail`/`first` even though the flag's shape looks identical across commands.
+- **A channel and a policy are mutually exclusive.** `--on-unanswered` alongside
+  `--decider-dir`/`--decider-cmd` is a usage error on `run`, `record`, `skill` and `probe-dispatch`.
+  The channel *is* the terminal — the decider chain ends at it, so the policy terminal is never built
+  and the flag could only ever be inert. `--decider-llm` rejects the same pairing for the same reason.
+  Pick the channel or the policy, not both.
+- **`record` also rejects a scenario whose YAML sets `on_unanswered: prompt`.** The scenario field
+  outranks the flag, so validating only the flag left a TTY wait reachable on the command that writes a
+  committed fixture. `run` has always rejected it; `record` now matches.
 
 Verification commands (all fail at argument parsing, before any scenario runs or spends anything):
 

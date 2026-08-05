@@ -166,6 +166,10 @@ Exact accepted values (teach precisely): `--on-unanswered` takes `fail|prompt|fi
 only `fail|first` on `run`. **`llm` is NOT an `--on-unanswered` value** — the bare flag
 `--on-unanswered llm` is rejected (use `--decider-llm`); the YAML spelling is `on_unanswered: llm`.
 The word `agent` is **retired** — do not write `on_unanswered: agent` (the schema rejects it).
+`--on-unanswered` also conflicts with `--decider-dir`/`--decider-cmd`/`--decider-llm` (the channel or
+model IS the terminal, so a policy alongside it never applies) — pass one, not both. On `record`, a
+scenario setting `on_unanswered: prompt` is rejected too: the YAML field outranks the flag, and a TTY
+wait can't produce a deterministic committed fixture.
 `--on-unanswered first` is itself flagged `nonDeterministic` — it is *not* a deterministic stand-in
 for scripted answers. See `references/fidelity-and-answers.md`.
 

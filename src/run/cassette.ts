@@ -2513,6 +2513,17 @@ export async function cmdRecord(args: string[]) {
   const intent = p.options["--intent"];
   const deciderModel = p.options["--decider-model"];
   const onUnansweredOpt = p.options["--on-unanswered"] as OnUnanswered | undefined;
+  // `--help` presents these as alternatives (`--decider-dir | --decider-llm | --on-unanswered`) and they
+  // are: buildDecider takes `opts.external ?? <policy terminal>`, so with a channel the policy terminal is
+  // never constructed and the flag is inert. Accepting both silently discarded whichever the user meant.
+  if (deciderDir !== undefined && onUnansweredOpt !== undefined)
+    return fail(
+      "record",
+      "usage",
+      `--on-unanswered ${onUnansweredOpt} conflicts with --decider-dir (the channel IS the terminal, so the policy would never apply). Drop one.`,
+      undefined,
+      asJson,
+    );
   // Bounded batch parallelism (dir-batch / --rerecord-stale). Each record is already fully isolated per run
   // (unique sidecar networks + proxy, per-session run dir), so concurrency is safe — the bound exists to stay
   // under Docker's address pool + model API rate limits. Default 1 (sequential, ordered output).
@@ -2724,6 +2735,8 @@ export async function cmdRecord(args: string[]) {
     } catch (e) {
       return fail("record", "usage", `record --dry-run: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
     }
+    const promptReject = promptPolicyRejection(scenario);
+    if (promptReject) return fail("record", "usage", promptReject, undefined, asJson);
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
@@ -3067,11 +3080,26 @@ export function nullOutScrubbedPreRunHashes(
 /** The live-record TAIL shared by the file (batch/single) and in-memory (re-record) paths: run live, refuse
  *  a failing run unless opted in, snapshot + secret-scrub bodies, opt-in redact + verdict-preserve,
  *  then write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
+/** `on_unanswered: prompt` blocks on a TTY. `run` rejects it outright (it breaks determinism), and
+ *  `record`'s own `--on-unanswered` enum excludes `prompt` for the same reason — but the SCENARIO field
+ *  outranks the flag (`scenario.on_unanswered ?? opts.onUnanswered` in executeScenario), so the enum
+ *  alone left the YAML door open on the command that writes a COMMITTED fixture. Returns the rejection
+ *  message, or undefined when the scenario is recordable. */
+export function promptPolicyRejection(scenario: Scenario): string | undefined {
+  return scenario.on_unanswered === "prompt"
+    ? `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`record\` (a TTY wait can't produce a deterministic committed fixture). Use fail|first, or a decider channel.`
+    : undefined;
+}
+
 async function recordScenarioObject(
   scenario: Scenario,
   opts: RecordOpts,
   extraPolicyDirs: string[] = [],
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string }> {
+  // Same guard as the --dry-run path, on the funnel every real record passes through (dir batches and
+  // --rerecord-stale never touch the dry-run branch).
+  const promptReject = promptPolicyRejection(scenario);
+  if (promptReject) throw new Error(promptReject);
   // Redaction preflight — MUST fire BEFORE the (paid) agent spawn below; the historical policy-load
   // point after the live run is exactly the after-the-fact discovery this exists to prevent. Same search
   // set as the post-run load. `--no-redact` skips it (explicit known-synthetic opt-out); the batch paths

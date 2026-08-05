@@ -1065,6 +1065,14 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
       flags.label = v;
     } else rest.push(a);
   }
+  // Flag-level validation runs HERE, for every command that takes common flags, so no downstream
+  // early-return (skill's --dry-run) or short-circuit (`externalChannel ? … :`) can skip it.
+  // `--decider-dir` + `--decider-cmd` is a pure flag conflict, checked here rather than inside
+  // resolveExternal so a --dry-run rejects it WITHOUT constructing a channel (fileChannel touches the
+  // directory and installs an exit handler — side effects a preview must not have).
+  if (flags.deciderDir != null && flags.deciderCmd != null)
+    fail(commandName, "usage", "--decider-dir conflicts with --decider-cmd (one terminal channel).", undefined, isJsonOutput(args));
+  validateOnUnanswered(commandName, flags, args);
   return { rest, flags };
 }
 
@@ -1087,13 +1095,37 @@ function resolveOutput(
   return { json: false, render: true, footer: true, plan: { live, progress, verbose, color, compact } };
 }
 
-/** Resolve the on_unanswered default for a command. This is the choke
- *  point BOTH run and skill pass through, so the removed/internal policy values are rejected here — they
- *  can't silently degrade to `fail` (which would pass a no-gate run green under a bogus policy). */
-function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswered {
-  const json = flags.output === "json";
+/** Commands whose own CLI exposes `--decider-llm`. The rest must redirect `--on-unanswered llm` at the
+ *  scenario-YAML spelling: telling a `run`/`probe-dispatch` user to "use --decider-llm" names a flag
+ *  those commands then reject as an unexpected argument. */
+const HAS_DECIDER_LLM_FLAG = new Set(["skill"]);
+
+/** VALIDATE the `--on-unanswered` value (and its conflicts). Split out of `resolvePolicy` and called at
+ *  flag-parse time, because validation and resolution have different lifetimes: resolution is only
+ *  needed when a run is about to happen, so every path that legitimately skipped it — `skill`'s
+ *  `--dry-run` early return, the `externalChannel ? "fail" : resolvePolicy(…)` short-circuit — silently
+ *  skipped validation too, and `--on-unanswered banana --dry-run` exited 0.
+ *
+ *  Takes `args` (not `flags.output`) for the JSON decision: `--output-format` is parsed in the same
+ *  loop as the flag being validated, so reading `flags.output` mid-parse makes the envelope depend on
+ *  flag ORDER. `isJsonOutput` scans the whole argv. */
+function validateOnUnanswered(command: string, flags: CommonFlags, args: string[]): void {
+  const json = isJsonOutput(args);
+  const v = flags.onUnanswered as string | undefined;
+  // A terminal channel and a policy are mutually exclusive whether or not the policy value is valid:
+  // buildDecider takes `opts.external ?? <policy terminal>`, so with a channel the policy terminal is
+  // never constructed and the flag is inert. `--decider-llm` already rejects the same pairing.
+  if (v !== undefined && (flags.deciderDir != null || flags.deciderCmd != null))
+    fail(
+      command,
+      "usage",
+      `--on-unanswered ${v} conflicts with --decider-dir/--decider-cmd (the channel IS the terminal, so the policy would never apply). Drop one.`,
+      undefined,
+      json,
+    );
+  if (v === undefined) return;
   // `external` (the removed stdio channel) → `--decider-dir`/`--decider-cmd` subsume it.
-  if ((flags.onUnanswered as string) === "external")
+  if (v === "external")
     fail(
       command,
       "usage",
@@ -1101,36 +1133,36 @@ function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswer
       undefined,
       json,
     );
-  // The LLM decider's CLI spelling is --decider-llm; we reject the raw policy value on the CLI to keep deciders in the --decider-* family (the scenario-YAML spelling is on_unanswered: llm).
-  // `run` has no --decider-llm flag (only `skill`/`record` do), so its redirect can't point there — it
-  // has to point at the scenario-YAML spelling instead.
-  if ((flags.onUnanswered as string) === "llm")
+  // The LLM decider's CLI spelling is --decider-llm; the raw policy value is rejected on the CLI to keep
+  // deciders in the --decider-* family (the scenario-YAML spelling is on_unanswered: llm).
+  if (v === "llm")
     fail(
       command,
       "usage",
-      command === "run"
-        ? "--on-unanswered llm is not a user flag. Set on_unanswered: llm in the scenario YAML instead — `run` has no --decider-llm flag (only `skill`/`record` do)."
-        : '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.',
+      HAS_DECIDER_LLM_FLAG.has(command)
+        ? '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.'
+        : `--on-unanswered llm is not a user flag. Set on_unanswered: llm in the scenario YAML instead — \`${command}\` has no --decider-llm flag (only \`skill\`/\`record\` do).`,
       undefined,
       json,
     );
-  if (flags.onUnanswered) {
-    // validate the accepted set. `external`/`llm` are rejected above with redirect messages (the
-    // decider-orthogonality invariant); any OTHER bogus value (e.g. "banana") used to fall through here
-    // and pass unvalidated, with audit metadata reporting a nonsensical policy. Reject it loudly.
-    if (flags.onUnanswered !== "fail" && flags.onUnanswered !== "prompt" && flags.onUnanswered !== "first")
-      fail(
-        command,
-        "usage",
-        `--on-unanswered must be fail|prompt|first (got "${flags.onUnanswered}")`,
-        "for a model/external decider use --decider-llm, --decider-dir, or --decider-cmd",
-        json,
-      );
-    if (command === "run" && flags.onUnanswered === "prompt") {
-      fail(command, "usage", "run rejects --on-unanswered prompt (would break determinism). Use fail|first.", undefined, json);
-    }
-    return flags.onUnanswered;
-  }
+  // Any OTHER bogus value (e.g. "banana") used to fall through unvalidated, with audit metadata
+  // reporting a nonsensical policy. Reject it loudly.
+  if (v !== "fail" && v !== "prompt" && v !== "first")
+    fail(
+      command,
+      "usage",
+      `--on-unanswered must be fail|prompt|first (got "${v}")`,
+      "for a model/external decider use --decider-llm, --decider-dir, or --decider-cmd",
+      json,
+    );
+  if (command === "run" && v === "prompt")
+    fail(command, "usage", "run rejects --on-unanswered prompt (would break determinism). Use fail|first.", undefined, json);
+}
+
+/** RESOLVE the on_unanswered policy for a command — validation already happened at flag-parse time
+ *  (`validateOnUnanswered`), so this is pure and safe to call from a preview/dry-run path. */
+function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswered {
+  if (flags.onUnanswered) return flags.onUnanswered;
   if (command === "run") return "fail"; // scenarios are reproducible regression tests
   // skill: adaptive — prompt if a human is at the TTY, else fail (CI/agent)
   return process.stdin.isTTY && !process.env.CI ? "prompt" : "fail";
@@ -2029,6 +2061,29 @@ async function cmdSkill(rawArgs: string[]) {
       isJson,
     );
 
+  // Preconditions `run` never needed. `--session-id`/`--resume` are skill-only, and both pin ONE run dir:
+  // every repeat iteration would resolve the same `sess-<id>` outDir and the same-origin freshness wipe
+  // (execute.ts) would delete the previous iteration — N runs, one survivor, while the help text promises
+  // every run is kept. `--resume` additionally chains one session instead of sampling N independent runs.
+  if (repeatFlags.repeatN !== undefined && (sessionId || resume))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --session-id/--resume (both pin a single run dir, so each iteration would overwrite the last instead of producing N independent samples)",
+      undefined,
+      isJson,
+    );
+  // Same invariant the run lane enforces and docs/scenario.md states: an interactive driving agent x N
+  // runs is not a reproducible measurement.
+  if (repeatFlags.repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
+      undefined,
+      isJson,
+    );
+
   if (dryRun) {
     out(
       JSON.stringify(
@@ -2039,6 +2094,12 @@ async function cmdSkill(rawArgs: string[]) {
           marketplaces,
           enabled: enables,
           answers,
+          // The preview is what a reader checks the invocation against, so it reports the gate settings
+          // too — omitting them also made the equals-vs-spaced parity test for --on-unanswered vacuous
+          // (it compared two previews that never carried the value).
+          on_unanswered: useLlm ? "llm" : resolvePolicy("skill", flags),
+          ...(flags.deciderDir != null ? { decider: "decider-dir" } : flags.deciderCmd != null ? { decider: "decider-cmd" } : {}),
+          ...(useLlm ? { decider: "decider-llm" } : {}),
           ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
         },
         null,
@@ -2086,28 +2147,6 @@ async function cmdSkill(rawArgs: string[]) {
   const o = resolveOutput("skill", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   const { repeatN, minPassRate, stopOnDiverge, maxBudgetUsd, allowBudgetStop } = repeatFlags;
-  // Preconditions `run` never needed. `--session-id`/`--resume` are skill-only, and both pin ONE run dir:
-  // every repeat iteration would resolve the same `sess-<id>` outDir and the same-origin freshness wipe
-  // (execute.ts) would delete the previous iteration — N runs, one survivor, while the help text promises
-  // every run is kept. `--resume` additionally chains one session instead of sampling N independent runs.
-  if (repeatN !== undefined && (sessionId || resume))
-    return void fail(
-      "skill",
-      "usage",
-      "--repeat cannot be combined with --session-id/--resume (both pin a single run dir, so each iteration would overwrite the last instead of producing N independent samples)",
-      undefined,
-      o.json,
-    );
-  // Same invariant the run lane enforces and docs/scenario.md states: an interactive driving agent x N
-  // runs is not a reproducible measurement.
-  if (repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
-    return void fail(
-      "skill",
-      "usage",
-      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
-      undefined,
-      o.json,
-    );
   // Single-run budget ceiling. The batch path enforces its own cumulative cap between iterations, so this
   // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
   if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
