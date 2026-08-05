@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 
 // C1b: repo-docs anchor integrity.
@@ -15,14 +15,22 @@ import { resolve, join } from "node:path";
 
 const README_PATH = resolve("README.md");
 
-/** GitHub-style heading slug: lowercase; strip anything that isn't alphanumeric, space, or
- *  hyphen; replace each whitespace char with a hyphen (runs of whitespace become runs of
+/** GitHub-style heading slug: lowercase; strip anything that isn't alphanumeric, space, hyphen, or
+ *  UNDERSCORE; replace each whitespace char with a hyphen (runs of whitespace become runs of
  *  hyphens — NOT collapsed, matching GitHub's actual behavior for e.g. "Testing & CI/CD" ->
- *  "testing--cicd"). */
+ *  "testing--cicd").
+ *
+ *  The underscore is load-bearing and was previously dropped. `github-slugger` keeps `\w`, which
+ *  includes `_`, so a heading like "Static `subagent_type` resolution" anchors as
+ *  `…static-subagent_type-resolution…`, NOT `…subagenttype…`. No root-README heading contains one
+ *  today, which is why stripping it went unnoticed — but `docs/subagents.md` has one and
+ *  `docs/plugin-root.md` links to it correctly, so the moment this slugger is pointed at doc→doc
+ *  links (below) the bug turns a VALID link into a reported break. Getting a guard's own oracle
+ *  wrong is worse than having no guard: it trains you to distrust the failure. */
 function githubSlug(heading: string): string {
   return heading
     .toLowerCase()
-    .replace(/[^a-z0-9 -]/g, "")
+    .replace(/[^a-z0-9 _-]/g, "")
     .replace(/\s/g, "-");
 }
 
@@ -98,6 +106,62 @@ describe("repo docs' ../README.md anchors resolve to real README headings (C1b)"
     expect(
       broken,
       broken.map((r) => `${r.file.replace(resolve(".") + "/", "")}: ${r.raw} — #${r.slug} has no matching README heading`).join("\n"),
+    ).toEqual([]);
+  });
+});
+
+// Same integrity check, one hop further: a doc linking into ANOTHER DOC's heading. The suite above
+// covers only links into root README.md, so `](./other-doc.md#slug)` was unguarded — a deliberately
+// broken anchor was verified to pass it. That is the more common shape in this repo (21 such links
+// today), and the failure is silent for exactly the same reason: the FILE resolves, so nothing
+// notices the fragment points at nothing.
+//
+// This is preventive, not remedial: after fixing the slugger's underscore handling above, all 21
+// currently resolve. The one apparent break before that fix was the slugger's own bug, not a bad link.
+function docAnchorRefs(file: string): (AnchorRef & { target: string })[] {
+  const text = readFileSync(file, "utf8");
+  const refs: (AnchorRef & { target: string })[] = [];
+  // ](./name.md#slug) / ](name.md#slug) — same-directory doc links. Deliberately excludes
+  // `../README.md` (the suite above owns it) and any absolute/remote URL.
+  const re = /\]\((?:\.\/)?([a-zA-Z0-9._-]+\.md)#([^)]+)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m[1] === "README.md") continue; // root-README links belong to the suite above
+    refs.push({ file, slug: m[2], raw: m[0], target: join(resolve("docs"), m[1]) });
+  }
+  return refs;
+}
+
+describe("docs' sibling-doc anchors resolve to real headings in the target doc", () => {
+  const refs = repoDocFiles().flatMap(docAnchorRefs);
+
+  it("found sibling-doc anchor references to check (guards against a no-op test)", () => {
+    expect(refs.length).toBeGreaterThan(5);
+  });
+
+  it("the slugger keeps underscores (the bug that made a valid link look broken)", () => {
+    // Pins the fix above against regression, using the real heading that exposed it.
+    expect(githubSlug("Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)")).toBe(
+      "static-subagent_type-resolution-resolve-agent-types--lint-skill",
+    );
+  });
+
+  it("every ](./sibling.md#slug) anchor matches a real heading in that doc", () => {
+    const slugCache = new Map<string, Set<string>>();
+    const slugsFor = (target: string): Set<string> | null => {
+      if (!slugCache.has(target)) {
+        if (!existsSync(target)) return null;
+        slugCache.set(target, new Set(extractHeadings(readFileSync(target, "utf8")).map(githubSlug)));
+      }
+      return slugCache.get(target) ?? null;
+    };
+    const broken = refs.filter((r) => {
+      const s = slugsFor(r.target);
+      return s === null || !s.has(r.slug);
+    });
+    expect(
+      broken,
+      broken.map((r) => `${r.file.replace(resolve(".") + "/", "")}: ${r.raw} — #${r.slug} has no matching heading`).join("\n"),
     ).toEqual([]);
   });
 });
