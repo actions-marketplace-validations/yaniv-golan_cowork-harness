@@ -311,8 +311,14 @@ jobs:
           fi
       - name: Prove the sandbox enforces Cowork's limitations (self-contained sidecar)
         run: node dist/cli.js boundary-check
-      - name: Live contract tests — guard the binary assumptions (no token needed)
+      - name: Live contract tests — guard the binary assumptions (free ON THIS RUNNER)
         # Requires the staged agent; only runs where it's present. Skips cleanly otherwise.
+        #
+        # "no token needed" was the old wording and it is only true HERE, on a Linux runner with no
+        # credential store: every token-gated case skips, so the step is free. Do NOT carry that reading
+        # to a developer machine — running this same command locally on macOS BILLS, because at hostloop
+        # the agent self-sources credentials from the Keychain and an empty environment proves nothing.
+        # The lane prints that warning itself now (vitest.config.live.ts's globalSetup).
         run: npm run test:live
 
   # ── Stage 3: live scenario suite (best-effort live inference; soft-skips without a key) ────

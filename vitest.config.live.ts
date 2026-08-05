@@ -10,9 +10,15 @@ import { defineConfig } from "vitest/config";
 // worst possible direction: `live-resume-continuity` was absent here while also being skip-gated in the
 // default lane, so its assertions executed NOWHERE. Adding a live suite must never require remembering
 // two edits.
+//
+// SPENDING: this lane bills. The `globalSetup` below says so once per run, and says the part that is
+// easy to get wrong — an empty environment does NOT make it free, because at hostloop the agent
+// self-sources credentials from the macOS Keychain. It lives in the CONFIG rather than the npm script
+// so a direct `npx vitest run --config vitest.config.live.ts` gets it too.
 export default defineConfig({
   test: {
     include: ["test/live-*.test.ts"],
     testTimeout: 180000,
+    globalSetup: ["test/setup/live-lane-notice.ts"],
   },
 });

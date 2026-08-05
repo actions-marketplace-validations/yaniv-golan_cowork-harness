@@ -603,10 +603,13 @@ written to that dispatch's `subagents[].reasoning`.
   out past the cap (only present when non-zero).
 - **`configDirRoot` is fidelity-tier-resolved** — hostloop vs. the container/microvm sandboxed config
   dir; an unresolvable root (e.g. `protocol`) leaves `reasoning` undefined on every dispatch.
-- **Never fails the run.** A missing/malformed child transcript, an unreadable `configDirRoot`, or a
-  meta file with no matching `subagents[]` entry is a silent per-dispatch no-op — `reasoning` just
-  stays `undefined` for that dispatch (distinct from `[]`, which means a child file WAS found but
-  produced no thinking/text turns).
+- **Never fails the run.** A missing/malformed child transcript or an unreadable `configDirRoot` is a
+  silent per-dispatch no-op — `reasoning` just stays `undefined` for that dispatch (distinct from `[]`,
+  which means a child file WAS found but produced no thinking/text turns). A transcript with **no
+  matching `subagents[]` entry** is a different case: its `reasoning` has nowhere truthful to live, but
+  any research it contains is attributed upward rather than dropped — see
+  [`subagents[].webSearches`](#subagentswebsearches--grounding-a-researched-claim-including-a-nested-one)
+  below.
 
 **Sub-agent thinking TEXT is empty by default — only TEXT turns carry content.** This is the most
 important semantic to understand before consuming `reasoning`. A sub-agent thinking block comes through
@@ -658,3 +661,33 @@ pass/fail: `subagent_dispatched` (matches `dispatchAgentType`/`resolvedAgentType
 `no_vm_path_file_op` (content-class, re-derived from the frozen `tool_use` stream — replay-checkable
 without `controlOut`), and `path_denied` / `vm_path_denied` (decision-level — need `controlOut` on
 replay).
+
+### `subagents[].webSearches` — grounding a "researched" claim, including a nested one
+
+The same child transcript carries the dispatch's **`WebSearch` calls** — the query from the assistant
+`tool_use` block paired with the result text from the matching `tool_result`, both bounded
+(`SUBAGENT_WEBSEARCH_CAP` entries, `SUBAGENT_WEBSEARCH_RESULT_CAP_BYTES` per result, oldest elided into
+`webSearchesElided`). This is the ONLY place a sub-agent's research is recorded: a sub-agent's search
+never increments the main turn's `toolCounts.WebSearch`, and the top-level `webSearches[]` is
+main-agent/fork-scoped. Without it, a sub-agent reporting `evidence_source: "researched"` is
+unadjudicable. Same lane contract as `reasoning` — `undefined` on replay, never "no research".
+
+**A sub-agent can dispatch its own sub-agent, and only dispatches the PARENT stream surfaced become
+`subagents[]` entries.** A search made deeper therefore has no entry to join to. Measured live: a
+three-deep chain where the only `WebSearch` ran at depth 3, `modelUsage.webSearchRequests` proved a
+search had happened, and every `webSearches[]` read empty — indistinguishable from "the sub-agent did
+not search", which is the worst possible shape for a field whose whole job is grounding.
+
+Such a search is attributed to the **nearest ancestor** that does have an entry, walking
+`agent-<id>.meta.json`'s `parentAgentId` chain (the meta also carries `spawnDepth`):
+
+- Attributed entries carry **`viaAgentId`** (the descendant that actually ran the search) and
+  `viaSpawnDepth`. An **untagged** entry is the dispatch's own search — keep the distinction when
+  attributing work to an agent.
+- `trace --view subagent-research` renders them `[via nested agent <id> @depth N]`; critique's evidence
+  labels them `← via nested agent <id>`. Read either as *research happened **under** this dispatch*.
+- **Nearest ancestor, not the root** — attribution has to say which dispatch the work sits under.
+- **Attributed, never appended.** No synthetic `subagents[]` entry is created: `subagents.length` backs
+  the published `dispatch_count_max` assertion, so inventing entries would silently re-grade scenarios.
+- If **no** ancestor has an entry, the capture **warns** naming the orphaned agent rather than dropping
+  it. An empty `webSearches` that actually means "inconclusive" is exactly the failure this removes.
