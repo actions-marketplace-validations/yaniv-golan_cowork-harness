@@ -73,7 +73,7 @@ describe("readGateBool / resolveSkillDiscoveryGates (A2 discovery gates)", () =>
   // THE inversion pin: if readGateBool were swapped for readGateFlag(baseline, id, "suggestSkillsEnabled")
   // this returns false, and suggest_skills silently disappears from every container/hostloop run.
   it("resolves suggestSkillsEnabled TRUE against the live baseline (kills the readGateFlag inversion)", () => {
-    expect(readGateFlag(LIVE, "245679952", "suggestSkillsEnabled")).toBe(false); // the WRONG reader's answer
+    expect(readGateFlag(LIVE, "245679952", "suggestSkillsEnabled", false)).toBe(false); // the WRONG reader's answer
     expect(resolveSkillDiscoveryGates(LIVE).suggestSkillsEnabled).toBe(true); // the RIGHT one
   });
 

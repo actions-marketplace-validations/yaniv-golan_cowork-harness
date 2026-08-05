@@ -195,20 +195,41 @@ describe("readGateFlag (prefixed key + prose/structured shapes)", () => {
 
   it("reads a sub-flag from the committed PROSE string under the prefixed key", () => {
     const b = withGates({ "coworkRuntimeConfig:1978029737": "on(force) coworkWebFetchViaApi=true coworkWebFetchPrompt=true" });
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt", false)).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi", false)).toBe(true);
   });
   it("reads a sub-flag from a decoded STRUCTURED entry", () => {
     const b = withGates({ "coworkRuntimeConfig:1978029737": { on: true, source: "force", value: { coworkWebFetchPrompt: true } } });
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(false); // absent sub-flag
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt", false)).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi", false)).toBe(false); // absent sub-flag
   });
   it("returns false for a missing gate (no silent true)", () => {
-    expect(readGateFlag(withGates({}), "1978029737", "coworkWebFetchPrompt")).toBe(false);
+    expect(readGateFlag(withGates({}), "1978029737", "coworkWebFetchPrompt", false)).toBe(false);
   });
   it("also resolves a bare-id key (no prefix)", () => {
     const b = withGates({ "1978029737": "coworkWebFetchPrompt=true" });
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt", false)).toBe(true);
+  });
+
+  // Production reads these through `Ea(id, key, default, …)`, so an UNSERVED key resolves to that call
+  // site's default — which is `true` for two real keys on this very gate (`bashHostOnlyIntercept`,
+  // `scheduledTaskStaleReapEnabled`). Returning false for them, as this reader used to unconditionally,
+  // is wrong in the silent direction. These three pin the distinction the old signature could not make.
+  it("an ABSENT gate resolves to the production default, including when that default is true", () => {
+    expect(readGateFlag(withGates({}), "1978029737", "bashHostOnlyIntercept", true)).toBe(true);
+  });
+  it("an absent SUB-FLAG on a present gate resolves to the production default", () => {
+    const b = withGates({ "coworkRuntimeConfig:1978029737": { on: true, source: "experiment", value: { coworkWebFetchViaApi: true } } });
+    expect(readGateFlag(b, "1978029737", "bashHostOnlyIntercept", true)).toBe(true);
+    // a SERVED false still beats the default — the default only fills genuine absence
+    const served = withGates({ "coworkRuntimeConfig:1978029737": { on: true, value: { bashHostOnlyIntercept: false } } });
+    expect(readGateFlag(served, "1978029737", "bashHostOnlyIntercept", true)).toBe(false);
+  });
+  it("prose: an explicit `flag=false` beats a true default", () => {
+    const b = withGates({ "coworkRuntimeConfig:1978029737": "on(force) bashHostOnlyIntercept=false" });
+    expect(readGateFlag(b, "1978029737", "bashHostOnlyIntercept", true)).toBe(false);
+    // …while a flag the prose never mentions falls through to the default
+    expect(readGateFlag(b, "1978029737", "scheduledTaskStaleReapEnabled", true)).toBe(true);
   });
 });
 

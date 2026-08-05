@@ -583,13 +583,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
   // created HERE (before spawnHostLoop builds the handler) and filled with a Run-backed bundle after
   // the Run exists — the handler reads ref.current at call time (strictly after the stream starts).
-  const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
-  const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
+  const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
+  const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt", false);
   const provenanceRef: { current?: WebFetchProvenance } = {};
   // coworkWebFetchDedup (host-API path only): a per-session negative-work cache. Built only when the gate is
   // on (an older baseline that lacks it ⇒ undefined ⇒ no behavior change); 100/900000 come from the baseline.
   const dedup =
-    viaApiOn && readGateFlag(baseline, "1978029737", "coworkWebFetchDedup")
+    viaApiOn && readGateFlag(baseline, "1978029737", "coworkWebFetchDedup", false)
       ? makeWebFetchDedupCache({
           ttlMs: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupTtlMs") ?? 900000,
           maxEntries: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupMaxEntries") ?? 100,
