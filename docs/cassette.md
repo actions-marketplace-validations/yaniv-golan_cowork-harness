@@ -557,6 +557,16 @@ before the next one runs, so the materialized tree ends the pass unchanged.
 > `mutation` (`sampled` / `eligible` / `truncatedBy` / `caps` / `uncaught`), which is the right surface to
 > aggregate over.
 
+**Scope it, and raise the cap that binds.** `--mutate-include <glob>` / `--mutate-exclude <glob>` (both
+repeatable, exclude applied last) restrict which artifact paths are perturbed — `*` stays inside a path
+segment, `**` crosses them, so `--mutate-exclude 'handoff/**'` drops per-run internals nobody should
+assert on and spends the sample on deliverables instead. Filtering happens before planning, so an
+out-of-scope artifact is absent from `eligible` too: the report describes the scope you asked for rather
+than counting what you deliberately excluded as missed. `--mutate-max-per-file <n>` / `--mutate-max-total
+<n>` raise the caps; reach for the per-file one first, since it is applied first and with a handful of
+artifacts the total is never the binding constraint. Cost is linear — one full assertion re-run per
+perturbation.
+
 This is coverage reporting, not verdict reporting: an uncaught perturbation is a gap in the scenario's
 assertions, not a failure of the run, so `--mutate` never changes replay's verdict or exit code — a green
 replay stays green regardless of what it finds.

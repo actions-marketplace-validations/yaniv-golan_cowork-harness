@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`replay --mutate` can be scoped, and its caps raised.** `--mutate-include <glob>` /
+  `--mutate-exclude <glob>` (repeatable; exclude last) restrict which artifact paths are perturbed — `*`
+  stays inside a path segment, `**` crosses them. A corpus dominated by per-run `handoff/` internals
+  buried the signal about delivered artifacts under noise it would be wrong to act on;
+  `--mutate-exclude 'handoff/**'` spends the bounded sample on deliverables instead. Filtering runs
+  before planning, so an out-of-scope artifact is absent from `eligible` too. `--mutate-max-per-file <n>`
+  / `--mutate-max-total <n>` raise the caps — per-file first, since it binds first.
+
 ### Changed
 
 - **`verify-cassettes` opens with a per-class count.** `findings by class: host-inventory 240` prints

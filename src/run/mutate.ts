@@ -154,6 +154,30 @@ export function planMutationsWithStats(
   return { mutations, eligibleLeafCounts, truncatedTotal };
 }
 
+/** Glob matcher for `--mutate-include` / `--mutate-exclude`, over cassette-recorded artifact paths.
+ *
+ *  Deliberately its own, rather than reusing `analyze-skill`'s: that one is module-private, EXPANDS the
+ *  filesystem (`readdirSync`) rather than matching a string, accepts only `dir/*.ext`-shaped patterns,
+ *  and is case-insensitive. Artifact paths are recorded strings — matching them is a pure predicate, and
+ *  case is meaningful.
+ *
+ *  `*` matches within one path segment; `**` crosses segments (so `handoff/**` scopes a whole subtree,
+ *  which is the shape someone reaches for to exclude per-run internals). Every other character is
+ *  literal, including regex metacharacters. */
+export function matchesAnyGlob(path: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => globToRegExp(pattern).test(path));
+}
+
+function globToRegExp(pattern: string): RegExp {
+  // Split on the ** token first so it can be expanded to a cross-segment match; everything between is
+  // escaped literally, with single `*` limited to non-separator characters.
+  const body = pattern
+    .split("**")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"))
+    .join(".*");
+  return new RegExp(`^${body}$`); // case-SENSITIVE by construction
+}
+
 /** What a `--mutate` run actually sampled, and which cap stopped it.
  *
  *  `truncatedTotal` alone cannot answer the second question — despite its name, `planMutationsWithStats`

@@ -8,6 +8,7 @@ import {
   planMutations,
   planMutationsWithStats,
   summarizeMutationPlan,
+  matchesAnyGlob,
   applyMutation,
   explainNoMutations,
   type Mutation,
@@ -354,5 +355,104 @@ describe("replay --mutate — the report is self-describing", () => {
     expect(m.truncatedBy).toBe("per-file");
     expect(m.caps).toEqual({ perFile: 10, total: 50 });
     expect(m.uncaught).toHaveLength(30);
+  });
+});
+
+// A dedicated matcher: analyze-skill's is module-private, is a FILESYSTEM expander rather than a string
+// matcher, accepts only `dir/*.md`-shaped inputs, and is case-insensitive — all wrong here. Artifact
+// paths are recorded strings, compared case-sensitively.
+describe("matchesAnyGlob", () => {
+  it("matches a literal path", () => {
+    expect(matchesAnyGlob("outputs/a.json", ["outputs/a.json"])).toBe(true);
+  });
+
+  it("`*` stays within one segment", () => {
+    expect(matchesAnyGlob("outputs/a.json", ["outputs/*.json"])).toBe(true);
+    expect(matchesAnyGlob("outputs/deep/a.json", ["outputs/*.json"])).toBe(false);
+  });
+
+  it("`**` crosses segments — the shape needed to scope a whole subtree", () => {
+    expect(matchesAnyGlob("handoff/run-1/state.json", ["handoff/**"])).toBe(true);
+    expect(matchesAnyGlob("outputs/report.json", ["handoff/**"])).toBe(false);
+  });
+
+  it("is case-SENSITIVE (artifact paths are recorded strings, not filenames to be guessed at)", () => {
+    expect(matchesAnyGlob("Outputs/a.json", ["outputs/*.json"])).toBe(false);
+  });
+
+  it("is true when any pattern matches, false for an empty pattern list", () => {
+    expect(matchesAnyGlob("outputs/a.json", ["nope/**", "outputs/**"])).toBe(true);
+    expect(matchesAnyGlob("outputs/a.json", [])).toBe(false);
+  });
+
+  it("treats regex metacharacters in a pattern as literals", () => {
+    expect(matchesAnyGlob("outputs/a+b.json", ["outputs/a+b.json"])).toBe(true);
+    expect(matchesAnyGlob("outputs/axb.json", ["outputs/a+b.json"])).toBe(false);
+  });
+});
+
+// The reporter's corpus was dominated by per-run `handoff/` internals nobody should assert on, so the
+// signal about delivered artifacts was buried in noise it would be WRONG to act on. Scoping turns the
+// number into a work-list; the caps then bind on what survived, which is the point.
+describe("replay --mutate — scoping and cap overrides", () => {
+  const CLI = resolve("dist/cli.js");
+  const can = existsSync(CLI);
+  const base = JSON.parse(readFileSync(resolve("examples/replays/example-pdf-skill.cassette.json"), "utf8"));
+
+  function cassette(dir: string, paths: string[], leaves: number): string {
+    const c = JSON.parse(JSON.stringify(base));
+    c.artifacts = paths.map((p) => {
+      const body = JSON.stringify(Object.fromEntries(Array.from({ length: leaves }, (_, i) => [`k${i}`, i + 1])));
+      return { path: p, bytes: body.length, sha256: createHash("sha256").update(body).digest("hex"), body };
+    });
+    c.scenario.assert = [{ result: "success" }];
+    const f = join(dir, "s.cassette.json");
+    writeFileSync(f, JSON.stringify(c));
+    return f;
+  }
+  const json = (file: string, extra: string[]) =>
+    JSON.parse(spawnSync("node", [CLI, "replay", file, "--mutate", "--output-format", "json", ...extra], { encoding: "utf8" }).stdout)
+      .results[0].mutation;
+
+  const paths = ["outputs/report.json", "handoff/run-1/state.json", "handoff/run-2/state.json"];
+
+  it.skipIf(!can)("--mutate-exclude drops a whole subtree from the sample AND from the eligible count", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    const m = json(f, ["--mutate-exclude", "handoff/**"]);
+    expect(m.sampled).toBe(10); // one surviving file, per-file cap
+    expect(m.eligible).toBe(40); // the excluded files are not counted as "missed" — they were out of scope
+    expect(m.uncaught.every((u: string) => u.startsWith("outputs/"))).toBe(true);
+  });
+
+  it.skipIf(!can)("--mutate-include restricts to matching paths", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    expect(json(f, ["--mutate-include", "outputs/**"]).eligible).toBe(40);
+  });
+
+  it.skipIf(!can)("exclude wins over include", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    const m = json(f, ["--mutate-include", "**", "--mutate-exclude", "handoff/**"]);
+    expect(m.eligible).toBe(40);
+  });
+
+  it.skipIf(!can)("repeated --mutate-exclude honours EVERY occurrence, not just the last", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    const m = json(f, ["--mutate-exclude", "handoff/run-1/**", "--mutate-exclude", "handoff/run-2/**"]);
+    expect(m.eligible).toBe(40); // both patterns applied; only outputs/ survives
+  });
+
+  it.skipIf(!can)("--mutate-max-per-file raises the cap that actually binds", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), ["outputs/a.json"], 40);
+    expect(json(f, []).sampled).toBe(10);
+    expect(json(f, ["--mutate-max-per-file", "25"]).sampled).toBe(25);
+    // Raising only the total cannot help while per-file binds — the trap the report now names.
+    expect(json(f, ["--mutate-max-total", "500"]).sampled).toBe(10);
+  });
+
+  it.skipIf(!can)("the scoping flags require --mutate rather than silently doing nothing", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 3);
+    const r = spawnSync("node", [CLI, "replay", f, "--mutate-exclude", "handoff/**"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stdout + r.stderr).toMatch(/require\(s\) --mutate/);
   });
 });
