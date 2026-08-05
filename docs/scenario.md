@@ -19,7 +19,7 @@ The full schema below documents every optional field.
 ```yaml
 name: my-test                             # OPTIONAL — defaults to the filename (sans ext); keys runs/<name>/
 baseline: latest                          # platform baseline: "latest" or "desktop-<ver>"
-session: ../sessions/default.yaml        # the pre-prompt setup (resolved relative to THIS file)
+session: ../sessions/my-session.yaml     # the pre-prompt setup (resolved relative to THIS file)
 fidelity: container                      # protocol | container | microvm | hostloop | cowork (see below)
 execution: local                         # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                          # local today): local (default) | cloud-describe (RESERVED — no
@@ -351,7 +351,7 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 
 ### Which assertion for which question (goal → key)
 
-The full catalog below is a reference, not a chooser — 71 keys, ordered by family rather than by how often
+The full catalog below is a reference, not a chooser — ordered by family rather than by how often
 you need them. Start here instead, then read the row for whichever key you land on. (`cowork-harness
 assertions --list` prints the same set grouped the same way.)
 
@@ -686,7 +686,7 @@ covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`s
 edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
 identity keyed on `appVersion` alone cannot see it.
 
-**Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
+**Egress + other filesystem** assertions (`no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
 `semantic_matches`, `no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
 (token + Docker).

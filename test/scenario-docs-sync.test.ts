@@ -130,9 +130,10 @@ describe("docs/scenario.md ↔ src/run/cassette.ts MANIFEST_KEYS sync", () => {
 // Anchored by literal section text, and failing LOUD when an anchor moves rather than silently slicing
 // an empty string — the same discipline the MANIFEST_KEYS guard above uses, for the same reason: a
 // vacuous pass on a doc guard is worse than no guard, because it reads as coverage.
-describe("SPEC.md + docs/cassette.md ↔ LIVE_ONLY_KEYS / VERDICT_MODIFIER_KEYS sync", () => {
+describe("SPEC.md + docs/cassette.md + docs/scenario.md ↔ LIVE_ONLY_KEYS / VERDICT_MODIFIER_KEYS sync", () => {
   const spec = readFileSync(resolve("SPEC.md"), "utf8");
   const cassetteDoc = readFileSync(resolve("docs/cassette.md"), "utf8");
+  const scenarioDoc = readFileSync(resolve("docs/scenario.md"), "utf8");
 
   it("parsed sane key sets", () => {
     // sanity: catches an import that silently resolved to an empty/undefined array
@@ -165,10 +166,16 @@ describe("SPEC.md + docs/cassette.md ↔ LIVE_ONLY_KEYS / VERDICT_MODIFIER_KEYS 
   const CASSETTE_LIVE_END = "\n## ";
   const cassetteLive = section(cassetteDoc, CASSETTE_LIVE_START, CASSETTE_LIVE_END);
 
-  it("found all three sections (an anchor that moved must fail here, not pass vacuously)", () => {
+  // docs/scenario.md's live-only list — same bucket, scenario-authoring framing.
+  const SCENARIO_LIVE_START = "**Egress + other filesystem** assertions";
+  const SCENARIO_LIVE_END = "Two consequences for CI:";
+  const scenarioLive = section(scenarioDoc, SCENARIO_LIVE_START, SCENARIO_LIVE_END);
+
+  it("found all four sections (an anchor that moved must fail here, not pass vacuously)", () => {
     expect(specLive, `SPEC.md: "${SPEC_LIVE_START}" … "${SPEC_LIVE_END}" not found — did the section move?`).not.toBe("");
     expect(specMods, `SPEC.md: "${SPEC_MOD_START}…)" not found — did the enumeration move?`).not.toBe("");
     expect(cassetteLive, `docs/cassette.md: "${CASSETTE_LIVE_START}" … "${CASSETTE_LIVE_END}" not found`).not.toBe("");
+    expect(scenarioLive, `docs/scenario.md: "${SCENARIO_LIVE_START}" … "${SCENARIO_LIVE_END}" not found`).not.toBe("");
   });
 
   // A key counts as present only as a backtick token, or via a `prefix_*` wildcard already in the list
@@ -192,5 +199,10 @@ describe("SPEC.md + docs/cassette.md ↔ LIVE_ONLY_KEYS / VERDICT_MODIFIER_KEYS 
   it("docs/cassette.md's live-only list names every LIVE_ONLY_KEYS member", () => {
     const missing = LIVE_ONLY_KEYS.filter((k) => !named(cassetteLive, k));
     expect(missing, `docs/cassette.md's live-only list is missing: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("docs/scenario.md's live-only list names every LIVE_ONLY_KEYS member", () => {
+    const missing = LIVE_ONLY_KEYS.filter((k) => !named(scenarioLive, k));
+    expect(missing, `docs/scenario.md's live-only list is missing: ${missing.join(", ")}`).toEqual([]);
   });
 });

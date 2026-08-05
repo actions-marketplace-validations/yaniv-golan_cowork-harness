@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Assertion } from "../src/types.js";
 import { groupAssertionKeys } from "../src/cli.js";
 
-// `assertions --list` groups 71 keys into families so a reader looking for one ("how do I prove a gate
+// `assertions --list` groups assertion keys into families so a reader looking for one ("how do I prove a gate
 // still fires?") isn't scanning a flat dump. The grouping is a READING AID, not a contract — the JSON
 // envelope stays flat, and these titles are human text under SPEC §12.
 //
