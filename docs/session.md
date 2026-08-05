@@ -56,6 +56,13 @@ folders:
                                             # NOTE: at `fidelity: hostloop`, a rw/rwd folder needs the
                                             # scenario's `allow_host_writes: true` (see scenario.md) —
                                             # hostloop's native file tools have no container around them.
+projects:                        # userSelectedProjectUuids — a connected PROJECT, not a folder
+  - { uuid: 019fb25b-aadb-70a5-b6d1-e42aa718db03, from: ~/code/myproject }
+                                 # mounted READ-ONLY at mnt/.projects/<uuid>. There is deliberately no
+                                 # `mode:` here — Cowork hardcodes `ro` for these at the mount builder,
+                                 # so unlike `folders[]` the mode is not a degree of freedom. A project
+                                 # also never becomes the session cwd: a project-only session keeps
+                                 # {{workspaceFolder}} at mnt/outputs, matching production.
 trusted_folders:                 # localAgentModeTrustedFolders (mount without a trust prompt)
   - ~/code/myproject
 auto_mount_folders: false        # autoMountFolders
@@ -185,6 +192,7 @@ default `{}`) hashes identically to one authored before this field existed.
 | Field | Maps to | Mounted at |
 |---|---|---|
 | `folders[]` | "add folder" / Spaces | `mnt/<folder-name>` (collision-resolved basename; ≥1.14271.0, older baselines use `.projects/<id>`) |
+| `projects[]` | `userSelectedProjectUuids` | `mnt/.projects/<uuid>` — **read-only**; never the session cwd |
 | `trusted_folders[]` | `localAgentModeTrustedFolders` | (settings.json; mount without prompt) |
 | `auto_mount_folders` | `autoMountFolders` | (settings.json) |
 | `uploads[]` | pre-prompt file upload | `mnt/uploads/<basename>` |

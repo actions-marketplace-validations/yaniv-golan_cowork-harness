@@ -3038,6 +3038,21 @@
       ".plugins.remote_plugins[]": {
         "type": "string"
       },
+      ".projects": {
+        "type": "array"
+      },
+      ".projects[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".projects[].from": {
+        "type": "string",
+        "required": true
+      },
+      ".projects[].uuid": {
+        "type": "string",
+        "required": true
+      },
       ".skills": {
         "type": "object",
         "closed": true

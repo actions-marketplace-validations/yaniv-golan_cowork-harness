@@ -1,4 +1,5 @@
 import { cpSync, existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { isConnectedContent } from "../session.js";
 import { dirname, join } from "node:path";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
@@ -24,9 +25,7 @@ export type { HostLoopBindMount };
 export function resolveHostLoopBindMounts(plan: LaunchPlan, sessionRoot: string): HostLoopBindMount[] {
   const mnt = (p: string) => `${sessionRoot}/mnt/${p}`;
   return [
-    ...plan.mounts
-      .filter((m) => m.kind === "folder")
-      .map((m) => ({ hostPath: m.hostPath, guestPath: mnt(m.mountPath), ro: m.mode === "r" })),
+    ...plan.mounts.filter(isConnectedContent).map((m) => ({ hostPath: m.hostPath, guestPath: mnt(m.mountPath), ro: m.mode === "r" })),
     { hostPath: join(plan.configDir, "skills"), guestPath: mnt(".claude/skills"), ro: true },
     { hostPath: join(plan.configDir, "projects"), guestPath: mnt(".claude/projects"), ro: true },
   ];
@@ -42,7 +41,7 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string): { mcp
   if (!plan.resume) {
     const mntHostReal = realpathSync(mntHost);
     for (const mt of plan.mounts) {
-      if (mt.kind === "folder") continue; // bind-mounted, never copied — matches production
+      if (isConnectedContent(mt)) continue; // bind-mounted, never copied — matches production (projects too)
       const dest = join(mntHost, mt.mountPath);
       mkdirSync(dirname(dest), { recursive: true });
       if (!containedRealPath(mntHostReal, dirname(dest)))

@@ -73,6 +73,28 @@
         "additionalProperties": false
       }
     },
+    "projects": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "minLength": 1
+          },
+          "from": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "uuid",
+          "from"
+        ],
+        "additionalProperties": false
+      }
+    },
     "trusted_folders": {
       "default": [],
       "type": "array",

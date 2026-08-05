@@ -5,7 +5,7 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
 import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills-handler.js";
 import { makePluginsHandler } from "../hostloop/plugins-handler.js";
 import { makeCoworkHandlerHostLoop } from "../hostloop/cowork-handler-hostloop.js";
@@ -102,7 +102,7 @@ export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolea
  * process.
  */
 export function hostLoopPresentFilesRoots(hostOutputsDir: string, plan: LaunchPlan): string[] {
-  return [hostOutputsDir, ...plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath)];
+  return [hostOutputsDir, ...plan.mounts.filter(isConnectedContent).map((mt) => mt.hostPath)];
 }
 
 /**

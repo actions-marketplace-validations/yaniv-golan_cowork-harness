@@ -28,6 +28,7 @@ import {
   readonlyFolderRootsFromPlan,
   deleteDeniedRootsFromPlan,
   pluginSkillRootsFromPlan,
+  isConnectedContent,
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
@@ -1215,10 +1216,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // this same "live" mode without hostRoots (see cli.ts's cmdVerifyRun).
       linkResolution: {
         mode: "live",
-        hostRoots: [
-          join(resolve(outDir), "work", "session", "mnt"),
-          ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.hostPath),
-        ],
+        hostRoots: [join(resolve(outDir), "work", "session", "mnt"), ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath)],
       },
       ...budgetFields(record),
       resources,

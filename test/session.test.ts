@@ -9,6 +9,8 @@ import {
   resolveSessionPaths,
   applySessionOverrides,
   readonlyFolderRootsFromPlan,
+  userVisibleRootsFromPlan,
+  deleteDeniedRootsFromPlan,
   pluginSkillRootsFromPlan,
 } from "../src/session.js";
 import { parseSessionFile } from "../src/run/execute.js";
@@ -667,5 +669,48 @@ describe("applySessionOverrides (E3 — matrix runner's session-loading override
     });
     expect(next.model).toBe("claude-opus-4-8");
     expect(next.plugins.local_plugins).toEqual(["../b/my-pdf-skill"]);
+  });
+});
+
+// ==========================================================================================
+// Connected PROJECTS (`userSelectedProjectUuids`). Distinct from folders in exactly two ways, both
+// read first-party from the asar's spawn-time mount builder: a project is hardcoded `mode:"ro"` there
+// (it never passes through the delete-deny resolver that outputs and folders do), and it never becomes
+// the session cwd. Everything else about it is read-only-connected-content, same as a `mode: r` folder.
+// ==========================================================================================
+describe("connected projects — .projects/<uuid>, read-only, never the cwd", () => {
+  const withProject = () =>
+    plan({
+      projects: [{ uuid: "019fb25b-aadb-70a5-b6d1-e42aa718db03", from: mkdtempSync(join(tmpdir(), "cowork-proj-")) }],
+    });
+
+  it("mounts at .projects/<uuid> with mode r", () => {
+    const m = withProject().plan.mounts.find((x) => x.kind === "project");
+    expect(m).toBeDefined();
+    expect(m!.mountPath).toBe(".projects/019fb25b-aadb-70a5-b6d1-e42aa718db03");
+    expect(m!.mode).toBe("r"); // production hardcodes "ro" — not author-selectable, not delete-approvable
+  });
+
+  it("is a user-visible root AND a read-only root — it is readable input, not a deliverable", () => {
+    const { plan: p } = withProject();
+    expect(userVisibleRootsFromPlan(p)).toContain(".projects/019fb25b-aadb-70a5-b6d1-e42aa718db03");
+    expect(readonlyFolderRootsFromPlan(p)).toContain(".projects/019fb25b-aadb-70a5-b6d1-e42aa718db03");
+  });
+
+  it("is NOT delete-denied — it is not writable at all, so it is outside that class entirely", () => {
+    // The distinction that made this item worth getting right: modelling a project as writable-but-
+    // delete-denied would have put it in the delete guard's scope and reported deletes that production
+    // makes impossible.
+    expect(deleteDeniedRootsFromPlan(withProject().plan)).toEqual(["outputs"]);
+  });
+
+  it("never becomes the session cwd — a project-only session keeps workspaceFolder at outputs", () => {
+    // Production keys cwd off `userSelectedFolders`, which a project does not populate. Sites that pick
+    // a cwd filter on kind === "folder" alone, so a project must not answer that query.
+    expect(withProject().plan.mounts.find((m) => m.kind === "folder")).toBeUndefined();
+  });
+
+  it("a uuid cannot escape the mnt root", () => {
+    expect(() => plan({ projects: [{ uuid: "../../etc", from: tmpdir() }] })).toThrow();
   });
 });

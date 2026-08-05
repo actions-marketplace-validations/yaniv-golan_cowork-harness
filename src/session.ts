@@ -55,6 +55,16 @@ const Folder = z.object({
   mode: z.enum(["r", "rw", "rwd"]).default("rw"),
 });
 
+/** A connected PROJECT (Cowork's `userSelectedProjectUuids`), distinct from a connected folder.
+ *  Production mounts each at `.projects/<uuid>` with `mode:"ro"` — read first-party from the spawn-time
+ *  mount builder, where it is hardcoded rather than resolved through the delete-deny resolver that
+ *  outputs and connected folders pass through. So there is deliberately NO `mode` here: the product does
+ *  not vary it, and offering the knob would invent a degree of freedom that does not exist. */
+const Project = z.object({
+  uuid: z.string().min(1), // the project uuid — becomes the `.projects/<uuid>` mount path
+  from: z.string().min(1), // host path to the project's content
+});
+
 export const SessionConfig = z.strictObject({
   // --- model & reasoning (Cowork model picker + toggles) ---
   model: z.string().optional(), // setModel
@@ -91,6 +101,11 @@ export const SessionConfig = z.strictObject({
 
   // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
   folders: z.array(Folder).default([]),
+  // Connected PROJECTS. Separate from `folders` because production keys them off a different config
+  // field (`userSelectedProjectUuids` vs `userSelectedFolders`), mounts them at a different path, and
+  // — critically — does NOT let one become the session cwd: a project-only session keeps
+  // `{{workspaceFolder}}` at outputs, which is why these get their own mount kind below.
+  projects: z.array(Project).default([]),
   trusted_folders: z.array(z.string().min(1)).default([]), // localAgentModeTrustedFolders
   auto_mount_folders: z.boolean().default(false), // autoMountFolders
 
@@ -264,7 +279,7 @@ export interface Mount {
    * Structural discriminator so downstream code (host-loop prompt folder filter, artifact visibility,
    * chat labels) keys off the KIND rather than fragile `mountPath` string prefixes like `.projects/`.
    */
-  kind: "folder" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
+  kind: "folder" | "project" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
   /**
    * Precomputed staging copy filter. When set, the runtime copy sites use it verbatim instead of
    * re-deriving via `gitCpFilter` — so the file count reported at plan-build equals the delivered set
@@ -328,8 +343,22 @@ export interface LaunchPlan {
 /** The user-visible roots derived from a plan: `outputs` + each connected folder's RESOLVED mount name.
  *  Single owner for the derivation — the pre-run baseline walk and the post-run artifact walk MUST
  *  enumerate the same root set, or the `no_unexpected_files` diff reports phantom "created" files. */
+/** Content the USER connected — a folder or a project. Both are real host trees the agent can read,
+ *  both are bind-mounted rather than staged at host-loop, and both are legitimate `present_files` roots.
+ *
+ *  They differ in exactly two ways, which is why this predicate exists rather than a kind widening:
+ *  a project is always read-only, and a project NEVER becomes the session cwd — production keys the two
+ *  off different config fields (`userSelectedProjectUuids` vs `userSelectedFolders`) and a project-only
+ *  session keeps `{{workspaceFolder}}` at outputs. Sites that pick a cwd, or warn about host WRITES,
+ *  therefore keep filtering on `kind === "folder"` alone. */
+export function isConnectedContent(m: Mount): boolean {
+  return m.kind === "folder" || m.kind === "project";
+}
+
 export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
-  return ["outputs", ...plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath)];
+  // Projects are included: they are content the agent can read and reason about, exactly like a
+  // read-only connected folder, which is already in this set.
+  return ["outputs", ...plan.mounts.filter((m) => m.kind === "folder" || m.kind === "project").map((m) => m.mountPath)];
 }
 
 /** The mount prefixes of read-only (`mode: "r"`) connected folders — inputs, not deliverables. Used to
@@ -349,7 +378,9 @@ export function deleteDeniedRootsFromPlan(plan: LaunchPlan): string[] {
 }
 
 export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
-  return plan.mounts.filter((m) => m.kind === "folder" && m.mode === "r").map((m) => m.mountPath);
+  // A project is always read-only, so it always belongs here — its bodies are stripped from the cassette
+  // manifest and excluded from `RunResult.artifacts`, since an input is not a deliverable.
+  return plan.mounts.filter((m) => (m.kind === "folder" && m.mode === "r") || m.kind === "project").map((m) => m.mountPath);
 }
 
 /** Plugin skill-source roots for `resolveAvailableSkills`'s whenToUse enrichment. Reads each
@@ -690,6 +721,16 @@ export function buildLaunchPlan(
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
       kind: "folder",
+    });
+  }
+  for (const proj of session.projects) {
+    const src = expand(proj.from);
+    // Always `r`: production hardcodes `mode:"ro"` for `.projects/<uuid>` at the mount builder. The uuid
+    // is path-segment-checked like every other authored name so a `../` cannot escape the mnt root.
+    const mountPath = `.projects/${safePathSegment(proj.uuid, "project uuid")}`;
+    mounts.push({
+      ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `project "${proj.uuid}"` })!,
+      kind: "project",
     });
   }
   for (const p of session.plugins.local_plugins) {
