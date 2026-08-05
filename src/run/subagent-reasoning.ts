@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { RunResult } from "../types.js";
+import { warn } from "../io.js";
 
 /**
  * Capture per-sub-agent REASONING (thinking + intermediate text turns) from the child session
@@ -206,23 +207,94 @@ export function captureSubagentReasoning(configDirRoot: string, subagents: Subag
     if (!metaFiles.length) return;
     const byToolUseId = new Map<string, SubagentEntry>();
     for (const s of subagents) if (s.toolUseId) byToolUseId.set(s.toolUseId, s);
+
+    /** Every readable child transcript, keyed by its own agent id (the `agent-<id>` filename stem —
+     *  the meta records its PARENT's id, never its own, so the filename is the only source for it). */
+    type Child = { agentId: string; toolUseId?: string; parentAgentId?: string; spawnDepth?: number; jsonlPath: string };
+    const children: Child[] = [];
     for (const metaPath of metaFiles) {
       try {
-        const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { toolUseId?: string };
-        const toolUseId = meta?.toolUseId;
-        if (!toolUseId) continue;
-        const entry = byToolUseId.get(toolUseId);
-        if (!entry) continue; // meta file for a dispatch not (or no longer) in this result — skip
+        const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { toolUseId?: string; parentAgentId?: string; spawnDepth?: number };
         const jsonlPath = metaPath.replace(/\.meta\.json$/, ".jsonl"); // agent-<id>.meta.json's sibling
         if (!existsSync(jsonlPath)) continue;
-        const { reasoning, elided, webSearches, webSearchesElided } = parseChildTranscript(jsonlPath);
-        entry.reasoning = reasoning;
-        if (elided > 0) entry.reasoningElided = elided;
-        // Same live-lane-only channel as reasoning: absent = never captured (replay), [] = captured, none made.
-        if (webSearches.length > 0) entry.webSearches = webSearches;
-        if (webSearchesElided > 0) entry.webSearchesElided = webSearchesElided;
+        const agentId = basename(jsonlPath)
+          .replace(/^agent-/, "")
+          .replace(/\.jsonl$/, "");
+        children.push({
+          agentId,
+          toolUseId: meta?.toolUseId,
+          parentAgentId: meta?.parentAgentId,
+          spawnDepth: typeof meta?.spawnDepth === "number" ? meta.spawnDepth : undefined,
+          jsonlPath,
+        });
       } catch {
-        // this ONE dispatch's meta/child file is malformed — skip it, other dispatches still join
+        continue; // this ONE meta is malformed — the rest still join
+      }
+    }
+    const byAgentId = new Map<string, Child>();
+    for (const c of children) byAgentId.set(c.agentId, c);
+
+    /** Walk `parentAgentId` upward to the nearest ancestor that HAS a `subagents[]` entry. Returns
+     *  undefined when the chain runs out (or loops) without reaching one. Depth-bounded by the child
+     *  count so a corrupt meta with a parent cycle can't spin forever. */
+    const nearestEntryAncestor = (start: Child): SubagentEntry | undefined => {
+      const seen = new Set<string>([start.agentId]);
+      let cur = start.parentAgentId;
+      for (let hops = 0; cur && hops <= children.length; hops++) {
+        if (seen.has(cur)) return undefined; // cycle — refuse rather than loop
+        seen.add(cur);
+        const parent = byAgentId.get(cur);
+        if (!parent) return undefined;
+        if (parent.toolUseId) {
+          const entry = byToolUseId.get(parent.toolUseId);
+          if (entry) return entry;
+        }
+        cur = parent.parentAgentId;
+      }
+      return undefined;
+    };
+
+    for (const child of children) {
+      try {
+        const own = child.toolUseId ? byToolUseId.get(child.toolUseId) : undefined;
+        const { reasoning, elided, webSearches, webSearchesElided } = parseChildTranscript(child.jsonlPath);
+        if (own) {
+          own.reasoning = reasoning;
+          if (elided > 0) own.reasoningElided = elided;
+          // Same live-lane-only channel as reasoning: absent = never captured (replay), [] = captured, none made.
+          if (webSearches.length > 0) own.webSearches = [...(own.webSearches ?? []), ...webSearches];
+          if (webSearchesElided > 0) own.webSearchesElided = (own.webSearchesElided ?? 0) + webSearchesElided;
+          continue;
+        }
+        // NO entry for this transcript — a dispatch the parent stream never surfaced (a sub-agent's own
+        // sub-agent). Its reasoning has nowhere truthful to live, but its RESEARCH does: attribute it to
+        // the nearest ancestor that has an entry, tagged, so `webSearches: []` stops meaning "no research"
+        // when a descendant researched. Dropping it silently is the defect this replaces.
+        if (!webSearches.length) continue; // nothing to attribute — an untagged nested dispatch is not itself a finding
+        const ancestor = nearestEntryAncestor(child);
+        if (!ancestor) {
+          // Unattributable: research happened and we cannot say under which dispatch. Never silent.
+          warn(
+            `[subagents] a nested dispatch's research could not be attributed (agent ${child.agentId}, ` +
+              `${webSearches.length} WebSearch call(s)): no ancestor dispatch appears in subagents[]. ` +
+              `The searches are NOT reflected in any webSearches[] — treat an empty one as inconclusive, not as "no research".`,
+          );
+          continue;
+        }
+        const tagged = webSearches.map((w) => ({
+          ...w,
+          viaAgentId: child.agentId,
+          ...(child.spawnDepth !== undefined ? { viaSpawnDepth: child.spawnDepth } : {}),
+        }));
+        const merged = [...(ancestor.webSearches ?? []), ...tagged];
+        // Re-apply the per-dispatch sliding window across the MERGED set, oldest-first, so folding a
+        // descendant's research in can't push an entry past the cap it was chosen to respect.
+        const overflow = Math.max(0, merged.length - SUBAGENT_WEBSEARCH_CAP);
+        ancestor.webSearches = overflow ? merged.slice(overflow) : merged;
+        const elidedTotal = (ancestor.webSearchesElided ?? 0) + webSearchesElided + overflow;
+        if (elidedTotal > 0) ancestor.webSearchesElided = elidedTotal;
+      } catch {
+        // this ONE child file is malformed — skip it, other dispatches still join
         continue;
       }
     }

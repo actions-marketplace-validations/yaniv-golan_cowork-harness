@@ -220,6 +220,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A sub-agent's own sub-agent could research, and `subagents[].webSearches` reported none.** Only
+  dispatches the parent event stream surfaced become `subagents[]` entries, and the capture joined child
+  transcripts to those entries by exact `toolUseId`. A dispatch made *by a sub-agent* has no entry — so
+  its transcript matched nothing and was dropped with a bare `continue`. Measured on a live run: a
+  three-deep chain where the only `WebSearch` ran at depth 3, `modelUsage.webSearchRequests` proved a
+  search had happened, and every `webSearches[]` read empty. For a field whose whole job is grounding a
+  "researched" claim, that is the worst possible shape — indistinguishable from "the sub-agent did not
+  search". A descendant's searches are now attributed to the nearest ancestor that *does* have an entry,
+  each tagged `viaAgentId` / `viaSpawnDepth` so a dispatch's own research stays distinguishable from one
+  made beneath it; `trace --view subagent-research` marks them `[via nested agent …]`. When no ancestor
+  can be found the capture **warns** naming the orphaned agent, because an empty array that silently
+  means "inconclusive" is the defect being removed. Attributed, never appended: `subagents.length` backs
+  the published `dispatch_count_max` assertion, and inflating it would silently re-grade existing
+  scenarios.
+
 - **A gate key the payload does not serve is no longer read as "off".** Cowork reads value-gate keys
   through an accessor carrying a per-call default, so an unserved key resolves to *that* default — and
   two keys on the runtime-config gate default to **true**. The harness returned `false` for any absent

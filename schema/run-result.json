@@ -885,7 +885,7 @@
           },
           "webSearches": {
             "type": "array",
-            "description": "the sub-agent's OWN WebSearch calls (query + the paired tool_result's text, bounded), read from the same child session transcript as `reasoning` (LIVE/record lane only \u2014 undefined on replay). Sub-agent searches never enter the top-level webSearches[] (main-agent/fork-scoped) or toolCounts, so this is the only place a sub-agent's research is grounded. RAW bounded text rather than the top-level field's parsed {title,url} shape: grounding needs the content the sub-agent actually saw. Absent = never captured OR the dispatch made no searches; a present array is 1+ captured searches.",
+            "description": "the sub-agent's WebSearch calls (query + the paired tool_result's text, bounded), read from the same child session transcript as `reasoning` (LIVE/record lane only \u2014 undefined on replay). Sub-agent searches never enter the top-level webSearches[] (main-agent/fork-scoped) or toolCounts, so this is the only place a sub-agent's research is grounded. RAW bounded text rather than the top-level field's parsed {title,url} shape: grounding needs the content the sub-agent actually saw. Absent = never captured OR the dispatch made no searches; a present array is 1+ captured searches. Entries tagged `viaAgentId` were made by a DESCENDANT dispatch (a sub-agent's own sub-agent, which the parent stream never surfaced as its own subagents[] entry) and are attributed to the nearest ancestor that has one \u2014 without them an empty array read as 'no research' when a descendant had researched.",
             "items": {
               "type": "object",
               "required": [
@@ -902,6 +902,14 @@
                 "resultTruncated": {
                   "type": "boolean",
                   "description": "present and true ONLY when the result text was cut at the per-entry byte cap"
+                },
+                "viaAgentId": {
+                  "type": "string",
+                  "description": "present ONLY when a DESCENDANT dispatch made this search: the child agent id (agent-<id>.jsonl) that ran it. Absent = this dispatch's own search."
+                },
+                "viaSpawnDepth": {
+                  "type": "number",
+                  "description": "the descendant's own spawnDepth from its agent-<id>.meta.json (this dispatch is shallower). Only meaningful alongside viaAgentId; absent when the meta carried no depth."
                 }
               }
             }

@@ -529,7 +529,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
        --view tool-errors        one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars
        --view files              workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)
        --view usage              per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)
-       --view subagent-research  each dispatch's own WebSearch query + result; needs a run dir (reads result.json's subagents[].webSearches) (live/record lane capture only); UNAVAILABLE on replay, never rendered as zero research
+       --view subagent-research  each dispatch's WebSearch query + result, incl. a nested dispatch's, marked [via nested agent …]; needs a run dir (reads result.json's subagents[].webSearches) (live/record lane capture only); UNAVAILABLE on replay, never rendered as zero research
        --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)
        --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)
        (default: all views)
@@ -4458,8 +4458,11 @@ function cmdTrace(args: string[]) {
     return;
   }
   if (view === "subagent-research") {
-    // subagent-research view: each dispatch's OWN WebSearch query+result (live/record lane capture) —
-    // reads the sibling result.json's subagents[].webSearches; UNAVAILABLE on replay, never "no research".
+    // subagent-research view: each dispatch's WebSearch query+result (live/record lane capture) — reads
+    // the sibling result.json's subagents[].webSearches; UNAVAILABLE on replay, never "no research". A
+    // search made by a NESTED dispatch (one the parent stream never surfaced as its own entry) is
+    // attributed to its nearest ancestor and rendered `[via nested agent …]`, so it is visible without
+    // being mistaken for that ancestor's own research.
     const v = buildSubagentResearchView(file);
     if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
     else out(formatSubagentResearchView(v));

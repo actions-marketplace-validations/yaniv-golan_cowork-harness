@@ -2160,6 +2160,12 @@
       ".subagents[].webSearches[].resultTruncated": {
         "type": "boolean"
       },
+      ".subagents[].webSearches[].viaAgentId": {
+        "type": "string"
+      },
+      ".subagents[].webSearches[].viaSpawnDepth": {
+        "type": "number"
+      },
       ".tasks": {
         "type": "array"
       },

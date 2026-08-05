@@ -476,9 +476,29 @@ describe.skipIf(!PROBE_CAN)("live: sub-agent WebSearch is captured as subagents[
     const subs = full.subagents ?? [];
     expect(subs.length, "no sub-agent was dispatched — the probe prompt failed to trigger a Task").toBeGreaterThan(0);
     const withSearch = subs.filter((s: { webSearches?: unknown[] }) => (s.webSearches?.length ?? 0) > 0);
+    // Ground the failure against whether a search HAPPENED AT ALL, so a red says which defect it is.
+    // The model's choice is not ours to control: it may search directly, or re-delegate to its own
+    // sub-agent (measured — a 3-deep chain where only the deepest searched). Capture now attributes a
+    // descendant's search up to its nearest ancestor entry, so both shapes land here; what must never
+    // happen again is searches existing while `webSearches` reads empty.
+    const searchRequests = Object.values((full.modelUsage ?? {}) as Record<string, { webSearchRequests?: number }>).reduce(
+      (n, u) => n + (u.webSearchRequests ?? 0),
+      0,
+    );
+    if (!withSearch.length && searchRequests > 0) {
+      throw new Error(
+        `CAPTURE DEFECT: modelUsage reports ${searchRequests} WebSearch request(s) but no dispatch carries webSearches[]. ` +
+          `A search ran and the result renders as "no research" — check the nested-dispatch attribution in ` +
+          `captureSubagentReasoning (and stderr for an "could not be attributed" warning). ` +
+          `subagents toolsUsed: ${JSON.stringify(subs.map((s: { toolsUsed?: unknown }) => s.toolsUsed))}`,
+      );
+    }
     expect(
       withSearch.length,
-      `no dispatch captured a WebSearch (subagents: ${JSON.stringify(subs.map((s: { toolsUsed?: unknown }) => s.toolsUsed))})`,
+      `the sub-agent made no WebSearch at all (modelUsage webSearchRequests=0) — a MODEL-BEHAVIOUR miss, ` +
+        `not a capture regression: the dispatch answered without searching. Re-run; if it persists, the probe ` +
+        `skill's instruction has stopped compelling a search. subagents toolsUsed: ` +
+        `${JSON.stringify(subs.map((s: { toolsUsed?: unknown }) => s.toolsUsed))}`,
     ).toBeGreaterThan(0);
     const ws = (withSearch[0] as { webSearches: Array<{ query: string; resultText: string }> }).webSearches[0];
     expect(typeof ws.query).toBe("string");

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,7 +25,7 @@ function stageChild(
   projSlug: string,
   parentSessionUuid: string,
   agentId: string,
-  meta: { agentType: string; description: string; toolUseId: string; spawnDepth: number },
+  meta: { agentType: string; description: string; toolUseId: string; spawnDepth: number; parentAgentId?: string },
   lines: unknown[],
 ): void {
   const dir = join(configDirRoot, "projects", projSlug, parentSessionUuid, "subagents");
@@ -326,5 +326,168 @@ describe("sub-agent WebSearch capture (query + paired tool_result, from the same
     captureSubagentReasoning(configDir, subagents);
     expect(subagents[0].webSearches).toBeUndefined();
     expect(subagents[0].reasoning).toEqual([{ kind: "text", text: "no research needed" }]);
+  });
+});
+
+// A sub-agent can dispatch its OWN sub-agent, and only dispatches the PARENT stream surfaced become
+// `subagents[]` entries. A search made two levels down therefore had no entry to join to, and the join
+// dropped it with a bare `continue` — so `webSearches: []` read as "this dispatch did no research" when
+// research is exactly what happened. Measured live: a 3-deep chain where the ONLY WebSearch lived at
+// depth 3, while `modelUsage.webSearchRequests` proved a search had run.
+//
+// The fix attributes a descendant's research to the nearest ANCESTOR that has an entry, tagged with
+// provenance. Deliberately NOT by appending synthetic entries: `subagents.length` backs the published
+// `dispatch_count_max` assertion, so inflating it would silently re-grade existing scenarios.
+describe("nested dispatch research (a sub-agent's own sub-agent) is attributed, never dropped", () => {
+  /** Stage the live-measured shape: L1 (entry) → L2 (entry) → L3 (NO entry, does the searching). */
+  function stageThreeDeep(configDir: string): void {
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "L1",
+      { agentType: "general-purpose", description: "research", toolUseId: "toolu_L1", spawnDepth: 1 },
+      [assistantLine([{ type: "text", text: "delegating" }])],
+    );
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "L2",
+      { agentType: "general-purpose", description: "find it", toolUseId: "toolu_L2", spawnDepth: 2, parentAgentId: "L1" },
+      [assistantLine([{ type: "text", text: "delegating again" }])],
+    );
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "L3",
+      { agentType: "general-purpose", description: "search", toolUseId: "toolu_L3", spawnDepth: 3, parentAgentId: "L2" },
+      [
+        assistantLine([{ type: "tool_use", id: "ws_n", name: "WebSearch", input: { query: "first iPhone release year" } }]),
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "ws_n", content: "2007" }] } },
+      ],
+    );
+  }
+
+  it("attributes a grandchild's search to the nearest ancestor WITH an entry, tagged with provenance", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-nested-"));
+    stageThreeDeep(configDir);
+    // L1 and L2 have entries; L3 does not — exactly the live topology.
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_L1"), baseSubagent("toolu_L2")];
+    captureSubagentReasoning(configDir, subagents);
+    // Nearest ancestor with an entry is L2, not L1 — attribution must not skip to the top.
+    expect(subagents[1].webSearches).toEqual([
+      { query: "first iPhone release year", resultText: "2007", viaAgentId: "L3", viaSpawnDepth: 3 },
+    ]);
+    expect(subagents[0].webSearches, "L1 did not search and has a searching descendant nearer to L2").toBeUndefined();
+  });
+
+  it("walks PAST an ancestor that has no entry, up to the nearest one that does", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-nested-"));
+    stageThreeDeep(configDir);
+    // Only L1 has an entry now — the walk must hop over L2 rather than give up at the first miss.
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_L1")];
+    captureSubagentReasoning(configDir, subagents);
+    expect(subagents[0].webSearches).toEqual([
+      { query: "first iPhone release year", resultText: "2007", viaAgentId: "L3", viaSpawnDepth: 3 },
+    ]);
+  });
+
+  it("an own search stays UNTAGGED, so 'I searched' remains distinguishable from 'a descendant did'", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-nested-"));
+    stageChild(configDir, "-p", "u1", "S1", { agentType: "general-purpose", description: "search", toolUseId: "toolu_S1", spawnDepth: 1 }, [
+      assistantLine([{ type: "tool_use", id: "ws_own", name: "WebSearch", input: { query: "own query" } }]),
+      { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "ws_own", content: "own result" }] } },
+    ]);
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_S1")];
+    captureSubagentReasoning(configDir, subagents);
+    expect(subagents[0].webSearches).toEqual([{ query: "own query", resultText: "own result" }]);
+    expect(subagents[0].webSearches?.[0]).not.toHaveProperty("viaAgentId");
+  });
+
+  it("an unattributable orphan WARNS instead of vanishing (empty webSearches must not read as 'no research')", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-nested-"));
+    // A searching child whose parent chain reaches nothing with an entry.
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "X1",
+      { agentType: "general-purpose", description: "orphan", toolUseId: "toolu_X1", spawnDepth: 2, parentAgentId: "GONE" },
+      [
+        assistantLine([{ type: "tool_use", id: "ws_o", name: "WebSearch", input: { query: "orphaned query" } }]),
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "ws_o", content: "orphaned result" }] } },
+      ],
+    );
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_OTHER")];
+    const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let warned = "";
+    try {
+      captureSubagentReasoning(configDir, subagents);
+      warned = spy.mock.calls.map((c) => String(c[0])).join("");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warned, "an unattributable nested search must be LOUD — silence is the defect being fixed").toMatch(/could not be attributed/);
+    expect(warned).toMatch(/X1/);
+    expect(subagents[0].webSearches, "nothing may be attributed to an unrelated dispatch").toBeUndefined();
+  });
+
+  it("a nested dispatch that made no searches is not itself a finding (no warning, no noise)", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-nested-"));
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "Q1",
+      { agentType: "general-purpose", description: "quiet", toolUseId: "toolu_Q1", spawnDepth: 2, parentAgentId: "GONE" },
+      [assistantLine([{ type: "text", text: "no research here" }])],
+    );
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_OTHER")];
+    const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let warned = "";
+    try {
+      captureSubagentReasoning(configDir, subagents);
+      warned = spy.mock.calls.map((c) => String(c[0])).join("");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warned).not.toMatch(/could not be attributed/);
+  });
+
+  it("a parentAgentId CYCLE refuses rather than looping forever", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cwh-nested-"));
+    // C1 -> C2 -> C1: a corrupt/adversarial meta pair. The walk must terminate.
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "C1",
+      { agentType: "general-purpose", description: "cyc1", toolUseId: "toolu_C1", spawnDepth: 2, parentAgentId: "C2" },
+      [
+        assistantLine([{ type: "tool_use", id: "ws_c", name: "WebSearch", input: { query: "cyclic" } }]),
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "ws_c", content: "r" }] } },
+      ],
+    );
+    stageChild(
+      configDir,
+      "-p",
+      "u1",
+      "C2",
+      { agentType: "general-purpose", description: "cyc2", toolUseId: "toolu_C2", spawnDepth: 3, parentAgentId: "C1" },
+      [assistantLine([{ type: "text", text: "x" }])],
+    );
+    const subagents: SubagentEntry[] = [baseSubagent("toolu_OTHER")];
+    const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let warned = "";
+    try {
+      captureSubagentReasoning(configDir, subagents);
+      warned = spy.mock.calls.map((c) => String(c[0])).join("");
+    } finally {
+      spy.mockRestore();
+    }
+    // Terminated (the assertion below is only reached if it did) and reported rather than silently lost.
+    expect(warned).toMatch(/could not be attributed/);
   });
 });

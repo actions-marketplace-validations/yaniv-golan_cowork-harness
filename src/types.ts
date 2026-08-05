@@ -1393,8 +1393,28 @@ export interface RunResult {
      *  parsed {title,url} shape of the top-level field): grounding needs the content the sub-agent
      *  actually saw, and the Links-convention parse would silently drop a format drift. LIVE/record lane
      *  only — the child transcript does not exist on replay, so this is `undefined` there (same contract
-     *  as `reasoning`). `resultTruncated` marks a result cut at the per-entry byte cap. */
-    webSearches?: Array<{ query: string; resultText: string; resultTruncated?: boolean }>;
+     *  as `reasoning`). `resultTruncated` marks a result cut at the per-entry byte cap.
+     *
+     *  NESTED research is folded in here too, tagged with `viaAgentId`/`viaSpawnDepth`. A sub-agent can
+     *  dispatch its own sub-agent, and only dispatches the PARENT stream saw become `subagents[]` entries
+     *  — so a search made two levels down had no entry to attach to and was silently dropped, rendering
+     *  as "this dispatch did no research" when research is exactly what happened (measured: a 3-deep
+     *  chain where the only WebSearch lived at depth 3). Rather than append synthetic entries — which
+     *  would silently change `subagents.length` and with it `dispatch_count_max`, a published assertion —
+     *  a descendant's searches are attributed to its nearest ANCESTOR that does have an entry, carrying
+     *  the provenance so "my own search" stays distinguishable from "a search under me". An untagged
+     *  entry is this dispatch's own. */
+    webSearches?: Array<{
+      query: string;
+      resultText: string;
+      resultTruncated?: boolean;
+      /** Set when this search was made by a DESCENDANT dispatch, not by this one: the child agent id
+       *  (`agent-<id>.jsonl`) that actually ran it. Absent = this dispatch's own search. */
+      viaAgentId?: string;
+      /** The descendant's own `spawnDepth` from its `agent-<id>.meta.json` (this dispatch is shallower).
+       *  Absent when the meta carried no depth. Only meaningful alongside `viaAgentId`. */
+      viaSpawnDepth?: number;
+    }>;
     /** Count of WebSearch calls dropped past the per-dispatch cap (oldest-first) — mirrors `reasoningElided`. */
     webSearchesElided?: number;
   }>;
