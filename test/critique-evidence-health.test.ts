@@ -405,3 +405,47 @@ describe("F31 — SKILL.md missing vs. unreadable produce distinct, typed status
     rmSync(skillDir, { recursive: true, force: true });
   });
 });
+
+// A search made by a NESTED dispatch (a sub-agent's own sub-agent) is attributed to the nearest
+// ancestor that has a `subagents[]` entry and tagged `viaAgentId` — see captureSubagentReasoning. The
+// evidence label must carry that provenance: without it the evaluator reads the search as the
+// ancestor's own work and grounds a "researched" claim against the wrong agent, which is the exact
+// mis-attribution the tag exists to prevent, one layer further out.
+describe("critique evidence: nested sub-agent research is labeled with its provenance", () => {
+  function stageRun(subagents: unknown[]): { dir: string; skillDir: string } {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-crit-nested-"));
+    writeFileSync(join(dir, "events.jsonl"), '{"t":"init"}\n');
+    // The canonical turn-1 result location under the per-turn layout — NOT the run-dir root.
+    mkdirSync(join(dir, "turns", "1"), { recursive: true });
+    writeFileSync(join(dir, "turns", "1", "result.json"), JSON.stringify({ subagents }));
+    const skillDir = mkdtempSync(join(tmpdir(), "cwh-crit-skill-"));
+    writeFileSync(join(skillDir, "SKILL.md"), "# a skill\nguidance");
+    return { dir, skillDir };
+  }
+
+  it("marks a via-tagged search '← via nested agent', and leaves an own search unmarked", () => {
+    const { dir, skillDir } = stageRun([
+      {
+        resolvedAgentType: "general-purpose",
+        webSearches: [
+          { query: "own question", resultText: "own answer" },
+          { query: "nested question", resultText: "nested answer", viaAgentId: "a4f4e851f268443b9", viaSpawnDepth: 3 },
+        ],
+      },
+    ]);
+    const result = packageEvidence(dir, snapshotTurnBoundary(dir), skillDir);
+    expect(result.pkg).toMatch(/\[general-purpose\] query: own question/);
+    expect(result.pkg).toMatch(/\[general-purpose ← via nested agent a4f4e851f268443b9 @depth 3\] query: nested question/);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("omits the depth suffix when the meta carried none, but still names the nested agent", () => {
+    const { dir, skillDir } = stageRun([
+      { resolvedAgentType: "researcher", webSearches: [{ query: "q", resultText: "r", viaAgentId: "abc123" }] },
+    ]);
+    const result = packageEvidence(dir, snapshotTurnBoundary(dir), skillDir);
+    expect(result.pkg).toMatch(/\[researcher ← via nested agent abc123\] query: q/);
+    expect(result.pkg).not.toMatch(/@depth/);
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+});
