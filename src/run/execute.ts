@@ -1541,6 +1541,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       partial: undefined,
       unansweredGate: undefined,
       staleness: undefined,
+      mutation: undefined, // replay --mutate only
       skippedAssertions: undefined,
       outcome: undefined, // stamped alongside the verdict just below (derived from it)
       verdict: undefined, // computed just below (after assertions are evaluated / the object is fully assembled) and stored — see the comment there
@@ -1971,6 +1972,7 @@ export function buildPartialResult(args: {
     l0PluginDivergence: undefined,
     missingCapabilityUse: undefined,
     staleness: undefined,
+    mutation: undefined, // replay --mutate only
     skippedAssertions: undefined,
     outcome: undefined, // stamped alongside the verdict just below (derived from it)
     verdict: undefined, // computed just below (after every other field is assembled) and stored — see the comment there

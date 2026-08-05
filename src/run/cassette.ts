@@ -63,7 +63,7 @@ import { isVmSessionsPath } from "../vm-paths.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields, type AssertContext } from "../assert.js";
-import { planMutations, applyMutation, explainNoMutations } from "./mutate.js";
+import { planMutationsWithStats, summarizeMutationPlan, applyMutation, explainNoMutations, type MutationCoverage } from "./mutate.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
@@ -3550,6 +3550,7 @@ function replayErrorResult(file: string): RunResult {
     effectiveFidelity: undefined,
     fidelityWarnings: undefined,
     staleness: undefined,
+    mutation: undefined, // the protocol-error stub carries no mutation report
     skippedAssertions: undefined,
     toolResults: undefined,
     l0PluginDivergence: undefined,
@@ -3951,7 +3952,7 @@ export const REPLAY_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (`cassette format too new: …`) that tells a user to pass it — the P9 bug this generalization fixes).
 export const REPLAY_USAGE =
   "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
-  "       --mutate: perturb each recorded JSON artifact value, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. Reporting only; never changes the verdict or exit code.\n" +
+  "       --mutate: perturb recorded JSON artifact values, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. SAMPLES: max 10 values per file, 50 total (per-file applies first), so `N/N caught by nothing` is N of the sample, not of your corpus; when a cap binds the report names it and the eligible total. Reporting only; never changes the verdict or exit code.\n" +
   "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
@@ -5344,7 +5345,10 @@ export async function replayCassette(
   // outside the try, since it doesn't depend on anything materializeManifest produced.
   const folderPrefixResolution = buildFolderPrefixMap(cassette);
   // Populated only under --mutate; surfaced after the verdict so it reads as coverage info, not a failure.
-  let mutationReport: { planned: number; uncaught: string[] } | undefined;
+  // Surfaced on the RunResult so `--mutate --output-format json` is machine-readable. It was previously
+  // assigned here and never read by anything, so every consumer had to scrape stderr — which is how the
+  // capped denominator went unnoticed in the first place.
+  let mutationReport: RunResult["mutation"];
   // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
@@ -5521,7 +5525,15 @@ export async function replayCassette(
       const inlined = (cassette.artifacts ?? [])
         .filter((a): a is typeof a & { body: string } => typeof a.body === "string" && !a.truncated)
         .map((a) => ({ path: a.path, body: a.body }));
-      const plan = planMutations(inlined);
+      // planMutationsWITHSTATS, not planMutations: the plan is CAPPED (10 per file, 50 total), so
+      // reporting `uncaught/plan.length` alone reads as "N of your N fields are unguarded" when N is a
+      // sample. A consumer aggregated twenty such lines into "1,020 perturbations, 0 caught" and came one
+      // step from concluding their assertions verified nothing — the truth was their asserted paths were
+      // never in the sample. The stats form exists precisely to make that discoverable; it was simply
+      // never wired to its only caller.
+      const stats = planMutationsWithStats(inlined);
+      const plan = stats.mutations;
+      const coverage = summarizeMutationPlan(stats);
       const uncaught: string[] = [];
       const baselineFailed = new Set(assertions.map((a, i) => (a.pass ? -1 : i)).filter((i) => i >= 0));
       for (const m of plan) {
@@ -5543,12 +5555,31 @@ export async function replayCassette(
           writeFileSync(abs, original); // restore unconditionally — a thrown assert must not leave a mutated tree
         }
       }
-      mutationReport = { planned: plan.length, uncaught };
+      mutationReport = {
+        sampled: plan.length,
+        eligible: coverage.eligible,
+        truncatedBy: coverage.truncatedBy,
+        caps: coverage.caps,
+        uncaught,
+      };
+      // Only when truncation actually happened: on a corpus under both caps the counts ARE the whole
+      // truth and the parenthetical is noise. Naming the binding cap matters — the per-file cap is
+      // checked first, so "raise --mutate-max-total" is inert advice whenever per-file bound.
+      const scope = coverage.truncatedBy
+        ? ` (sampled ${coverage.sampled} of ${coverage.eligible} eligible value(s)` +
+          (coverage.truncatedBy === "per-file"
+            ? `; per-file cap ${coverage.caps.perFile} reached on ${coverage.filesAtPerFileCap} file(s)`
+            : `; total cap ${coverage.caps.total} reached`) +
+          `)`
+        : "";
       if (!plan.length) log(`::notice:: [mutate] ${explainNoMutations(cassette.artifacts ?? [], inlined)}`);
       else if (uncaught.length) {
-        log(`::warning:: [mutate] ${uncaught.length}/${plan.length} perturbation(s) CAUGHT BY NOTHING — these fields are unguarded:`);
+        log(
+          `::warning:: [mutate] ${uncaught.length}/${plan.length} sampled perturbation(s) CAUGHT BY NOTHING — these fields are unguarded${scope}:`,
+        );
         for (const u of uncaught) log(`    ${u}`);
-      } else log(`::notice:: [mutate] all ${plan.length} perturbation(s) were caught — assertions cover every perturbed field`);
+      } else
+        log(`::notice:: [mutate] all ${plan.length} sampled perturbation(s) were caught — assertions cover every perturbed field${scope}`);
     }
 
     // under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
@@ -5657,6 +5688,7 @@ export async function replayCassette(
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       command: "replay", // #48
+      mutation: mutationReport, // --mutate only; undefined otherwise
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,

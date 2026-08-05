@@ -1406,6 +1406,46 @@
           }
         }
       }
+    },
+    "mutation": {
+      "type": "object",
+      "description": "Replay lane only, and only under --mutate: which recorded values were perturbed and which perturbations no assertion caught. `sampled` is post-cap; `eligible` is the pre-cap total, so a consumer can distinguish 'N unguarded fields' from 'N unguarded OUT OF eligible'. `truncatedBy` names the cap that bound \u2014 raising the other one would not change the sample.",
+      "properties": {
+        "sampled": {
+          "type": "number"
+        },
+        "eligible": {
+          "type": "number"
+        },
+        "truncatedBy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "per-file",
+            "total",
+            null
+          ]
+        },
+        "caps": {
+          "type": "object",
+          "properties": {
+            "perFile": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            }
+          }
+        },
+        "uncaught": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

@@ -154,6 +154,42 @@ export function planMutationsWithStats(
   return { mutations, eligibleLeafCounts, truncatedTotal };
 }
 
+/** What a `--mutate` run actually sampled, and which cap stopped it.
+ *
+ *  `truncatedTotal` alone cannot answer the second question — despite its name, `planMutationsWithStats`
+ *  also sets it when the PER-FILE cap bit. The distinction is what makes the report actionable: the
+ *  per-file cap is checked before the total (see the loop above), so with a handful of artifacts the
+ *  total is never reached and telling the reader to raise it would change nothing.
+ *
+ *  `total` takes precedence when both bound: once the total cap is reached, raising the per-file cap
+ *  alone cannot yield a single extra perturbation. */
+export interface MutationCoverage {
+  /** perturbations the plan contains (post-cap). */
+  sampled: number;
+  /** eligible leaves across every artifact, BEFORE either cap. */
+  eligible: number;
+  truncatedBy: "per-file" | "total" | null;
+  /** how many artifacts hit the per-file cap with more left — the shape of what was missed. */
+  filesAtPerFileCap: number;
+  caps: { perFile: number; total: number };
+}
+
+export function summarizeMutationPlan(
+  stats: { mutations: Mutation[]; eligibleLeafCounts: Record<string, number> },
+  opts?: PlanOptions,
+): MutationCoverage {
+  const perFile = opts?.maxPerFile ?? DEFAULT_MAX_PER_FILE;
+  const total = opts?.maxTotal ?? DEFAULT_MAX_TOTAL;
+  const eligible = Object.values(stats.eligibleLeafCounts).reduce((a, b) => a + b, 0);
+  const takenPerFile = new Map<string, number>();
+  for (const m of stats.mutations) takenPerFile.set(m.file, (takenPerFile.get(m.file) ?? 0) + 1);
+  let filesAtPerFileCap = 0;
+  for (const [file, count] of takenPerFile) if (count >= perFile && (stats.eligibleLeafCounts[file] ?? 0) > count) filesAtPerFileCap++;
+  const truncatedBy: MutationCoverage["truncatedBy"] =
+    stats.mutations.length >= total && eligible > stats.mutations.length ? "total" : filesAtPerFileCap > 0 ? "per-file" : null;
+  return { sampled: stats.mutations.length, eligible, truncatedBy, filesAtPerFileCap, caps: { perFile, total } };
+}
+
 /** Pure planner: decides which leaves across a set of artifacts are worth perturbing, bounded by
  *  maxPerFile/maxTotal (defaults 10/50 — a full assertion-suite re-run per mutation, so cost is linear
  *  in the length of this list). Convenience wrapper over planMutationsWithStats for callers that don't

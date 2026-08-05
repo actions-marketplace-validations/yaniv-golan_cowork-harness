@@ -541,10 +541,21 @@ scenario's `assert:` block; on the live path it would fail as an empty assertion
 
 ### Mutation coverage — `replay --mutate`
 
-`replay --mutate` perturbs each recorded, inlined JSON artifact value in turn, re-runs the scenario's
+`replay --mutate` perturbs recorded, inlined JSON artifact values one at a time, re-runs the scenario's
 assertions against the perturbed tree, and reports which perturbations nothing catches — those are the
 fields your `assert:` block leaves unguarded. Each perturbation is applied, evaluated, and restored
 before the next one runs, so the materialized tree ends the pass unchanged.
+
+> **It samples. Read the ratio accordingly.** The plan is capped at **10 values per file and 50 in
+> total** — the per-file cap is applied first, so a corpus of N JSON artifacts yields at most `10 × N`
+> perturbations no matter how much total budget is left. A line reading `50/50 … CAUGHT BY NOTHING` means
+> 50 of the *sampled* values, not 50 of your fields, and aggregating such lines across many cassettes
+> produces a number that describes the sample rather than the corpus. Whenever a cap binds, the report
+> appends the eligible total and names the cap that bound — `(sampled 30 of 120 eligible value(s);
+> per-file cap 10 reached on 3 file(s))` — and omits that note entirely when nothing was truncated, so
+> its absence means the counts are the whole truth. `--output-format json` carries the same facts under
+> `mutation` (`sampled` / `eligible` / `truncatedBy` / `caps` / `uncaught`), which is the right surface to
+> aggregate over.
 
 This is coverage reporting, not verdict reporting: an uncaught perturbation is a gap in the scenario's
 assertions, not a failure of the run, so `--mutate` never changes replay's verdict or exit code — a green

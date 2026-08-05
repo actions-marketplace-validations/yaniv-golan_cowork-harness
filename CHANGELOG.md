@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`replay --mutate` reported a sample as if it were the whole corpus.** The plan is capped (10 values
+  per file, 50 total), but the report read `50/50 perturbation(s) CAUGHT BY NOTHING` with no indication
+  that 50 was a sample. A consumer aggregated twenty such lines into "1,020 perturbations, 0 caught" and
+  came one step from concluding their assertions verified nothing; the truth was their asserted paths
+  were never sampled. The report now says `sampled 30 of 120 eligible value(s)` and names the cap that
+  bound — which matters, because the per-file cap is applied first, so advising anyone to raise the total
+  is inert whenever per-file was the binding constraint. The note is omitted entirely when nothing was
+  truncated, so its absence means the counts are the whole truth. `planMutationsWithStats`, which exists
+  precisely to expose this, had never been wired to its only caller.
+- **`replay --mutate` had no machine-readable output.** The internal report was assembled and never read,
+  so every consumer had to scrape stderr — which is how the capped denominator went unnoticed. It now
+  rides the JSON envelope as `mutation` (`sampled` / `eligible` / `truncatedBy` / `caps` / `uncaught`).
+- **The host-inventory check flagged the scenario's own plugin agents.** At `hostloop` the agent roster
+  necessarily contains the agents of the plugin under test — the fixture itself — so every
+  plugin-with-agents consumer hit false positives on upgrade, with "invent an allow regex" as the only
+  remedy. An agent namespaced `<plugin>:<agent>` whose plugin the same recording declares is now exempt,
+  matching the carve-out the MCP-server check already made. The provenance comes from the cassette, so
+  this applies to recordings you already have — no re-record. A foreign agent, or one namespaced to a
+  plugin the run never mounted, still flags.
+
 ## [1.18.0] — 2026-08-06
 
 ### Upgrade notes

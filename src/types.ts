@@ -1520,6 +1520,18 @@ export interface RunResult {
    *  `--strict` / `--fail-on-skill-drift` gates turn selected classes into failing assertions; this field
    *  itself is pure data. Absent on the live lane (no cassette to compare). */
   staleness?: StalenessFinding[];
+  /** Replay-lane only, and only under `--mutate`: which recorded values were perturbed and which
+   *  perturbations no assertion caught. `sampled` is post-cap and `eligible` is the pre-cap total, so a
+   *  consumer can tell "N unguarded fields" from "N unguarded fields OUT OF eligible" — conflating the
+   *  two is what nearly produced a false "our assertions verify nothing" report. `truncatedBy` names the
+   *  cap that bound, since raising the other one would not change the sample. */
+  mutation?: {
+    sampled: number;
+    eligible: number;
+    truncatedBy: "per-file" | "total" | null;
+    caps: { perFile: number; total: number };
+    uncaught: string[];
+  };
   /** Replay-lane only: count of assertions NOT evaluated on replay because they are live-only (filesystem /
    *  egress / expect_denied). `full` = the whole assertion was skipped; `partial` = its content half ran but a
    *  filesystem/egress half was dropped. Surfaced so a CI script doesn't read a green replay as having checked

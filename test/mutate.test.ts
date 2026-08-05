@@ -1,7 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { planMutations, planMutationsWithStats, applyMutation, explainNoMutations, type Mutation } from "../src/run/mutate.js";
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import {
+  planMutations,
+  planMutationsWithStats,
+  summarizeMutationPlan,
+  applyMutation,
+  explainNoMutations,
+  type Mutation,
+} from "../src/run/mutate.js";
 
 function artifact(path: string, doc: unknown) {
   return { path, body: JSON.stringify(doc) };
@@ -242,5 +252,107 @@ describe("explainNoMutations — the empty plan says WHY", () => {
 
   it("never claims a reason it wasn't given", () => {
     expect(explainNoMutations([{ path: "a.json" }], [])).toMatch(/unrecorded reason/);
+  });
+});
+
+// `truncatedTotal` cannot say WHICH cap bound — despite the name, mutate.ts sets it for per-file
+// truncation too. The distinction is the whole point of the message: the per-file cap is checked BEFORE
+// the total, so with a handful of artifacts the total is never reached and advising "--mutate-max-total"
+// would be advice that changes nothing. This is what a consumer read as "50 of your 50 fields are
+// unguarded" when 50 was a sample.
+describe("summarizeMutationPlan", () => {
+  const doc = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, i + 1]));
+  const art = (path: string, n: number) => ({ path, body: JSON.stringify(doc(n)) });
+
+  it("reports no truncation when everything fit", () => {
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 3)]));
+    expect(s.truncatedBy).toBeNull();
+    expect(s.sampled).toBe(3);
+    expect(s.eligible).toBe(3);
+  });
+
+  it("attributes truncation to the per-file cap when the total was never reached", () => {
+    // 3 files x 10 taken = 30 sampled, well under the 50 total — only the per-file cap bound.
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 40), art("b.json", 40), art("c.json", 40)]));
+    expect(s.sampled).toBe(30);
+    expect(s.eligible).toBe(120);
+    expect(s.truncatedBy).toBe("per-file");
+    expect(s.filesAtPerFileCap).toBe(3);
+  });
+
+  it("attributes to the total cap when it is reached, since raising per-file alone would not help", () => {
+    const arts = Array.from({ length: 10 }, (_, i) => art(`f${i}.json`, 40));
+    const s = summarizeMutationPlan(planMutationsWithStats(arts));
+    expect(s.sampled).toBe(50); // 10 files x 10 = 100 wanted, total cap bit first
+    expect(s.truncatedBy).toBe("total");
+  });
+
+  it("carries the caps in effect so a message can name the flag that raises them", () => {
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 3)]));
+    expect(s.caps).toEqual({ perFile: 10, total: 50 });
+  });
+
+  it("reflects overridden caps rather than the defaults", () => {
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 9)], { maxPerFile: 2, maxTotal: 4 }), {
+      maxPerFile: 2,
+      maxTotal: 4,
+    });
+    expect(s.caps).toEqual({ perFile: 2, total: 4 });
+    expect(s.sampled).toBe(2);
+  });
+});
+
+// The planner is unit-tested above, but the SENTENCE a human reads was not covered anywhere — and the
+// sentence is what went wrong in the field. "50/50 perturbation(s) CAUGHT BY NOTHING" parses as "50 of
+// your 50 fields are unguarded"; 50 was a sample cap. A consumer aggregated twenty such lines into
+// "1,020 perturbations, 0 caught" and came one step from reporting that their assertions verified
+// nothing. These assert the emitted text, spawning the built CLI on a synthetic cassette (token-free).
+describe("replay --mutate — the report is self-describing", () => {
+  const CLI = resolve("dist/cli.js");
+  const can = existsSync(CLI);
+  const base = JSON.parse(readFileSync(resolve("examples/replays/example-pdf-skill.cassette.json"), "utf8"));
+
+  /** A cassette carrying `files` JSON artifacts of `leaves` perturbable values each. */
+  function cassetteWith(dir: string, files: number, leaves: number): string {
+    const c = JSON.parse(JSON.stringify(base));
+    c.artifacts = Array.from({ length: files }, (_, f) => {
+      const body = JSON.stringify(Object.fromEntries(Array.from({ length: leaves }, (_, i) => [`k${i}`, i + 1])));
+      return { path: `outputs/a${f}.json`, bytes: body.length, sha256: createHash("sha256").update(body).digest("hex"), body };
+    });
+    c.scenario.assert = [{ result: "success" }];
+    const p = join(dir, "m.cassette.json");
+    writeFileSync(p, JSON.stringify(c));
+    return p;
+  }
+
+  const replay = (file: string, extra: string[] = []) =>
+    spawnSync("node", [CLI, "replay", file, "--mutate", ...extra], { encoding: "utf8" });
+
+  it.skipIf(!can)("names the eligible total and the per-file cap when per-file truncates", () => {
+    const p = cassetteWith(mkdtempSync(join(tmpdir(), "mut-")), 3, 40);
+    const out = replay(p).stdout + replay(p).stderr;
+    expect(out).toMatch(/sampled 30 of 120 eligible/);
+    expect(out).toMatch(/per-file cap 10 reached on 3 file\(s\)/);
+    // The bare ratio must no longer stand alone as if it were the whole corpus.
+    expect(out).toMatch(/30\/30 sampled perturbation/);
+  });
+
+  it.skipIf(!can)("adds no cap parenthetical when nothing was truncated", () => {
+    const p = cassetteWith(mkdtempSync(join(tmpdir(), "mut-")), 1, 3);
+    const out = replay(p).stdout + replay(p).stderr;
+    expect(out).toMatch(/\[mutate\]/);
+    expect(out).not.toMatch(/eligible value\(s\)/);
+    expect(out).not.toMatch(/cap \d+ reached/);
+  });
+
+  it.skipIf(!can)("surfaces the coverage on the JSON envelope so it need not be scraped from text", () => {
+    const p = cassetteWith(mkdtempSync(join(tmpdir(), "mut-")), 3, 40);
+    const r = replay(p, ["--output-format", "json"]);
+    const m = JSON.parse(r.stdout).results[0].mutation;
+    expect(m.sampled).toBe(30);
+    expect(m.eligible).toBe(120);
+    expect(m.truncatedBy).toBe("per-file");
+    expect(m.caps).toEqual({ perFile: 10, total: 50 });
+    expect(m.uncaught).toHaveLength(30);
   });
 });
