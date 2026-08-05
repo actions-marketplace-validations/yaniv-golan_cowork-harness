@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/session.schema.json
 # Session setup — mirrors everything you set in Cowork BEFORE the first prompt.
 # Author + maintain one of these per project; scenarios reference it via `session:`.
 # (Separate from baselines/desktop-*.json, which is the auto-synced runtime baseline.)

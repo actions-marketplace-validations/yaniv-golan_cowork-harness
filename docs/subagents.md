@@ -233,7 +233,9 @@ harness run is structurally blind to this (no browser, no human — see
 
 `analyze-skill` scans `.html/.htm/.js/.mjs/.py` sources under the target (its OWN source
 set — the `.py`/`.js` *generator* that emits the HTML is scanned too, since the write-back string often
-lives in a template) and emits:
+lives in a template). `.ts`/`.tsx`/`.jsx` sources are deliberately out of scope — the in-process parser
+cannot read TypeScript or JSX — so a target whose artifact generator is written in one of those languages
+is reported under `unscannedArtifactSources` rather than silently passing as clean. In scope, it emits:
 
 - **`artifact-write-back-lost`** (severity `error` — gates under `--strict`) — a relative write-back with
   a lost consequence: a broken download fallback, an unchecked success claim, or a native
@@ -654,8 +656,8 @@ sub-agent didn't reason":
   on turns/blocks that carry text.
 
 **Where to look.** `schema/run-result.json` is the authoritative field reference — every field named
-above has a `description` there (`subagents[]` at line 640; top-level `fileToolAttempts`/`pathDenials` at
-lines 61/80). The matching assert keys (see [scenario.md](./scenario.md)) turn this telemetry into
+above has a `description` there, including `subagents` and the top-level `fileToolAttempts`/`pathDenials`.
+The matching assert keys (see [scenario.md](./scenario.md)) turn this telemetry into
 pass/fail: `subagent_dispatched` (matches `dispatchAgentType`/`resolvedAgentType`/description),
 `subagent_dispatch_healthy` (per-dispatch delivered output + no VM-path attempts, host-loop only),
 `no_vm_path_file_op` (content-class, re-derived from the frozen `tool_use` stream — replay-checkable

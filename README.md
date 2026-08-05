@@ -21,6 +21,7 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 
 > **Requirements at a glance** (a summary — full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below)
 > - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
+> - **Global `npm install -g`:** ships only `examples/replays/` — `run examples/scenarios/…` needs a source checkout instead; full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below.
 > - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
 > - **Live tiers** need three things:
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
@@ -245,7 +246,9 @@ cowork-harness lint examples/scenarios/*.yaml --strict --min-severity WARN
 
 > **What replay checks.** A cassette freezes the WHOLE scenario (`lane:`, `fidelity:`, `baseline:` and the
 > rest — not just `assert:`), and a plain `replay` evaluates all of it from that frozen copy; editing the
-> YAML cannot change a replay's verdict, and only `assert:` can be opted back to disk (`--assert-from`).
+> YAML cannot change a replay's verdict, and `--assert-from` opts both `assert:` and `expect_denied:` back to
+> disk — though `expect_denied:` stays live-only on replay, so it is sourced from disk but never evaluated
+> there, only producing a drift warning when it differs from the frozen copy.
 > `replay` re-evaluates a scenario's `assert:` against the frozen recording, split
 > into four buckets:
 >
@@ -490,7 +493,7 @@ expect_denied: ["evil.example.com"]       # assert this host is denied egress
 
 assert:
   - transcript_contains: "action items"
-  - user_visible_artifact: outputs/actions.md   # the robust primitive — also catches connected-folder deliverables that file_exists (mnt/-anchored) misses
+  - user_visible_artifact: project/outputs/actions.md   # resolved against workRoot exactly like file_exists, so a connected-folder deliverable still needs the <mount>/ prefix — this key additionally requires the path sit under a user-visible root
   - tool_called: Write
   - egress_denied: evil.example.com
   - result: success
@@ -718,7 +721,7 @@ The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs an **eight
 | **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check`, then `npm run test:live` (live contract tests that guard the binary-resolution assumptions, no token needed) | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
 | **scenarios** | the live scenario suite (mixed `protocol` + `container` fidelity across `examples/scenarios/`), plus the `e2e/scenarios/*.yaml` smoke set (this repo's own L0/L1/hostloop self-tests, `microvm` excluded — needs a real VM); uploads transcripts/egress logs as artifacts; relies on a runner-local staged agent binary (no in-workflow download step). | `ANTHROPIC_API_KEY` | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
-| **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | **fails CI** if the newest committed baseline is &gt; 90 days old |
+| **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | **goes red** if the newest committed baseline is &gt; 90 days old, but sits outside `ci-green`'s `needs:` list, so a red run does not block a merge |
 
 This ordering means cheap checks fail fast, the **boundary parity gate runs without secrets** (so forks get it too), and expensive live runs only happen when a key is present.
 

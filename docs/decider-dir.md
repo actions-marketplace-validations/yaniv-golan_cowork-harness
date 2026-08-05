@@ -150,6 +150,52 @@ cowork-harness answer "$GATES" --gate 1 --choose "PDF"
   - `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS` — the per-gate backstop before a loud `UnansweredError`
     (default 600000, i.e. 10 minutes).
 
+## Decider flags by command: `run` vs `record` vs `skill`
+
+`run`, `record`, and `skill` each accept a different subset of the decider flags, and no single
+`--help` shows all three side by side. This is the full cross-reference, verified against
+`cowork-harness 1.17.0`'s own `--help` output for each command:
+
+| Command | `--decider-dir` | `--decider-cmd` | `--decider-llm` | `--on-unanswered` accepts |
+|---|---|---|---|---|
+| `run` | yes | yes | no | `fail`\|`first` |
+| `record` | yes | no | yes | `fail`\|`first` |
+| `skill` | yes | yes | yes | `fail`\|`prompt`\|`first` |
+
+- **`run` has no `--decider-llm`, by design** — a scenario run pins its answers for
+  reproducibility, so `run --help` states it directly: "`run` omits `--decider-llm` by design —
+  scenarios pin answers for reproducibility". The only route to a model decider on `run` is the
+  scenario-YAML field `on_unanswered: llm` (see [scenario.md](./scenario.md)), which flags that run
+  non-deterministic exactly as `--decider-llm` does on `skill`/`record`.
+- **`record` has no `--decider-cmd`** — its `--help` lists only `--decider-dir` (single scenario
+  only) and `--decider-llm` under "answer gates LIVE"; a spawned-helper decider is a `skill`/`run`-only
+  path.
+- **`--on-unanswered llm` is rejected as a flag value on every command** — `llm` is a
+  scenario-YAML-only value (`on_unanswered: llm`); the CLI equivalent is the separate `--decider-llm`
+  flag. Since `run` has no `--decider-llm` at all, the scenario YAML is the *only* route to a model
+  decider there.
+- **`run` additionally rejects `--on-unanswered prompt`** (it would break determinism), narrowing its
+  accepted set to `fail`/`first` even though the flag's shape looks identical across commands.
+
+Verification commands (all fail at argument parsing, before any scenario runs or spends anything):
+
+```bash
+node dist/cli.js run examples/scenarios/example-pdf-skill.yaml --decider-llm
+#   unexpected argument(s): --decider-llm — `run` takes one <scenario.yaml | dir/> plus common flags…
+
+node dist/cli.js record examples/scenarios/example-pdf-skill.yaml --decider-cmd foo
+#   unknown flag: --decider-cmd
+
+node dist/cli.js record examples/scenarios/example-pdf-skill.yaml --on-unanswered llm
+#   --on-unanswered: expected one of fail|first, got llm
+```
+
+**Caution when probing this matrix yourself:** unlike the three commands above, flags that a
+command *does* accept — e.g. `run --decider-dir <dir>` or `run --decider-cmd '<helper>'` — parse
+successfully and go on to execute the scenario for real (real tokens, a real sandboxed agent). Only
+the invalid combinations shown above are guaranteed to fail before any spend; don't assume every
+decider-flag probe is free.
+
 ## See also
 
 - [`../README.md`](../README.md) — the answer-channels overview (`--decider-llm` / `--answer-policy` / `--decider-cmd` /

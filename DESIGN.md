@@ -162,7 +162,7 @@ L1 reproduces this as a **default-deny forward proxy**: the agent's `HTTP(S)_PRO
 |---|---|
 | `onToolPermissionRequest` (subscribe) | inbound `can_use_tool` control_request |
 | `respondToToolPermission(allow/deny)` | `control_response` allow/deny |
-| AskUserQuestion answered by question UI | allow + `updatedInput.answers` (Record<questionText, answer>) |
+| AskUserQuestion answered by question UI | allow + `updatedInput = {questions, answers}` — BOTH keys required (Record<questionText, answer>) |
 | `onEvent` live stream | stream-json assistant/tool messages → `events.jsonl` |
 | `getTranscript` | accumulated stream → the `transcript` line in `run.jsonl` |
 | `setDraftSessionFolders` / `addFolderToSession` | bind-mount into `mnt/<folder-name>` before launch |
@@ -183,7 +183,7 @@ The handshake and shapes below were confirmed empirically with an end-to-end run
 2. **Handshake:** the driver sends `{type:"control_request", request_id, request:{subtype:"initialize"}}` as the first message, then the user turn. Without it, permissions/questions are auto-handled (AskUserQuestion is silently dismissed).
 3. **Inbound permission/question:** `{type:"control_request", request_id, request:{subtype:"can_use_tool", tool_name, input, tool_use_id}}`. For AskUserQuestion, `input.questions[] = {question, header, options:[{label,description}], multiSelect}`.
 4. **Response envelope (nested!):** `{type:"control_response", response:{subtype:"success", request_id, response:{behavior:"allow", updatedInput} | {behavior:"deny", message}}}`. The payload sits under an **inner** `response`; missing that nesting yields `ZodError: expected object, received undefined`.
-5. **AskUserQuestion answer:** allow with `updatedInput.answers = Record<questionText, chosenLabel>` (the CLI's own schema is `z.record(z.string(), z.string())`). The model receives the answer and proceeds.
+5. **AskUserQuestion answer:** allow with `updatedInput = {questions, answers}` — BOTH keys required (dropping `questions` breaks the binary's built-in `questions.map(...)` handler); `answers = Record<questionText, chosenLabel>` (the CLI's own schema is `z.record(z.string(), z.string())`). The model receives the answer and proceeds.
 
 > **Cowork mode is enabled by env, not a flag.** In the staged agent (2.1.197) `--cowork` is a *plugin-scope* flag ("can only be used with user scope") and is rejected by the agent invocation; cowork mode is entered via **`CLAUDE_CODE_IS_COWORK=1`**. (Do **not** also set `CLAUDE_CODE_USE_COWORK_PLUGINS` — Desktop doesn't, and it flips the agent's userSettings filename to `cowork_settings.json` and plugin cache to `cowork_plugins/` via `TSO()` — the minified Desktop helper that derives the cowork settings/cache paths; plugins are delivered via `--plugin-dir`.) The host CLI is a different (macOS) build, so L0 runs plain (control-loop validation only); L1/L2 run the staged **Linux/arm64** binary — bind-mounted from the user's own install.
 

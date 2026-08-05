@@ -125,6 +125,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
   "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified")
+  "preRunOrigin": "local-walk", // provenance of the pre-run baseline (local-walk / remote-unavailable / local-unreadable); `local-unreadable` makes no_unexpected_files/input_unmodified fail evidence-unavailable on replay instead of diffing an incomplete baseline
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true, "truncationReason": "size" }, // oversized → hash-only (raise --max-artifact-bytes)
@@ -135,7 +136,9 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
   "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
-  "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
+  "timeline": [ /* … */ ], // harness-observation timeline (see src/agent/timeline.ts): seq/ts/line/type per meaningful in-run event, in total order; `ts` is wall-clock-observation-time, frozen not recomputed on replay — informational only, no verdict impact. ABSENT on a pre-timeline cassette or when timeline.jsonl was empty/unreadable at record time
+  "timelineHeader": { "startedAtMono": "…", "startedAtWall": "…" }, // written once as timeline.jsonl's first line; `startedAtMono` is the raw `process.hrtime.bigint()` start value (as a string) that every `timeline[].ts` is milliseconds-elapsed-since; `startedAtWall` is the wall-clock anchor so absolute times are recoverable from the relative `ts` stream
+  "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic. `channel` is optional: it is absent when `--on-unanswered first` answered the gate rather than a decider channel, so the stamp serializes as just `{ nonDeterministic: true }`
 }
 ```
 
@@ -223,6 +226,9 @@ separate discovery run to learn the gates, then encoding answers, then recording
 - `--decider-llm [--intent "<one line>"]` — a model answers the gates.
 - `--decider-model <model>` — pins which model answers the gates; requires `--decider-llm`.
 - `--on-unanswered first` — auto-pick option 1 for any unmatched gate.
+
+> `record` takes a different decider subset than `run` and `skill` do — notably it has no `--decider-cmd`.
+> See [decider-dir.md → Decider flags by command](./decider-dir.md#decider-flags-by-command-run-vs-record-vs-skill).
 
 These are rejected together with `--rerecord-stale` (it re-records committed cassettes at the default
 policy). When a gate is actually answered by a live decider (or `--on-unanswered first`), the cassette
@@ -533,6 +539,21 @@ This is the **O7 guard on the token-free lane**: if a future change to `serializ
 `replay_protocol_fidelity` is a synthesized assertion, not user-authored. It will never appear in a
 scenario's `assert:` block; on the live path it would fail as an empty assertion.
 
+### Mutation coverage — `replay --mutate`
+
+`replay --mutate` perturbs each recorded, inlined JSON artifact value in turn, re-runs the scenario's
+assertions against the perturbed tree, and reports which perturbations nothing catches — those are the
+fields your `assert:` block leaves unguarded. Each perturbation is applied, evaluated, and restored
+before the next one runs, so the materialized tree ends the pass unchanged.
+
+This is coverage reporting, not verdict reporting: an uncaught perturbation is a gap in the scenario's
+assertions, not a failure of the run, so `--mutate` never changes replay's verdict or exit code — a green
+replay stays green regardless of what it finds.
+
+```
+cowork-harness replay cassettes/my-scenario.cassette.json --mutate
+```
+
 ### What replay's `RunResult` carries
 
 A replay `RunResult` is built from the same frozen recording, so several fields are populated from it
@@ -782,6 +803,13 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
   `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
   `KNOWN_COWORK_SERVERS` instead of allowing it.
+  **`record` carries its own preflight for the same risk.** Recording at a host-inheriting tier
+  (`protocol`, `hostloop`, or `cowork` resolving to hostloop) into a repo-visible cassette path is
+  refused by default — that recording would freeze this machine's MCP servers, agents, and account
+  metadata into a committed fixture. `--allow-host-inventory-fixture` is the boolean consent to record
+  anyway; it is distinct from `verify-cassettes`' `--allow-host-inventory <regex>` above (a per-finding
+  suppressor, not a record-time consent) and is appropriate only when the session has no personal MCP
+  servers or plugins.
   **Tier-gated on purpose:** at `container` the agent is sealed (`HOME=/tmp`), so a foreign server name there
   can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
   it would fail a legitimate fixture.

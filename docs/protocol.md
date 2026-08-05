@@ -21,9 +21,10 @@ wire surface — the harness's *own* protocol, not Anthropic's.
    *inner* `response` key; a flattened body is rejected by the agent with `ZodError: expected object,
    received undefined` (`ControlResponse`, `ControlResponseBody`, `AllowBody`, `DenyBody`,
    `McpResponseBody`, `HookOutputBody`).
-5. The AskUserQuestion answer wire-shape: `updatedInput.answers` is `Record<questionText, answer>` —
-   values are always **strings**; a multiSelect answer is a single **comma-joined string** of the chosen
-   labels (e.g. `"Auth, Audit"`), never an array (`Answers`, `QuestionAnswerUpdatedInput`).
+5. The AskUserQuestion answer wire-shape: `updatedInput` requires **both** `questions` and `answers` —
+   `answers` is `Record<questionText, answer>` with values always **strings**; a multiSelect answer is a
+   single **comma-joined string** of the chosen labels (e.g. `"Auth, Audit"`), never an array (`Answers`,
+   `QuestionAnswerUpdatedInput`).
 
 **Out of scope, on purpose** — the Claude Agent SDK's own event stream (`assistant`/`result`/`user`
 tool-result messages, `system/init` capability manifests, `api_metrics`). That surface is Anthropic's,

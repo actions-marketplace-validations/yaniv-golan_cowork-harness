@@ -543,7 +543,7 @@ Docker, no re-record.
 | Situation | Symptom | Reach for (in order) |
 |---|---|---|
 | **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools, gates, sub-agent tree)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
-| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `replay --mutate` — perturbs each recorded JSON artifact value and reports which perturbations NOTHING caught (reporting only; never moves the verdict/exit code) · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
 agent stderr) — read those before re-running; a re-record rarely tells you more than the captured stderr
@@ -883,6 +883,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     `present_files_called` assertion keys are harness-side names and stay valid either way.
     ([`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)
     → "File delivery" has the binary-verified detail; repo-only.)
+
+25. **Two distinct host-inventory consent flags — a record-time one and a verify-time one.** `record
+    --allow-host-inventory-fixture` is the boolean consent to proceed recording a host-inheriting
+    (`protocol`/`hostloop`/`cowork`-resolving-to-hostloop) cassette into a repo-visible path — otherwise
+    `record` refuses (freezing this machine's MCP servers/agents/account into a committed fixture is the
+    risk). `verify-cassettes --allow-host-inventory <regex>` is unrelated: a per-finding suppressor for the
+    scanner's `host-inventory` class on an already-committed cassette. Passing one where the other command
+    wants it fails as an unrecognized flag — they don't interchange. Depth: `references/ci-recipe.md`.
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

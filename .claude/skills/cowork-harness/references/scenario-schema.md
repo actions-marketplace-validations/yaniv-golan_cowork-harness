@@ -32,7 +32,7 @@ references a session for setup.
 ```yaml
 name: my-test                       # OPTIONAL — defaults to the filename; keys runs/<name>/
 baseline: latest                    # platform baseline: "latest" or "desktop-<ver>" (NOT "profile:")
-session: ../sessions/default.yaml   # pre-prompt setup (resolved relative to THIS file)
+session: ../sessions/my-session.yaml # pre-prompt setup (resolved relative to THIS file)
 fidelity: container                 # protocol | container | microvm | hostloop | cowork
 execution: local                    # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                     # local): local (default) | cloud-describe (RESERVED — no runner
@@ -402,12 +402,12 @@ overall run verdict and exit code — `assert result: success` alone won't catch
 A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re-evaluates only the
 **content** assertions. The authoritative list is `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` (composed) in `src/run/cassette.ts`.
 
-**Scenario source — the WHOLE scenario is frozen; only `assert:` can be opted back to disk.** A cassette
-captures every key (`name`/`prompt`/`session`/`baseline`/`fidelity`/`lane`/`skills`/`answers`/`execution`/
-`requires_capabilities`/`expect_denied`/`assert`), and a plain `replay` evaluates **all** of them from that
-frozen copy (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does not change
-it — replay only prints a `::notice::` when a sibling's `assert:`/`prompt:` differs, or when it fails to
-load at all. An edited `lane:`/`fidelity:`/`baseline:` reaches a replay ONLY by re-recording. `replay --assert-from
+**Scenario source — the WHOLE scenario is frozen; only `assert:` (+`expect_denied:`) can be opted back to
+disk.** A cassette captures every key (`name`/`prompt`/`session`/`baseline`/`fidelity`/`lane`/`skills`/
+`answers`/`execution`/`requires_capabilities`/`expect_denied`/`assert`), and a plain `replay` evaluates
+**all** of them from that frozen copy (byte-deterministic, ignores the working tree); editing
+`scenarios/<name>.yaml` does not change it — replay only prints a `::notice::` when a sibling's
+`assert:`/`prompt:` differs, or when it fails to load at all. An edited `lane:`/`fidelity:`/`baseline:` reaches a replay ONLY by re-recording. `replay --assert-from
 <scenario.yaml>` / `--reassert` is the opt-in token-free re-check against the on-disk block; it **hard-fails**
 on recording-shaping drift (`prompt`/`answers`/`baseline`/`skills`) or skill-content staleness (it implies
 `--fail-on-skill-drift`). `expect_denied`/filesystem/egress keys are sourced from on-disk but stay live-only —

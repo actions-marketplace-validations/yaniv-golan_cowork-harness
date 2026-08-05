@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/session.schema.json
 # Lean session for the zero-infra `protocol` (L0) smoke test.
 # No mounts, no uploads, no plugins — protocol runs the host `claude` directly, so the
 # fewer moving parts, the faster the inner loop. The scenario asserts only control-loop +

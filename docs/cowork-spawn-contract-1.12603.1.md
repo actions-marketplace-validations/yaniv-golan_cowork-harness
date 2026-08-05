@@ -4,7 +4,9 @@
 > this document is not updated per release (the live values are tracked in the newest
 > `baselines/desktop-*.json`). Control-protocol fields documented here (spawn flags, handshake envelope,
 > permission/question shapes) are **unchanged**; the **mount layout changed at ≥1.14271.0** (work folders
-> now mount at `mnt/<name>`, not `mnt/.projects/<id>` — see CHANGELOG). Volatile fields — `agentVersion`,
+> now mount at `mnt/<name>`, not `mnt/.projects/<id>`, and local-class plugins now mount at
+> `.local-plugins/marketplaces/<marketplace>/<plugin>`, not `.local-plugins/cache/<name>` — see
+> CHANGELOG). Volatile fields — `agentVersion`,
 > egress `allowDomains`, GrowthBook gate values — have moved and are tracked in the latest baseline
 > (`baselines/desktop-<latest>.json` — run `cowork-harness sync` to update).
 

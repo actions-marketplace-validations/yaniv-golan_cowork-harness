@@ -124,6 +124,13 @@ The split is not just about tokens — it decides **where each lane can run**:
   cowork-harness assertions --list --output-format json   # every key, with its replay class
   ```
 
+  **`replay --mutate`** is a distinct, reporting-only diagnostic on this same lane: it perturbs each
+  recorded JSON artifact value one at a time, re-runs the assertions against the perturbed cassette,
+  and reports which perturbations NOTHING caught — those are the fields your `assert:` block leaves
+  unguarded. It never changes the verdict or exit code (it's coverage information, not a check), so
+  don't wire it into a pass/fail gate — read its `::warning::`/`::notice::` output to find `assert:`
+  gaps to close.
+
   Placing a key on this gate from a doc list rather than from `assertions --list` is how a valid
   replay-lane check ends up left off the PR gate. Filesystem/egress assertions are
   skipped on this token-free lane — loudly: replay emits an `::warning::` annotation whenever it drops
@@ -190,6 +197,12 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   (`hostloop`, `protocol`) has an **empty** redaction policy — that combination commits real host paths
   the `path` scanner then hard-fails at `verify-cassettes` time. The always-on scanner remains the
   universal net (container-tier recordings can trip it too).
+- **Host-inheriting record refused by default — `--allow-host-inventory-fixture` is the consent.** A
+  `protocol`/`hostloop`/`cowork`-resolving-to-hostloop record into a repo-visible cassette path would
+  freeze THIS machine's MCP server names, agents, and account metadata into a committed fixture, so
+  `record` refuses outright rather than warn. Pass `--allow-host-inventory-fixture` only when the
+  recording session genuinely has no personal MCP servers or plugins to leak — it is a per-record
+  boolean consent, not a pattern.
 - **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path /
   machine-inventory matches it finds in the committed cassettes and **exits non-zero**, so "no leak" is
   a gate, not discipline. Non-zero is not one thing, though: exit `1` means verification RAN and found a
@@ -202,6 +215,13 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   Suppress synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word
   proper names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus
   needs it.)
+- **`--allow-host-inventory <regex>` — the per-finding sibling of the record-time consent above, and a
+  different thing from it.** `verify-cassettes` scans a **structural** `host-inventory` class (an
+  `mcp_servers[].name`/`agents[]` entry outside the harness's own known set, or `account.email`/
+  `.organization`/`.subscriptionType`) over already-committed cassettes. `--allow-host-inventory <regex>`
+  suppresses a specific finding there — it is a scanner allowlist entry, not a record-time green light —
+  and, like `--allow-domain`/`--allow-email`/`--allow-path`/`--allow-machine-inventory`, scopes the
+  pattern to that one class so it can't accidentally clear an unrelated finding.
 
 ```bash
 cowork-harness verify-cassettes cassettes/                       # privacy scan + staleness — exit 1 = verified & failed, exit 3 = could not verify

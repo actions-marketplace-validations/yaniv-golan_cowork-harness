@@ -17,6 +17,14 @@ The full schema below documents every field.
 
 ## Full schema
 
+> **Machine-readable:** [`schema/session.schema.json`](../schema/session.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate sessions against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/session.schema.json` hint.
+
+> **`lint` does not validate a session file.** `cowork-harness lint` is a *scenario* linter: pointing it
+> at a `sessions/*.yaml` file produces a wall of spurious `unknown-top-key` warnings — one per session
+> field, each asking "typo or hallucination?" — and still exits 0, since every top-level session key is,
+> correctly, not a scenario key. The `$schema` hint above (editor-side YAML-language-server validation)
+> is the session-authoring validation path; `lint` has no session-shaped counterpart.
+
 ```yaml
 # ── model & reasoning (Cowork model picker + toggles) ──────────────────────────
 model: claude-opus-4-8           # setModel; omit for the agent default
@@ -224,6 +232,10 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 
 ### Egress
 `extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).
+
+| Field | Type | Cowork control | Notes |
+|---|---|---|---|
+| `web_fetch.approved_domains[]` | string[] | *(none — TEST CONVENIENCE, not a real Cowork setting)* | Pre-approves these hosts for the run, as if the user had clicked "Allow all for website" earlier in the session (seeds `Run.approvedDomains`) — a `web_fetch` to a listed host raises no approval gate. The set starts empty every run; Cowork itself has no persistent pre-approval across runs. `web_fetch`'s real gate is the URL provenance set, seeded from URLs in the prompt — see [boundary.md](./boundary.md). |
 
 ## Path expansion
 
