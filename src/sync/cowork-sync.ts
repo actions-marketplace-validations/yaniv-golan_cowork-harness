@@ -160,9 +160,12 @@ const DARK_GATES = new Set([
   "4200321681", // autoModeOverridesAlwaysAllow — absent from a standard 1.22209.0 fcache at pin time (dark);
   //                pinned so a rollout (absent→present) surfaces as a visible diff.
   "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale.
-  "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11 and absent from a standard fcache (dark).
-  //                Without this entry the PINNED_GATES pin above would never round-trip and the sentinel
-  //                would be vacuous — it would silently guard nothing.
+  "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11, and dark (absent from a standard fcache) when
+  //                pinned. Observed 2026-08-05 as SERVED (`source:"force"`, `value:false`) — still off, so
+  //                nothing it arms is reachable. The entry STAYS: force rules are server-evaluated and can
+  //                be segment-targeted, so another account may still see it absent, and dropping it would
+  //                turn that account's sync into a spurious hard-fail. Tolerating absence is the point —
+  //                without it the PINNED_GATES pin never round-trips and the sentinel guards nothing.
 ]);
 
 /**
