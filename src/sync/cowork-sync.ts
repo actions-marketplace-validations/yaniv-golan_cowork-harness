@@ -35,6 +35,11 @@ export interface SyncResult {
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
+  // Snapshot identity for `gates`, captured from the SAME read. Returned rather than re-derived by the
+  // caller: the payload refetches on Desktop's schedule (3.7-20.8 min observed) and asar extraction
+  // between the two reads takes tens of seconds, so a second read can label snapshot N's gates with
+  // snapshot N+1's identity -- exactly the misattribution this field exists to prevent.
+  fcache: FcacheProvenance | null;
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
   spawnEnvKeys: string[]; // WI-6: the sorted SET of constructed spawn-env keys — committed as provenance.spawnEnvKeys (regex-rot oracle)
   spawnEnvSpreadCount: number; // WI-5: count of `...`-spread sites across the spawn windows — committed as provenance.spawnEnvSpreadCount
@@ -201,20 +206,34 @@ const DARK_GATES = new Set([
  *  every time. */
 export type FcacheProvenance = { content16: string; embeddedTimestamp: number | null; featureCount: number };
 
-/** Escape to `\uXXXX` so the output matches Python's default `ensure_ascii=True`; without it the two
- *  implementations diverge the moment a feature value carries a non-ASCII character. */
+/** Escape to `\uXXXX` to match Python's default `ensure_ascii=True`, which escapes everything outside
+ *  PRINTABLE ascii — so the range starts at DEL (U+007F), not at U+0080. */
 function jsonStringAscii(s: string): string {
-  return JSON.stringify(s).replace(/[-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+  return JSON.stringify(s).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
 }
 
-/** Serialise to the exact byte sequence of `json.dumps(v, sort_keys=True, separators=(',',':'))`.
+/** Serialise to `json.dumps(v, sort_keys=True, separators=(',',':'))` form.
  *
  *  Emits directly rather than building a key-sorted clone and calling `JSON.stringify`. That obvious
  *  approach is WRONG here and fails silently: gate ids are integer-like strings, and a JS object always
  *  enumerates integer-like keys in ascending NUMERIC order regardless of insertion order — so
  *  `Object.fromEntries(sortedPairs)` discards the sort and yields `"17519066"` before `"1004628546"`,
  *  where Python's lexicographic `sort_keys` yields the reverse. Self-consistent, and cross-project
- *  incomparable. Serialising the sorted key list directly is the only way to keep both true. */
+ *  incomparable. Serialising the sorted key list directly is the only way to keep both true.
+ *
+ *  SCOPE OF THE CROSS-LANGUAGE GUARANTEE — read before relying on it. Strings (incl. non-ASCII and
+ *  astral pairs), booleans, null, arrays, nested objects and key ordering all agree. **Numbers do not,
+ *  in general, and cannot be made to**: JSON has one number type where Python has two, so a payload
+ *  written `1.0` reaches Python as float `1.0` (repr `"1.0"`) and JS as `1` (repr `"1"`) — and after
+ *  `JSON.parse` nothing remains in JS to tell them apart. Same for exponent formatting (`5e-7` vs
+ *  `5e-07`, `1e17` vs `1e+17`) and integers past 2^53, which JS silently rounds. The live payload DOES
+ *  carry floats (`364911507.value.*.split` = 0.1/0.5/0.3); those round-trip identically in both, which
+ *  is why the implementations agree today — that is a property of the current values, not a guarantee.
+ *
+ *  So: authoritative for OUR OWN drift detection (self-consistent across syncs, which is what
+ *  `provenance.fcache.content16` is for). Cross-implementation comparison is verified only for the value
+ *  space the payload currently uses, and must be RE-VERIFIED, never assumed, if a served value lands in
+ *  one of the classes above. The agreeing classes are pinned in test/baseline.test.ts. */
 function canonicalJson(v: unknown): string {
   if (v === null || v === undefined) return "null";
   if (typeof v === "string") return jsonStringAscii(v);
@@ -339,6 +358,7 @@ export function sync(): SyncResult {
   // — a production flip then shows up coherently as both a provenance.gates diff and the
   // corresponding spawn.env value diff.
   const gates = decodeFcacheGates();
+  const fcacheProv = decodeFcacheProvenance();
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
@@ -367,6 +387,7 @@ export function sync(): SyncResult {
     requireFullVmSandbox,
     asarFingerprint: fingerprint,
     gates,
+    fcache: fcacheProv,
     spawnEnv,
     spawnEnvKeys,
     spawnEnvSpreadCount,
@@ -838,10 +859,20 @@ export function checkSyspromptMapFacts(files: Map<string, string>): string[] {
   // Mode is encoded in the key suffix (`07_16_2026.replace`), which is how a served entry selects it.
   if (!/\^\[A-Za-z0-9_-\]\{1,128\}\(\\\.\(replace\|append\)\)\?\$/.test(bundle))
     miss("key grammar", "the `<name>(.replace|.append)?` key-name regex moved");
-  // A `replace` variant must carry the cache boundary or the build throws at startup. If that invariant
-  // is dropped, a served replace-variant can silently reshape the prompt with no structural guard.
+  // The startup throw requiring {{promptCacheBoundary}} in a replace-mode variant. NOTE ITS SCOPE: it
+  // guards the BUILT-IN variants table only. Server-supplied entries are validated later, on the
+  // resolution path, which DEGRADES rather than throwing — a boundary-less `replace` resolves to
+  // `missing_boundary` and the session simply gets a different prompt, with no error anywhere. So this
+  // anchor pins the loud half; the quiet half is why the harness needs the sentinel at all.
   if (!/replace-mode text must contain \{\{promptCacheBoundary\}\}/.test(bundle))
-    miss("boundary invariant", "the startup throw requiring {{promptCacheBoundary}} in a replace-mode variant is gone");
+    miss("boundary invariant", "the startup throw requiring {{promptCacheBoundary}} in a built-in replace-mode variant is gone");
+  // The resolution-path status machine — the SILENT half. If these statuses disappear, a malformed
+  // served variant stops being classified at all, and the failure mode gets quieter still.
+  if (!/missing_boundary/.test(bundle) || !/invalid_entry/.test(bundle))
+    miss(
+      "resolution status machine",
+      "the per-key hit/invalid_entry/missing_boundary resolution statuses moved — a malformed served variant may no longer be classified",
+    );
   return flags;
 }
 

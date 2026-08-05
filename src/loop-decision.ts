@@ -28,7 +28,8 @@ export interface LoopInputs {
  * `productionDefault` is REQUIRED, and it is the whole point of this signature. Production reads these
  * keys through a per-call accessor that supplies its own default — `Ea(id, key, default, …)` — so an
  * unserved key is NOT "off", it is whatever that call site passes. Measured on gate `1978029737`: the
- * code requests 21 keys while the payload serves 8, and two of the 13 unserved default to TRUE
+ * code requests 21 keys while the payload serves 8 (one of which, sessionsBridgePollBlockMs, is never
+ * requested — so the intersection is 7 and 14 requested keys are unserved), and two of those default to TRUE
  * (`bashHostOnlyIntercept`, `scheduledTaskStaleReapEnabled`). Returning `false` for an absent key, as
  * this function used to unconditionally, is therefore wrong in the silent direction. The argument is
  * required rather than defaulted so a new call site cannot inherit that bug by omission.

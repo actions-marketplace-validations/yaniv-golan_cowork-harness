@@ -1747,9 +1747,23 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
 // computed the same way everywhere, which is what these pin.
 // ==========================================================================================
 describe("fcacheContentHash — snapshot identity", () => {
-  it("ignores the fetch timestamp: identical features hash identically", () => {
-    const features = { "123": { on: true, source: "force" }, "456": { on: false, source: "defaultValue" } };
-    expect(fcacheContentHash(features)).toBe(fcacheContentHash({ ...features }));
+  // PAYLOAD-level, not function-level. Comparing `f(x)` to `f({...x})` cannot fail for any
+  // deterministic function and proves nothing — the claim under test is that two REAL payloads which
+  // differ only in their fetch timestamp share an identity, which is what makes content16 usable as one.
+  it("ignores the fetch timestamp: two payloads differing ONLY in timestamp share a content16", () => {
+    const features = { "1143815894": { value: true, on: true, source: "force" } };
+    const write = (timestamp: number) => {
+      const gz = gzipSync(Buffer.from(JSON.stringify({ timestamp, features }), "utf8"));
+      const dir = mkdtempSync(join(tmpdir(), "cowork-fcache-prov-"));
+      const f = join(dir, "fcache");
+      writeFileSync(f, Buffer.concat([Buffer.from([0x43, 0x4c, 0x46, 0x01, 0, 0, 0, 0]), gz]));
+      return f;
+    };
+    const a = decodeFcacheProvenance(write(1_000))!;
+    const b = decodeFcacheProvenance(write(9_999))!;
+    expect(a.content16).toBe(b.content16); // identity: unchanged
+    expect(a.embeddedTimestamp).not.toBe(b.embeddedTimestamp); // metadata: moved
+    expect(a.featureCount).toBe(1);
   });
 
   it("changes when a gate's VALUE changes", () => {
@@ -1779,8 +1793,16 @@ describe("fcacheContentHash — snapshot identity", () => {
     );
   });
 
+  // The cross-language guarantee is scoped: strings/bools/null/arrays/nesting/ordering agree, NUMBERS
+  // do not (JSON has one number type, Python has two — a payload's `1.0` is indistinguishable from `1`
+  // after JSON.parse, and the same applies to exponent form and ints past 2^53). These pin the classes
+  // that DO agree, so a regression in them is caught; the number classes are documented, not asserted.
   it("escapes non-ASCII to \\uXXXX, matching Python's ensure_ascii default", () => {
     expect(fcacheContentHash({ k: "café" })).toBe(createHash("sha256").update('{"k":"caf\\u00e9"}', "utf8").digest("hex").slice(0, 16));
+  });
+
+  it("escapes DEL (U+007F) — Python escapes everything outside PRINTABLE ascii, not just >= U+0080", () => {
+    expect(fcacheContentHash({ a: "\u007f" })).toBe(createHash("sha256").update('{"a":"\\u007f"}', "utf8").digest("hex").slice(0, 16));
   });
 
   it("decodeFcacheProvenance returns null rather than throwing when there is no fcache", () => {
@@ -1800,7 +1822,8 @@ describe("checkSyspromptMapFacts — prompt-patch channel sentinel", () => {
       "chunk.js",
       'x.coworkSyspromptMap;function fn(e){return e==="replace"||e==="append"}' +
         "var re=/^[A-Za-z0-9_-]{1,128}(\\.(replace|append))?$/;" +
-        "throw Error(`SP_VARIANTS.${e}: replace-mode text must contain {{promptCacheBoundary}}`)",
+        "throw Error(`SP_VARIANTS.${e}: replace-mode text must contain {{promptCacheBoundary}}`);" +
+        'return{status:"missing_boundary"};return{status:"invalid_entry"};',
     ],
   ]);
 
@@ -1824,6 +1847,15 @@ describe("checkSyspromptMapFacts — prompt-patch channel sentinel", () => {
     const m = new Map(CLEAN);
     m.set("chunk.js", CLEAN.get("chunk.js")!.replace("replace-mode text must contain {{promptCacheBoundary}}", "ok"));
     expect(checkSyspromptMapFacts(m).some((f) => /boundary invariant/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the resolution status machine disappears → flags (the SILENT failure half)", () => {
+    // The startup throw guards only BUILT-IN variants; a malformed SERVER-supplied variant degrades to
+    // `missing_boundary` with no error raised anywhere. If that classification goes, the quiet path
+    // gets quieter still — which for a fidelity harness means a silently different prompt.
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace('return{status:"missing_boundary"};', ""));
+    expect(checkSyspromptMapFacts(m).some((f) => /resolution status/.test(f))).toBe(true);
   });
 
   it("MUTATION: the channel disappears entirely → flags once, and does NOT vacuously pass", () => {

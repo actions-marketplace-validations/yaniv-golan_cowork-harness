@@ -403,18 +403,21 @@ describe("web_fetch DNS-rebind SSRF backstop — Path A (provenance), and litera
 });
 
 // ==========================================================================================
-// DELIBERATE FIDELITY, NOT A BUG. Production's `webFetchAllowedUrls` is populated by scraping
-// dotted tokens out of conversation/code text and parsing them as hostnames — so a Python source
-// listing lands `os.unlink` in a network allowlist. Observed first-party in a live Cowork session's
-// persisted config: ["https://os.unlink/","https://os.rmdir/","https://os.truncate/",
-// "https://os.rename/","https://errno.errorcode.get/","https://e.strerror/"].
+// DELIBERATE FIDELITY, NOT A BUG — but read the scope, which is narrower than it first looked.
 //
-// Our `uen` port reproduces it. This test exists because that reads as a bug in OUR extractor and
-// would otherwise get "fixed" into a divergence from the product. If production ever narrows its
-// extractor, this test should fail and BE UPDATED — it is not asserting that the behaviour is good.
+// Production's `webFetchAllowedUrls` is a genuine per-session URL allowlist: measured across 439 live
+// sessions, 21,316 entries, only 74 (0.35%) are over-matches. It is NOT "populated by scraping dotted
+// tokens", which was an earlier characterisation drawn from a single session that happened to contain
+// no real URLs — retracted at source, and corrected here rather than left to rot.
+//
+// What IS real is a small parser over-match: a dotted identifier or filename-shaped token
+// (`os.unlink`, `offer.docx`, `26.xlsx`) parses as a hostname and is persisted. Nearly all are inert
+// because those suffixes are not real TLDs. Our `uen` port reproduces that over-match, which is the
+// faithful behaviour — this test exists so it does not get "fixed" into a divergence. If production
+// ever narrows its extractor, this test should FAIL and be updated, not defended.
 // ==========================================================================================
-describe("webFetchAllowedUrls — bare dotted identifiers are scraped as hosts (matches production)", () => {
-  it("turns Python attribute access into allowlist entries, as production does", () => {
+describe("webFetchAllowedUrls — the dotted-token over-match is reproduced faithfully", () => {
+  it("over-matches dotted identifiers as hosts, exactly as production does", () => {
     const pySource = "import os, errno\nos.unlink(p)\nos.rmdir(d)\nerrno.errorcode.get(e)\ne.strerror";
     expect(extractUrls(pySource)).toEqual([
       "https://os.unlink/",
@@ -424,7 +427,16 @@ describe("webFetchAllowedUrls — bare dotted identifiers are scraped as hosts (
     ]);
   });
 
-  it("still requires a plausible TLD shape — a bare word or a trailing dot is not a host", () => {
-    expect(extractUrls("just some prose, and a trailing dot. plus x")).toEqual([]);
+  it("over-matches filename-shaped tokens too — the class actually observed in the corpus", () => {
+    expect(extractUrls("attached offer.docx and 26.xlsx")).toEqual(["https://offer.docx/", "https://26.xlsx/"]);
+  });
+
+  it("the common case is still genuine URLs, and a trailing dot is trimmed rather than kept", () => {
+    // The 99.65% case. Also pins ZHA-trimming: `example.com.` yields the host, NOT `example.com./`.
+    // Deduped because the full-URL and bare-domain regexes both match a full URL — `Ien` concatenates
+    // its three passes and dedup happens in the tracker, so the raw extractor legitimately repeats.
+    const urls = [...new Set(extractUrls("see https://a.example/x and example.com. done"))];
+    expect(urls).toEqual(["https://a.example/x", "https://example.com/"]);
+    expect(new ProvenanceTracker().seedFromText("see https://a.example/x and example.com. done")).toBe(2);
   });
 });

@@ -29,7 +29,7 @@ import {
 import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
-import { sync, canonicalizeEnv, decodeFcacheProvenance } from "./sync/cowork-sync.js";
+import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
@@ -2803,7 +2803,6 @@ async function cmdSync(args: string[]) {
   }
 
   const capturedAt = new Date().toISOString().slice(0, 10);
-  const fcacheProv = decodeFcacheProvenance();
   const next = {
     ...base,
     $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
@@ -2842,7 +2841,7 @@ async function cmdSync(args: string[]) {
       // payload refetches irregularly (3.7–20.8 min observed) and its membership churns count-neutrally,
       // so "captured on 2026-08-05" cannot distinguish two materially different reads. Carried forward
       // from `baseProvenance` when the fcache is unreadable, so an offline sync never blanks it.
-      ...(fcacheProv ? { fcache: fcacheProv } : {}),
+      ...(res.fcache ? { fcache: res.fcache } : {}),
     },
   };
   const diffFlag = !!syncParsed.flags["--diff"];

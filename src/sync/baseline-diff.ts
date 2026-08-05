@@ -92,12 +92,10 @@ export function renderChangelog(entries: BaselineDiffEntry[]): string {
     capturedAt: (e) => (e.kind === "scalar" ? `- baseline captured: \`${e.from}\` → \`${e.to}\`` : undefined),
     // The fcache snapshot identity. Only `content16` means the payload's CONTENT moved; the timestamp
     // and count move on refetches that changed nothing, so they are reported as the weaker signal.
+    // No `added` branch: on first introduction the differ emits a single whole-object `added` at
+    // `provenance.fcache` and never recurses, so a per-leaf added renderer here is unreachable.
     "provenance.fcache.content16": (e) =>
-      e.kind === "scalar"
-        ? `- fcache CONTENT changed (\`${e.from}\` → \`${e.to}\`) — gate membership and/or values moved`
-        : e.kind === "added"
-          ? `- fcache snapshot id recorded: \`${e.to}\``
-          : undefined,
+      e.kind === "scalar" ? `- fcache CONTENT changed (\`${e.from}\` → \`${e.to}\`) — gate membership and/or values moved` : undefined,
     "provenance.fcache.embeddedTimestamp": (e) =>
       e.kind === "scalar" ? `- fcache refetched (timestamp only; see content16 for whether it mattered)` : undefined,
     "provenance.fcache.featureCount": (e) => (e.kind === "scalar" ? `- fcache feature count: \`${e.from}\` → \`${e.to}\`` : undefined),
