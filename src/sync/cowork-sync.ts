@@ -795,7 +795,11 @@ export function checkMountModeFacts(bundle: string): string[] {
     flags.push(
       'mountLayout: the delete-deny resolver (IX `…?"rwd":"rw"`) is gone from the asar — outputs/projects default mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)',
     );
-  // Every mount whose mode is HARDCODED at the spawn-time mount builder, rather than resolved through
+  // Every mount whose mode is HARDCODED at the mount-set builder, rather than resolved through
+  // NOTE the lane difference, because "spawn-time" is wrong for half of it: the VM-loop builder runs
+  // once at spawn, but the host-loop one is wired as `computeBashMounts` and RECOMPUTES PER BASH CALL
+  // with a live approved-list read. The hardcoded modes below are identical either way, which is why
+  // one set of anchors covers both — but a reader reasoning about WHEN a mode is decided needs this.
   // the delete-deny resolver above. Read first-party from the builder, which assembles the whole set:
   // outputs and each connected folder go through the resolver (`rw`, or `rwd` once approved) while these
   // are pinned `"ro"`. Worth pinning individually because a mount silently moving from `ro` to a

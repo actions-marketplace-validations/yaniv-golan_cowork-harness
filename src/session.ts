@@ -56,9 +56,9 @@ const Folder = z.object({
 });
 
 /** A connected PROJECT (Cowork's `userSelectedProjectUuids`), distinct from a connected folder.
- *  Production mounts each at `.projects/<uuid>` with `mode:"ro"` — read first-party from the spawn-time
- *  mount builder, where it is hardcoded rather than resolved through the delete-deny resolver that
- *  outputs and connected folders pass through. So there is deliberately NO `mode` here: the product does
+ *  Production mounts each at `.projects/<uuid>` with `mode:"ro"` — read first-party from the mount-set
+ *  builder, where it is hardcoded rather than resolved through the delete-deny resolver that outputs
+ *  and connected folders pass through. So there is deliberately NO `mode` here: the product does
  *  not vary it, and offering the knob would invent a degree of freedom that does not exist. */
 const Project = z.object({
   uuid: z.string().min(1), // the project uuid — becomes the `.projects/<uuid>` mount path
