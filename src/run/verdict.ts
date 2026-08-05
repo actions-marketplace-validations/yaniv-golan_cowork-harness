@@ -10,6 +10,7 @@ export interface VerdictSignal {
     | "usage_limit"
     | "permissive_auto_allow"
     | "outputs_delete"
+    | "mount_delete"
     | "host_path_leak"
     | "non_deterministic"
     | "l0_plugin_divergence"
@@ -456,6 +457,23 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         message:
           `unauthorized delete touched mnt/outputs: ${result.scan.outputsDeletes.join("; ")} ` +
           `(assert no_delete_in_outputs to make this explicit, or allow_outputs_delete if the deletion is intended)`,
+      });
+    // Deletes in a delete-denied mount OTHER than outputs. WARN, not fail, on purpose: production
+    // ENFORCES this (EPERM) while we only DETECT it after the fact, so by the time we see it the run has
+    // already diverged — and promoting it to a failure would silently re-verdict every existing scenario
+    // whose skill deletes in a connected folder. Suppressed per-mount by `allow_delete_in`, and entirely
+    // when the scenario authored `no_delete_in_mounts` (it fails there instead).
+    const waivedMounts = new Set(authored.flatMap((a) => a.allow_delete_in ?? []));
+    const authoredMountDeny = authored.some((a) => a.no_delete_in_mounts !== undefined);
+    const unwaived = (result.scan?.mountDeletes ?? []).filter((d) => d.mount !== "outputs" && !waivedMounts.has(d.mount));
+    if (unwaived.length && !authoredMountDeny)
+      signals.push({
+        code: "mount_delete",
+        severity: "warn",
+        message:
+          `delete op(s) touched delete-denied mount(s) ${[...new Set(unwaived.map((d) => d.mount))].join(", ")} — ` +
+          `production denies unlink/rmdir there until per-mount approval, so this run diverged ` +
+          `(assert no_delete_in_mounts to hard-fail on it, or allow_delete_in if the deletion is intended)`,
       });
 
     // hostloop AND protocol (L0) run the agent's native file tools on the REAL host cwd — neither

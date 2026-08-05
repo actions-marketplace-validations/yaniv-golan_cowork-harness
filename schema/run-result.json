@@ -687,6 +687,7 @@
                   "usage_limit",
                   "permissive_auto_allow",
                   "outputs_delete",
+                  "mount_delete",
                   "host_path_leak",
                   "non_deterministic",
                   "l0_plugin_divergence",

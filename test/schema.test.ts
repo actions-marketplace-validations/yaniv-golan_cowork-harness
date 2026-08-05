@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
-import { AnswerRule, Assertion, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
@@ -218,5 +218,24 @@ describe("published scenario schema enforces cross-key rules the loader enforces
     const v = compiled();
     expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true, allow_outputs_delete: true }] })).toBe(false);
     expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true }, { allow_outputs_delete: true }] })).toBe(false);
+  });
+});
+
+describe("cross-key rule: allow_delete_in must not waive outputs alongside no_delete_in_outputs", () => {
+  it("the loader rejects the contradiction", () => {
+    const bad = { prompt: "p", assert: [{ no_delete_in_outputs: true }, { allow_delete_in: ["outputs"] }] };
+    expect(Scenario.safeParse(bad).success).toBe(false);
+  });
+  it("waiving a DIFFERENT mount alongside no_delete_in_outputs is fine — not a contradiction", () => {
+    const ok = { prompt: "p", assert: [{ no_delete_in_outputs: true }, { allow_delete_in: ["reports"] }] };
+    expect(Scenario.safeParse(ok).success).toBe(true);
+  });
+  it("no_delete_in_mounts + allow_delete_in COMPOSE — 'none except these' is coherent", () => {
+    const ok = { prompt: "p", assert: [{ no_delete_in_mounts: true }, { allow_delete_in: ["reports"] }] };
+    expect(Scenario.safeParse(ok).success).toBe(true);
+  });
+  it("the published JSON Schema mirrors the refinement (editors/CI must agree with the loader)", () => {
+    const schema = JSON.parse(readFileSync(join(process.cwd(), "schema/scenario.schema.json"), "utf8"));
+    expect(JSON.stringify(schema.not)).toMatch(/allow_delete_in/);
   });
 });

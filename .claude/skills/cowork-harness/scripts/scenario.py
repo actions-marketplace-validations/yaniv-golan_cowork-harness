@@ -136,6 +136,7 @@ LIVE_ONLY_KEYS = {
     "egress_denied",
     "egress_allowed",
     "no_delete_in_outputs",
+    "no_delete_in_mounts",
     "self_heal_ran",
     "transcript_no_host_path",
     "no_mcp_error",
@@ -165,6 +166,7 @@ VERDICT_MODIFIER_KEYS = {
     "allow_stall",
     "allow_undelivered_deliverables",
     "allow_outputs_delete",
+    "allow_delete_in",
 }
 
 # Every key the replay-class logic knows how to handle. `replay_protocol_fidelity` is valid-but-not-authorable

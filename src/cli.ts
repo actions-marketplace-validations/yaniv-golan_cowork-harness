@@ -4044,6 +4044,7 @@ async function cmdVerifyRun(args: string[]) {
     authoredFilesHealth:
       recomputedAuthored && authoredFilesHealthNonEmpty(recomputedAuthored.health) ? recomputedAuthored.health : undefined,
     outputsDeletes: scan.outputsDeletes,
+    mountDeletes: scan.mountDeletes ?? [],
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,
     selfHealRan: scan.selfHealRan,
@@ -4336,6 +4337,7 @@ const FILE_FAMILY = new Set([
   "no_unexpected_files",
   "input_unmodified",
   "no_delete_in_outputs",
+  "no_delete_in_mounts",
   "no_scratchpad_leak",
   "present_files_called",
   "no_lost_write_back",

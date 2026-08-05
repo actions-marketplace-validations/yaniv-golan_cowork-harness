@@ -4943,6 +4943,7 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "egress_denied",
   "egress_allowed",
   "no_delete_in_outputs",
+  "no_delete_in_mounts",
   "self_heal_ran",
   "transcript_no_host_path",
   "no_mcp_error",
@@ -5372,6 +5373,7 @@ export async function replayCassette(
       // instead of spuriously matching against "".
       postRunHashes: Object.fromEntries((cassette.artifacts ?? []).flatMap((e) => (e.sha256 ? [[e.path, e.sha256] as const] : []))),
       outputsDeletes: [],
+      mountDeletes: [], // replay has no live scan — the same shape outputsDeletes already uses here
       questions: rec.questions,
       hostPathLeaked: false,
       selfHealRan: false,

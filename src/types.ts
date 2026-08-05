@@ -604,6 +604,25 @@ export const Assertion = z.strictObject({
     .describe(
       "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. WAIVES the harness's post-hoc detection; it does NOT model production's allow_cowork_file_delete approval handshake, so a skill relying on the live EPERM still behaves differently here. Mutually exclusive with no_delete_in_outputs",
     ),
+  // Production denies unlink/rmdir on EVERY delete-denied (`rw`) mount, not just outputs, and approval is
+  // strictly per-mount. `no_delete_in_outputs` covers only outputs and keeps its exact meaning; this is
+  // the mount-wide form. Deletes in a mount named by `allow_delete_in` are waived (see below).
+  no_delete_in_mounts: z
+    .literal(true)
+    .optional()
+    .describe(
+      "fails if a delete is DETECTED in any delete-denied mount (outputs + every `rw` connected folder) that is not waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on every such mount until per-mount approval",
+    ),
+  // A WAIVER of the harness's post-hoc detection for the named mounts, mirroring allow_outputs_delete
+  // exactly: detection still RUNS and the hits stay in result.json for forensics — only the verdict is
+  // waived. It does not model production's allow_cowork_file_delete approval handshake.
+  allow_delete_in: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      '(verdict modifier) accept detected deletes in these mounts by NAME (e.g. ["reports"]) instead of failing/warning — the per-mount analogue of allow_outputs_delete, mirroring production\'s per-mount fileDeleteApprovedMounts. WAIVES the harness\'s post-hoc detection (which still runs and is still recorded); it does NOT model the live approval handshake. Listing "outputs" conflicts with no_delete_in_outputs',
+    ),
   allow_l0_plugin_divergence: z
     .literal(true)
     .optional()
@@ -698,6 +717,7 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_stall",
   "allow_undelivered_deliverables",
   "allow_outputs_delete",
+  "allow_delete_in",
 ] as const satisfies readonly (keyof Assertion)[];
 
 /** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
@@ -840,6 +860,18 @@ export const Scenario = ScenarioObject.superRefine((s, ctx) => {
       message:
         "no_delete_in_outputs and allow_outputs_delete are mutually exclusive — the first asserts no delete " +
         "touched mnt/outputs, the second accepts one. Keep whichever matches the scenario's intent.",
+    });
+  // Same contradiction, reached through the per-mount key: waiving `outputs` while also asserting no
+  // delete touched it. `no_delete_in_mounts` + `allow_delete_in` do NOT conflict in general — "no deletes
+  // anywhere except these mounts" is a coherent and useful thing to say, and mirrors how production
+  // combines a blanket denial with per-mount approval.
+  if (denies && s.assert.some((a) => a.allow_delete_in?.includes("outputs")))
+    ctx.addIssue({
+      code: "custom",
+      path: ["assert"],
+      message:
+        'no_delete_in_outputs conflicts with allow_delete_in containing "outputs" — the first asserts no ' +
+        "delete touched mnt/outputs, the second waives exactly that. Keep whichever matches the intent.",
     });
 });
 export type Scenario = z.infer<typeof ScenarioObject>;
@@ -1261,6 +1293,7 @@ export interface RunResult {
         | "usage_limit"
         | "permissive_auto_allow"
         | "outputs_delete"
+        | "mount_delete"
         | "host_path_leak"
         | "non_deterministic"
         | "l0_plugin_divergence"

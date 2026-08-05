@@ -483,6 +483,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         a.no_unexpected_files !== undefined ||
         a.input_unmodified !== undefined ||
         a.no_delete_in_outputs !== undefined ||
+        // Without this the fs-diff backstop never arms for the mount-wide key and it would silently
+        // degrade to regex-only — weaker than its outputs-scoped sibling, with nothing saying so.
+        a.no_delete_in_mounts !== undefined ||
         // no_lost_write_back derives the authored-file set by diffing against the pre-run manifest, and
         // uses preRunHashes to tell an ADDED artifact from a merely-modified pre-existing one. Without the
         // baseline it can only report evidence-unavailable every run.
@@ -1161,6 +1164,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunHashes,
       preRunOrigin,
       outputsDeletes: scan.outputsDeletes,
+      mountDeletes: scan.mountDeletes,
       questions: record.questions,
       hostPathLeaked: scan.hostPathLeaked,
       selfHealRan: scan.selfHealRan,
@@ -1511,6 +1515,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         ? undefined
         : {
             outputsDeletes: scan.outputsDeletes,
+            mountDeletes: scan.mountDeletes,
             // Omitted when empty so an unchanged run's result.json is byte-identical to before.
             ...(scan.mountDeletes.length ? { mountDeletes: scan.mountDeletes } : {}),
             hostPathLeaked: scan.hostPathLeaked,

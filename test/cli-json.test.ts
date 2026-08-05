@@ -404,7 +404,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   // `allow_l0_plugin_divergence` fell through (it had no assert.ts noop branch).
   it.each([...VERDICT_MODIFIER_KEYS])("a standalone %s assertion replays green with no filesystem-skip warning", (modifier) => {
     const r0 = run(["--version"]); // borrow a temp cwd
-    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: true }])));
+    // Not every modifier is `literal(true)` — `allow_delete_in` takes a non-empty array of mount names.
+    // Encoding that here keeps the sweep honest rather than excluding the key from it.
+    const value: unknown = modifier === "allow_delete_in" ? ["reports"] : true;
+    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: value }])));
     const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--output-format", "json"], {
       encoding: "utf8",
       cwd: r0.cwd,

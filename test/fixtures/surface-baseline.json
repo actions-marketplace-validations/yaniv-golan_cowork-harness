@@ -2340,6 +2340,7 @@
           "usage_limit",
           "permissive_auto_allow",
           "outputs_delete",
+          "mount_delete",
           "host_path_leak",
           "non_deterministic",
           "l0_plugin_divergence",
@@ -2482,6 +2483,12 @@
         "type": "boolean",
         "const": true
       },
+      ".assert[].allow_delete_in": {
+        "type": "array"
+      },
+      ".assert[].allow_delete_in[]": {
+        "type": "string"
+      },
       ".assert[].allow_l0_plugin_divergence": {
         "type": "boolean",
         "const": true
@@ -2594,6 +2601,10 @@
       },
       ".assert[].max_turns": {
         "type": "integer"
+      },
+      ".assert[].no_delete_in_mounts": {
+        "type": "boolean",
+        "const": true
       },
       ".assert[].no_delete_in_outputs": {
         "type": "boolean",

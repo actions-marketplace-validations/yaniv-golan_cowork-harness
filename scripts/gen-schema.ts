@@ -108,7 +108,29 @@ function addScenarioCrossKeyRules(json: Record<string, unknown>): void {
     // `{ [key]: {} }` stub — the presence of the key is the whole condition, its value is irrelevant here.
     properties: { assert: { type: "array", contains: { type: "object", required: [key], properties: { [key]: {} } } } },
   });
-  json.not = { allOf: [someEntryHas("no_delete_in_outputs"), someEntryHas("allow_outputs_delete")] };
+  // Second rule, same contradiction reached through the per-mount key: waiving `outputs` via
+  // `allow_delete_in` while also asserting no delete touched it. Needs a value-aware `contains` (the
+  // waiver is an ARRAY of mount names), unlike the presence-only checks above.
+  const someEntryWaivesOutputs = {
+    type: "object",
+    required: ["assert"],
+    properties: {
+      assert: {
+        type: "array",
+        contains: {
+          type: "object",
+          required: ["allow_delete_in"],
+          properties: { allow_delete_in: { type: "array", contains: { const: "outputs" } } },
+        },
+      },
+    },
+  };
+  json.not = {
+    anyOf: [
+      { allOf: [someEntryHas("no_delete_in_outputs"), someEntryHas("allow_outputs_delete")] },
+      { allOf: [someEntryHas("no_delete_in_outputs"), someEntryWaivesOutputs] },
+    ],
+  };
 }
 
 /** Build { filename: pretty-printed-JSON } for every schema. Pure; no I/O. */

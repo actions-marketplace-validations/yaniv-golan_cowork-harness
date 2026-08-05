@@ -441,6 +441,14 @@ Recognize these before "fixing" a non-bug:
   would claim more than the evidence supports, and staying silent would read as clean. Mutually exclusive
   with `undelivered_deliverables`, and quiet on a run that produced nothing to deliver. Not a skill defect —
   a harness coverage gap (see the *File delivery* section of fidelity-gaps).
+- **`mount_delete`** (`WARN`) — a delete touched a **delete-denied mount other than `outputs`**: a `rw`
+  connected folder. Production denies `unlink`/`rmdir` on *every* Cowork FUSE mount until per-mount
+  approval, not just outputs — a connected folder shows the identical default — so this run diverged from
+  what production would have allowed. `WARN` rather than `FAIL` because the harness **detects** post-hoc
+  what production **enforces**: by the time the scan sees it, the agent already proceeded where it would
+  have hit `EPERM`, so failing the run would overstate what a post-hoc scan knows. Author
+  `no_delete_in_mounts: true` to hard-fail on it, or `allow_delete_in: ["<mount>"]` to waive that mount
+  (detection still runs and the hit is still recorded — the waiver is a verdict decision).
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
