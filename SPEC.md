@@ -402,7 +402,8 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `skill_tool_used`, `skill_available`, `connector_available`, `tool_available`, `all_tasks_completed`,
   `task_status`, `compaction_occurred`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
-  `allow_l0_plugin_divergence`, `allow_stall`, `allow_undelivered_deliverables`, `allow_outputs_delete`),
+  `allow_l0_plugin_divergence`, `allow_stall`, `allow_undelivered_deliverables`, `allow_outputs_delete`,
+  `allow_delete_in`),
   and (when `controlOut` is present) `question_asked`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
   `no_hook_blocked` (illustrative — see `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts` for the authoritative
@@ -420,7 +421,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   own baseline, `preRunHashes` (the pre-run per-path sha256 manifest, captured alongside `preRunPaths` but a
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
-- **Egress / live-only assertions** (`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`,
+- **Egress / live-only assertions** (`no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`,
   `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `no_lost_write_back`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated

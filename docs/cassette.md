@@ -459,7 +459,8 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 
-`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
+`no_delete_in_outputs`, `no_delete_in_mounts` (both need the live post-run bash scan; a cassette freezes no
+commands to re-scan), `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
 stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
 to sample, so `RunResult.resources` is absent on replay), `semantic_matches` (an LLM judge call — never

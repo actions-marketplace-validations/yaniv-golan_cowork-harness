@@ -146,6 +146,13 @@ folders:
 uploads:
   - ~/Downloads/report.pdf
 
+# connected PROJECTS (userSelectedProjectUuids) — NOT the same as a work folder above, and not the
+#   legacy mnt/.projects/<id> work-folder path older baselines used
+projects:
+  - { uuid: 7f3c…, from: ~/code/myproject }   # mounted READ-ONLY at mnt/.projects/<uuid>
+                                              #   no mode: knob — production hardcodes ro
+                                              #   never becomes the cwd; {{workspaceFolder}} stays at outputs
+
 # discovery: marketplaces / plugins / skills / mcp
 plugins:
   marketplaces: []               # plugin_marketplaces (git URLs or local paths)
