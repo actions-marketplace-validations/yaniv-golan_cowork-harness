@@ -240,6 +240,27 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.out).not.toMatch(/unexpected argument/);
     expect(r.out).toMatch(/scenario path not found/);
   });
+
+  // --on-unanswered llm is rejected on every command (the LLM decider's CLI spelling is --decider-llm),
+  // but `run` has no --decider-llm flag (only `skill`/`record` do) — its redirect must point at the
+  // scenario-YAML spelling instead of telling the user to pass a flag `run` would then reject as
+  // unexpected. NOTE: no --dry-run here — this rejection lives in resolvePolicy(), which the dry-run
+  // early-return in the `skill` handler bypasses, so a --dry-run invocation would exit 0 and prove nothing.
+  it("run: --on-unanswered llm → redirects to the scenario YAML, not --decider-llm", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--on-unanswered", "llm"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/on_unanswered: llm/);
+    expect(r.out).not.toMatch(/Use --decider-llm/);
+  });
+
+  it("skill: --on-unanswered llm → still redirects to --decider-llm", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    const r = run(["skill", "./plugin", "hi", "--on-unanswered", "llm"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/Use --decider-llm/);
+  });
 });
 
 // A GLOBAL flag (--dotenv / --run-dir) only works in LEADING position (before the subcommand). Used

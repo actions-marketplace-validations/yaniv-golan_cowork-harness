@@ -1102,11 +1102,15 @@ function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswer
       json,
     );
   // The LLM decider's CLI spelling is --decider-llm; we reject the raw policy value on the CLI to keep deciders in the --decider-* family (the scenario-YAML spelling is on_unanswered: llm).
+  // `run` has no --decider-llm flag (only `skill`/`record` do), so its redirect can't point there — it
+  // has to point at the scenario-YAML spelling instead.
   if ((flags.onUnanswered as string) === "llm")
     fail(
       command,
       "usage",
-      '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.',
+      command === "run"
+        ? "--on-unanswered llm is not a user flag. Set on_unanswered: llm in the scenario YAML instead — `run` has no --decider-llm flag (only `skill`/`record` do)."
+        : '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.',
       undefined,
       json,
     );
