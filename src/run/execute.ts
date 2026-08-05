@@ -98,6 +98,10 @@ export interface ExecuteOptions {
   session?: ReturnType<typeof loadSession>;
   /** input policy for unscripted questions/dialogs. Default: scenario.on_unanswered ?? "fail". */
   onUnanswered?: OnUnanswered;
+  /** The user's EXPLICIT `--on-unanswered`, or undefined when they passed none — distinct from
+   *  `onUnanswered` above, which callers may fill with a resolved default. Carried solely so the
+   *  scenario-overrides-flag warning can tell "the user asked for this" from "this is the default". */
+  onUnansweredFlag?: OnUnanswered;
   /** override the whole decider (replaces scripted + parity + terminal). */
   decider?: Decider;
   /** wire an ExternalDecider TERMINAL over this channel (scripted `--answer` + parity still apply first). */
@@ -522,6 +526,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     );
   }
 
+  const overrideWarning = onUnansweredOverrideWarning(scenario.on_unanswered, opts.onUnansweredFlag);
+  if (overrideWarning) warn(overrideWarning);
   const onUnanswered: OnUnanswered = scenario.on_unanswered ?? opts.onUnanswered ?? "fail";
   // This is a POLICY line (what happens IF an unscripted question arrives), not an outcome — the old
   // `unanswered questions → fail` wording read as a failure on clean runs. State it as policy + source.
@@ -2617,6 +2623,24 @@ export function findUngatedPathToolCalls(file: string, gateFired: Set<string>): 
  *  - `undefined` for absent / "0" / empty (→ policy-based default applies)
  * Rejects decimals, NaN, negative values, zero, and values exceeding 3_600_000 ms (1 hour).
  */
+/** A scenario's `on_unanswered:` outranks an explicit `--on-unanswered` — deliberately, and documented
+ *  in `run --help` ("per-scenario answers/on_unanswered in the YAML take precedence where set"), because
+ *  a committed scenario is the reproducible definition of its own test. The precedence is a covered
+ *  surface and stays; what was wrong is that it applied in SILENCE, so a user who passed the flag saw no
+ *  sign their value had been dropped and the run answered gates by the policy they were replacing.
+ *
+ *  Returns the warning text, or undefined when nothing is actually discarded. Deliberately silent when
+ *  the two agree: nothing is lost, and `run dir/ --on-unanswered first` over a tree where most scenarios
+ *  already declare `first` would otherwise emit one line per scenario and train the reader to skip it. */
+export function onUnansweredOverrideWarning(scenarioValue?: OnUnanswered, flagValue?: OnUnanswered): string | undefined {
+  if (scenarioValue === undefined || flagValue === undefined || scenarioValue === flagValue) return undefined;
+  return (
+    `::warning:: [input] the scenario sets \`on_unanswered: ${scenarioValue}\`, which takes precedence over ` +
+    `\`--on-unanswered ${flagValue}\` — the run answers unscripted gates by \`${scenarioValue}\`. ` +
+    `Edit the scenario's YAML to change it.\n`
+  );
+}
+
 export function parseDialogTimeout(raw: string): number | undefined {
   const s = raw.trim().toLowerCase();
   if (!s || s === "0") return undefined;

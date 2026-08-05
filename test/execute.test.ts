@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, resolve as resolvePath } from "node:path";
 import {
   parseSessionFile,
   parseScenarioFile,
@@ -12,6 +12,7 @@ import {
   isOutputsDelete,
   detectMountDeletes,
   collectArtifacts,
+  onUnansweredOverrideWarning,
   readSessionManifest,
   parseEnvPort,
   resolveSubagentConfigRoot,
@@ -835,5 +836,62 @@ describe("detectMountDeletes — per-mount scope and attribution", () => {
   it("mv direction stays per-mount: moving INTO a mount is not a delete from it", () => {
     expect(detectMountDeletes("mv /tmp/a.pdf reports/", ["reports"])).toEqual([]);
     expect(detectMountDeletes("mv reports/a.pdf /tmp/", ["reports"])).toEqual(["reports"]);
+  });
+});
+
+// The scenario's `on_unanswered:` outranking `--on-unanswered` is INTENTIONAL and documented
+// (`run --help`: "per-scenario answers/on_unanswered in the YAML take precedence where set"). The
+// defect was that the override happened in silence: a user who passed the flag got no signal it was
+// discarded, so a run answered gates by a policy they had explicitly tried to replace. Precedence is a
+// covered surface and stays put — this only makes the discard visible.
+describe("onUnansweredOverrideWarning", () => {
+  it("warns when the scenario field discards a DIFFERENT explicit flag", () => {
+    const w = onUnansweredOverrideWarning("first", "fail");
+    expect(w).toBeTruthy();
+    // Names both values and which one wins — a warning that doesn't say what actually applied
+    // leaves the reader to guess the precedence it is warning about.
+    expect(w).toContain("first");
+    expect(w).toContain("fail");
+  });
+
+  it("stays silent when both agree (nothing is lost, and a dir batch would drown in it)", () => {
+    expect(onUnansweredOverrideWarning("first", "first")).toBeUndefined();
+  });
+
+  it("stays silent when only the scenario sets it (no flag to discard)", () => {
+    expect(onUnansweredOverrideWarning("first", undefined)).toBeUndefined();
+  });
+
+  it("stays silent when only the flag is given (it applies)", () => {
+    expect(onUnansweredOverrideWarning(undefined, "fail")).toBeUndefined();
+  });
+
+  it("stays silent when neither is set", () => {
+    expect(onUnansweredOverrideWarning(undefined, undefined)).toBeUndefined();
+  });
+});
+
+// The warning above is only as good as its wiring: `onUnansweredFlag` is optional, so a caller that
+// sets the policy but forgets it compiles fine and silently loses the signal. `run` in particular
+// passes a RESOLVED `policy`, so without the companion field the warning can never fire there. This is
+// the same "added to one assembler, not the other" trap that has bitten RunResult fields.
+describe("every executeScenario caller that sets a policy also declares whether the user asked for it", () => {
+  it("onUnanswered: and onUnansweredFlag: appear together at every call site", () => {
+    const files = ["src/cli.ts", "src/run/cassette.ts"];
+    const missing: string[] = [];
+    for (const rel of files) {
+      const src = readFileSync(resolvePath(rel), "utf8");
+      // Each executeScenario(...) options object, sliced to its call.
+      const calls = src.split("executeScenario(").slice(1);
+      expect(calls.length, `no executeScenario call found in ${rel} — did it move?`).toBeGreaterThan(0);
+      calls.forEach((call, i) => {
+        const body = call.slice(0, 2000); // the options literal, comfortably
+        if (body.includes("onUnanswered:") && !body.includes("onUnansweredFlag:")) missing.push(`${rel} call #${i + 1}`);
+      });
+    }
+    expect(
+      missing,
+      "a caller sets onUnanswered: without onUnansweredFlag: — the scenario-overrides-flag warning cannot fire there",
+    ).toEqual([]);
   });
 });

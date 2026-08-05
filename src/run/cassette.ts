@@ -3126,6 +3126,9 @@ async function recordScenarioObject(
   const result = await executeScenario(scenario, {
     command: "record",
     onUnanswered: opts.onUnanswered,
+    // record's `onUnanswered` is already explicit-only (`p.options["--on-unanswered"]`, undefined when
+    // the flag is absent), unlike run's resolved `policy` — so the same value serves both roles here.
+    onUnansweredFlag: opts.onUnanswered,
     externalChannel: opts.externalChannel,
     llmIntent: opts.llmIntent,
     llmModel: opts.llmModel,

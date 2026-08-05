@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A scenario's `on_unanswered:` overrode an explicit `--on-unanswered` in silence.** The precedence is
+  intentional and documented (`run --help`: "per-scenario answers/on_unanswered in the YAML take
+  precedence where set") — a committed scenario is the reproducible definition of its own test — but a
+  user who passed the flag got no signal it had been discarded, and the run answered gates by the very
+  policy they were replacing. The harness now warns when the two disagree, naming both values and which
+  one applies. Silent when they agree, so a `run dir/` over a tree that already declares the same policy
+  stays quiet. Precedence is unchanged.
+
 - **`--dry-run` on `skill` validated nothing it previewed.** The dry-run early return sat above four
   guards, so `skill … --on-unanswered banana --dry-run` exited 0 — as did a `--decider-dir` +
   `--decider-cmd` pair and both `--repeat` conflicts. `--dry-run` is the advertised pre-flight check, so

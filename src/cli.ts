@@ -1288,6 +1288,10 @@ async function runOneScenario(p: {
       ...extra,
       command: execCommand,
       onUnanswered: policy,
+      // `policy` is RESOLVED (it carries resolvePolicy's default when no flag was passed), so the raw
+      // flag rides along separately — otherwise the override warning cannot tell a user's explicit
+      // `--on-unanswered fail` from the `fail` default and would fire on every defaulted run.
+      onUnansweredFlag: flags.onUnanswered,
       externalChannel,
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact

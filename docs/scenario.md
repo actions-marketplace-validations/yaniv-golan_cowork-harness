@@ -212,7 +212,10 @@ have an explicit precedence vs `answer`/`choose`, so today's two-key model stays
 
 If no rule matches a question, the **`on_unanswered` policy** decides — the harness never silently
 fabricates an answer. Set it per scenario (`on_unanswered: fail | prompt | first | llm`) or per run
-(`--on-unanswered`). **The two accept different value sets:** the CLI `--on-unanswered` flag takes only
+(`--on-unanswered`). **Where both are set, the scenario's YAML field wins** — a committed scenario is the
+reproducible definition of its own test, so steer it by editing the YAML rather than by passing the flag;
+the harness warns when the two disagree rather than dropping the flag in silence. **The two also accept
+different value sets:** the CLI `--on-unanswered` flag takes only
 `fail|first` on `run` (`fail|prompt|first` on `skill`) — `llm` is a scenario-YAML-only value, never a
 valid `--on-unanswered` argument (the CLI equivalent is the separate `--decider-llm` flag). Default for
 `run` is **`fail`** (the error names the exact `--answer`/`choose` to add, and also now mentions
