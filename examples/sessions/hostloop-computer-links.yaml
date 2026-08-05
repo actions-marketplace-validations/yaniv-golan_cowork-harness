@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/session.schema.json
 # Session for the hostloop cassette + computer_links_resolve two-tier check.
 # hostloop runs the real agent binary NATIVELY on the host; only shell/web route through the
 # Docker sidecar. No connected folder → no `allow_host_writes` consent needed (the agent writes to

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
-import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan } from "../session.js";
+import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
 import { resolveMounts, resolveAgentBinary } from "../baseline.js";
 import { agentArgs, spawnEnv, dockerRunArgv } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
@@ -37,7 +37,8 @@ export function spawnContainer(
     /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
      *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
     suggestSkillsEnabled?: boolean;
-    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ default false). Only
+    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ the synced baseline gate,
+     *  which is ON from the 1.24012.11 baseline; the fallback for an older baseline is false). Only
      *  consulted when `suggestSkillsEnabled` is true. */
     proactiveSkillSuggestEnabled?: boolean;
   } = {},
@@ -128,7 +129,7 @@ export function spawnContainer(
             sessionRootVm: sessionRoot,
             sessionHostDir: sessionHost,
             outputsHostDir,
-            folderMounts: plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath),
+            folderMounts: plan.mounts.filter(isConnectedContent).map((m) => m.mountPath), // present_files roots: a project path is real and mounted
           }),
         };
   // Deterministic, run-derived catalogs for the discovery stubs — read straight off the ALREADY-staged

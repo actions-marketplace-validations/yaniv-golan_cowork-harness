@@ -21,6 +21,19 @@ forward from the previous baseline untouched)
     permissionMode, maxThinkingTokens, effortDefault), the prompt-asset pointers, and every $comment*
 ```
 
+> **`mountLayout.mounts[].mode` is documentary, and older baselines carry a stale `projects` row.**
+> Nothing reads that array at run time: `resolveMounts()` spreads it, but container/microvm/hostloop each
+> take only `cwd` and `mntRoot` from the result, and the one `mode === "r"` filter reads the launch plan's
+> mounts, not the baseline's. The `projects` row reads `mode: "rw"` in every baseline before
+> `desktop-1.25927.0`, which is **not uniformly wrong**: below `MOUNT_BARE_NAME_MIN_VERSION` (1.14271.0)
+> `.projects/<name>` really was the connected-folder namespace, and folders are resolver-driven `rw`. From
+> that boundary on, folders moved to `mnt/<basename>` and `.projects/<uuid>` became the project-attachment
+> namespace, which Cowork mounts **read-only** — so the row is stale in the 18 baselines between the
+> boundary and 1.25927.0. They are deliberately left as frozen per-release records: correcting them
+> honestly means re-verifying each against its own asar, a blanket edit would put a wrong value into the
+> three pre-boundary files, and nothing consumes the field either way. New baselines carry the corrected
+> `r`, which `sync` merges forward.
+
 The two generated `spawn` families are **all-or-nothing**: if `deriveSpawnEnv` or
 `extractModelEffortConfig` hard-fails, `sync` preserves the previous baseline's values rather than writing
 a partial map, and reports the failure as an unknown delta. That is why a green `sync` is meaningful — a
@@ -81,7 +94,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.219   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.221   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"
@@ -145,11 +158,55 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
    entry (BOTH `hl` and `vm` are mandatory — a partial entry is itself a hard-fail), then re-run
    `cowork-harness sync`.
 
+   **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
+   `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named
+   variant, and which the harness does not model — a disclosed gap, distinct from the paraphrased-append
+   one, in
+   [docs/fidelity-gaps.md](./fidelity-gaps.md#server-driven-system-prompt-patches-coworksyspromptmap).
+   It pins the channel's presence (its **absence** is itself
+   a finding: either the channel went away or the extractor stopped seeing it — neither may pass quietly),
+   the mode vocabulary as a **closed set** (`replace`/`append` — a third mode would change what a served
+   variant can do to the prompt, so this is the highest-value anchor here), the
+   `<name>(.replace|.append)?` key grammar, the startup throw requiring `{{promptCacheBoundary}}` in a
+   replace-mode variant, and the `hit`/`invalid_entry`/`missing_boundary` resolution statuses. Mind the
+   scope split, because it is the reason the sentinel exists at all: the startup throw guards the
+   **built-in** variants table only. A **server-supplied** entry is validated later, on the resolution
+   path, which **degrades instead of throwing** — a boundary-less `replace` resolves to
+   `missing_boundary`, the session gets a different prompt, and nothing errors anywhere. The anchors pin
+   the loud half so the quiet half cannot move unobserved.
+
+   **Includes the mount-mode sentinel.** `checkMountModeFacts` pins five facts about
+   `mountLayout.mounts[].mode`: the delete-deny resolver (`…?"rwd":"rw"`, which is what makes `outputs`
+   and each connected folder `rw`, or `rwd` once approved), plus four mounts whose mode is **hardcoded**
+   `"ro"` at the mount-set builder rather than resolved — `uploads`, `.claude/skills`, `.claude/projects`,
+   and the per-uuid project attachment `.projects/<uuid>`. Each is pinned individually because a mount
+   silently moving from `ro` to a writable mode is a containment change the harness would otherwise model
+   wrongly with nothing failing. Two notes worth carrying: the `.projects/<uuid>` anchor is the fact that
+   settles why a project mount is **not** in the delete-denied set (it is not writable at all, so there is
+   nothing to deny); and the builder runs on two lanes — VM-loop once at spawn, host-loop as
+   `computeBashMounts`, recomputed **per bash call** with a live approved-list read. The hardcoded modes
+   are identical either way, which is why one set of anchors covers both, but "spawn-time" is the wrong
+   mental model for half of it.
+
 2. **`asarFingerprint` → a `--diff` tripwire (separate).** `sync` also records a fingerprint over the
    cowork-relevant code regions (`sliceCowork` tokens). It does **not** itself raise an unknown delta — a
    change just surfaces as a field diff under `sync --diff`, a hint to re-verify the extractor even when
    extraction still *succeeded* (the layout near a token shifted; the regex might be matching the wrong
    thing now).
+
+   **`provenance.fcache` → the same kind of tripwire, for the gate snapshot.** Gate states come from the
+   feature cache, not the asar, so they move on their own schedule. A baseline records
+   `{ content16, embeddedTimestamp, featureCount }` for the payload it read. **`content16` is the
+   identity; `embeddedTimestamp` is metadata and must never be used as one.** The payload refetches
+   irregularly (measured intervals of 3.7–20.8 min across five fetches), so a whole-file hash tracks the
+   *fetch* — gzip framing and the timestamp field — and reports drift on every refetch even when nothing
+   changed. `content16` hashes the canonicalised `features` object instead, so it moves only when the
+   content does; verified across four reads, where the content hash held while the file hash moved every
+   time. `featureCount` alone is not sufficient either: membership churns **count-neutrally** (one gate
+   observed going absent → force while another went present → absent, count pinned at 241 both times).
+   `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
+   and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
+   key silently falls back to a code default that need not match production.
 
 ### Maintainer fix
 Extraction broke because Anthropic moved something the extractor parses. Update the relevant part of

@@ -136,6 +136,7 @@ LIVE_ONLY_KEYS = {
     "egress_denied",
     "egress_allowed",
     "no_delete_in_outputs",
+    "no_delete_in_mounts",
     "self_heal_ran",
     "transcript_no_host_path",
     "no_mcp_error",
@@ -164,6 +165,8 @@ VERDICT_MODIFIER_KEYS = {
     "allow_missing_capability",
     "allow_stall",
     "allow_undelivered_deliverables",
+    "allow_outputs_delete",
+    "allow_delete_in",
 }
 
 # Every key the replay-class logic knows how to handle. `replay_protocol_fidelity` is valid-but-not-authorable
@@ -584,6 +587,50 @@ def lint_doc(doc, path, raw_lines):
                     "Add a content assertion (result / transcript_* / tool_* / subagent_*) or a "
                     "manifest-backed one (file_exists / user_visible_artifact / artifact_json), or run this "
                     "scenario only on the live (run/record) lane.",
+                    path,
+                )
+            )
+
+    # W: gate_answers_delivered with no presence companion → vacuous the moment the skill stops asking.
+    #
+    # `gate_answers_delivered` checks that every gate that fired was delivered non-error, and ZERO gates
+    # fired passes VACUOUSLY (gate firing is model-dependent, so failing there would red every run of a
+    # skill that legitimately doesn't ask). The consequence is the failure mode this rule exists for: a
+    # skill that silently STOPS asking keeps a green assertion forever. A real corpus had a recording with
+    # 0 gates sit green for weeks against a scenario asserting exactly this key.
+    #
+    # A companion is anything that FAILS (rather than vacuously passes) on an empty gate set:
+    #   · gate_answer_count_min — the explicit floor
+    #   · question_asked        — fails "no question matched" against an empty question list
+    #   · tool_called matching AskUserQuestion — fails "tool not called"
+    # `questions_count_max` is deliberately NOT a companion: a MAX passes vacuously at zero, so pairing it
+    # leaves the hole wide open. The harness's own `scaffold` emits `question_asked` alongside this key,
+    # which is why the exemption must include it — otherwise this rule reds the tool's own output.
+    if "gate_answers_delivered" in assert_keys:
+        has_companion = bool(assert_keys & {"gate_answer_count_min", "question_asked"})
+        if not has_companion:
+            for item in items:
+                tc = item.get("tool_called")
+                if not isinstance(tc, str):
+                    continue
+                # `tool_called` is a user regex over observed tool names; ask whether THEIR pattern would
+                # match the gate tool rather than string-comparing. A bad regex is somebody else's finding.
+                try:
+                    if re.search(tc, "AskUserQuestion", re.IGNORECASE):
+                        has_companion = True
+                        break
+                except re.error:
+                    continue
+        if not has_companion:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "vacuous-gate-assert",
+                    "`gate_answers_delivered` has no presence companion — zero gates fired passes it "
+                    "VACUOUSLY, so this assertion stays green if the skill stops asking altogether "
+                    "(exactly the regression it looks like it is guarding).",
+                    'Pair it with `gate_answer_count_min: 1` (or a `question_asked: "<rx>"`, or '
+                    '`tool_called: "AskUserQuestion"`) so a gate must actually fire.',
                     path,
                 )
             )

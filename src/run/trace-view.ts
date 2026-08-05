@@ -650,7 +650,7 @@ export interface SubagentResearchView {
    *  live-lane child transcript never joined (or replay) — unavailable, not zero. */
   rows: Array<{
     label: string; // resolved/dispatch agent type or description — whatever identifies the dispatch best
-    webSearches?: Array<{ query: string; resultText: string; resultTruncated?: boolean }>;
+    webSearches?: Array<{ query: string; resultText: string; resultTruncated?: boolean; viaAgentId?: string; viaSpawnDepth?: number }>;
     webSearchesElided?: number;
   }>;
 }
@@ -682,9 +682,20 @@ export function formatSubagentResearchView(v: SubagentResearchView): string {
       lines.push(`▷ ${r.label}: no WebSearch calls captured`);
       continue;
     }
-    lines.push(`▷ ${r.label}: ${r.webSearches.length} WebSearch call(s)${r.webSearchesElided ? ` (+${r.webSearchesElided} elided)` : ""}`);
+    const nested = r.webSearches.filter((w) => w.viaAgentId).length;
+    lines.push(
+      `▷ ${r.label}: ${r.webSearches.length} WebSearch call(s)${r.webSearchesElided ? ` (+${r.webSearchesElided} elided)` : ""}` +
+        // Say it on the header too: a reader scanning only headers must not read a nested-only row as
+        // this dispatch having searched itself.
+        (nested ? ` — ${nested} by a nested dispatch` : ""),
+    );
     for (const w of r.webSearches) {
-      lines.push(`    query: ${w.query}`);
+      // `via` marks research done by a DESCENDANT dispatch and attributed up to this one (the descendant
+      // never got its own subagents[] entry). Untagged = this dispatch's own search.
+      const via = w.viaAgentId
+        ? ` [via nested agent ${w.viaAgentId}${w.viaSpawnDepth !== undefined ? ` @depth ${w.viaSpawnDepth}` : ""}]`
+        : "";
+      lines.push(`    query: ${w.query}${via}`);
       const first = w.resultText.split("\n").find((l) => l.trim()) ?? "";
       lines.push(`    result: ${first.slice(0, 160)}${w.resultTruncated ? " …[truncated at cap]" : ""}`);
     }

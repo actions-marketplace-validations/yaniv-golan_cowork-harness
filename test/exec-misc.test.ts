@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { readSessionManifest, hostPathLeaked, scanEvents } from "../src/run/execute.js";
+import { readSessionManifest, hostPathLeaked, scanEvents, outputsRemovedByFsDiff } from "../src/run/execute.js";
 import { isHostFsSealed, boundaryAllowList } from "../src/boundary.js";
 import { loadBaseline } from "../src/baseline.js";
 import { clampTimeout } from "../src/hostloop/workspace-handler.js";
@@ -227,5 +227,76 @@ describe("workspace-handler — clampTimeout", () => {
 
   it("passes through an in-range value", () => {
     expect(clampTimeout(30000)).toBe(30000);
+  });
+});
+
+// The fs-diff is the SECOND outputs-delete detector, independent of the command scanner. It was inline
+// in executeScenario and therefore only reachable via a live agent run; extracted so its semantics are
+// pinned here. These tests record TODAY'S behaviour, including one case that is knowingly stricter than
+// the real product (see the note on rename).
+describe("execute — outputsRemovedByFsDiff (the pre/post path detector)", () => {
+  it("reports a pre-existing outputs path that is gone post-run", () => {
+    expect(outputsRemovedByFsDiff(["outputs/a.md"], [])).toEqual(["[fs-diff] output file removed post-run: outputs/a.md"]);
+  });
+
+  it("is silent when the path survives", () => {
+    expect(outputsRemovedByFsDiff(["outputs/a.md"], ["outputs/a.md"])).toEqual([]);
+  });
+
+  it("ignores paths outside outputs, and does not prefix-match a sibling dir", () => {
+    // `outputs-backup/` must not be read as being under `outputs/`
+    expect(outputsRemovedByFsDiff(["uploads/in.csv", "outputs-backup/a.md", "mnt/other/x"], [])).toEqual([]);
+  });
+
+  it("covers the outputs root itself and nested paths", () => {
+    expect(outputsRemovedByFsDiff(["outputs"], [])).toHaveLength(1);
+    expect(outputsRemovedByFsDiff(["outputs/sub/deep.md"], [])).toHaveLength(1);
+  });
+
+  it("a file CREATED during the run is invisible to it (create-then-delete is structurally unseen)", () => {
+    // nothing in the pre-run manifest ⇒ nothing to compare, however the run ended
+    expect(outputsRemovedByFsDiff([], [])).toEqual([]);
+  });
+
+  // A vanished PATH is not a deletion. Production permits a rename WITHIN outputs, so the detector
+  // clears a candidate whose content reappears at a NEW path. Overwrite/truncate never get here (the
+  // path is still present), which matters because in-place rewriting is what skills mostly do.
+  const H = { "outputs/a.md": "hash-A", "outputs/dup.md": "hash-A" };
+  const hashOf = (m: Record<string, string>) => (p: string) => m[p] ?? null;
+
+  it("a rename WITHIN outputs is not a removal (content reappears at a new path)", () => {
+    expect(
+      outputsRemovedByFsDiff(["outputs/a.md"], ["outputs/b.md"], { preRunHashes: H, hashPostPath: hashOf({ "outputs/b.md": "hash-A" }) }),
+    ).toEqual([]);
+  });
+
+  it("a real delete still reports when the content is nowhere", () => {
+    expect(outputsRemovedByFsDiff(["outputs/a.md"], [], { preRunHashes: H, hashPostPath: hashOf({}) })).toHaveLength(1);
+  });
+
+  it("a PRE-EXISTING file with identical content cannot mask a delete", () => {
+    // dup.md shares a.md's content but is not NEW, so it must not clear a.md's removal
+    expect(
+      outputsRemovedByFsDiff(["outputs/a.md", "outputs/dup.md"], ["outputs/dup.md"], {
+        preRunHashes: H,
+        hashPostPath: hashOf({ "outputs/dup.md": "hash-A" }),
+      }),
+    ).toEqual(["[fs-diff] output file removed post-run: outputs/a.md"]);
+  });
+
+  it("fails SAFE: no hashing support, or an unhashable candidate, still reports", () => {
+    expect(outputsRemovedByFsDiff(["outputs/a.md"], ["outputs/b.md"])).toHaveLength(1);
+    expect(
+      outputsRemovedByFsDiff(["outputs/a.md"], ["outputs/b.md"], { preRunHashes: {}, hashPostPath: hashOf({ "outputs/b.md": "hash-A" }) }),
+    ).toHaveLength(1);
+  });
+
+  it("hashing is LAZY — never called when nothing vanished", () => {
+    let calls = 0;
+    outputsRemovedByFsDiff(["outputs/a.md"], ["outputs/a.md", "outputs/new.md"], {
+      preRunHashes: H,
+      hashPostPath: () => (calls++, "x"),
+    });
+    expect(calls).toBe(0);
   });
 });

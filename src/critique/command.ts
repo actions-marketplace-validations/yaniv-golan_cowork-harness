@@ -153,7 +153,10 @@ COST AND PREREQUISITES — read before running:
     the armor's injection-resistance is verified for the DEFAULT evaluator only.
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
     agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
-    tiers need an authenticated \`claude\` CLI on PATH.
+    tiers need CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY as a CI fallback) in the env or .env — the
+    graded turns self-spawn the installed CLI, which runs the staged agent binary, not the host \`claude\`.
+    The two evaluator passes need an authenticated \`claude\` CLI on PATH, overridable via
+    COWORK_HARNESS_CLAUDE_BIN.
 
 RUN-DIR ARTIFACTS (written best-effort alongside turns/):
   critique-report.json           the machine-readable report, every outcome

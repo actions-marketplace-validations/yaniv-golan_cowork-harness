@@ -1,7 +1,7 @@
 {
   "name": "cowork-harness",
-  "version": "1.17.0",
-  "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios \u2014 same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
+  "version": "1.18.0",
+  "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios — same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -82,8 +82,8 @@
     "test:live": "vitest run --config vitest.config.live.ts",
     "test:golden:update": "vitest run -u test/golden.test.ts test/golden-render.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
-    "format:write": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
+    "format:write": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"*.ts\"",
     "prepare": "git config core.hooksPath .githooks || true",
     "smoke:cli": "node dist/cli.js list",
     "ci": "npm run typecheck && npm run build && npm run test",

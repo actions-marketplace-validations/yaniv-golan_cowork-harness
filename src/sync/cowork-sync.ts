@@ -35,6 +35,11 @@ export interface SyncResult {
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
   gates: Record<string, GateState> | null; // decoded GrowthBook gate states (null = fcache absent/unreadable)
+  // Snapshot identity for `gates`, captured from the SAME read. Returned rather than re-derived by the
+  // caller: the payload refetches on Desktop's schedule (3.7-20.8 min observed) and asar extraction
+  // between the two reads takes tens of seconds, so a second read can label snapshot N's gates with
+  // snapshot N+1's identity -- exactly the misattribution this field exists to prevent.
+  fcache: FcacheProvenance | null;
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
   spawnEnvKeys: string[]; // WI-6: the sorted SET of constructed spawn-env keys — committed as provenance.spawnEnvKeys (regex-rot oracle)
   spawnEnvSpreadCount: number; // WI-5: count of `...`-spread sites across the spawn windows — committed as provenance.spawnEnvSpreadCount
@@ -112,7 +117,15 @@ export const PINNED_GATES: Record<string, string> = {
   // (`resolveSkillDiscoveryGates`), so a flip here CHANGES the declared tool set on container/hostloop
   // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
-  "1598976391": "proactiveSkillSuggestEnabled", // off/defaultValue — proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with this gate OFF, so it only swaps suggest_skills's description and adds `trigger`.)
+  // proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate
+  // the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with
+  // this gate OFF.) It has THREE effects, not two: it swaps suggest_skills's description, adds `trigger`,
+  // AND is passed into generateSkillsSystemPrompt, where it swaps the suggest-guidance line inside the
+  // dynamically-generated `<skills_instructions>` block (plus a once-per-conversation sentence). A prior
+  // version of this comment claimed "only swaps the description and adds `trigger`" — that was wrong about
+  // the product. The harness models the first two and renders no `<skills_instructions>` section at all,
+  // so the prompt effect is a disclosed gap, not a modelled surface (same shape as canSaveSkill below).
+  "1598976391": "proactiveSkillSuggestEnabled",
   // Flipped off/defaultValue -> ON/force server-side (fcache) as of 2026-07-25, i.e. for current users on
   // any Desktop version — NOT a Desktop change; the machinery already shipped in 1.24012.1 gated off. ON
   // adds a `save_skill` tool to the session's SDK-MCP inventory AND is passed into
@@ -123,6 +136,18 @@ export const PINNED_GATES: Record<string, string> = {
   // render-only sibling. Pinned so a production flip surfaces as a sync diff instead of silently widening
   // the tool set the way canSaveSkill's did.
   "1824824999": "canProposeSkills",
+  // New in Desktop 1.24012.11 (0 occurrences in 1.24012.9's asar, 1 in .11) and DARK — absent from a
+  // standard fcache, hence the DARK_GATES entry below; without it the pin would never round-trip through
+  // sync and this sentinel would guard nothing. Arms a Desktop-side direct-MCP pool for MDM-managed 1P
+  // servers, which short-circuits on an empty managed-server list before the gate is consulted, so it is
+  // inert for a standard unmanaged account and outside the harness's modelled agent surface. Pinned on the
+  // canProposeSkills principle: a production flip should surface as a sync diff, not silent widening.
+  // NAME CAVEAT: unlike every other entry here, this is NOT the GrowthBook flag name — the call site
+  // passes the bare id (`const c="4074604942"; isFeatureEnabled(c)`), and the name appears nowhere in the
+  // asar, so it is unrecoverable (and the gate is absent from the fcache, which is the other place a name
+  // would come from). The value below is the subsystem's own log tag, deliberately kebab-case so it does
+  // not read as a verified camelCase flag name. Replace it if the real name ever surfaces in an fcache.
+  "4074604942": "1p-direct-mcp",
 };
 
 /**
@@ -133,13 +158,33 @@ export const PINNED_GATES: Record<string, string> = {
  * The re-key guard below excludes `source:"absent"` entries from its "did anything match" count,
  * so this marker can't mask a wholesale GrowthBook id re-key (see test/baseline.test.ts).
  */
+/* Membership here means "tolerate absence from the fcache", NOT "this gate is permanently absent".
+ *
+ * "Dark" is a TIMESTAMPED OBSERVATION, never a property. Three states, and the middle one is the trap:
+ *   absent                  — not in the payload; genuinely unevaluated
+ *   present + defaultValue  — evaluated, no server rule matched (looks like "off", is not "unevaluated")
+ *   present + force         — a server rule actively matched
+ * Gates move between these on the server's own schedule: three of the five entries below were recorded
+ * as absent and are present today. That is why the comments name a DATE for every observation.
+ *
+ * Entries are never removed on becoming present. Force rules are server-evaluated and can be
+ * segment-targeted, so another account may still see a gate absent; dropping its entry would turn that
+ * account's sync into a spurious hard-fail. Tolerating absence is the entry's whole job — without it the
+ * PINNED_GATES pin never round-trips and the sentinel guards nothing. */
 const DARK_GATES = new Set([
   "2614807392",
   "1129419822", // enableToolSearchAuto — a spawn-env gate absent from a standard fcache (dark); pinned so an
   //                absent→present flip on the ENABLE_TOOL_SEARCH conditional surfaces as a visible diff.
-  "4200321681", // autoModeOverridesAlwaysAllow — absent from a standard 1.22209.0 fcache at pin time (dark);
-  //                pinned so a rollout (absent→present) surfaces as a visible diff.
-  "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale.
+  "4200321681", // autoModeOverridesAlwaysAllow — dark at pin time (absent from a standard 1.22209.0 fcache).
+  //                Observed 2026-08-05 as PRESENT + `force` + ON. Kept per the rule below.
+  "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale; observed 2026-08-05 as PRESENT +
+  //                `defaultValue` + off.
+  "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11, and dark (absent from a standard fcache) when
+  //                pinned. Observed 2026-08-05 as SERVED (`source:"force"`, `value:false`) — still off, so
+  //                nothing it arms is reachable. The entry STAYS: force rules are server-evaluated and can
+  //                be segment-targeted, so another account may still see it absent, and dropping it would
+  //                turn that account's sync into a spurious hard-fail. Tolerating absence is the point —
+  //                without it the PINNED_GATES pin never round-trips and the sentinel guards nothing.
 ]);
 
 /**
@@ -149,6 +194,91 @@ const DARK_GATES = new Set([
  * `{ timestamp, features: { <id>: { value, on, off, source, ruleId } } }`.
  * Returns the pinned gates' states, or null if the cache is absent/unreadable (caller flags it).
  */
+/** Snapshot identity for a decoded fcache payload.
+ *
+ *  `content16` is the IDENTITY; `embeddedTimestamp` is metadata and must never be used as one. The
+ *  payload refetches irregularly (measured intervals of 3.7–20.8 min across five fetches) and its
+ *  membership churns COUNT-NEUTRALLY — we observed `4074604942` go absent → force while `2403605075`
+ *  went present → absent, with the feature count pinned at 241 both times. A whole-file sha256 tracks
+ *  the FETCH (gzip framing + the timestamp field), so it reports drift on every refetch even when
+ *  nothing changed; hashing the canonicalised `features` object instead reports drift only when the
+ *  content actually moves. Verified across four reads: the content hash held while the file hash moved
+ *  every time. */
+export type FcacheProvenance = { content16: string; embeddedTimestamp: number | null; featureCount: number };
+
+/** Escape to `\uXXXX` to match Python's default `ensure_ascii=True`, which escapes everything outside
+ *  PRINTABLE ascii — so the range starts at DEL (U+007F), not at U+0080. */
+function jsonStringAscii(s: string): string {
+  return JSON.stringify(s).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
+/** Serialise to `json.dumps(v, sort_keys=True, separators=(',',':'))` form.
+ *
+ *  Emits directly rather than building a key-sorted clone and calling `JSON.stringify`. That obvious
+ *  approach is WRONG here and fails silently: gate ids are integer-like strings, and a JS object always
+ *  enumerates integer-like keys in ascending NUMERIC order regardless of insertion order — so
+ *  `Object.fromEntries(sortedPairs)` discards the sort and yields `"17519066"` before `"1004628546"`,
+ *  where Python's lexicographic `sort_keys` yields the reverse. Self-consistent, and cross-project
+ *  incomparable. Serialising the sorted key list directly is the only way to keep both true.
+ *
+ *  SCOPE OF THE CROSS-LANGUAGE GUARANTEE — read before relying on it. Strings (incl. non-ASCII and
+ *  astral pairs), booleans, null, arrays, nested objects and key ordering all agree. **Numbers do not,
+ *  in general, and cannot be made to**: JSON has one number type where Python has two, so a payload
+ *  written `1.0` reaches Python as float `1.0` (repr `"1.0"`) and JS as `1` (repr `"1"`) — and after
+ *  `JSON.parse` nothing remains in JS to tell them apart. Same for exponent formatting (`5e-7` vs
+ *  `5e-07`, `1e17` vs `1e+17`) and integers past 2^53, which JS silently rounds. The live payload DOES
+ *  carry floats (`364911507.value.*.split` = 0.1/0.5/0.3); those round-trip identically in both, which
+ *  is why the implementations agree today — that is a property of the current values, not a guarantee.
+ *
+ *  So: authoritative for OUR OWN drift detection (self-consistent across syncs, which is what
+ *  `provenance.fcache.content16` is for). Cross-implementation comparison is verified only for the value
+ *  space the payload currently uses, and must be RE-VERIFIED, never assumed, if a served value lands in
+ *  one of the classes above. The agreeing classes are pinned in test/baseline.test.ts. */
+function canonicalJson(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "string") return jsonStringAscii(v);
+  if (typeof v === "number") return Number.isFinite(v) ? JSON.stringify(v) : "null";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (Array.isArray(v)) return "[" + v.map(canonicalJson).join(",") + "]";
+  if (typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    const keys = Object.keys(o).sort(); // lexicographic, matching Python's sort_keys
+    return "{" + keys.map((k) => jsonStringAscii(k) + ":" + canonicalJson(o[k])).join(",") + "}";
+  }
+  return "null";
+}
+
+/** sha256 over the canonical form above — 16 hex chars. */
+export function fcacheContentHash(features: unknown): string {
+  return createHash("sha256").update(canonicalJson(features), "utf8").digest("hex").slice(0, 16);
+}
+
+/** Decode the fcache payload's snapshot identity. Same read + shape checks as `decodeFcacheGates`. */
+export function decodeFcacheProvenance(path = join(SUPPORT, "fcache")): FcacheProvenance | null {
+  if (!existsSync(path)) return null;
+  let buf: Buffer;
+  try {
+    buf = readFileSync(path);
+  } catch {
+    return null;
+  }
+  if (buf.length < 9 || buf.subarray(0, 3).toString("latin1") !== "CLF") return null;
+  try {
+    const parsed = JSON.parse(gunzipSync(buf.subarray(8)).toString("utf8")) as {
+      timestamp?: unknown;
+      features?: Record<string, unknown>;
+    };
+    const features = parsed?.features ?? {};
+    return {
+      content16: fcacheContentHash(features),
+      embeddedTimestamp: typeof parsed?.timestamp === "number" ? parsed.timestamp : null,
+      featureCount: Object.keys(features).length,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
@@ -228,6 +358,7 @@ export function sync(): SyncResult {
   // — a production flip then shows up coherently as both a provenance.gates diff and the
   // corresponding spawn.env value diff.
   const gates = decodeFcacheGates();
+  const fcacheProv = decodeFcacheProvenance();
 
   // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
   // merged with user hosts.
@@ -256,6 +387,7 @@ export function sync(): SyncResult {
     requireFullVmSandbox,
     asarFingerprint: fingerprint,
     gates,
+    fcache: fcacheProv,
     spawnEnv,
     spawnEnvKeys,
     spawnEnvSpreadCount,
@@ -271,18 +403,165 @@ export function sync(): SyncResult {
 // instead of one monolithic file. Follow local relative requires transitively (BFS, deduped) so
 // every fact-checker below sees the real bundle content regardless of which layout Desktop ships —
 // a stub-only read would silently report every anchor as missing, not that the contract changed.
+/** Rewrite substitution-free template literals to the double-quoted form.
+ *
+ *  Desktop 1.25927.0 changed minifier codegen: plain string literals are now emitted with BACKTICKS
+ *  (``settingSources:[`user`]``) where every earlier build emitted double quotes. Measured on the
+ *  1.24012.11 → 1.25927.0 pair, double-quoted identifier-ish strings fell 83.5k → 13.3k while backtick
+ *  ones rose 847 → 71.1k. That is a codegen change, not a product change, but it silently voids EVERY
+ *  literal anchor in this file at once (22 of them fired on the first 1.25927.0 sync).
+ *
+ *  Normalizing once here — rather than making ~40 anchor regexes quote-agnostic — keeps each anchor
+ *  readable and keeps `resolveConst`/value extraction emitting the quoting the baselines already store.
+ *
+ *  This is a TOKENIZER, deliberately not a regex: a naive ``/`([^`]*)`/g`` mis-pairs the CLOSING
+ *  backtick of an interpolated template with the OPENING backtick of the next string, which corrupts
+ *  the text and produced a false "settingSources is gone" on the very first attempt. Strings, comments
+ *  and regex literals are copied through verbatim; a template is rewritten ONLY when it has no `${}`
+ *  substitution, no raw newline and no embedded `"` — anything else is passed through unchanged, so
+ *  real templates (including every prompt body the fingerprints hash) keep their exact text. */
+export function normalizeBundleQuotes(src: string): string {
+  const n = src.length;
+  const parts: string[] = [];
+  let mark = 0; // start of the pending verbatim run
+  let i = 0;
+  let prev = ""; // last significant char — disambiguates a regex literal from division
+  const REGEX_OK = new Set("(,=:[!&|?{};+-*%~^<>".split(""));
+
+  const skipQuoted = (start: number): number => {
+    const q = src[start];
+    let j = start + 1;
+    while (j < n) {
+      const c = src[j];
+      if (c === "\\") {
+        j += 2;
+        continue;
+      }
+      if (c === q || c === "\n") return c === q ? j + 1 : j;
+      j++;
+    }
+    return n;
+  };
+  // Returns the template's end offset plus the [start,end) span of every `${…}` EXPRESSION body, so an
+  // interpolated template can be re-emitted with its expressions normalized while its literal text stays
+  // byte-identical. Without recursing into the expressions, a plain string nested inside an
+  // interpolation (``lam_session_type:${i.sessionType??`chat`}``) keeps its backticks and the value
+  // deriver reports it as an unrecognized expression.
+  const readTemplate = (start: number): [number, Array<[number, number]>] => {
+    let j = start + 1;
+    const subs: Array<[number, number]> = [];
+    while (j < n) {
+      const c = src[j];
+      if (c === "\\") {
+        j += 2;
+        continue;
+      }
+      if (c === "`") return [j + 1, subs];
+      if (c === "$" && src[j + 1] === "{") {
+        let depth = 1;
+        j += 2;
+        const exprStart = j;
+        while (j < n && depth > 0) {
+          const d = src[j];
+          if (d === "\\") j += 2;
+          else if (d === "{") (depth++, j++);
+          else if (d === "}") (depth--, j++);
+          else if (d === '"' || d === "'") j = skipQuoted(j);
+          else if (d === "`") j = readTemplate(j)[0];
+          else j++;
+        }
+        subs.push([exprStart, depth === 0 ? j - 1 : j]);
+        continue;
+      }
+      j++;
+    }
+    return [n, subs];
+  };
+
+  while (i < n) {
+    const c = src[i];
+    if (c === '"' || c === "'") {
+      i = skipQuoted(i);
+      prev = src[i - 1];
+      continue;
+    }
+    if (c === "`") {
+      const [end, subs] = readTemplate(i);
+      const body = src.slice(i + 1, end - 1);
+      if (subs.length === 0) {
+        if (!body.includes("\n") && !body.includes('"')) {
+          parts.push(src.slice(mark, i), '"', body, '"');
+          mark = end;
+        }
+      } else {
+        // Keep the template intact; normalize only inside each `${…}`.
+        parts.push(src.slice(mark, i));
+        let at = i;
+        for (const [s, e] of subs) {
+          parts.push(src.slice(at, s), normalizeBundleQuotes(src.slice(s, e)));
+          at = e;
+        }
+        parts.push(src.slice(at, end));
+        mark = end;
+      }
+      prev = "`";
+      i = end;
+      continue;
+    }
+    if (c === "/" && (src[i + 1] === "/" || src[i + 1] === "*")) {
+      const isLine = src[i + 1] === "/";
+      const at = isLine ? src.indexOf("\n", i) : src.indexOf("*/", i + 2);
+      i = at === -1 ? n : isLine ? at : at + 2;
+      continue;
+    }
+    if (c === "/" && (prev === "" || REGEX_OK.has(prev))) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < n) {
+        const d = src[j];
+        if (d === "\\") {
+          j += 2;
+          continue;
+        }
+        if (d === "\n") break;
+        if (d === "[") inClass = true;
+        else if (d === "]") inClass = false;
+        else if (d === "/" && !inClass) {
+          closed = true;
+          j++;
+          break;
+        }
+        j++;
+      }
+      if (closed) {
+        while (j < n && /[a-z]/.test(src[j])) j++; // flags
+        prev = "/";
+        i = j;
+        continue;
+      }
+    }
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  parts.push(src.slice(mark));
+  return parts.join("");
+}
+
 export function readMainBundleFiles(dir: string): Map<string, string> {
   const entryPath = join(dir, ".vite/build/index.js");
   const visited = new Set<string>();
   const queue = [entryPath];
   const out = new Map<string, string>();
-  const localRequireRe = /require\(["']\.\/([^"']+)["']\)/g;
+  // The require specifier itself may be backtick-quoted in newer codegen — match all three forms on the
+  // RAW text, since the graph walk has to happen before normalization.
+  const localRequireRe = /require\(["'`]\.\/([^"'`]+)["'`]\)/g;
   while (queue.length > 0) {
     const p = queue.shift() as string;
     if (visited.has(p) || !existsSync(p)) continue;
     visited.add(p);
     const content = readFileSync(p, "utf8");
-    out.set(p.slice(p.lastIndexOf("/") + 1), content);
+    out.set(p.slice(p.lastIndexOf("/") + 1), normalizeBundleQuotes(content));
     for (const m of content.matchAll(localRequireRe)) {
       queue.push(join(dirname(p), m[1]));
     }
@@ -291,6 +570,60 @@ export function readMainBundleFiles(dir: string): Map<string, string> {
 }
 export function readMainBundle(dir: string): string {
   return [...readMainBundleFiles(dir).values()].join("");
+}
+
+/** Resolve the LOCAL identifier a chunk binds to an exported name, across every export shape seen so far.
+ *
+ *  Shape order matters: the mangled CJS-interop form is checked first because Desktop 1.25927.0 emits it
+ *  in 274 of 341 chunks, while the readable arrow form survives in 27. The bare `name:local` /
+ *  `name=local` legacy form is checked LAST and constrained to an identifier, so a `:0`-style decoy in an
+ *  unrelated object literal cannot be captured ahead of a real export. */
+export function exportLocalOf(text: string, exportName: string): string | null {
+  const esc = exportName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const shapes = [
+    // Object.defineProperty(exports,"vt",{enumerable:!0,get:function(){return B}})
+    new RegExp(`defineProperty\\(exports,"${esc}",\\{[^}]*?return ([A-Za-z_$][\\w$]*)\\}`),
+    // HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se
+    new RegExp(`(?<![\\w$])${esc}:\\(\\)=>([A-Za-z_$][\\w$]*)`),
+    // <local> as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS
+    new RegExp(`([A-Za-z_$][\\w$]*)\\s+as\\s+${esc}(?![\\w$])`),
+    // TASK_TOOL_NAMES:uae / TASK_TOOL_NAMES=uae
+    new RegExp(`(?<![\\w$])${esc}[:=]([A-Za-z_$][\\w$]*)(?![\\w$])`),
+  ];
+  for (const re of shapes) {
+    const m = text.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Follow a `NS.exported` reference to the chunk + local that actually defines it.
+ *
+ *  Desktop 1.25927.0 both MANGLED export names (`...o.TASK_TOOL_NAMES` became `...E.vt`) and split the
+ *  bundle 101 → 341 chunks, so the previous "regex-hop on the joined bundle" strategy became
+ *  catastrophically ambiguous: hopping on a two-character name like `f` or `vt` matches somewhere random
+ *  in 11 MB of text. That mis-resolution is not a safe failure — it reported `CLAUDE_DESIGN_TOOLS is no
+ *  longer empty` and `maxThinkingTokens resolved to null`, both of which are FALSE (verified by hand
+ *  against the asar: the array is still `[]` and the constant is still 31999).
+ *
+ *  So resolution is scoped: from the chunk holding the REFERENCE, follow that chunk's own
+ *  `NS=require("./chunk-X.js")` binding, then read the export map of the chunk it names.
+ *  `files` absent (or the ref undotted) ⇒ single-text mode, which is what the synthetic fixtures and the
+ *  older monolithic builds need. Returns null rather than guessing — callers flag that loudly. */
+export function resolveNamespaceRef(ref: string, siteChunk: string, files?: Map<string, string>): { chunk: string; local: string } | null {
+  if (!ref.includes(".")) return { chunk: siteChunk, local: ref };
+  const prop = ref.slice(ref.lastIndexOf(".") + 1);
+  const ns = ref.slice(0, ref.indexOf("."));
+  if (files) {
+    const reqM = siteChunk.match(new RegExp(`(?<![\\w$])${ns}=require\\("\\./([^"]+)"\\)`));
+    const target = reqM ? files.get(reqM[1].slice(reqM[1].lastIndexOf("/") + 1)) : undefined;
+    if (target) {
+      const local = exportLocalOf(target, prop);
+      return local ? { chunk: target, local } : null;
+    }
+  }
+  const local = exportLocalOf(siteChunk, prop);
+  return local ? { chunk: siteChunk, local } : null;
 }
 
 /** Extract domains + fingerprint + spawn.env + model-effort-config from the asar main bundle without
@@ -339,16 +672,17 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
+    for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
     // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
     const { deltas: tripwireDeltas, notes: tripwireNotes } = partitionSpawnFlags(checkCodeTripwires(bundle));
     for (const f of tripwireDeltas) flag(unknown, f);
     // Spawn contract: S-tier structural sentinels + the generated spawn.env. Non-NOTE flags
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
-    for (const f of checkSpawnContractFacts(bundle)) flag(unknown, f);
+    for (const f of checkSpawnContractFacts(bundle, bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
-    const spawn = deriveSpawnEnv(bundle, gates);
+    const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
     // Per-model effort/regex-default config: same all-or-nothing contract as spawn.env — any anchor
@@ -461,10 +795,29 @@ export function checkMountModeFacts(bundle: string): string[] {
     flags.push(
       'mountLayout: the delete-deny resolver (IX `…?"rwd":"rw"`) is gone from the asar — outputs/projects default mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)',
     );
-  if (!/\("uploads"\)\][^}]{0,90}mode:\s*"ro"/.test(bundle))
-    flags.push(
-      'mountLayout: the uploads read-only ("ro") mount is gone from the asar — uploads mode may have changed; re-derive mountLayout.mounts[name=uploads].mode',
-    );
+  // Every mount whose mode is HARDCODED at the mount-set builder, rather than resolved through
+  // NOTE the lane difference, because "spawn-time" is wrong for half of it: the VM-loop builder runs
+  // once at spawn, but the host-loop one is wired as `computeBashMounts` and RECOMPUTES PER BASH CALL
+  // with a live approved-list read. The hardcoded modes below are identical either way, which is why
+  // one set of anchors covers both — but a reader reasoning about WHEN a mode is decided needs this.
+  // the delete-deny resolver above. Read first-party from the builder, which assembles the whole set:
+  // outputs and each connected folder go through the resolver (`rw`, or `rwd` once approved) while these
+  // are pinned `"ro"`. Worth pinning individually because a mount silently moving from `ro` to a
+  // writable mode is a containment change we would otherwise model wrongly with nothing failing.
+  const hardcodedRo: [string, RegExp][] = [
+    ["uploads", /\("uploads"\)\][^}]{0,90}mode:\s*"ro"/],
+    [".claude/skills", /\("\.claude\/skills"\)\][^}]{0,120}mode:\s*"ro"/],
+    [".claude/projects", /\("\.claude\/projects"\)\][^}]{0,120}mode:\s*"ro"/],
+    // Project ATTACHMENTS (`userSelectedProjectUuids`) — one mount per uuid, read-only. This is the fact
+    // that settles whether a project mount belongs in the delete-denied set: it does not, because it is
+    // not writable at all.
+    [".projects/<uuid>", /\(`\.projects\/\$\{[^}]+\}`\)\][^}]{0,90}mode:\s*"ro"/],
+  ];
+  for (const [name, re] of hardcodedRo)
+    if (!re.test(bundle))
+      flags.push(
+        `mountLayout: the read-only ("ro") mount for ${name} is gone from the asar — its mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)`,
+      );
   return flags;
 }
 
@@ -493,6 +846,55 @@ export function checkWebFetchFacts(bundle: string): string[] {
  *  CONSUMING chunk (found by the matcher install site) for the hook body, deny texts, topology,
  *  ordering, and the canUseTool chain. Each tool-set array is bound to its EXPORT NAME (not "some
  *  matching array exists"), and the install site must reference the same export property. */
+/** Drift sentinel for `coworkSyspromptMap` — a SERVER-DRIVEN system-prompt patch channel the harness
+ *  models nowhere.
+ *
+ *  Why it is a sentinel and not a model: the map's entries come from the server, per session, so we
+ *  cannot know what any given session is served. What we CAN pin is its shape, and the shape is what
+ *  makes it dangerous — `replace` mode DISCARDS the computed default section and emits
+ *  `[text, ...appends].join("\n\n")`. The harness models the system prompt as an append onto the
+ *  `claude_code` preset, so an active `replace` variant is a STRUCTURAL divergence: we would retain a
+ *  section production dropped entirely. If the mode vocabulary widens (a third mode), or the key grammar
+ *  moves, or the boundary invariant disappears, that changes what the channel can do to the prompt and
+ *  we need to know before a user hits it.
+ *
+ *  Present in 1.24012.1, 1.24012.11 and 1.25927.0 alike — long-standing, not new. */
+export function checkSyspromptMapFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const bundle = [...files.values()].join("");
+  const miss = (what: string, why: string) =>
+    flags.push(`syspromptMap: ${what} anchor missing — ${why}; re-derive checkSyspromptMapFacts in cowork-sync.ts`);
+
+  if (!/coworkSyspromptMap/.test(bundle)) {
+    // Absence is itself a finding: either the channel was removed (good for us, but a modeled fact
+    // changed) or the extractor stopped seeing it. Either way, do not silently pass.
+    miss("channel", "coworkSyspromptMap is gone from the asar — the prompt-patch channel changed shape or was removed");
+    return flags;
+  }
+  // The mode vocabulary as a CLOSED SET. A third mode would change what a served variant can do to the
+  // prompt, so this is the highest-value anchor here.
+  if (!/function [\w$]+\([\w$]+\)\{return [\w$]+==="replace"\|\|[\w$]+==="append"\}/.test(bundle))
+    miss("mode predicate", 'the two-mode membership test (`m==="replace"||m==="append"`) moved — a THIRD MODE may exist');
+  // Mode is encoded in the key suffix (`07_16_2026.replace`), which is how a served entry selects it.
+  if (!/\^\[A-Za-z0-9_-\]\{1,128\}\(\\\.\(replace\|append\)\)\?\$/.test(bundle))
+    miss("key grammar", "the `<name>(.replace|.append)?` key-name regex moved");
+  // The startup throw requiring {{promptCacheBoundary}} in a replace-mode variant. NOTE ITS SCOPE: it
+  // guards the BUILT-IN variants table only. Server-supplied entries are validated later, on the
+  // resolution path, which DEGRADES rather than throwing — a boundary-less `replace` resolves to
+  // `missing_boundary` and the session simply gets a different prompt, with no error anywhere. So this
+  // anchor pins the loud half; the quiet half is why the harness needs the sentinel at all.
+  if (!/replace-mode text must contain \{\{promptCacheBoundary\}\}/.test(bundle))
+    miss("boundary invariant", "the startup throw requiring {{promptCacheBoundary}} in a built-in replace-mode variant is gone");
+  // The resolution-path status machine — the SILENT half. If these statuses disappear, a malformed
+  // served variant stops being classified at all, and the failure mode gets quieter still.
+  if (!/missing_boundary/.test(bundle) || !/invalid_entry/.test(bundle))
+    miss(
+      "resolution status machine",
+      "the per-key hit/invalid_entry/missing_boundary resolution statuses moved — a malformed served variant may no longer be classified",
+    );
+  return flags;
+}
+
 export function checkPathHookFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
@@ -500,17 +902,17 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
 
   // --- defining chunk: the one that EXPORTS the name (alias or property form), not merely mentions
   //     it as a namespace-property consumer (the hostloop chunk references `.HOST_LOOP_…` too) ---
-  const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS[:=][\w$]/;
+  // B8 (Desktop 1.25927.0): the arrow export form `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se` puts `(`
+  // after the colon, which the old `[:=][\w$]` tail rejected — the chunk DOES still export the name.
+  const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS(?::\(\)=>|[:=])[\w$]/;
   const defining = [...files.values()].find((c) => definesExport.test(c));
   if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
   else {
     const hop = (exportName: string, arrayRe: RegExp, label: string) => {
-      // Resolve the LOCAL bound to this export: ESM `<local> as ExportName`, OR the object-property /
-      // alias forms `ExportName:<local>` / `ExportName=<local>`. Then require `<local>=<exact array>`.
-      // Binding to the export (not a free array search) is what makes a decoy array fail.
-      const alias =
-        defining.match(new RegExp(`([\\w$]+)\\s+as\\s+${exportName}\\b`)) ?? defining.match(new RegExp(`\\b${exportName}[:=]([\\w$]+)`));
-      const local = alias?.[1];
+      // Resolve the LOCAL bound to this export across every export shape, then require
+      // `<local>=<exact array>`. Binding to the export (not a free array search) is what makes a decoy
+      // array fail.
+      const local = exportLocalOf(defining, exportName);
       if (!local) {
         miss(label, `could not resolve the local bound to the ${exportName} export`);
         return;
@@ -531,10 +933,32 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   }
 
   // --- consuming chunk: located by the install site (namespace-property connectivity) ---
-  const consuming = [...files.values()].find((c) => /\.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"\]\.join\("\|"\)/.test(c));
+  // B9 (Desktop 1.25927.0): the spread is a MANGLED namespace property (`[...m.E,"MultiEdit"]`), so the
+  // install site can no longer be found by the readable export name. Locate it by the invariant part of
+  // the shape — a namespace spread joined with "MultiEdit" — then RESOLVE the spread and require it to be
+  // the gated 5-set. That is strictly stronger than the old name match: a rename now passes only if the
+  // thing actually installed is still the same array.
+  const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
+  const consuming = [...files.values()].find((c) => installRe.test(c));
   if (!consuming) {
     miss("install site", 'no chunk contains [...NS.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|")');
     return flags; // everything below is scoped to this chunk
+  }
+  {
+    const spreadId = consuming.match(installRe)![1];
+    const prop = spreadId.slice(spreadId.lastIndexOf(".") + 1);
+    // Resolve through the consumer's own require() binding; if the consumer does not bind the namespace
+    // locally (older single-graph layouts, and the synthetic fixtures), fall back to the chunk already
+    // identified as DEFINING the tool-set exports — looking up the REFERENCED name, so an install site
+    // that spreads some other export still fails to resolve rather than silently reusing the right one.
+    let ref = resolveNamespaceRef(spreadId, consuming, files);
+    if (!ref && defining) {
+      const local = exportLocalOf(defining, prop);
+      if (local) ref = { chunk: defining, local };
+    }
+    if (!ref) miss("install site spread", `the PreToolUse matcher spread (${spreadId}) could not be resolved to a defining export`);
+    else if (!new RegExp(`(?<![\\w$])${esc(ref.local)}=\\["Read","Write","Edit","Glob","Grep"\\]`).test(ref.chunk))
+      miss("install site spread", "the PreToolUse matcher no longer spreads the gated Read/Write/Edit/Glob/Grep set");
   }
   const inHook = (re: RegExp, label: string, why: string) => {
     if (!re.test(consuming)) miss(label, why);
@@ -545,11 +969,14 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     "VM-path deny",
     "the /sessions guard text changed",
   );
-  // resolveFilePath's two hard-block strings live in the DEFINING/shared chunk, not the consumer.
-  if (!defining || !/Refusing to resolve non-regular file/.test(defining))
+  // resolveFilePath's two hard-block strings live in a shared resolver module. B13 (Desktop 1.25927.0):
+  // the 101 → 341 chunk split moved that resolver OUT of the chunk that exports the tool sets, so scoping
+  // these to `defining` now reports "gone" for text that is still present. They are unique enough to be
+  // graph-wide facts — assert existence anywhere in the require graph.
+  const anywhere = (re: RegExp) => [...files.values()].some((c) => re.test(c));
+  if (!anywhere(/Refusing to resolve non-regular file/))
     miss("resolver hard-block", "the non-regular-file branch is gone from the shared resolver");
-  if (!defining || !/Failed to resolve path/.test(defining))
-    miss("resolver failure text", "the resolve-failure branch is gone from the shared resolver");
+  if (!anywhere(/Failed to resolve path/)) miss("resolver failure text", "the resolve-failure branch is gone from the shared resolver");
   inHook(/could not be safely resolved/, "resolver caller block", "the active non-ENOENT block branch is gone from the hook"); // caller-side text — stays in the consumer
   inHook(/is outside this session's scratch directory, so \$\{/, "scratch deny", "the scratch directory deny-variant text changed");
   inHook(/is outside this session's connected folders, so \$\{/, "connected deny", "the connected folders deny-variant text changed");
@@ -568,15 +995,24 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   );
   inHook(/spooledProjectsReadOnlyRoots/, "spool roots identifier", "spooledProjectsReadOnlyRoots is gone");
   inHook(/getMidSessionReadOnlyPaths/, "mid-session roots", "getMidSessionReadOnlyPaths is no longer wired");
+  // B14: the optional call is emitted NATIVELY now (`?[]:ye?.()??[]`) instead of downleveled
+  // (`?[]:(ne==null?void 0:ne())??[]`). Same expression, newer output target — admit both.
   inHook(
-    /\?\[\]:\([\w$]+==null\?void 0:[\w$]+\(\)\)\?\?\[\]/,
+    /\?\[\]:(?:\([\w$]+==null\?void 0:[\w$]+\(\)\)|[\w$]+\?\.\(\))\?\?\[\]/,
     "readOnly-tail rule",
     "the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone",
   );
-  inHook(/===[\w$]+\.SESSION_TYPE_CHAT/, "chat-type connectivity", "the sessionType===SESSION_TYPE_CHAT comparison is gone");
+  // B15: the SESSION_TYPE_CHAT constant is INLINED to its literal at this comparison
+  // (`e.sessionType==="chat"`). The constant itself is still exported and separately asserted above, so
+  // accept either form here — what this anchor pins is that the hook still branches on chat sessions.
+  inHook(
+    /===[\w$]+\.SESSION_TYPE_CHAT|sessionType==="chat"/,
+    "chat-type connectivity",
+    "the sessionType===SESSION_TYPE_CHAT comparison is gone",
+  );
   inHook(/=[\w$]+\?\[\.\.\.[\w$]+,\.\.\.[\w$]+\]:\[/, "root topology ternary", "the chat/task st root-assembly ternary is gone");
   inHook(
-    /const [\w$]+=[\w$]+\.canUseTool;[\w$]+&&\([\w$]+\.canUseTool=async\(/,
+    /(?:const|let|var) [\w$]+=[\w$]+\.canUseTool;[\w$]+&&\([\w$]+\.canUseTool=async\(/,
     "conditional canUseTool install",
     "the Se&&(e.canUseTool=…) conditional install is gone",
   );
@@ -590,9 +1026,15 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // guard's function must be referenced BEFORE any containment-helper call, and NO containment call may
   // precede it (a blanket early-allow shape).
   const qtDef = consuming.match(/function ([\w$]+)\([\w$]+\)\{[\s\S]{0,2000}?hardlink to the user's original file/);
-  const installAt = consuming.search(/\.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"\]\.join\("\|"\)/);
+  // B16: this used the readable-name install regex, which stopped matching when the spread was mangled —
+  // and because the ordering check is guarded by `installAt >= 0`, it SILENTLY SKIPPED rather than
+  // flagging. Reuse the shape-based `installRe` (already proven to match above) so the
+  // qt-before-containment order stays enforced instead of failing open.
+  const installAt = consuming.search(installRe);
   if (!qtDef) miss("qt definition", "no function contains the hardlink category text");
-  else if (installAt >= 0) {
+  else if (installAt < 0)
+    miss("install offset", "the install site matched for discovery but not for ordering — the order check would skip");
+  else {
     const hookSlice = consuming.slice(installAt, installAt + 6000);
     const qtCallAt = hookSlice.indexOf(`${qtDef[1]}(`);
     if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
@@ -823,9 +1265,11 @@ function templateBodyAt(module: string, at: number): string | null {
  *  arm). Each body is sliced by backtick scanning from its discriminator — no function-body brace
  *  matching, which the old draft got wrong (it grabbed the destructured-param `{` of `zo({…})`). */
 export function extractSubagentBranchSlices(files: Map<string, string>): { module: string; hl: string; vm: string } | null {
-  const module = [...files.values()].find(
-    (c) => c.includes("buildSubagentEnvironmentPrompt") && c.includes("on the user's machine") && c.includes("exist only in the sandbox"),
-  );
+  // B10 (Desktop 1.25927.0): `buildSubagentEnvironmentPrompt` is mangled away — the generator is no
+  // longer identifiable by name. The two BRANCH TEXTS are the real discriminator anyway (they are the
+  // thing being fingerprinted), and they are content, not identifiers, so they survive minification.
+  // Requiring BOTH still pins a single module: only the generator carries the hl and vm bodies together.
+  const module = [...files.values()].find((c) => c.includes("on the user's machine") && c.includes("exist only in the sandbox"));
   if (!module) return null;
   const vmAt = module.indexOf("exist only in the sandbox");
   const hlAt = module.lastIndexOf("on the user's machine", vmAt);
@@ -1091,27 +1535,27 @@ export function resolveConst(bundle: string, id: string, hops = 0): string | nul
  * (`Sde` → `resolveConst`) or a settings-getter call (`Zv()` → the function's `??<id>` fallback default,
  * then `resolveConst`). Exponential literals (`6e4`,`9e5`) are Number-normalized to `"60000"`/`"900000"`.
  */
-function resolveStringArg(bundle: string, arg: string, isCall: boolean): string | null {
+function resolveStringArg(bundle: string, arg: string, isCall: boolean, scope?: string, files?: Map<string, string>): string | null {
+  // B11 (Desktop 1.25927.0): both the const (`String(j)`) and the helper (`String(A.f())`) are now
+  // resolved through the REFERENCE CHUNK — export names are mangled to 1-2 chars, so a hop on the joined
+  // 11 MB bundle lands on an unrelated `j=`/`f:` and returns a wrong number or null. `site` is the chunk
+  // holding the expression when the caller knows it, else the joined bundle (single-text mode).
+  const site = scope ?? bundle;
   let constId = arg;
+  let where = site;
   if (isCall) {
-    // B2: `arg` may now be a dotted member call (`o.getMcpToolTimeout`) rather than a bare hoisted
-    // helper name. A dotted arg is itself an export alias — resolve `<lastSegment>[:=]<alias>` first
-    // (identifier-shaped capture only, so it can't land on a `:0`-style decoy), then look up the
-    // function body under the resolved alias, exactly as the bare-name path already did.
-    let fnName = arg;
-    if (fnName.includes(".")) {
-      const last = fnName.slice(fnName.lastIndexOf(".") + 1);
-      const escLast = last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const aliasM = bundle.match(new RegExp(`${escLast}[:=]([A-Za-z_$][\\w$]*)`));
-      if (!aliasM) return null;
-      fnName = aliasM[1];
-    }
-    const esc = fnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const fm = bundle.match(new RegExp(`function ${esc}\\([^)]*\\)\\{[^{}]*\\?\\?(\\w+)`));
+    const ref = resolveNamespaceRef(arg, site, files);
+    if (!ref) return null;
+    const esc = ref.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const fm = ref.chunk.match(new RegExp(`function ${esc}\\([^)]*\\)\\{[^{}]*\\?\\?(\\w+)`));
     if (!fm) return null;
     constId = fm[1];
+    where = ref.chunk;
   }
-  const v = resolveConst(bundle, constId);
+  // B12 (Desktop 1.25927.0): the `??` fallback may be an INLINE numeric literal (`??18e4`) where it used
+  // to be a named const (`??zwe` → `ypt` → `6e4`). A literal needs no const lookup — and must not be
+  // treated as an unresolvable name, which would mask a real value change behind a shape complaint.
+  const v = Number.isFinite(Number(constId)) ? constId : (resolveConst(where, constId) ?? resolveConst(bundle, constId));
   if (v == null) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
@@ -1125,7 +1569,13 @@ function resolveStringArg(bundle: string, arg: string, isCall: boolean): string 
  * chat localAgent session pins deterministically (disableCron→"1", oauth-env prod→"", 3p-entrypoint→1p).
  * Anything else → `{ unknown: true }` (never a silent partial substitution).
  */
-function resolveSpawnValue(bundle: string, expr: string, gates: Record<string, GateState>): { value: string } | { unknown: true } {
+function resolveSpawnValue(
+  bundle: string,
+  expr: string,
+  gates: Record<string, GateState>,
+  scope?: string,
+  files?: Map<string, string>,
+): { value: string } | { unknown: true } {
   const e = expr.trim();
   let m: RegExpMatchArray | null;
   if ((m = e.match(/^"([^"]*)"$/)) || (m = e.match(/^'([^']*)'$/))) return { value: m[1] };
@@ -1141,7 +1591,7 @@ function resolveSpawnValue(bundle: string, expr: string, gates: Record<string, G
   // B2: the `String()` argument may now be a dotted member call (`o.getMcpToolTimeout()`); widen the
   // capture to admit `.` and let resolveStringArg follow the export-alias hop.
   if ((m = e.match(/^String\(([\w$.]+)(\(\))?\)$/))) {
-    const v = resolveStringArg(bundle, m[1], !!m[2]);
+    const v = resolveStringArg(bundle, m[1], !!m[2], scope, files);
     return v == null ? { unknown: true } : { value: v };
   }
   // Modeled-session ternaries (matched on stable property/literal tokens, minified object id = \w+).
@@ -1238,6 +1688,7 @@ function enumSpawnKeys(text: string): { key: string; valueStart: number }[] {
 export function deriveSpawnEnv(
   bundle: string,
   gates: Record<string, GateState> | null,
+  files?: Map<string, string>,
 ): { env: Record<string, string> | null; flags: string[]; keys: string[]; spreadCount: number } {
   const flags: string[] = [];
   // If the fcache is unreadable the caller already flags it; emit no spurious spawn flags, no partial env.
@@ -1296,10 +1747,16 @@ export function deriveSpawnEnv(
   // new, but its value must NOT be applied (an off-gate value must not override a W2 pin, e.g. off-gate
   // MCP_CONNECTION_NONBLOCKING:"0" must not clobber W2's "true"). A pinned key is still resolved so an
   // unresolvable value flags, but the resolved value is dropped when apply=false.
-  const resolveInto = (rawKey: string, expr: string, target: Record<string, string>, apply = true) => {
+  // The chunk a window's text came from — value expressions inside it must be resolved against that
+  // chunk's own bindings, not the joined bundle (see B11). Matched on a long prefix so the lookup is
+  // unambiguous; falls back to the joined bundle when the graph isn't available.
+  const chunkFor = (text: string): string | undefined =>
+    files ? [...files.values()].find((c) => c.includes(text.slice(0, 200))) : undefined;
+
+  const resolveInto = (rawKey: string, expr: string, target: Record<string, string>, apply = true, scope?: string) => {
     if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return; // deliberately not pinned
     if ((SPAWN_PIN_KEYS as readonly string[]).includes(rawKey)) {
-      const r = resolveSpawnValue(bundle, expr, gates);
+      const r = resolveSpawnValue(bundle, expr, gates, scope, files);
       if ("unknown" in r) flagUnresolvable(rawKey, expr);
       else if (apply) target[rawKey] = r.value;
       return;
@@ -1310,8 +1767,8 @@ export function deriveSpawnEnv(
   // Inner key of an ON gate-conditional spread: the gate IS the classifier, so resolve first — a literal
   // value auto-pins (e.g. gate 434204418 on → MCP_CONNECT_TIMEOUT_MS:"10000"), a non-literal host value
   // (e.g. OAUTH_SCOPES:o.scope) stays allowlisted, anything else is unknown.
-  const resolveGateInner = (rawKey: string, expr: string, target: Record<string, string>) => {
-    const r = resolveSpawnValue(bundle, expr, gates);
+  const resolveGateInner = (rawKey: string, expr: string, target: Record<string, string>, scope?: string) => {
+    const r = resolveSpawnValue(bundle, expr, gates, scope, files);
     if (!("unknown" in r)) target[rawKey] = r.value;
     else if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return;
     else {
@@ -1326,6 +1783,7 @@ export function deriveSpawnEnv(
   // minifier-assigned (At/et/…); the leading `...` bounds the identifier start.
   const applyWindow = (text: string, target: Record<string, string>, isW1: boolean) => {
     let work = text;
+    const scope = chunkFor(text);
     if (isW1) {
       // B6: the gate helper acquired an `o.`-style receiver here too (`...o.isFeatureEnabled("id")&&{…}`);
       // without this widening the block is never blanked and the generic pass below reads its inner keys
@@ -1341,15 +1799,15 @@ export function deriveSpawnEnv(
           // unknown/non-SPAWN gate id): classify by name WITHOUT applying (WI-4) so a brand-new key in an
           // off-gate spread hard-fails instead of being silently enumerated, while a known off-gate key's
           // value stays unapplied (W2 wins).
-          if (gateOn) resolveGateInner(k.key, expr, target);
-          else resolveInto(k.key, expr, target, false);
+          if (gateOn) resolveGateInner(k.key, expr, target, scope);
+          else resolveInto(k.key, expr, target, false, scope);
         }
         work = work.replace(sm[0], "");
       }
     }
     for (const k of enumSpawnKeys(work)) {
       enumerated.add(k.key);
-      resolveInto(k.key, sliceSpawnValue(work, k.valueStart), target);
+      resolveInto(k.key, sliceSpawnValue(work, k.valueStart), target, true, scope);
     }
   };
 
@@ -1417,12 +1875,15 @@ export function partitionSpawnFlags(flags: string[]): { deltas: string[]; notes:
  * two prompt-asset delivery shapes). Any anchor miss → a flag naming the field (re-derive the anchor).
  * Pure over the bundle string, mirroring checkMountModeFacts.
  */
-export function checkSpawnContractFacts(bundle: string): string[] {
+export function checkSpawnContractFacts(bundle: string, files?: Map<string, string>): string[] {
   const flags: string[] = [];
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");
   const w2 = twoAnchorWindow(bundle, "return{CLAUDE_CODE_ENTRYPOINT", ".sessionEnvVars()}");
   const has = (re: RegExp, s = bundle) => re.test(s);
   const miss = (field: string, why: string) => flags.push(`spawn: ${field} anchor missing — ${why}; ${SPAWN_NO_BYPASS}`);
+  // The chunk holding a reference site — needed to read that chunk's own require() bindings when a
+  // spread/arm is a mangled namespace property. Falls back to the joined bundle in single-text mode.
+  const siteOf = (needle: string): string => (files ? ([...files.values()].find((c) => c.includes(needle)) ?? bundle) : bundle);
 
   if (!has(/settingSources:\["user"\]/)) miss("S2 settingSources", 'settingSources:["user"] is gone');
   if (!has(/permissionMode:.{0,24}\?"default"/)) miss("S3 permissionMode", "the default-permissionMode ternary is gone");
@@ -1439,14 +1900,12 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return [\w$]+\?\?[\w$]+\?\?![\w$]+)\?([\w$.]+):0\}/);
     if (!m) miss("S4 maxThinkingTokens", "the maxThinkingTokens capture is gone");
     else {
-      let armId: string | null = m[1];
-      if (armId.includes(".")) {
-        const last = armId.slice(armId.lastIndexOf(".") + 1);
-        const escLast = last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const aliasM = bundle.match(new RegExp(`${escLast}[:=]([A-Za-z_$][\\w$]*)`));
-        armId = aliasM ? aliasM[1] : null;
-      }
-      const resolved = armId ? resolveConst(bundle, armId) : null;
+      // B6 (Desktop 1.25927.0): the arm is a MANGLED namespace property (`E.f`) reached through the
+      // reference chunk's own require() binding — the old bare-name hop on the joined bundle captured a
+      // stray `f=…` and wrongly reported "resolved to null", while the real value is unchanged.
+      const site = siteOf(m[0]);
+      const ref = resolveNamespaceRef(m[1], site, files);
+      const resolved = ref ? resolveConst(ref.chunk, ref.local) : null;
       if (resolved !== "31999") miss("S4 maxThinkingTokens", `resolved to ${resolved} not 31999`);
     }
   }
@@ -1471,43 +1930,24 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     // (`o.CLAUDE_DESIGN_TOOLS`) is an export-alias hop (`CLAUDE_DESIGN_TOOLS:Cde` / `=Cde`) to the real
     // array site (`,Cde=[]`) — follow it exactly as S7 does below. Fail loud if the spread is present but
     // unresolvable, or resolves to a non-empty array (a new design tool set that must be modeled).
+    const toolsSite = siteOf(s6[0]);
     const designId = s6[1];
     if (designId !== undefined) {
-      const requireEmpty = (id: string): boolean => {
-        const esc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return has(new RegExp(`(?<![\\w$])${esc}=\\[\\]`));
-      };
-      if (designId.includes(".")) {
-        const last = designId.slice(designId.lastIndexOf(".") + 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const aliasM = bundle.match(new RegExp(`${last}[:=]([A-Za-z_$][\\w$]*)`));
-        if (!aliasM) miss("S6b design-tools", "the CLAUDE_DESIGN_TOOLS export alias could not be resolved");
-        else if (!requireEmpty(aliasM[1]))
-          miss("S6b design-tools", "CLAUDE_DESIGN_TOOLS is no longer empty — a new spawn tool set to model");
-      } else if (!requireEmpty(designId)) {
+      const ref = resolveNamespaceRef(designId, toolsSite, files);
+      if (!ref) miss("S6b design-tools", "the CLAUDE_DESIGN_TOOLS export alias could not be resolved");
+      else if (!new RegExp(`(?<![\\w$])${ref.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=\\[\\]`).test(ref.chunk))
         miss("S6b design-tools", "CLAUDE_DESIGN_TOOLS is no longer empty — a new spawn tool set to model");
-      }
     }
     // A2: a dotted id (`o.TASK_TOOL_NAMES`) is not a local-const definition — it is an export-alias hop
     // (`TASK_TOOL_NAMES:uae` / `TASK_TOOL_NAMES=uae`) to the real array site (`,uae=[...]`). Follow the
     // hop (identifier-shaped capture only, so a `:0`-style decoy can't be captured) and require the exact
     // five-name array at the resolved alias — never resolveConst, whose 40-char/no-comma value budget
     // can't hold the array literal. A bare id keeps the original local-const lookup.
-    const rawId = s6[2];
     const taskArray = `\\["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"\\]`;
-    if (rawId.includes(".")) {
-      const last = rawId.slice(rawId.lastIndexOf(".") + 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const aliasM = bundle.match(new RegExp(`${last}[:=]([A-Za-z_$][\\w$]*)`));
-      if (!aliasM) miss("S7 Task-tools spread", "the TASK_TOOL_NAMES export alias could not be resolved");
-      else {
-        const alias = aliasM[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (!has(new RegExp(`(?<![\\w$])${alias}=${taskArray}`)))
-          miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
-      }
-    } else {
-      const id = rawId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (!has(new RegExp(`\\b${id}=${taskArray}`)))
-        miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
-    }
+    const ref = resolveNamespaceRef(s6[2], toolsSite, files);
+    if (!ref) miss("S7 Task-tools spread", "the TASK_TOOL_NAMES export alias could not be resolved");
+    else if (!new RegExp(`(?<![\\w$])${ref.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=${taskArray}`).test(ref.chunk))
+      miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
   }
   if (!has(/"ToolSearch",\.\.\.\w+\.sessionType===/)) miss("S8 tools tail-guard", "a tool appended after ToolSearch would evade S6");
   // A3: same member-expression spread widening as S6.
@@ -1526,7 +1966,9 @@ export function checkSpawnContractFacts(bundle: string): string[] {
     miss("S12 OnA call args", "disableCron:!0 / localAgent:!0 no longer earn the DISABLE_CRON / PROVIDER_MANAGED_BY_HOST pins");
   if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:\w+\.disableCron\?"1":""/, w2))
     miss("S13 DISABLE_CRON ternary", "the disableCron?'1':'' shape changed");
-  if (!has(/for\(const \w+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
+  // B7 (Desktop 1.25927.0): the loop binding is emitted as `let` in the new codegen (`for(let t of[…])`).
+  // The binding keyword is a minifier choice, never a contract fact — admit all three.
+  if (!has(/for\((?:const|let|var) \w+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
     miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
   // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS
   // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and

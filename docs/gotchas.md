@@ -24,11 +24,27 @@
   recording-shaping fields. Either re-record, or pass `--skip-scenario-drift` if you're intentionally
   verifying the rest of the gate against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
 
+## Operational tools when you're stuck
+
+- **Is a background run still alive?** `cowork-harness status <run-id | run-dir> [--follow]` checks
+  without `ps aux` — see [run-status.md](./run-status.md#cowork-harness-status-run-id--run-dir---follow).
+- **Run history missing or looks wrong?** `cowork-harness stats --reindex` rebuilds `index.jsonl` by
+  walking the on-disk run-dir tree — see [stats.md](./stats.md#--reindex-the-migration-path).
+- **Not sure the sandbox actually isolates anything?** `cowork-harness boundary-check` proves the
+  Docker sandbox against a given baseline — see [boundary.md](./boundary.md#verifying-the-boundary-holds).
+- **A trace/tool-output path shows a VM path instead of a real one?** A run's `mounts.json` records the
+  mount → host-path mapping that `trace --translate-paths` reads to print host paths for a `hostloop`
+  run — see [run-status.md](./run-status.md#mountsjson--a-runs-vm-path-resolution-context).
+- **An old run dir predates the per-turn `turns/<N>/` layout?** `cowork-harness migrate-run-dir`
+  converts it in place (dry run by default; pass `--write` to apply) — see
+  [debugging.md](./debugging.md#old-run-dirs-pre-turns-layout).
+
 ## Skill-authoring & host-loop footguns
 
-- **A skill works in the Claude Code CLI but misbehaves under Cowork's host-loop.** Two common footguns:
-  a `${CLAUDE_PLUGIN_ROOT}` path hardcoded into in-VM bash (dead in the host-loop VM — resolve the mount
-  at runtime instead), and a hook command that `export`s an env var or writes into `/tmp` (a host-side
+- **A skill works in the Claude Code CLI but misbehaves under Cowork.** Two common footguns:
+  a `${CLAUDE_PLUGIN_ROOT}` path hardcoded into in-VM bash — unset in in-VM bash on every fidelity tier
+  (see [plugin-root.md](./plugin-root.md); resolve the mount at runtime instead) — and a hook command
+  that `export`s an env var or writes into `/tmp` (a host-side
   hook write isn't VM-visible to the agent). `cowork-harness lint-skill <SKILL.md | skill-dir>` (also
   runnable directly as `scenario.py lint-skill <SKILL.md | skill-dir>`) scans a skill's body (and any
   sibling `hooks.json`) for both, WARN-only and deliberately narrow (fenced bash/sh/shell code blocks,

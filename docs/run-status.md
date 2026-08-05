@@ -51,7 +51,8 @@ result (`result.json`, exit code, assertions).
 - **`cowork-harness status <dir>`** — read the current status once and print a one-line summary (or the
   full JSON with `--output-format json`, which also carries a `stale: boolean` field). Exits `0` for a
   fresh `running`/`done`, `1` for `error` or missing/malformed `status.json`, `2` for an unresolvable
-  argument, `3` for a **stale** `running` (see below).
+  argument, `3` for a **stale** `running` (see below). The one-line summary goes to **stderr** and stdout
+  stays empty; `--output-format json` is the stdout form (see the anti-pattern under *Recipe*).
 - **`cowork-harness status <dir> --follow`** — stream one JSON line per status change on stdout, until
   the run reaches a terminal state. The harness owns the poll loop, so a driving agent points **one**
   Monitor at this instead of hand-rolling a poll/read loop. Two things make `--follow` fail loud with a
@@ -87,6 +88,18 @@ cowork-harness status "$OUT_DIR" --follow
 # {"schemaVersion":1,"state":"running",...}
 # {"schemaVersion":1,"state":"running",...}
 # {"schemaVersion":1,"state":"done","result":"success","durationMs":67432,...}
+```
+
+The one-shot summary above is written to **stderr**; stdout stays empty. A shell loop that greps
+`status`'s stdout therefore matches nothing, exits 1, and returns immediately against a live run — a
+silent false "done", the worst shape a polling helper can take:
+
+```bash
+# WRONG — stdout is empty, so grep exits 1, `!` inverts it, and the loop never sleeps.
+until ! cowork-harness status "$D" | grep -q '● running'; do sleep 30; done
+
+# RIGHT — the harness owns the poll loop and exits when the run reaches a terminal state.
+cowork-harness status "$D" --follow
 ```
 
 ## Exit codes

@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.17.0`
-(baseline `desktop-1.24012.9`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.18.0`
+(baseline `desktop-1.25927.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
@@ -32,7 +32,7 @@ references a session for setup.
 ```yaml
 name: my-test                       # OPTIONAL — defaults to the filename; keys runs/<name>/
 baseline: latest                    # platform baseline: "latest" or "desktop-<ver>" (NOT "profile:")
-session: ../sessions/default.yaml   # pre-prompt setup (resolved relative to THIS file)
+session: ../sessions/my-session.yaml # pre-prompt setup (resolved relative to THIS file)
 fidelity: container                 # protocol | container | microvm | hostloop | cowork
 execution: local                    # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                     # local): local (default) | cloud-describe (RESERVED — no runner
@@ -146,6 +146,13 @@ folders:
 uploads:
   - ~/Downloads/report.pdf
 
+# connected PROJECTS (userSelectedProjectUuids) — NOT the same as a work folder above, and not the
+#   legacy mnt/.projects/<id> work-folder path older baselines used
+projects:
+  - { uuid: 7f3c…, from: ~/code/myproject }   # mounted READ-ONLY at mnt/.projects/<uuid>
+                                              #   no mode: knob — production hardcodes ro
+                                              #   never becomes the cwd; {{workspaceFolder}} stays at outputs
+
 # discovery: marketplaces / plugins / skills / mcp
 plugins:
   marketplaces: []               # plugin_marketplaces (git URLs or local paths)
@@ -158,7 +165,7 @@ plugins:
 skills:
   local: []                      # extra host skill dirs
   suggest_enabled: true          # gate 245679952 override — `mcp__skills__suggest_skills` on/off (default true)
-  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param (default false)
+  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param; unset = synced baseline gate (ON from 1.24012.11)
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map)
   enabled: []
@@ -274,6 +281,7 @@ same set live from the schema.
 | `file_exists: <path>` | the path exists under the run's `work/` (anchored at `mnt/`, e.g. `outputs/x.md`). For a user-facing deliverable prefer `user_visible_artifact` — with a connected folder the file lands in `mnt/<folder>` (= `{{workspaceFolder}}`), not `mnt/outputs`, so `file_exists: outputs/x.md` misses it |
 | `user_visible_artifact: <path>` | exists **and** under a user-visible root (`outputs/` + each connected folder's mount name) — the right primitive for a workspace deliverable when a folder is connected |
 | `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
+| `no_delete_in_mounts: true` | no delete op touched ANY delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount, so `no_delete_in_outputs` covers only part of the real rule. **only `true` is valid** |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); an **incomplete post-run filesystem walk** (an unreadable subtree — a permission/I-O error) also fails evidence-unavailable rather than reporting "no strays" over a partial tree — distinct from the missing-manifest case (a `--resume` run), which fails for a different reason; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay needs `cassette.preRunPaths` (≥0.24 recordings) — cassettes without it **exclude** the key with a loud warning |
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. uploaded files under `uploads/**`) whose workRoot-relative path matches ≥1 glob keeps an unchanged content hash after the run — the in-place-mutation companion to `no_unexpected_files`'s new-files check (`[]` is rejected by the schema — list at least one glob); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise verify zero files and pass vacuously); a matched file that was deleted counts as a content change (fails); live/verify-run without a pre-run hash manifest ⇒ evidence-unavailable hard-fail (a `--resume` run); captured on every live sandbox tier including microvm; replay needs `cassette.preRunHashes` — cassettes without it **exclude** the key with a loud warning; on replay it compares against the manifest's recorded `sha256`, never a re-hash of the materialized tree |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
@@ -334,6 +342,8 @@ same set live from the schema.
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
 | `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an `AskUserQuestion`); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider) |
 | `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap |
+| `allow_outputs_delete: true` | verdict modifier — accepts a detected outputs delete instead of failing the run, for a skill whose deletion is intended. Omitting `no_delete_in_outputs` does **not** permit deletes (a detected delete fails via the `outputs_delete` signal precisely because the key was not authored), so this is the way to accept one. **Mutually exclusive** with `no_delete_in_outputs`. Waives the harness's post-hoc detection; it does not model Cowork's `allow_cowork_file_delete` approval handshake |
+| `allow_delete_in: [<mount>…]` | verdict modifier — accepts detected deletes in the named mounts (the per-mount analogue of `allow_outputs_delete`, mirroring production's `fileDeleteApprovedMounts`). Waives the verdict only; detection still runs and the hits stay in `result.json`. Listing `outputs` conflicts with `no_delete_in_outputs` |
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths, and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this fails BY DESIGN on both (the harness warns at run start if asserted anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -369,6 +379,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `transport_error` | fail | The connection dropped mid/after-run |
 | `permissive_auto_allow` | fail | A cowork-parity auto-allow real Cowork would block (opt out: `allow_permissive_auto_allow`) |
 | `outputs_delete` | fail | An unauthorized delete touched `mnt/outputs` (opt out: author `no_delete_in_outputs`) |
+| `mount_delete` | warn | A delete touched a delete-denied mount other than `outputs` (a `rw` connected folder). Production denies `unlink`/`rmdir` there until per-mount approval, so the run diverged. Warn, not fail: the harness detects post-hoc what production enforces. Author `no_delete_in_mounts` to hard-fail, or `allow_delete_in` to waive |
 | `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`) |
 | `l0_plugin_divergence` | fail | L0/protocol plugin loading diverged from Cowork (opt out: `allow_l0_plugin_divergence`) |
 | `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`, or `skill --allow-missing-capability` on an open-ended run) |
@@ -391,12 +402,12 @@ overall run verdict and exit code — `assert result: success` alone won't catch
 A cassette (`record`/`replay`) has **no filesystem and no network**. `replay` re-evaluates only the
 **content** assertions. The authoritative list is `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS`/`MANIFEST_KEYS` (composed) in `src/run/cassette.ts`.
 
-**Scenario source — the WHOLE scenario is frozen; only `assert:` can be opted back to disk.** A cassette
-captures every key (`name`/`prompt`/`session`/`baseline`/`fidelity`/`lane`/`skills`/`answers`/`execution`/
-`requires_capabilities`/`expect_denied`/`assert`), and a plain `replay` evaluates **all** of them from that
-frozen copy (byte-deterministic, ignores the working tree); editing `scenarios/<name>.yaml` does not change
-it — replay only prints a `::notice::` when a sibling's `assert:`/`prompt:` differs, or when it fails to
-load at all. An edited `lane:`/`fidelity:`/`baseline:` reaches a replay ONLY by re-recording. `replay --assert-from
+**Scenario source — the WHOLE scenario is frozen; only `assert:` (+`expect_denied:`) can be opted back to
+disk.** A cassette captures every key (`name`/`prompt`/`session`/`baseline`/`fidelity`/`lane`/`skills`/
+`answers`/`execution`/`requires_capabilities`/`expect_denied`/`assert`), and a plain `replay` evaluates
+**all** of them from that frozen copy (byte-deterministic, ignores the working tree); editing
+`scenarios/<name>.yaml` does not change it — replay only prints a `::notice::` when a sibling's
+`assert:`/`prompt:` differs, or when it fails to load at all. An edited `lane:`/`fidelity:`/`baseline:` reaches a replay ONLY by re-recording. `replay --assert-from
 <scenario.yaml>` / `--reassert` is the opt-in token-free re-check against the on-disk block; it **hard-fails**
 on recording-shaping drift (`prompt`/`answers`/`baseline`/`skills`) or skill-content staleness (it implies
 `--fail-on-skill-drift`). `expect_denied`/filesystem/egress keys are sourced from on-disk but stay live-only —

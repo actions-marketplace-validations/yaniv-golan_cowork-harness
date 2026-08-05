@@ -51,16 +51,43 @@ fi
 # (`verify-cassettes examples/replays/` in .github/workflows/ci.yml), so it fires at commit time
 # instead of at release time.
 #
-baseline_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^baselines/desktop-.*\.json$' || true)
+# ALSO trigger on a staged cassette, not just a staged baseline. A baseline moves `latest` and stales the
+# committed fixtures — that's why this started here — but the commit that ADDS or re-records a cassette is
+# the one that can introduce a host-inventory leak, and it stages no baseline at all, so it used to skip
+# this check entirely (the host-inventory warning below was unreachable on exactly that commit).
+baseline_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(baselines/desktop-.*|.*\.cassette)\.json$' || true)
 if [ -n "$baseline_files" ]; then
   if [ ! -f dist/cli.js ]; then
     echo "⚠ pre-commit: dist/cli.js not built (run 'npm run build') — skipping cassette staleness check."
   else
-    if ! node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com' >/tmp/cwh-verify-cassettes.$$ 2>&1; then
+    # Verify the example dir (a staged BASELINE stales those) PLUS any staged cassette that lives elsewhere
+    # — otherwise widening the trigger above to `*.cassette.json` would fire the hook on a file it then
+    # never looks at, checking a different directory than the one that changed.
+    staged_cassettes=$(printf '%s\n' "$baseline_files" | grep -E '\.cassette\.json$' | grep -v '^examples/replays/' || true)
+    # Exit 3 is "could not verify" (an unreadable/hand-authored fixture), NOT a finding — the CLI documents
+    # that as a bug to report, not a signal to re-record. Only exit 1 (verified & failed) blocks a commit;
+    # a 3 is surfaced as a warning so a minimal eval fixture can't wedge every commit that touches it.
+    hook_status=0
+    node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com' >/tmp/cwh-verify-cassettes.$$ 2>&1 || hook_status=$?
+    for c in $staged_cassettes; do
+      [ -f "$c" ] || continue
+      node dist/cli.js verify-cassettes "$c" >>/tmp/cwh-verify-cassettes.$$ 2>&1 || s=$?
+      if [ "${s:-0}" = "1" ]; then hook_status=1; fi
+      if [ "${s:-0}" = "3" ] && [ "$hook_status" = "0" ]; then hook_status=3; fi
+      s=0
+    done
+    if [ "$hook_status" = "3" ]; then
+      echo "⚠ pre-commit: a staged cassette could not be verified (exit 3 — not a finding):"
+      cat /tmp/cwh-verify-cassettes.$$
+    fi
+    if [ "$hook_status" = "1" ]; then
       cat /tmp/cwh-verify-cassettes.$$
       rm -f /tmp/cwh-verify-cassettes.$$
       echo ""
-      echo "✖ pre-commit: a staged baseline file staled the committed example cassettes above."
+      echo "✖ pre-commit: a staged cassette FAILED verification (privacy or staleness) — see above."
+      echo "  A [host-inventory] finding means the recording carries THIS machine's MCP servers/agents/"
+      echo "  account metadata; committing it publishes them. Re-record at 'container' tier (sealed)."
+      echo "  A [stale] finding after a baseline change:"
       echo "  Re-stamp fingerprint.baseline in examples/replays/*.cassette.json to the new version"
       echo "  (safe when the spawn contract is unchanged — see 9eaba8d for precedent), or re-record"
       echo "  for real: cowork-harness record <scenario> --out examples/replays/<name>.cassette.json"

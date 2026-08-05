@@ -5,7 +5,7 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
 import type { LaunchPlan, Mount } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
 import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills-handler.js";
 import { makePluginsHandler } from "../hostloop/plugins-handler.js";
 import { makeCoworkHandlerHostLoop } from "../hostloop/cowork-handler-hostloop.js";
@@ -102,7 +102,7 @@ export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolea
  * process.
  */
 export function hostLoopPresentFilesRoots(hostOutputsDir: string, plan: LaunchPlan): string[] {
-  return [hostOutputsDir, ...plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath)];
+  return [hostOutputsDir, ...plan.mounts.filter(isConnectedContent).map((mt) => mt.hostPath)];
 }
 
 /**
@@ -141,7 +141,8 @@ export function spawnHostLoop(
     /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
      *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
     suggestSkillsEnabled?: boolean;
-    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ default false). Only
+    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ the synced baseline gate,
+     *  which is ON from the 1.24012.11 baseline; the fallback for an older baseline is false). Only
      *  consulted when `suggestSkillsEnabled` is true. */
     proactiveSkillSuggestEnabled?: boolean;
   } = {},

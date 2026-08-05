@@ -77,6 +77,23 @@ describe("redaction self-check does not emit a spurious skill-staleness warning"
     expect(withoutDir.staleness?.some((s) => s.class === "unverifiable-skill")).toBe(true);
   });
 
+  // A verdict flip used to report only `pass=true → pass=false`, which says something broke but not
+  // WHAT — the operator then had to diff two replays by hand. The message now names both diffs.
+  it("a verdict flip names the flipped assertion AND the verdict signals", async () => {
+    const { cassette, cassetteDir } = relocatableCassetteWithSkill();
+    captureStderr();
+    // Manufacture the flip: the redacted copy's run ends in an error, so `result: "success"` fails.
+    const redacted = JSON.parse(JSON.stringify(cassette));
+    redacted.events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: [] }),
+      JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true }),
+    ];
+    await expect(assertRedactionVerdictPreserved(cassette, redacted, cassetteDir)).rejects.toThrow(/failing assertions: \[.*\] → \[.*\]/);
+    await expect(assertRedactionVerdictPreserved(cassette, redacted, cassetteDir)).rejects.toThrow(/verdict signals: \[.*\] → \[.*\]/);
+    // and it must still name the concrete key that flipped, not just report that something did
+    await expect(assertRedactionVerdictPreserved(cassette, redacted, cassetteDir)).rejects.toThrow(/result/);
+  });
+
   it("assertRedactionVerdictPreserved emits no `unverifiable-skill` warning when given the cassette dir", async () => {
     const { cassette, cassetteDir } = relocatableCassetteWithSkill();
     const cap = captureStderr();

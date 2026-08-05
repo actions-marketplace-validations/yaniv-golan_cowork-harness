@@ -404,7 +404,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   // `allow_l0_plugin_divergence` fell through (it had no assert.ts noop branch).
   it.each([...VERDICT_MODIFIER_KEYS])("a standalone %s assertion replays green with no filesystem-skip warning", (modifier) => {
     const r0 = run(["--version"]); // borrow a temp cwd
-    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: true }])));
+    // Not every modifier is `literal(true)` — `allow_delete_in` takes a non-empty array of mount names.
+    // Encoding that here keeps the sweep honest rather than excluding the key from it.
+    const value: unknown = modifier === "allow_delete_in" ? ["reports"] : true;
+    writeIn(r0.cwd, "c.cassette.json", JSON.stringify(cassette([{ [modifier]: value }])));
     const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--output-format", "json"], {
       encoding: "utf8",
       cwd: r0.cwd,
@@ -757,5 +760,78 @@ describe.skipIf(!can)("replay staleness JSON + --fail-on-skill-drift (CLI wiring
     expect(baselineOnly.status).toBe(0); // baseline drift is not skill-source drift
     const skillDrift = spawnSync("node", [CLI, "replay", "s.cassette.json", "--fail-on-skill-drift"], { encoding: "utf8", cwd });
     expect(skillDrift.status).toBe(1); // skill staleness unverifiable ⇒ not green under this gate
+  });
+});
+
+// A JSON consumer parses stdout. Whether it GETS parseable stdout must not depend on where
+// `--output-format json` sits in argv — but four validations inside takeCommonFlags' parse loop read
+// `flags.output`, which is only populated once the loop has REACHED `--output-format`. Put the offending
+// flag first and the same error came back as plain text, so the consumer's JSON.parse threw instead of
+// reading a usage envelope. The loop's other error paths already used isJsonOutput(args), which scans
+// all of argv (and falls back to COWORK_HARNESS_OUTPUT_FORMAT), so this was an inconsistency inside one
+// function rather than a deliberate rule.
+describe.skipIf(!can)("the usage envelope does not depend on --output-format's position in argv", () => {
+  const LONG_LABEL = "x".repeat(201);
+  const cases: { name: string; offending: string[] }[] = [
+    { name: "--decider-cmd with a flag-looking value", offending: ["--decider-cmd", "-bad"] },
+    { name: "--decider-dir with a flag-looking value", offending: ["--decider-dir", "-bad"] },
+    { name: "--label containing a newline", offending: ["--label", "a\nb"] },
+    { name: "--label over the length cap", offending: ["--label", LONG_LABEL] },
+  ];
+
+  for (const { name, offending } of cases) {
+    it(`${name} → JSON envelope with --output-format AFTER it`, () => {
+      const r = run(["skill", "./x", "hi", ...offending, "--output-format", "json"]);
+      expect(r.code).toBe(2);
+      expect(r.json, `expected a JSON envelope, got: ${r.stdout.trim().slice(0, 120)}`).toBeTruthy();
+      expect(r.json.error.category).toBe("usage");
+    });
+
+    it(`${name} → same envelope with --output-format BEFORE it`, () => {
+      const r = run(["skill", "./x", "hi", "--output-format", "json", ...offending]);
+      expect(r.code).toBe(2);
+      expect(r.json).toBeTruthy();
+      expect(r.json.error.category).toBe("usage");
+    });
+  }
+
+  // The env-var route must keep working with no flag present at all: isJsonOutput falls back to it, and
+  // a regression here would silently drop env-only consumers back to plain text.
+  it("COWORK_HARNESS_OUTPUT_FORMAT=json still yields an envelope with no --output-format flag", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-envfmt-"));
+    const r = spawnSync("node", [CLI, "skill", "./x", "hi", "--decider-cmd", "-bad"], {
+      encoding: "utf8",
+      cwd,
+      env: { ...process.env, COWORK_HARNESS_OUTPUT_FORMAT: "json" },
+    });
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.category).toBe("usage");
+  });
+});
+
+// Structural guard for the invariant the behavior tests above prove. The behavior tests cover the four
+// validations that exist today; this one fails on a NEW `fail()` added to the same loop with the
+// order-dependent predicate, which is how the original four got there.
+describe("takeCommonFlags never decides JSON-ness from the half-parsed flags object", () => {
+  it('no `flags.output === "json"` inside the parse loop', () => {
+    const src = readFileSync(resolve("src/cli.ts"), "utf8");
+    const start = src.indexOf("function takeCommonFlags(");
+    expect(start, "takeCommonFlags not found — did it move or get renamed?").toBeGreaterThan(-1);
+    // The function ends at the first line that is exactly "}" at column 0 after the declaration.
+    const end = src.indexOf("\n}\n", start);
+    expect(end, "could not find takeCommonFlags' closing brace").toBeGreaterThan(start);
+    const body = src.slice(start, end);
+    // Sanity: the slice really is the parser (guards against an anchor that silently matched nothing).
+    expect(body).toContain('name === "--decider-cmd"');
+    expect(body).toContain("isJsonOutput(args)");
+
+    const offenders = body
+      .split("\n")
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(({ line }) => line.includes('flags.output === "json"'));
+    expect(
+      offenders.map((o) => `+${o.n}: ${o.line}`),
+      "use isJsonOutput(args): flags.output is not populated until the loop reaches --output-format, so this makes the error envelope depend on flag order",
+    ).toEqual([]);
   });
 });

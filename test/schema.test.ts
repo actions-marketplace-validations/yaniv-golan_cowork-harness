@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
-import { AnswerRule, Assertion, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
@@ -192,5 +192,50 @@ describe("execution field (location axis, orthogonal to fidelity)", () => {
     const keys = JSON.parse(buildAssertionKeys()).topLevelKeys as string[];
     expect(keys).toContain("execution");
     expect([...VERDICT_MODIFIER_KEYS]).not.toContain("execution");
+  });
+});
+
+// A zod `.superRefine` has no JSON Schema representation, so `z.toJSONSchema` drops it silently. The
+// loader would then reject a scenario the PUBLISHED schema accepts — an editor or a schema-validating CI
+// step would green a file that cannot run. gen-schema mirrors the rule by hand; this validates the emitted
+// schema with a real validator so a forgotten mirror fails loudly instead of drifting.
+describe("published scenario schema enforces cross-key rules the loader enforces", () => {
+  const compiled = (): ((d: unknown) => boolean) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Ajv = require("ajv");
+    const schema = JSON.parse(buildSchemas()["scenario.schema.json"]);
+    // strict mode on purpose — the same bar test/schema-ajv.test.ts holds the whole schema to.
+    return new Ajv({ strict: true }).compile(schema) as (d: unknown) => boolean;
+  };
+
+  it("accepts either outputs-delete key alone", () => {
+    const v = compiled();
+    expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true }] })).toBe(true);
+    expect(v({ prompt: "x", assert: [{ allow_outputs_delete: true }] })).toBe(true);
+  });
+
+  it("rejects the mutually exclusive pair, in one entry OR across entries", () => {
+    const v = compiled();
+    expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true, allow_outputs_delete: true }] })).toBe(false);
+    expect(v({ prompt: "x", assert: [{ no_delete_in_outputs: true }, { allow_outputs_delete: true }] })).toBe(false);
+  });
+});
+
+describe("cross-key rule: allow_delete_in must not waive outputs alongside no_delete_in_outputs", () => {
+  it("the loader rejects the contradiction", () => {
+    const bad = { prompt: "p", assert: [{ no_delete_in_outputs: true }, { allow_delete_in: ["outputs"] }] };
+    expect(Scenario.safeParse(bad).success).toBe(false);
+  });
+  it("waiving a DIFFERENT mount alongside no_delete_in_outputs is fine — not a contradiction", () => {
+    const ok = { prompt: "p", assert: [{ no_delete_in_outputs: true }, { allow_delete_in: ["reports"] }] };
+    expect(Scenario.safeParse(ok).success).toBe(true);
+  });
+  it("no_delete_in_mounts + allow_delete_in COMPOSE — 'none except these' is coherent", () => {
+    const ok = { prompt: "p", assert: [{ no_delete_in_mounts: true }, { allow_delete_in: ["reports"] }] };
+    expect(Scenario.safeParse(ok).success).toBe(true);
+  });
+  it("the published JSON Schema mirrors the refinement (editors/CI must agree with the loader)", () => {
+    const schema = JSON.parse(readFileSync(join(process.cwd(), "schema/scenario.schema.json"), "utf8"));
+    expect(JSON.stringify(schema.not)).toMatch(/allow_delete_in/);
   });
 });

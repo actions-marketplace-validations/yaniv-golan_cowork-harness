@@ -15,6 +15,7 @@ function ctx(over: Partial<AssertContext> = {}): AssertContext {
     workRoot: "/nonexistent",
     userVisiblePrefixes: ["outputs", ".projects"],
     outputsDeletes: [],
+    mountDeletes: [],
     questions: [],
     hostPathLeaked: false,
     selfHealRan: false,
@@ -1670,5 +1671,46 @@ describe("input_unmodified", () => {
     const [rChanged] = evaluate([{ input_unmodified: ["ref/**"] }], changedCtx);
     expect(rChanged.pass).toBe(false);
     expect(rChanged.message).toMatch(/modified in place/);
+  });
+});
+
+describe("no_delete_in_mounts / allow_delete_in — mount-wide delete assertions", () => {
+  const md = (mountDeletes: { mount: string; command: string }[], over: Record<string, unknown> = {}) => ctx({ mountDeletes, ...over });
+
+  it("passes when no delete-denied mount was touched", () => {
+    expect(evaluate([{ no_delete_in_mounts: true }], md([]))[0].pass).toBe(true);
+  });
+
+  it("fails on a delete in a connected folder — the case outputs-only scoping missed entirely", () => {
+    const r = evaluate([{ no_delete_in_mounts: true }], md([{ mount: "reports", command: "rm -rf reports/old.pdf" }]))[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/reports/);
+  });
+
+  it("allow_delete_in waives the named mount — and ONLY the named mount", () => {
+    const hits = [
+      { mount: "reports", command: "rm -rf reports/a" },
+      { mount: "drafts", command: "rm -rf drafts/b" },
+    ];
+    expect(evaluate([{ no_delete_in_mounts: true }, { allow_delete_in: ["reports", "drafts"] }], md(hits))[0].pass).toBe(true);
+    const partial = evaluate([{ no_delete_in_mounts: true }, { allow_delete_in: ["reports"] }], md(hits))[0];
+    expect(partial.pass).toBe(false);
+    expect(partial.message).toMatch(/drafts/);
+    expect(partial.message).not.toMatch(/reports/); // the waived one is not reported as a failure
+  });
+
+  it("the waiver does NOT suppress detection — hits stay in the evidence", () => {
+    // Mirrors allow_outputs_delete: a WAIVER of the verdict, not of the scan. The forensic record has to
+    // survive, or the key quietly destroys the evidence it is excusing.
+    const hits = [{ mount: "reports", command: "rm -rf reports/a" }];
+    const c = md(hits);
+    evaluate([{ no_delete_in_mounts: true }, { allow_delete_in: ["reports"] }], c);
+    expect((c as unknown as { mountDeletes: unknown[] }).mountDeletes).toEqual(hits);
+  });
+
+  it("evidence-unavailable when the post-run scan is absent — never a vacuous pass", () => {
+    const r = evaluate([{ no_delete_in_mounts: true }], md([], { scanMissing: true }))[0];
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/evidence unavailable/);
   });
 });

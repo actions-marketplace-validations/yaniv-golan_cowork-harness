@@ -240,6 +240,151 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.out).not.toMatch(/unexpected argument/);
     expect(r.out).toMatch(/scenario path not found/);
   });
+
+  // --on-unanswered llm is rejected on every command (the LLM decider's CLI spelling is --decider-llm),
+  // but `run` has no --decider-llm flag (only `skill`/`record` do) — its redirect must point at the
+  // scenario-YAML spelling instead of telling the user to pass a flag `run` would then reject as
+  // unexpected. NOTE: no --dry-run here — this rejection lives in resolvePolicy(), which the dry-run
+  // early-return in the `skill` handler bypasses, so a --dry-run invocation would exit 0 and prove nothing.
+  it("run: --on-unanswered llm → redirects to the scenario YAML, not --decider-llm", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--on-unanswered", "llm"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/on_unanswered: llm/);
+    expect(r.out).not.toMatch(/Use --decider-llm/);
+  });
+
+  it("skill: --on-unanswered llm → still redirects to --decider-llm", () => {
+    const d = mkdtempSync(join(tmpdir(), "g6-"));
+    const r = run(["skill", "./plugin", "hi", "--on-unanswered", "llm"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/Use --decider-llm/);
+  });
+});
+
+// `--dry-run` is the advertised pre-flight check ("does this invocation load?"), so a guard it skips is
+// a guard that green-lights an invalid command line. `skill`'s dry-run return sat ABOVE resolvePolicy,
+// resolveExternal and both --repeat conflicts, so all four were bypassed — the comment above the return
+// claims the opposite ("All semantic validation must happen BEFORE the dry-run return").
+describe.skipIf(!can)("skill --dry-run validates the command line it previews", () => {
+  const plugin = () => {
+    const d = mkdtempSync(join(tmpdir(), "dr-"));
+    mkdirSync(join(d, "p", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(d, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p", version: "0.0.1" }));
+    return d;
+  };
+
+  // Value validation lives in resolvePolicy, which the dry-run return skipped entirely.
+  for (const bad of ["banana", "llm", "external"]) {
+    it(`rejects --on-unanswered ${bad} under --dry-run`, () => {
+      const d = plugin();
+      const r = run(["skill", "./p", "hi", "--on-unanswered", bad, "--dry-run"], d);
+      expect(r.code).toBe(2);
+    });
+  }
+
+  it("rejects --decider-dir + --decider-cmd under --dry-run (one terminal channel)", () => {
+    const d = plugin();
+    mkdirSync(join(d, "dd"), { recursive: true });
+    const r = run(["skill", "./p", "hi", "--decider-dir", "dd", "--decider-cmd", "cat", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/one terminal channel/);
+  });
+
+  it("rejects --repeat + --session-id under --dry-run", () => {
+    const d = plugin();
+    const r = run(["skill", "./p", "hi", "--repeat", "3", "--session-id", "foo", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat cannot be combined with --session-id/);
+  });
+
+  it("rejects --repeat + --decider-dir under --dry-run", () => {
+    const d = plugin();
+    mkdirSync(join(d, "dd"), { recursive: true });
+    const r = run(["skill", "./p", "hi", "--repeat", "3", "--decider-dir", "dd", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--repeat cannot be combined with --decider-dir/);
+  });
+
+  // The preview is what a user reads to confirm the invocation is what they meant. Omitting the gate
+  // policy also made the equals-vs-spaced parity case for --on-unanswered vacuous: it compared two
+  // previews that never carried the flag's value.
+  it("the preview reports the resolved on_unanswered policy", () => {
+    const d = plugin();
+    const r = run(["skill", "./p", "hi", "--on-unanswered", "first", "--dry-run"], d);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).on_unanswered).toBe("first");
+  });
+});
+
+// With an external channel, buildDecider uses it AS the terminal (`opts.external ?? …`), so the
+// policy terminal is never constructed and --on-unanswered is inert. `--decider-llm` already rejects
+// the same combination; these channels silently swallowed it.
+describe.skipIf(!can)("--on-unanswered conflicts with an external decider channel", () => {
+  it("skill: --decider-dir + --on-unanswered → usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "cf-"));
+    mkdirSync(join(d, "dd"), { recursive: true });
+    const r = run(["skill", "./p", "hi", "--decider-dir", "dd", "--on-unanswered", "first"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--on-unanswered/);
+  });
+
+  // The scenario carries `execution: cloud-describe`, a hard load-time error, so this case can never
+  // spawn a run whether or not the guard fires — the flag conflict must be reported instead of the
+  // load error, which is also what proves the guard runs BEFORE the scenario is read.
+  it("run: --decider-cmd + --on-unanswered → usage error, before the scenario is read", () => {
+    const d = mkdtempSync(join(tmpdir(), "cf-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\nexecution: cloud-describe\n");
+    const r = run(["run", "s.yaml", "--decider-cmd", "true", "--on-unanswered", "first"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--on-unanswered/);
+    expect(r.out).not.toMatch(/cloud-describe/);
+  });
+});
+
+// resolvePolicy's signature was `command: "run" | "skill"`, so probe-dispatch passed "skill" and every
+// usage error it raised was stamped with another command's name.
+describe.skipIf(!can)("probe-dispatch names itself in its own usage errors", () => {
+  it("a bad --on-unanswered value reports command probe-dispatch, not skill", () => {
+    const d = mkdtempSync(join(tmpdir(), "pd-"));
+    const r = run(["probe-dispatch", "./p", "hi", "--on-unanswered", "banana", "--output-format", "json"], d);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.out).command).toBe("probe-dispatch");
+  });
+
+  // probe-dispatch has no --decider-llm flag either, so it needs `run`'s redirect, not `skill`'s.
+  it("--on-unanswered llm does not point at a --decider-llm flag probe-dispatch lacks", () => {
+    const d = mkdtempSync(join(tmpdir(), "pd-"));
+    const r = run(["probe-dispatch", "./p", "hi", "--on-unanswered", "llm"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).not.toMatch(/Use --decider-llm/);
+  });
+});
+
+// `run` rejects a scenario carrying `on_unanswered: prompt` because a TTY wait breaks determinism.
+// `record` writes a committed fixture and validates its own --on-unanswered to fail|first for the same
+// reason, but had no guard on the YAML field — which outranks the flag (execute.ts's
+// `scenario.on_unanswered ?? opts.onUnanswered`).
+describe.skipIf(!can)("record rejects on_unanswered: prompt in the scenario, as run does", () => {
+  it("record: scenario on_unanswered: prompt → usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "rp-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\non_unanswered: prompt\n");
+    const r = run(["record", "s.yaml", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/prompt/);
+  });
+
+  // record's own --help presents --decider-dir | --decider-llm | --on-unanswered as alternatives; the
+  // parser accepted a channel and a policy together, where the channel silently wins.
+  it("record: --decider-dir + --on-unanswered → usage error", () => {
+    const d = mkdtempSync(join(tmpdir(), "rp-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    mkdirSync(join(d, "dd"), { recursive: true });
+    const r = run(["record", "s.yaml", "--decider-dir", "dd", "--on-unanswered", "first", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--on-unanswered/);
+  });
 });
 
 // A GLOBAL flag (--dotenv / --run-dir) only works in LEADING position (before the subcommand). Used
@@ -341,6 +486,21 @@ describe.skipIf(!can)("global-flag position hint", () => {
     const r = run(["run", "s.yaml", "--dotenv.yaml"], d);
     expect(r.code).toBe(2);
     expect(r.out).not.toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
+  });
+
+  // The COMMA form is the shape that separates the two guards, and it is the reason `run`'s
+  // leftover-positional error carries its pointer in the MESSAGE rather than in fail()'s `hint`: a
+  // caller-supplied hint WINS over the auto-derived one (`hint ?? misplacedGlobalHint(…)`), and
+  // `--dotenv,foo` slips past cmdRun's strayGlobal pre-check (which terminates on `(=|$)`) while still
+  // matching misplacedGlobalHint (which also terminates on `[\s,]`) — so it lands here with the hint
+  // intact. Nothing covered this before; a future refactor onto `hint` would silently swallow it.
+  it("run: a comma-suffixed global reaches the leftover-positional path and KEEPS the hint", () => {
+    const d = mkdtempSync(join(tmpdir(), "gf-"));
+    writeFileSync(join(d, "s.yaml"), "prompt: hi\n");
+    const r = run(["run", "s.yaml", "--dotenv,foo"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/unexpected argument\(s\): --dotenv,foo/);
+    expect(r.out).toMatch(/GLOBAL flag and must come BEFORE the subcommand/);
   });
 
   // The flag name inside a quoted VALUE is being reported as a value, not parsed as a flag.
@@ -631,5 +791,22 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
     writeFileSync(join(d, "m.yaml"), "baselines: [a]\n");
     const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--decider-dir", d], d);
     expect(r.out).not.toMatch(/cannot be combined with --decider-dir/);
+  });
+});
+
+// A rejected flag on a PAID command should answer the question the rejection raises: "then how do I check
+// this without spending?" `run` takes no --dry-run (skill/record/rehash/prune do, and critique rejects it
+// WITH its reason), so reaching for it there is consistent with the tool's own surface rather than user
+// error — and the bare rejection left the user with nowhere to go. Two different checks, deliberately both
+// named: `record --dry-run` answers "does it LOAD" (the strict loader), `lint` answers "are the assertions
+// sane" (lenient — a WARN there still may not run).
+describe.skipIf(!can)("run: the leftover-positional rejection points at the token-free checks", () => {
+  it("names both `record --dry-run` and `lint`", () => {
+    const d = mkdtempSync(join(tmpdir(), "g-dryrun-"));
+    const r = run(["run", "x.yaml", "--dry-run"], d);
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/unexpected argument\(s\): --dry-run/);
+    expect(r.out).toMatch(/record <file\.yaml> --dry-run/);
+    expect(r.out).toMatch(/lint <file\.yaml>/);
   });
 });

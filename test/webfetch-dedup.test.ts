@@ -208,14 +208,14 @@ const GID = "1978029737";
 describe("coworkWebFetchDedup baseline-gating", () => {
   it("1.22209.3 carries the gate: flag on, TtlMs=900000, MaxEntries=100", () => {
     const b = loadBaseline("1.22209.3");
-    expect(readGateFlag(b, GID, "coworkWebFetchDedup")).toBe(true);
+    expect(readGateFlag(b, GID, "coworkWebFetchDedup", false)).toBe(true);
     expect(readGateNumber(b, GID, "coworkWebFetchDedupTtlMs")).toBe(900000);
     expect(readGateNumber(b, GID, "coworkWebFetchDedupMaxEntries")).toBe(100);
   });
 
   it("1.21459.0 (older) lacks the gate: flag off, numbers undefined → dedup stays off", () => {
     const b = loadBaseline("1.21459.0");
-    expect(readGateFlag(b, GID, "coworkWebFetchDedup")).toBe(false);
+    expect(readGateFlag(b, GID, "coworkWebFetchDedup", false)).toBe(false);
     expect(readGateNumber(b, GID, "coworkWebFetchDedupTtlMs")).toBeUndefined();
     // the callers gate on `viaApiOn && readGateFlag(...)`, so an off flag ⇒ no cache ⇒ no behavior change
   });

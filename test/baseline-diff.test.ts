@@ -172,3 +172,51 @@ describe("diffBaselines — a field introduced in a newer baseline is 'added', n
     });
   });
 });
+
+describe("renderChangelog — fcache snapshot identity + served-key drift", () => {
+  const render = (a: unknown, b: unknown) => renderChangelog(diffBaselines(a, b));
+
+  it("a content16 change is reported as CONTENT drift, not as a refetch", () => {
+    const out = render(
+      { provenance: { fcache: { content16: "aaaa", featureCount: 241 } } },
+      {
+        provenance: { fcache: { content16: "bbbb", featureCount: 241 } },
+      },
+    );
+    expect(out).toMatch(/fcache CONTENT changed \(`aaaa` → `bbbb`\)/);
+  });
+
+  it("a timestamp-only move is reported as a refetch that may not have mattered", () => {
+    const out = render(
+      { provenance: { fcache: { content16: "aaaa", embeddedTimestamp: 1 } } },
+      {
+        provenance: { fcache: { content16: "aaaa", embeddedTimestamp: 2 } },
+      },
+    );
+    expect(out).toMatch(/refetched \(timestamp only/);
+    expect(out).not.toMatch(/CONTENT changed/); // the whole point of separating the two
+  });
+
+  it("a WITHDRAWN served key says the code default now applies", () => {
+    // The real 1.22209.3 → 1.24012.0 case: the gate stayed present and on, but a key it had been
+    // serving was withdrawn — which hands control to a code default that may differ.
+    const out = render(
+      { provenance: { gates: { "cfg:1978029737": { value: { pluginsFullSyncStalenessMs: 0 } } } } },
+      {
+        provenance: { gates: { "cfg:1978029737": { value: {} } } },
+      },
+    );
+    expect(out).toMatch(/STOPPED serving key `pluginsFullSyncStalenessMs`/);
+    expect(out).toMatch(/falls back to the code default/);
+  });
+
+  it("a NEWLY served key is reported as taking over from the code default", () => {
+    const out = render(
+      { provenance: { gates: { "cfg:1978029737": { value: {} } } } },
+      {
+        provenance: { gates: { "cfg:1978029737": { value: { coworkWebFetchDedup: true } } } },
+      },
+    );
+    expect(out).toMatch(/now SERVES key `coworkWebFetchDedup`/);
+  });
+});

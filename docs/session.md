@@ -17,6 +17,14 @@ The full schema below documents every field.
 
 ## Full schema
 
+> **Machine-readable:** [`schema/session.schema.json`](../schema/session.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate sessions against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/session.schema.json` hint.
+
+> **`lint` does not validate a session file.** `cowork-harness lint` is a *scenario* linter: pointing it
+> at a `sessions/*.yaml` file produces a wall of spurious `unknown-top-key` warnings — one per session
+> field, each asking "typo or hallucination?" — and still exits 0, since every top-level session key is,
+> correctly, not a scenario key. The `$schema` hint above (editor-side YAML-language-server validation)
+> is the session-authoring validation path; `lint` has no session-shaped counterpart.
+
 ```yaml
 # ── model & reasoning (Cowork model picker + toggles) ──────────────────────────
 model: claude-opus-4-8           # setModel; omit for the agent default
@@ -56,6 +64,13 @@ folders:
                                             # NOTE: at `fidelity: hostloop`, a rw/rwd folder needs the
                                             # scenario's `allow_host_writes: true` (see scenario.md) —
                                             # hostloop's native file tools have no container around them.
+projects:                        # userSelectedProjectUuids — a connected PROJECT, not a folder
+  - { uuid: 019fb25b-aadb-70a5-b6d1-e42aa718db03, from: ~/code/myproject }
+                                 # mounted READ-ONLY at mnt/.projects/<uuid>. There is deliberately no
+                                 # `mode:` here — Cowork hardcodes `ro` for these at the mount builder,
+                                 # so unlike `folders[]` the mode is not a degree of freedom. A project
+                                 # also never becomes the session cwd: a project-only session keeps
+                                 # {{workspaceFolder}} at mnt/outputs, matching production.
 trusted_folders:                 # localAgentModeTrustedFolders (mount without a trust prompt)
   - ~/code/myproject
 auto_mount_folders: false        # autoMountFolders
@@ -83,7 +98,7 @@ skills:
   # documented default. Both omit-able; the harness resolves gate 245679952/1598976391 from the baseline
   # when unset.
   suggest_enabled: true          # gate 245679952 (suggestSkillsEnabled) override; default true when unset
-  proactive_suggest_enabled: false # gate 1598976391 (proactiveSkillSuggestEnabled) override; default false when unset
+  proactive_suggest_enabled: false # gate 1598976391 (proactiveSkillSuggestEnabled) override; unset = the synced baseline gate (ON from 1.24012.11)
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map), e.g. ../data/mcp.json
   enabled: []                    # enabledMcpjsonServers
@@ -185,6 +200,7 @@ default `{}`) hashes identically to one authored before this field existed.
 | Field | Maps to | Mounted at |
 |---|---|---|
 | `folders[]` | "add folder" / Spaces | `mnt/<folder-name>` (collision-resolved basename; ≥1.14271.0, older baselines use `.projects/<id>`) |
+| `projects[]` | `userSelectedProjectUuids` | `mnt/.projects/<uuid>` — **read-only**; never the session cwd |
 | `trusted_folders[]` | `localAgentModeTrustedFolders` | (settings.json; mount without prompt) |
 | `auto_mount_folders` | `autoMountFolders` | (settings.json) |
 | `uploads[]` | pre-prompt file upload | `mnt/uploads/<basename>` |
@@ -192,7 +208,7 @@ default `{}`) hashes identically to one authored before this field existed.
 For an ad-hoc `skill` run (no session file), the CLI flags **`--upload <file>`** and **`--folder <dir>`**
 are the equivalents of `uploads[]` and `folders[]`.
 
-`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md)).
+`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md), which records what production denies: `unlink`/`rmdir` only, not in-place emptying).
 
 ### Discovery
 See [discovery.md](./discovery.md) for the full model. In short: the harness builds a clean `CLAUDE_CONFIG_DIR` with a generated `settings.json`, mounts plugins at the Cowork paths, and wires `--mcp-config` — every field here is an override knob.
@@ -205,7 +221,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins/plugin_<id>` (migrated-Cowork uploaded/org-remote shape; the id is a stable hash of the declared source). A skill that references these via `${CLAUDE_PLUGIN_ROOT}` must mind [the two-namespace resolution model](./plugin-root.md) — the token is unset in host-loop VM bash. |
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
 | `skills.suggest_enabled` | gate `245679952` (`suggestSkillsEnabled`) override | `container`/`hostloop` (and `cowork`) only. `true` (or unset, if the synced baseline gate is on/absent) declares the `skills` SDK-MCP server's `suggest_skills` tool; `false` omits it and drops `list_skills`' fallback-to-`suggest_skills` clause. See [fidelity-gaps.md](./fidelity-gaps.md). |
-| `skills.proactive_suggest_enabled` | gate `1598976391` (`proactiveSkillSuggestEnabled`) override | Only consulted when `suggest_enabled` (effective) is true. `true` swaps `suggest_skills` to the proactive description and adds a `trigger` enum param (`user_asked` \| `proactive`); default `false`. |
+| `skills.proactive_suggest_enabled` | gate `1598976391` (`proactiveSkillSuggestEnabled`) override | Only consulted when `suggest_enabled` (effective) is true. `true` swaps `suggest_skills` to the proactive description, adds an optional `trigger` enum param (`user_asked` \| `proactive`), and chains the empty-catalog `note` into `search_plugins`. Omit to use the synced baseline gate — **on** from the `1.24012.11` baseline, which is what production serves; the fallback for a baseline predating the gate is `false`. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
@@ -216,6 +232,10 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 
 ### Egress
 `extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).
+
+| Field | Type | Cowork control | Notes |
+|---|---|---|---|
+| `web_fetch.approved_domains[]` | string[] | *(none — TEST CONVENIENCE, not a real Cowork setting)* | Pre-approves these hosts for the run, as if the user had clicked "Allow all for website" earlier in the session (seeds `Run.approvedDomains`) — a `web_fetch` to a listed host raises no approval gate. The set starts empty every run; Cowork itself has no persistent pre-approval across runs. `web_fetch`'s real gate is the URL provenance set, seeded from URLs in the prompt — see [boundary.md](./boundary.md). |
 
 ## Path expansion
 

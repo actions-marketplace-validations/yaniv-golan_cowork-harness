@@ -23,13 +23,28 @@ export interface LoopInputs {
 }
 
 /**
- * Read a GrowthBook gate sub-flag (e.g. `coworkWebFetchPrompt`) from the baseline's
- * provenance.gates. Handles BOTH shapes: the committed prose string ("on(force) coworkWebFetchPrompt=true …")
- * and a decoded structured entry ({on, source, value:{coworkWebFetchPrompt:true}}). CRITICAL: the
- * baseline key is prefixed ("coworkRuntimeConfig:1978029737") — try the prefixed key, then bare id
- * (mirrors decideLoopFromBaseline's `gates["hostLoop:…"] ?? gates["…"]`). A missing gate ⇒ false.
+ * Read a GrowthBook gate sub-flag (e.g. `coworkWebFetchPrompt`) from the baseline's `provenance.gates`.
+ *
+ * `productionDefault` is REQUIRED, and it is the whole point of this signature. Production reads these
+ * keys through a per-call accessor that supplies its own default — `Ea(id, key, default, …)` — so an
+ * unserved key is NOT "off", it is whatever that call site passes. Measured on gate `1978029737`: the
+ * code requests 21 keys while the payload serves 8 (one of which, sessionsBridgePollBlockMs, is never
+ * requested — so the intersection is 7 and 14 requested keys are unserved), and two of those default to TRUE
+ * (`bashHostOnlyIntercept`, `scheduledTaskStaleReapEnabled`). Returning `false` for an absent key, as
+ * this function used to unconditionally, is therefore wrong in the silent direction. The argument is
+ * required rather than defaulted so a new call site cannot inherit that bug by omission.
+ *
+ * Three distinct absence cases, which the previous implementation collapsed into one:
+ *   1. the gate entry is absent entirely            ⇒ productionDefault
+ *   2. the entry is present but `value[flag]` is absent ⇒ productionDefault  (the real per-key case)
+ *   3. the entry is a prose string                  ⇒ `flag=true` / `flag=false` if stated, else default
+ *
+ * Shape note: baselines store this either as a decoded entry (`{on, source, value:{…}}`) or, in early
+ * baselines, as a prose string (`"on(force) coworkWebFetchPrompt=true …"`). The key is prefixed
+ * (`"coworkRuntimeConfig:1978029737"`), so try the prefixed key then the bare id — mirroring
+ * `decideLoopFromBaseline`'s `gates["hostLoop:…"] ?? gates["…"]`.
  */
-export function readGateFlag(baseline: PlatformBaseline, id: string, flag: string): boolean {
+export function readGateFlag(baseline: PlatformBaseline, id: string, flag: string, productionDefault: boolean): boolean {
   const gates = (baseline as unknown as { provenance?: { gates?: Record<string, unknown> } }).provenance?.gates ?? {};
   let entry: unknown = gates[id];
   if (entry === undefined) {
@@ -40,14 +55,21 @@ export function readGateFlag(baseline: PlatformBaseline, id: string, flag: strin
       }
     }
   }
-  if (entry == null) return false;
-  if (typeof entry === "string") return new RegExp(`\\b${flag}=true\\b`).test(entry);
+  if (entry == null) return productionDefault; // case 1
+  if (typeof entry === "string") {
+    // case 3 — an explicit `flag=false` must beat the default, so it is matched rather than inferred
+    // from the absence of `flag=true`.
+    if (new RegExp(`\\b${flag}=true\\b`).test(entry)) return true;
+    if (new RegExp(`\\b${flag}=false\\b`).test(entry)) return false;
+    return productionDefault;
+  }
   if (typeof entry === "object") {
     const v = (entry as { value?: unknown }).value;
-    if (v && typeof v === "object") return (v as Record<string, unknown>)[flag] === true;
-    return (entry as Record<string, unknown>)[flag] === true;
+    const bag = (v && typeof v === "object" ? (v as Record<string, unknown>) : (entry as Record<string, unknown>)) ?? {};
+    if (!Object.prototype.hasOwnProperty.call(bag, flag)) return productionDefault; // case 2
+    return bag[flag] === true;
   }
-  return false;
+  return productionDefault;
 }
 
 /**

@@ -101,6 +101,104 @@ export const MANIFEST_SCAN_PATTERNS = DEFAULT_SCAN_PATTERNS.filter(
   (p) => p.cls === "email" || p.cls === "path" || p.cls === "machine-inventory",
 );
 
+/** The `cls` of a leaked host-inventory finding. Separate from DEFAULT_SCAN_PATTERNS on purpose: those are
+ *  text regexes, and this class is STRUCTURAL — it reads specific NAME fields of a decoded transcript event,
+ *  which no `{re, cls}` entry can express. */
+export const HOST_INVENTORY_CLS = "host-inventory";
+
+/** SDK-MCP server names the harness itself serves. Anything else in a host-inheriting recording's
+ *  `mcp_servers[]` is the recording machine's own inventory.
+ *
+ *  Kept as a literal (not imported from the handlers) to avoid a scan→hostloop dependency; a test calls each
+ *  handler's `initialize` and asserts its `serverInfo.name` is in here, so the two cannot drift.
+ *
+ *  Deliberately server-level, NOT tool-level. A tool allowlist cannot work: a recorded MCP `tools/list`
+ *  result carries the server's LOCAL names (`list_skills`), because the `mcp__<server>__` prefix is applied
+ *  client-side — so an `mcp__*`-filtered tool check matches nothing on that surface. Server granularity also
+ *  makes a new first-party TOOL free (no red, no maintenance) while still catching a new SERVER, which is
+ *  the granularity of the inventory being protected. */
+export const KNOWN_COWORK_SERVERS: ReadonlySet<string> = new Set(["cowork", "plugins", "skills", "workspace"]);
+
+/** Agents present in a clean recording. A closed set, unlike slash commands (which legitimately vary), so it
+ *  is a usable predicate rather than a threshold. Extend deliberately when the built-in roster changes. */
+export const KNOWN_BUILTIN_AGENTS: ReadonlySet<string> = new Set([
+  "claude",
+  "claude-code-guide",
+  "Explore",
+  "general-purpose",
+  "Plan",
+  "statusline-setup",
+]);
+
+/** `account` keys that identify the OPERATOR. A clean recording's account block is `{tokenSource,
+ *  apiProvider}` only. `email` is usually redacted upstream by the time it reaches here — the load-bearing
+ *  members are `organization` and `subscriptionType`, which no redaction rule touches. */
+const ACCOUNT_IDENTITY_KEYS = ["email", "organization", "subscriptionType"] as const;
+
+/**
+ * Structural host-inventory scan over ONE decoded transcript event.
+ *
+ * Reads name fields only — never description/prose fields. That is a scoping choice (cheap, predictable,
+ * bounded), not a false-positive necessity: legitimate `mcp__*` tokens do occur inside command
+ * `description` text, but they name KNOWN servers and so could not have flagged anyway. Descriptions are
+ * unbounded free text with no clean predicate, so they are out of scope by design — see the residual note
+ * in docs/cassette.md.
+ *
+ * CALLER MUST TIER-GATE THIS. Only meaningful for a host-inheriting recording (`protocol`/`hostloop`, or
+ * `cowork` resolving to hostloop). At `container` the agent is sealed, so a foreign server name is
+ * necessarily one the scenario attached on purpose via `mcp.config` — a documented, supported feature —
+ * and flagging it would red CI on a legitimate fixture.
+ */
+export function scanHostInventory(decoded: unknown, where: string, allow: AllowInput[]): ScanFinding[] {
+  const out: ScanFinding[] = [];
+  const norm = allow.map(normAllow);
+  const push = (sample: string, detail: string) => {
+    if (!allowed(sample, HOST_INVENTORY_CLS, norm)) out.push({ where: `${where} ${detail}`, cls: HOST_INVENTORY_CLS, sample });
+  };
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const v of node) visit(v);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const o = node as Record<string, unknown>;
+
+    // A1 — foreign MCP server name. The axis that caught the real leak.
+    if (Array.isArray(o.mcp_servers)) {
+      for (const s of o.mcp_servers) {
+        const name = (s as Record<string, unknown> | null)?.name;
+        if (typeof name === "string" && !KNOWN_COWORK_SERVERS.has(name)) push(name, "mcp_servers[].name");
+      }
+    }
+    // A2 — a prefixed tool naming a foreign server. Cheap defence-in-depth: it contributed nothing to the
+    // shipped leak (an unconnected server declares no tools) and A1 largely subsumes it.
+    if (Array.isArray(o.tools)) {
+      for (const t of o.tools) {
+        if (typeof t !== "string") continue;
+        const m = /^mcp__([^_]+(?:_[^_]+)*?)__/.exec(t);
+        if (m && !KNOWN_COWORK_SERVERS.has(m[1])) push(m[1], `tools[] (${t})`);
+      }
+    }
+    // A3 — operator identity on the account block.
+    if (o.account !== null && typeof o.account === "object") {
+      const acct = o.account as Record<string, unknown>;
+      for (const k of ACCOUNT_IDENTITY_KEYS) if (acct[k] !== undefined) push(k, `account.${k}`);
+    }
+    // A4 — an agent outside the built-in roster.
+    if (Array.isArray(o.agents)) {
+      for (const a of o.agents) {
+        const name = typeof a === "string" ? a : (a as Record<string, unknown> | null)?.name;
+        if (typeof name === "string" && !KNOWN_BUILTIN_AGENTS.has(name)) push(name, "agents[]");
+      }
+    }
+    for (const v of Object.values(o)) visit(v);
+  };
+
+  visit(decoded);
+  return out;
+}
+
 function allowed(sample: string, cls: string, allow: AllowPattern[]): boolean {
   // An allow suppresses a finding only when (a) it is unscoped OR scoped to this finding's class, AND (b) it
   // matches the WHOLE finding token. Anchoring with ^(?:…)$ is the fix: substring matching let a domain

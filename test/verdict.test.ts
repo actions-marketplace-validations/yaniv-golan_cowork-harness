@@ -40,6 +40,29 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(computeVerdict(rr({ scan: { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false } }), "live").pass).toBe(false);
   });
 
+  it("allow_outputs_delete accepts a detected delete instead of failing the run", () => {
+    const del = { outputsDeletes: ["rm outputs/x"], hostPathLeaked: false, selfHealRan: false };
+    expect(computeVerdict(rr({ scan: del }), "live").pass).toBe(false); // unwaived: still fails
+    const waived = computeVerdict(rr({ scan: del, assertions: [assn({ allow_outputs_delete: true })] }), "live");
+    expect(waived.signals.some((s) => s.code === "outputs_delete")).toBe(false);
+    expect(waived.pass).toBe(true);
+  });
+
+  // The roster reports what the GUARD observed, not whether the signal fired. The signal is suppressed
+  // whenever the scenario authored `no_delete_in_outputs` (it fails there instead) or waived via
+  // `allow_outputs_delete` — reporting `ok` in either case is a false ✓ for a guard that did catch its
+  // failure mode. The authored case was already wrong before `allow_outputs_delete` existed.
+  it("the outputs-delete guard reports `fired` whenever a delete was detected, even when the signal is suppressed", () => {
+    const del = { outputsDeletes: ["rm outputs/x"], hostPathLeaked: false, selfHealRan: false };
+    const status = (v: ReturnType<typeof computeVerdict>) => v.guards.find((g) => g.name === "outputs-delete")?.status;
+    expect(status(computeVerdict(rr({ scan: del }), "live"))).toBe("fired");
+    expect(status(computeVerdict(rr({ scan: del, assertions: [assn({ allow_outputs_delete: true })] }), "live"))).toBe("fired");
+    expect(status(computeVerdict(rr({ scan: del, assertions: [assn({ no_delete_in_outputs: true }, true)] }), "live"))).toBe("fired");
+    // and still `ok` when the scan ran clean, `unverified` when it did not run at all
+    expect(status(computeVerdict(rr({ scan: { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false } }), "live"))).toBe("ok");
+    expect(status(computeVerdict(rr({ scan: undefined }), "live"))).toBe("unverified");
+  });
+
   it("skips the host_path_leak default-fail at hostloop AND protocol (real host paths expected — neither seals the FS), still fails at container/microvm", () => {
     const leak = { outputsDeletes: [], hostPathLeaked: true, selfHealRan: false };
     const atHostloop = computeVerdict(rr({ scan: leak, effectiveFidelity: "hostloop" }), "live");

@@ -22,6 +22,13 @@ import {
   checkMountModeFacts,
   checkWebFetchFacts,
   readMainBundle,
+  readMainBundleFiles,
+  normalizeBundleQuotes,
+  exportLocalOf,
+  resolveNamespaceRef,
+  fcacheContentHash,
+  decodeFcacheProvenance,
+  checkSyspromptMapFacts,
   checkSubagentOverrideGate,
   checkCodeTripwires,
   PINNED_GATES,
@@ -158,6 +165,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       "1129419822": { id: "1129419822", name: "enableToolSearchAuto", on: false, source: "absent", value: undefined },
       "4200321681": { id: "4200321681", name: "autoModeOverridesAlwaysAllow", on: false, source: "absent", value: undefined },
       "1447478638": { id: "1447478638", name: "scheduledTaskToolsApprovableByAutoMode", on: false, source: "absent", value: undefined },
+      "4074604942": { id: "4074604942", name: "1p-direct-mcp", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -206,6 +214,17 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     // can't repeat unnoticed. That it is NOT dark is already pinned by the exact-match assertion on
     // decodeFcacheGates' absent-marker set above, which does not list this id.
     expect(PINNED_GATES["1824824999"]).toBe("canProposeSkills");
+  });
+
+  it("PINNED_GATES tracks 1p-direct-mcp, new in 1.24012.11 — and it MUST be dark, or the pin is vacuous", () => {
+    // This gate is absent from a standard fcache, so decodeFcacheGates would skip it entirely without a
+    // DARK_GATES entry: PINNED_GATES alone would never round-trip through sync and the sentinel would
+    // guard nothing while looking pinned. The absent-marker exact-match assertion above is what actually
+    // proves the round-trip — it lists this id, and being a toEqual it cannot pass if DARK_GATES drops it.
+    expect(PINNED_GATES["4074604942"]).toBe("1p-direct-mcp");
+    // Not the GrowthBook flag name: the asar passes the bare id and the name appears nowhere, so it is
+    // unrecoverable. Kebab-case (the subsystem's log tag) marks it as unverified vs the camelCase names.
+    expect(PINNED_GATES["4074604942"]).not.toMatch(/^[a-z]+[A-Z]/);
   });
 });
 
@@ -309,9 +328,15 @@ describe("cowork-sync platform guard", () => {
 });
 
 describe("checkMountModeFacts (mount-mode drift guard for the hand-authored baseline)", () => {
-  // a synthetic bundle carrying both binary-verified mode facts (the IX delete-deny resolver + uploads ro)
-  const ok = 'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}';
-  it("returns no flags when both mode facts are present", () => {
+  // A synthetic bundle carrying every binary-verified mode fact: the delete-deny resolver plus each
+  // mount whose mode is hardcoded `"ro"` at the spawn-time builder. Widened from two facts to five once
+  // the builder was read in full — `.claude/skills`, `.claude/projects` and the per-uuid project
+  // ATTACHMENT mount are all pinned read-only there.
+  const ok =
+    'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}' +
+    ';l[Es(".claude/skills")]={path:x,mode:"ro"};l[Es(".claude/projects")]={path:y,mode:"ro"}' +
+    ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}';
+  it("returns no flags when every mode fact is present", () => {
     expect(checkMountModeFacts(ok)).toEqual([]);
   });
   it("flags when the IX delete-deny resolver is gone (outputs/projects default may have changed)", () => {
@@ -320,9 +345,9 @@ describe("checkMountModeFacts (mount-mode drift guard for the hand-authored base
     expect(flags.some((f) => f.includes("delete-deny resolver"))).toBe(true);
   });
   it("flags when uploads is no longer read-only", () => {
-    const drifted = ok.replace('mode:"ro"', 'mode:"rw"');
+    const drifted = ok.replace('("uploads")]={path:wa(i),mode:"ro"', '("uploads")]={path:wa(i),mode:"rw"');
     const flags = checkMountModeFacts(drifted);
-    expect(flags.some((f) => f.includes("uploads read-only"))).toBe(true);
+    expect(flags.some((f) => f.includes("uploads"))).toBe(true);
   });
 });
 
@@ -1079,7 +1104,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     if (!bundle) return;
     const gates = decodeFcacheGates();
     if (!gates) return; // no live fcache on this machine
-    const { env, flags } = deriveSpawnEnv(bundle, gates);
+    const { env, flags } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
     expect(flags).toEqual([]);
     expect(env).toEqual(golden);
   });
@@ -1088,7 +1113,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   it("structural regression: checkSpawnContractFacts(real asar) is clean", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
-    expect(checkSpawnContractFacts(bundle)).toEqual([]);
+    expect(checkSpawnContractFacts(bundle, readRealBundleFilesOrSkip() ?? undefined)).toEqual([]);
   });
 
   // 12. Baseline lockstep: REQUIRED_SPAWN_KEYS ⊆ keys(latest committed baseline spawn.env).
@@ -1240,11 +1265,24 @@ function readRealBundleOrSkip(): string | null {
   return realBundleMemo;
 }
 
+// Desktop 1.25927.0 split the bundle 101 → 341 chunks and mangled export names, so the cross-chunk
+// resolvers need the per-chunk MAP, not just the joined text. Extraction is expensive, so the map is
+// memoised alongside the joined string from the same extraction.
+let realFilesMemo: Map<string, string> | null | undefined;
+function readRealBundleFilesOrSkip(): Map<string, string> | null {
+  if (realBundleMemo === undefined) realBundleMemo = extractRealBundle();
+  return realFilesMemo ?? null;
+}
+
 function extractRealBundle(): string | null {
   const override = process.env.COWORK_ASAR_BUNDLE;
   if (override) {
     try {
-      return readFileSync(override, "utf8");
+      // Normalize the override the same way the production read does, so a bundle captured from a
+      // backtick-emitting build behaves identically here.
+      const one = normalizeBundleQuotes(readFileSync(override, "utf8"));
+      realFilesMemo = new Map([["index.js", one]]);
+      return one;
     } catch {
       /* fall through to the live-install path */
     }
@@ -1256,7 +1294,8 @@ function extractRealBundle(): string | null {
   try {
     realBundleTmpDir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
     execFileSync("npx", ["--yes", "@electron/asar", "extract", LIVE_ASAR, realBundleTmpDir], { stdio: "ignore" });
-    return readMainBundle(realBundleTmpDir);
+    realFilesMemo = readMainBundleFiles(realBundleTmpDir);
+    return [...realFilesMemo.values()].join("");
   } catch (e) {
     return skipRealBundle(`asar extraction failed: ${(e as Error).message}`);
   }
@@ -1563,5 +1602,311 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       consuming: (s) => s.replace('.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"]', '.SOME_OTHER_SET,"MultiEdit"]'),
     });
     expect(checkPathHookFacts(f).some((x) => /install site/.test(x))).toBe(true);
+  });
+});
+
+// ==========================================================================================
+// Desktop 1.25927.0 changed the BUNDLER, not the product: plain string literals became backtick
+// templates, export names were mangled to 1-2 chars, and the graph split 101 -> 341 chunks. That
+// voided 22 literal anchors at once. These tests pin the two mechanisms that absorb it — quote
+// normalization and scoped cross-chunk export resolution — and, crucially, prove the widened guards
+// STILL FAIL on a real violation rather than having been loosened into rubber stamps.
+// ==========================================================================================
+describe("1.25927.0 bundler change: normalizeBundleQuotes", () => {
+  it("rewrites a substitution-free backtick string to the double-quoted form", () => {
+    expect(normalizeBundleQuotes("settingSources:[`user`],a:`b`")).toBe('settingSources:["user"],a:"b"');
+  });
+
+  it("keeps an interpolated template a template, but normalizes strings INSIDE its ${}", () => {
+    // The CLAUDE_CODE_TAGS shape: the outer template must survive (the value deriver matches on it),
+    // while the nested plain string inside the interpolation has to be normalized.
+    expect(normalizeBundleQuotes("`lam_session_type:${i.sessionType??`chat`}`")).toBe('`lam_session_type:${i.sessionType??"chat"}`');
+  });
+
+  it("does not mis-pair backticks across an interpolated template (the naive-regex defect)", () => {
+    // A naive /`([^`]*)`/g pairs the CLOSING backtick of the template with the OPENING backtick of the
+    // NEXT string, corrupting both. This exact input produced a false "settingSources is gone".
+    expect(normalizeBundleQuotes("`a${x}b`,settingSources:[`user`]")).toBe('`a${x}b`,settingSources:["user"]');
+  });
+
+  it("leaves double-quoted strings, comments and regex literals untouched", () => {
+    const src = 'a="keep",b=/`notastring`/g,c=1;//`nor this`\n';
+    expect(normalizeBundleQuotes(src)).toBe(src);
+  });
+
+  it("does not convert a template containing a double quote (would produce nested quotes)", () => {
+    expect(normalizeBundleQuotes('x=`say "hi"`')).toBe('x=`say "hi"`');
+  });
+
+  it("is idempotent", () => {
+    const once = normalizeBundleQuotes("k:[`a`],t:`p${q}`");
+    expect(normalizeBundleQuotes(once)).toBe(once);
+  });
+
+  it("preserves a multi-line template body verbatim (prompt bodies must not move)", () => {
+    const src = "x=`line1\nline2`";
+    expect(normalizeBundleQuotes(src)).toBe(src);
+  });
+});
+
+describe("1.25927.0 bundler change: exportLocalOf / resolveNamespaceRef", () => {
+  it("resolves the mangled CJS-interop export shape", () => {
+    const chunk = 'var B=["TaskCreate"];Object.defineProperty(exports,"vt",{enumerable:!0,get:function(){return B}});';
+    expect(exportLocalOf(chunk, "vt")).toBe("B");
+  });
+
+  it("resolves the readable arrow export shape", () => {
+    expect(exportLocalOf("x={HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se,z:()=>q}", "HOST_LOOP_PATH_GATED_BUILTIN_TOOLS")).toBe("Se");
+  });
+
+  it("follows a require() binding from the reference chunk to the defining chunk", () => {
+    const defining = 'var V=[];Object.defineProperty(exports,"i",{enumerable:!0,get:function(){return V}});';
+    const site = 'var E=require("./index.chunk-DEF.js");tools:[...E.i]';
+    const files = new Map([
+      ["index.chunk-DEF.js", defining],
+      ["index.chunk-SITE.js", site],
+    ]);
+    const ref = resolveNamespaceRef("E.i", site, files);
+    expect(ref?.local).toBe("V");
+    expect(ref?.chunk).toBe(defining);
+  });
+
+  it("returns null when the namespace is unbound and the export is absent — never a silent wrong hop", () => {
+    // The pre-fix behaviour hopped on a bare 1-2 char name across the joined bundle and captured an
+    // unrelated `f=`; that mis-resolution is what wrongly reported "resolved to null not 31999".
+    expect(resolveNamespaceRef("E.nope", 'var E=require("./missing.js");', new Map())).toBeNull();
+  });
+});
+
+describe("1.25927.0 bundler change: MUTATION — widened guards still fail on real violations", () => {
+  const realFiles = () => readRealBundleFilesOrSkip();
+  const joined = (f: Map<string, string>) => [...f.values()].join("");
+  // Mutate the chunk that DEFINES a fact, keeping the reference site intact, so the assertion is
+  // exercised through the same cross-chunk resolution path production uses.
+  const mutateDefining = (f: Map<string, string>, needle: string, replacement: string): Map<string, string> | null => {
+    const out = new Map(f);
+    for (const [k, v] of f) {
+      if (v.includes(needle)) {
+        out.set(k, v.replace(needle, replacement));
+        return out;
+      }
+    }
+    return null;
+  };
+
+  it("MUTATION: the Task-tools array changes in its defining chunk → S7 flags", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, '["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"]', '["TaskCreate","TaskUpdate"]');
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S7 Task-tools spread/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: maxThinkingTokens const changes in its defining chunk → S4 flags", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, "=31999", "=12345");
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S4 maxThinkingTokens/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the empty-ANTHROPIC_* delete helper removed → S14a flags (the let-widening did not blunt it)", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, '"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"', '"SOMETHING_ELSE"');
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the gated 5-set changes → path-hook install-site spread flags", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, '["Read","Write","Edit","Glob","Grep"]', '["Read","Write"]');
+    expect(m).not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the shared resolver's hard-block text removed → path-hook flags (graph-wide search still binds)", () => {
+    const f = realFiles();
+    if (!f) return;
+    const m = mutateDefining(f, "Refusing to resolve non-regular file", "Allowing anything at all");
+    expect(m).not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /resolver hard-block/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: MCP_TOOL_TIMEOUT's inline numeric fallback changes → the derived value follows it", () => {
+    const f = realFiles();
+    if (!f) return;
+    const gates = decodeFcacheGates();
+    if (!gates) return;
+    const m = mutateDefining(f, "mcpToolTimeoutMs??18e4", "mcpToolTimeoutMs??7e4");
+    expect(m).not.toBeNull();
+    const { env } = deriveSpawnEnv(joined(m!), gates, m!);
+    // Proves the literal is genuinely RESOLVED, not hardcoded or waved through by the shape check.
+    expect(env?.MCP_TOOL_TIMEOUT).toBe("70000");
+  });
+});
+
+// ==========================================================================================
+// fcache snapshot identity. The payload refetches irregularly and its membership churns
+// count-neutrally, so `capturedAt` (a date) cannot identify a read. `content16` can — provided it is
+// computed the same way everywhere, which is what these pin.
+// ==========================================================================================
+describe("fcacheContentHash — snapshot identity", () => {
+  // PAYLOAD-level, not function-level. Comparing `f(x)` to `f({...x})` cannot fail for any
+  // deterministic function and proves nothing — the claim under test is that two REAL payloads which
+  // differ only in their fetch timestamp share an identity, which is what makes content16 usable as one.
+  it("ignores the fetch timestamp: two payloads differing ONLY in timestamp share a content16", () => {
+    const features = { "1143815894": { value: true, on: true, source: "force" } };
+    const write = (timestamp: number) => {
+      const gz = gzipSync(Buffer.from(JSON.stringify({ timestamp, features }), "utf8"));
+      const dir = mkdtempSync(join(tmpdir(), "cowork-fcache-prov-"));
+      const f = join(dir, "fcache");
+      writeFileSync(f, Buffer.concat([Buffer.from([0x43, 0x4c, 0x46, 0x01, 0, 0, 0, 0]), gz]));
+      return f;
+    };
+    const a = decodeFcacheProvenance(write(1_000))!;
+    const b = decodeFcacheProvenance(write(9_999))!;
+    expect(a.content16).toBe(b.content16); // identity: unchanged
+    expect(a.embeddedTimestamp).not.toBe(b.embeddedTimestamp); // metadata: moved
+    expect(a.featureCount).toBe(1);
+  });
+
+  it("changes when a gate's VALUE changes", () => {
+    const a = { "123": { on: true, source: "force" } };
+    const b = { "123": { on: false, source: "force" } };
+    expect(fcacheContentHash(a)).not.toBe(fcacheContentHash(b));
+  });
+
+  it("changes when MEMBERSHIP churns count-neutrally (one in, one out)", () => {
+    // The real 2026-08-05 case: 4074604942 arrived, 2403605075 left, count pinned at 241 both times.
+    const before = { "4074604942": undefined as unknown, "2403605075": { on: true } };
+    delete (before as Record<string, unknown>)["4074604942"];
+    const after = { "4074604942": { on: false } };
+    expect(Object.keys(before).length).toBe(Object.keys(after).length); // count-neutral
+    expect(fcacheContentHash(before)).not.toBe(fcacheContentHash(after));
+  });
+
+  it("REGRESSION: integer-like keys sort lexicographically, not numerically", () => {
+    // Gate ids are integer-like strings. A JS object enumerates those in ascending NUMERIC order
+    // regardless of insertion order, so canonicalising by rebuilding an object (Object.fromEntries over
+    // sorted pairs) silently discards the sort — the first implementation did exactly that and produced
+    // a self-consistent but cross-project-incomparable hash. Python's sort_keys is LEXICOGRAPHIC:
+    // "1004628546" sorts BEFORE "17519066". Pinned against the reference implementation's output.
+    expect(fcacheContentHash({ "17519066": 1, "1004628546": 2 })).toBe(
+      // sha256('{"1004628546":2,"17519066":1}')[:16] — lexicographic order
+      createHash("sha256").update('{"1004628546":2,"17519066":1}', "utf8").digest("hex").slice(0, 16),
+    );
+  });
+
+  // The cross-language guarantee is scoped: strings/bools/null/arrays/nesting/ordering agree, NUMBERS
+  // do not (JSON has one number type, Python has two — a payload's `1.0` is indistinguishable from `1`
+  // after JSON.parse, and the same applies to exponent form and ints past 2^53). These pin the classes
+  // that DO agree, so a regression in them is caught; the number classes are documented, not asserted.
+  it("escapes non-ASCII to \\uXXXX, matching Python's ensure_ascii default", () => {
+    expect(fcacheContentHash({ k: "café" })).toBe(createHash("sha256").update('{"k":"caf\\u00e9"}', "utf8").digest("hex").slice(0, 16));
+  });
+
+  it("escapes DEL (U+007F) — Python escapes everything outside PRINTABLE ascii, not just >= U+0080", () => {
+    expect(fcacheContentHash({ a: "\u007f" })).toBe(createHash("sha256").update('{"a":"\\u007f"}', "utf8").digest("hex").slice(0, 16));
+  });
+
+  it("decodeFcacheProvenance returns null rather than throwing when there is no fcache", () => {
+    expect(decodeFcacheProvenance(join(tmpdir(), "cowork-harness-no-such-fcache"))).toBeNull();
+  });
+});
+
+// ==========================================================================================
+// coworkSyspromptMap — a SERVER-DRIVEN system-prompt patch channel the harness models nowhere.
+// `replace` mode discards the computed default section, so an active replace variant is a structural
+// divergence from our preset-plus-append model. Sentinel only: we cannot see what the server serves,
+// but we can pin the shape that determines what it is ABLE to do.
+// ==========================================================================================
+describe("checkMountModeFacts — hardcoded mount modes", () => {
+  // The spawn-time mount builder assembles the whole set: outputs and each connected folder go through
+  // the delete-deny resolver (`rw`, or `rwd` once approved); everything else is pinned `"ro"` inline.
+  // A mount silently moving from `ro` to writable is a containment change we would otherwise model
+  // wrongly with nothing failing, so each is pinned individually.
+  const CLEAN =
+    'p[r.a("uploads")]={path:x,mode:"ro"},p[r.a(".claude/skills")]={path:y,mode:"ro"};' +
+    'p[r.a(".claude/projects")]={path:z,mode:"ro"};' +
+    'p[r.a(`.projects/${e.uuid}`)]={path:w,mode:"ro"};' +
+    'let m=n?"rw":t?.includes(e)?"rwd":"rw";';
+
+  it("clean bundle → no flags", () => {
+    expect(checkMountModeFacts(CLEAN)).toEqual([]);
+  });
+
+  it.each([
+    [".projects/<uuid>", ".projects/${", ".projectsX/${"],
+    [".claude/projects", '(".claude/projects")]', '(".claude/projectsX")]'],
+    [".claude/skills", '(".claude/skills")]', '(".claude/skillsX")]'],
+    ["uploads", '("uploads")]', '("uploadsX")]'],
+    ["delete-deny resolver", '?"rwd":"rw"', '?"rw":"rw"'],
+  ])("MUTATION: %s moving → flags", (_label, from, to) => {
+    const mutated = CLEAN.split(from).join(to);
+    expect(mutated).not.toBe(CLEAN); // the mutation actually applied — a no-op mutation proves nothing
+    expect(checkMountModeFacts(mutated).length).toBeGreaterThan(0);
+  });
+
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkMountModeFacts([...files.values()].join(""))).toEqual([]);
+  });
+});
+
+describe("checkSyspromptMapFacts — prompt-patch channel sentinel", () => {
+  const CLEAN = new Map([
+    [
+      "chunk.js",
+      'x.coworkSyspromptMap;function fn(e){return e==="replace"||e==="append"}' +
+        "var re=/^[A-Za-z0-9_-]{1,128}(\\.(replace|append))?$/;" +
+        "throw Error(`SP_VARIANTS.${e}: replace-mode text must contain {{promptCacheBoundary}}`);" +
+        'return{status:"missing_boundary"};return{status:"invalid_entry"};',
+    ],
+  ]);
+
+  it("clean bundle → no flags", () => {
+    expect(checkSyspromptMapFacts(CLEAN)).toEqual([]);
+  });
+
+  it("MUTATION: a THIRD mode appears → mode-predicate flags", () => {
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace('e==="append"}', 'e==="append"||e==="prepend"}'));
+    expect(checkSyspromptMapFacts(m).some((f) => /mode predicate/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the key grammar moves → flags", () => {
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace("(replace|append)", "(replace|append|prepend)"));
+    expect(checkSyspromptMapFacts(m).some((f) => /key grammar/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the promptCacheBoundary startup invariant is dropped → flags", () => {
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace("replace-mode text must contain {{promptCacheBoundary}}", "ok"));
+    expect(checkSyspromptMapFacts(m).some((f) => /boundary invariant/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the resolution status machine disappears → flags (the SILENT failure half)", () => {
+    // The startup throw guards only BUILT-IN variants; a malformed SERVER-supplied variant degrades to
+    // `missing_boundary` with no error raised anywhere. If that classification goes, the quiet path
+    // gets quieter still — which for a fidelity harness means a silently different prompt.
+    const m = new Map(CLEAN);
+    m.set("chunk.js", CLEAN.get("chunk.js")!.replace('return{status:"missing_boundary"};', ""));
+    expect(checkSyspromptMapFacts(m).some((f) => /resolution status/.test(f))).toBe(true);
+  });
+
+  it("MUTATION: the channel disappears entirely → flags once, and does NOT vacuously pass", () => {
+    const flags = checkSyspromptMapFacts(new Map([["chunk.js", "unrelated();"]]));
+    expect(flags.length).toBe(1);
+    expect(flags[0]).toMatch(/channel/);
+  });
+
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkSyspromptMapFacts(files)).toEqual([]);
   });
 });

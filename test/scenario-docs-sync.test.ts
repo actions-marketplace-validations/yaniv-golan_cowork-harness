@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Assertion } from "../src/types.js";
-import { MANIFEST_KEYS, ALWAYS_CONTENT_KEYS } from "../src/run/cassette";
+import { MANIFEST_KEYS, ALWAYS_CONTENT_KEYS, LIVE_ONLY_KEYS } from "../src/run/cassette";
+import { VERDICT_MODIFIER_KEYS } from "../src/types.js";
 
 // Anti-drift guard: docs/scenario.md's "Full schema" assertion table hand-documents every key in
 // the Assertion zod schema (src/types.ts) — the same source `assertion-keys.json` / `Assertion.shape`
@@ -116,5 +117,92 @@ describe("docs/scenario.md ↔ src/run/cassette.ts MANIFEST_KEYS sync", () => {
   it("every ALWAYS_CONTENT_KEYS member is covered in the section", () => {
     const missing = ALWAYS_CONTENT_KEYS.filter((k) => !covered(k));
     expect(missing, `docs/scenario.md's replay content-assertion summary is missing: ${missing.join(", ")}`).toEqual([]);
+  });
+});
+
+// Anti-drift guard, second surface set. The two guards above read ONLY `docs/scenario.md` — which is
+// exactly why that file stayed complete while the SAME key lists went stale in `SPEC.md` and
+// `docs/cassette.md`: nothing mechanical was watching them. `no_delete_in_mounts` and `allow_delete_in`
+// shipped documented in scenario.md and missing from both enumerations here, and a reader consulting
+// SPEC.md (the compatibility contract) or cassette.md (the replay lane) would conclude the keys do not
+// exist, or worse, that a live-only key evaluates on replay.
+//
+// Anchored by literal section text, and failing LOUD when an anchor moves rather than silently slicing
+// an empty string — the same discipline the MANIFEST_KEYS guard above uses, for the same reason: a
+// vacuous pass on a doc guard is worse than no guard, because it reads as coverage.
+describe("SPEC.md + docs/cassette.md + docs/scenario.md ↔ LIVE_ONLY_KEYS / VERDICT_MODIFIER_KEYS sync", () => {
+  const spec = readFileSync(resolve("SPEC.md"), "utf8");
+  const cassetteDoc = readFileSync(resolve("docs/cassette.md"), "utf8");
+  const scenarioDoc = readFileSync(resolve("docs/scenario.md"), "utf8");
+
+  it("parsed sane key sets", () => {
+    // sanity: catches an import that silently resolved to an empty/undefined array
+    expect(LIVE_ONLY_KEYS.length).toBeGreaterThan(5);
+    expect(LIVE_ONLY_KEYS).toContain("no_delete_in_outputs");
+    expect(VERDICT_MODIFIER_KEYS.length).toBeGreaterThan(3);
+    expect(VERDICT_MODIFIER_KEYS).toContain("allow_outputs_delete");
+  });
+
+  /** Slice from `start` to the next `end`, failing loudly (empty string) if either anchor is gone. */
+  const section = (doc: string, start: string, end: string): string => {
+    const a = doc.indexOf(start);
+    if (a === -1) return "";
+    const b = doc.indexOf(end, a + start.length);
+    return b === -1 ? "" : doc.slice(a, b);
+  };
+
+  // SPEC.md's live-only bucket: the list naming every assertion always skipped on replay.
+  const SPEC_LIVE_START = "**Egress / live-only assertions**";
+  const SPEC_LIVE_END = "The count of skipped";
+  const specLive = section(spec, SPEC_LIVE_START, SPEC_LIVE_END);
+
+  // SPEC.md's verdict-modifier enumeration, inside the replay-evaluated key list.
+  const SPEC_MOD_START = "the verdict modifiers (";
+  const SPEC_MOD_END = ")";
+  const specMods = section(spec, SPEC_MOD_START, SPEC_MOD_END);
+
+  // docs/cassette.md's live-only list — same bucket, replay-lane framing.
+  const CASSETTE_LIVE_START = "### Still skipped on replay (no filesystem/network in a cassette)";
+  const CASSETTE_LIVE_END = "\n## ";
+  const cassetteLive = section(cassetteDoc, CASSETTE_LIVE_START, CASSETTE_LIVE_END);
+
+  // docs/scenario.md's live-only list — same bucket, scenario-authoring framing.
+  const SCENARIO_LIVE_START = "**Egress + other filesystem** assertions";
+  const SCENARIO_LIVE_END = "Two consequences for CI:";
+  const scenarioLive = section(scenarioDoc, SCENARIO_LIVE_START, SCENARIO_LIVE_END);
+
+  it("found all four sections (an anchor that moved must fail here, not pass vacuously)", () => {
+    expect(specLive, `SPEC.md: "${SPEC_LIVE_START}" … "${SPEC_LIVE_END}" not found — did the section move?`).not.toBe("");
+    expect(specMods, `SPEC.md: "${SPEC_MOD_START}…)" not found — did the enumeration move?`).not.toBe("");
+    expect(cassetteLive, `docs/cassette.md: "${CASSETTE_LIVE_START}" … "${CASSETTE_LIVE_END}" not found`).not.toBe("");
+    expect(scenarioLive, `docs/scenario.md: "${SCENARIO_LIVE_START}" … "${SCENARIO_LIVE_END}" not found`).not.toBe("");
+  });
+
+  // A key counts as present only as a backtick token, or via a `prefix_*` wildcard already in the list
+  // (SPEC.md writes `egress_*` for the two egress keys) — a prose mention elsewhere must not satisfy it.
+  const named = (text: string, key: string): boolean => {
+    if (text.includes(`\`${key}\``)) return true;
+    for (const m of text.matchAll(/`([a-zA-Z0-9]+_)\*`/g)) if (key.startsWith(m[1])) return true;
+    return false;
+  };
+
+  it("SPEC.md's live-only list names every LIVE_ONLY_KEYS member", () => {
+    const missing = LIVE_ONLY_KEYS.filter((k) => !named(specLive, k));
+    expect(missing, `SPEC.md's "${SPEC_LIVE_START}" list is missing: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("SPEC.md's verdict-modifier list names every VERDICT_MODIFIER_KEYS member", () => {
+    const missing = VERDICT_MODIFIER_KEYS.filter((k) => !named(specMods, k));
+    expect(missing, `SPEC.md's verdict-modifier enumeration is missing: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("docs/cassette.md's live-only list names every LIVE_ONLY_KEYS member", () => {
+    const missing = LIVE_ONLY_KEYS.filter((k) => !named(cassetteLive, k));
+    expect(missing, `docs/cassette.md's live-only list is missing: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("docs/scenario.md's live-only list names every LIVE_ONLY_KEYS member", () => {
+    const missing = LIVE_ONLY_KEYS.filter((k) => !named(scenarioLive, k));
+    expect(missing, `docs/scenario.md's live-only list is missing: ${missing.join(", ")}`).toEqual([]);
   });
 });

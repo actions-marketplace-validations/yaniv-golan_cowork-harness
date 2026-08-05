@@ -85,11 +85,11 @@ describe("verdict-signals docs ↔ code", () => {
   // REPLACES a `undelivered_deliverables` firing on the remote lane rather than adding new noise (the two
   // are mutually exclusive), and it is gated on the same candidate set, so a remote run that produced
   // nothing to deliver stays as quiet as it was before. Net warn volume on any given run is unchanged.
-  it('the docs\' "only seven warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  it('the docs\' "only eight warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(7);
-    expect(scenarioMdText).toMatch(/Only seven codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(8);
+    expect(scenarioMdText).toMatch(/Only eight codes are \*\*warn\*\*-severity/);
   });
 });
 

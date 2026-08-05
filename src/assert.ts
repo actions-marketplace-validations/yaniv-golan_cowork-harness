@@ -281,6 +281,13 @@ export interface AssertContext {
    *  body-less entries, so re-hashing it would be wrong. */
   postRunHashes?: Record<string, string>;
   outputsDeletes: string[]; // delete ops that touched mnt/outputs (post-run scan)
+  /** Per-mount delete detections across every delete-denied mount, incl. outputs. Superset of
+   *  `outputsDeletes`. OPTIONAL: a run recorded before this field existed simply has none, which is not
+   *  the same as evidence-unavailable — that case is `scanMissing`, and it is handled separately. */
+  mountDeletes?: { mount: string; command: string }[];
+  /** Mount names waived by `allow_delete_in` across the WHOLE assert array. Resolved in `evaluate()`
+   *  because `check()` only ever sees one assertion and the two keys can sit in separate entries. */
+  deleteWaivedMounts?: string[];
   questions: string[]; // AskUserQuestion question texts asked
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
@@ -504,7 +511,11 @@ export interface AssertContext {
 }
 
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
-  return assertions.map((a) => check(a, ctx));
+  // `allow_delete_in` waives per mount across the whole array; resolve it once here since `check()`
+  // cannot see sibling entries.
+  const deleteWaivedMounts = [...new Set(assertions.flatMap((a) => a.allow_delete_in ?? []))];
+  const withWaivers = deleteWaivedMounts.length ? { ...ctx, deleteWaivedMounts } : ctx;
+  return assertions.map((a) => check(a, withWaivers));
 }
 
 /** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert (via the supplied judge) and stash
@@ -1643,6 +1654,25 @@ function check(
           ? ok()
           : fail(`delete op(s) touched outputs (forbidden in Cowork): ${ctx.outputsDeletes.slice(0, 3).join("; ")}`),
     );
+  if (a.no_delete_in_mounts !== undefined) {
+    // Waived mounts still get DETECTED and recorded — the waiver is a verdict decision, not a scan
+    // suppression, exactly as allow_outputs_delete behaves.
+    const waived = new Set(ctx.deleteWaivedMounts ?? []);
+    const hits = (ctx.mountDeletes ?? []).filter((d) => !waived.has(d.mount));
+    results.push(
+      ctx.scanMissing
+        ? fail(`evidence unavailable: post-run scan absent from result.json — cannot evaluate no_delete_in_mounts`)
+        : hits.length === 0
+          ? ok()
+          : fail(
+              `delete op(s) touched delete-denied mount(s) (production denies unlink/rmdir there until approved): ` +
+                hits
+                  .slice(0, 3)
+                  .map((d) => `${d.mount}: ${d.command}`)
+                  .join("; "),
+            ),
+    );
+  }
   if (a.no_unexpected_files !== undefined) {
     if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
       results.push(

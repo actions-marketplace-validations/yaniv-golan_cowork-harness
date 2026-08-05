@@ -521,13 +521,16 @@ export const Assertion = z.strictObject({
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
-  // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect). To allow
-  // deletes, OMIT the assertion entirely rather than writing `false`.
+  // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect), so it is
+  // rejected. OMITTING the key does NOT permit deletes either: a detected delete still fails the run via the
+  // `outputs_delete` verdict signal, which fires precisely BECAUSE the key was not authored. Authoring it
+  // makes the failure an explicit assertion instead of a signal. To accept a delete, use
+  // `allow_outputs_delete: true`.
   no_delete_in_outputs: z
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
+      "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not mount-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))
@@ -591,6 +594,34 @@ export const Assertion = z.strictObject({
     .optional()
     .describe(
       "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
+    ),
+  // Mutually exclusive with `no_delete_in_outputs` — asserting "no delete happened" AND "a delete is
+  // fine here" is a contradiction, rejected at parse time on the whole `assert:` array (see
+  // ScenarioObject's superRefine; an Assertion-level check cannot see sibling array entries).
+  allow_outputs_delete: z
+    .literal(true)
+    .optional()
+    .describe(
+      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. WAIVES the harness's post-hoc detection; it does NOT model production's allow_cowork_file_delete approval handshake, so a skill relying on the live EPERM still behaves differently here. Mutually exclusive with no_delete_in_outputs",
+    ),
+  // Production denies unlink/rmdir on EVERY delete-denied (`rw`) mount, not just outputs, and approval is
+  // strictly per-mount. `no_delete_in_outputs` covers only outputs and keeps its exact meaning; this is
+  // the mount-wide form. Deletes in a mount named by `allow_delete_in` are waived (see below).
+  no_delete_in_mounts: z
+    .literal(true)
+    .optional()
+    .describe(
+      "fails if a delete is DETECTED in any delete-denied mount (outputs + every `rw` connected folder) that is not waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on every such mount until per-mount approval",
+    ),
+  // A WAIVER of the harness's post-hoc detection for the named mounts, mirroring allow_outputs_delete
+  // exactly: detection still RUNS and the hits stay in result.json for forensics — only the verdict is
+  // waived. It does not model production's allow_cowork_file_delete approval handshake.
+  allow_delete_in: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      '(verdict modifier) accept detected deletes in these mounts by NAME (e.g. ["reports"]) instead of failing/warning — the per-mount analogue of allow_outputs_delete, mirroring production\'s per-mount fileDeleteApprovedMounts. WAIVES the harness\'s post-hoc detection (which still runs and is still recorded); it does NOT model the live approval handshake. Listing "outputs" conflicts with no_delete_in_outputs',
     ),
   allow_l0_plugin_divergence: z
     .literal(true)
@@ -685,6 +716,8 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_l0_plugin_divergence",
   "allow_stall",
   "allow_undelivered_deliverables",
+  "allow_outputs_delete",
+  "allow_delete_in",
 ] as const satisfies readonly (keyof Assertion)[];
 
 /** THE fidelity tiers the harness understands — the single source for the Scenario `fidelity:` enum, the
@@ -808,7 +841,39 @@ export const ScenarioObject = z.strictObject({
       "required consent for `fidelity: hostloop` with a writable connected folder (mode rw/rwd) — the agent gets real, software-checked-only host filesystem access there, no container sandbox; read-only/folder-less hostloop runs need no opt-in",
     ),
 });
-export const Scenario = ScenarioObject;
+/** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key
+ *  minimum-format map) and it is the schema `gen:schema` emits. Cross-key rules live here instead, on the
+ *  parsed form. Note a refinement is INVISIBLE to `z.toJSONSchema`, so any rule added here must be mirrored
+ *  into the generated JSON Schema by hand (see scripts/gen-schema.ts) or editors/CI validating against the
+ *  published schema will accept what the loader rejects. */
+export const Scenario = ScenarioObject.superRefine((s, ctx) => {
+  // Asserting "no delete happened" AND "a delete is acceptable" is a contradiction, and silently
+  // letting one win would make the scenario's intent unreadable. Must be checked across the WHOLE
+  // `assert:` array — the two keys can sit in separate entries, which an Assertion-level refinement
+  // could never see.
+  const denies = s.assert.some((a) => a.no_delete_in_outputs !== undefined);
+  const allows = s.assert.some((a) => a.allow_outputs_delete === true);
+  if (denies && allows)
+    ctx.addIssue({
+      code: "custom",
+      path: ["assert"],
+      message:
+        "no_delete_in_outputs and allow_outputs_delete are mutually exclusive — the first asserts no delete " +
+        "touched mnt/outputs, the second accepts one. Keep whichever matches the scenario's intent.",
+    });
+  // Same contradiction, reached through the per-mount key: waiving `outputs` while also asserting no
+  // delete touched it. `no_delete_in_mounts` + `allow_delete_in` do NOT conflict in general — "no deletes
+  // anywhere except these mounts" is a coherent and useful thing to say, and mirrors how production
+  // combines a blanket denial with per-mount approval.
+  if (denies && s.assert.some((a) => a.allow_delete_in?.includes("outputs")))
+    ctx.addIssue({
+      code: "custom",
+      path: ["assert"],
+      message:
+        'no_delete_in_outputs conflicts with allow_delete_in containing "outputs" — the first asserts no ' +
+        "delete touched mnt/outputs, the second waives exactly that. Keep whichever matches the intent.",
+    });
+});
 export type Scenario = z.infer<typeof ScenarioObject>;
 
 /** Skill/plugin staleness fingerprint, recorded at run time. Stamped into a cassette (staleness tripwire)
@@ -827,6 +892,16 @@ export interface Fingerprint {
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
+  // v11+: gate option labels this run emitted that were found VERBATIM in the skill's own prose, recorded
+  // per source file IN THE ORDER THEY APPEAR IN THAT FILE. Two things it catches that `skillHash` cannot:
+  //   1. a catalog REORDER (all labels still exist, so an existence check passes by construction — the
+  //      order stored here is what makes it detectable);
+  //   2. a change to prose that is DELIVERED to the agent but excluded from the hash (`.cowork-hashignore`
+  //      / session `staleness.hash_ignore`) — outside skillHash forever, so nothing else sees it.
+  // Only verbatim-sourced labels are stamped: a model-PARAPHRASED label was never in the prose, so it
+  // cannot regress from absent to absent, and checking it would fire on every run. Absent on cassettes
+  // recorded before this existed, and on runs where no gate fired — both simply skip the check.
+  labelProvenance?: Array<{ file: string; labels: string[] }>;
   // the boundary used for skillHash — "git" (git-tracked set — the DEFAULT unless COWORK_HARNESS_GITSET=0,
   // and every dir is a git work tree) or "raw" (filesystem walk; used when GITSET=0 OR any dir is not a
   // repo). A record-vs-verify mode flip makes hash comparison meaningless → re-record.
@@ -1218,6 +1293,7 @@ export interface RunResult {
         | "usage_limit"
         | "permissive_auto_allow"
         | "outputs_delete"
+        | "mount_delete"
         | "host_path_leak"
         | "non_deterministic"
         | "l0_plugin_divergence"
@@ -1317,8 +1393,28 @@ export interface RunResult {
      *  parsed {title,url} shape of the top-level field): grounding needs the content the sub-agent
      *  actually saw, and the Links-convention parse would silently drop a format drift. LIVE/record lane
      *  only — the child transcript does not exist on replay, so this is `undefined` there (same contract
-     *  as `reasoning`). `resultTruncated` marks a result cut at the per-entry byte cap. */
-    webSearches?: Array<{ query: string; resultText: string; resultTruncated?: boolean }>;
+     *  as `reasoning`). `resultTruncated` marks a result cut at the per-entry byte cap.
+     *
+     *  NESTED research is folded in here too, tagged with `viaAgentId`/`viaSpawnDepth`. A sub-agent can
+     *  dispatch its own sub-agent, and only dispatches the PARENT stream saw become `subagents[]` entries
+     *  — so a search made two levels down had no entry to attach to and was silently dropped, rendering
+     *  as "this dispatch did no research" when research is exactly what happened (measured: a 3-deep
+     *  chain where the only WebSearch lived at depth 3). Rather than append synthetic entries — which
+     *  would silently change `subagents.length` and with it `dispatch_count_max`, a published assertion —
+     *  a descendant's searches are attributed to its nearest ANCESTOR that does have an entry, carrying
+     *  the provenance so "my own search" stays distinguishable from "a search under me". An untagged
+     *  entry is this dispatch's own. */
+    webSearches?: Array<{
+      query: string;
+      resultText: string;
+      resultTruncated?: boolean;
+      /** Set when this search was made by a DESCENDANT dispatch, not by this one: the child agent id
+       *  (`agent-<id>.jsonl`) that actually ran it. Absent = this dispatch's own search. */
+      viaAgentId?: string;
+      /** The descendant's own `spawnDepth` from its `agent-<id>.meta.json` (this dispatch is shallower).
+       *  Absent when the meta carried no depth. Only meaningful alongside `viaAgentId`. */
+      viaSpawnDepth?: number;
+    }>;
     /** Count of WebSearch calls dropped past the per-dispatch cap (oldest-first) — mirrors `reasoningElided`. */
     webSearchesElided?: number;
   }>;
@@ -1394,7 +1490,16 @@ export interface RunResult {
   permissiveAutoAllow?: string[];
   /** Post-run scan signals (live lane only). computeVerdict default-fails on `outputsDeletes`/`hostPathLeaked`
    *  when the scenario did NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */
-  scan?: { outputsDeletes: string[]; hostPathLeaked: boolean; selfHealRan: boolean };
+  scan?: {
+    outputsDeletes: string[];
+    /** Per-mount delete detections across every delete-denied (`rw`) user-visible mount, including
+     *  `outputs`. A SUPERSET of `outputsDeletes`, which is unchanged: production denies unlink/rmdir on
+     *  every such mount, so a delete in a connected folder is a real detection that used to produce no
+     *  signal at all. Reported, not verdict-moving — the harness detects where production ENFORCES. */
+    mountDeletes?: { mount: string; command: string }[];
+    hostPathLeaked: boolean;
+    selfHealRan: boolean;
+  };
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
   /** Run-identity metadata for the iterate-across-fixes loop. `runLabel`: the user's `--label` generation

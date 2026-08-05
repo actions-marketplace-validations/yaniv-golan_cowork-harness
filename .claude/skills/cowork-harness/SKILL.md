@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.17.0
-  tracks-harness: cowork-harness 1.17.0 (baseline desktop-1.24012.9)
+  version: 1.18.0
+  tracks-harness: cowork-harness 1.18.0 (baseline desktop-1.25927.0)
 ---
 
 # cowork-harness
@@ -22,8 +22,8 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.17.0` (baseline
-> `desktop-1.24012.9`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.18.0` (baseline
+> `desktop-1.25927.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.17.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.17.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.17.0"`. **Pin `@>=1.17.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.18.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.18.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.18.0"`. **Pin `@>=1.18.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -166,6 +166,10 @@ Exact accepted values (teach precisely): `--on-unanswered` takes `fail|prompt|fi
 only `fail|first` on `run`. **`llm` is NOT an `--on-unanswered` value** — the bare flag
 `--on-unanswered llm` is rejected (use `--decider-llm`); the YAML spelling is `on_unanswered: llm`.
 The word `agent` is **retired** — do not write `on_unanswered: agent` (the schema rejects it).
+`--on-unanswered` also conflicts with `--decider-dir`/`--decider-cmd`/`--decider-llm` (the channel or
+model IS the terminal, so a policy alongside it never applies) — pass one, not both. On `record`, a
+scenario setting `on_unanswered: prompt` is rejected too: the YAML field outranks the flag, and a TTY
+wait can't produce a deterministic committed fixture.
 `--on-unanswered first` is itself flagged `nonDeterministic` — it is *not* a deterministic stand-in
 for scripted answers. See `references/fidelity-and-answers.md`.
 
@@ -319,6 +323,8 @@ When the scenario declares `answers:`, verify-run **also** checks they still mat
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
+`run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
+`cowork-harness record <file.yaml> --dry-run`; `lint` checks the assertion invariants (both above).
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
@@ -441,6 +447,14 @@ Recognize these before "fixing" a non-bug:
   would claim more than the evidence supports, and staying silent would read as clean. Mutually exclusive
   with `undelivered_deliverables`, and quiet on a run that produced nothing to deliver. Not a skill defect —
   a harness coverage gap (see the *File delivery* section of fidelity-gaps).
+- **`mount_delete`** (`WARN`) — a delete touched a **delete-denied mount other than `outputs`**: a `rw`
+  connected folder. Production denies `unlink`/`rmdir` on *every* Cowork FUSE mount until per-mount
+  approval, not just outputs — a connected folder shows the identical default — so this run diverged from
+  what production would have allowed. `WARN` rather than `FAIL` because the harness **detects** post-hoc
+  what production **enforces**: by the time the scan sees it, the agent already proceeded where it would
+  have hit `EPERM`, so failing the run would overstate what a post-hoc scan knows. Author
+  `no_delete_in_mounts: true` to hard-fail on it, or `allow_delete_in: ["<mount>"]` to waive that mount
+  (detection still runs and the hit is still recorded — the waiver is a verdict decision).
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
@@ -484,6 +498,19 @@ newest session's `status.json` and reads that. `--follow` fails loud on a timeou
 rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
 payload; `cowork-harness status --help` has the flags.)
 
+**Poll with `--follow`, not with a shell loop over `status`'s stdout.** The one-shot text form prints to
+**stderr** and writes nothing to stdout; `--output-format json` (one envelope) and `--follow` (one JSON
+line per status change) are the **stdout** forms. A poll that greps `status`'s stdout therefore matches
+nothing, exits 1, and returns instantly against a run with minutes left to go — a silent false "done":
+
+```bash
+# WRONG — stdout is empty, so grep exits 1, `!` inverts it, and the loop never sleeps.
+until ! cowork-harness status "$D" | grep -q '● running'; do sleep 30; done
+
+# RIGHT — the harness owns the poll loop and exits when the run reaches a terminal state.
+cowork-harness status "$D" --follow
+```
+
 **A multi-minute `record`/`run` outlives a short-lived wrapper.** Don't launch a long record from a
 subagent that returns before it finishes — the returning agent tears down its process tree and kills the
 in-flight run mid-artifact-write. Run it foreground, or detached from any process that will exit first.
@@ -520,7 +547,7 @@ Docker, no re-record.
 | Situation | Symptom | Reach for (in order) |
 |---|---|---|
 | **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools, gates, sub-agent tree)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
-| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+| **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `replay --mutate` — perturbs each recorded JSON artifact value and reports which perturbations NOTHING caught (reporting only; never moves the verdict/exit code) · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
 agent stderr) — read those before re-running; a re-record rarely tells you more than the captured stderr
@@ -701,11 +728,17 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
    (write-but-no-delete on `outputs/` / connected folders) is *not* mount-enforced **in the harness** —
    `rm` succeeds and is only caught post-hoc by `no_delete_in_outputs`. **Real Cowork enforces it live:**
-   `rm` under `outputs/` fails `Operation not permitted`, and a skill must request approval via
-   `allow_cowork_file_delete` to delete. Two consequences: a skill should not stage disposable scratch
+   outputs is a FUSE mount, and `unlink`/`rmdir` fail `Operation not permitted`; a skill must request
+   approval via `allow_cowork_file_delete` (which re-mounts the folder `rwd` mid-session) to delete.
+   **Only unlinking is denied.** Emptying a file in place — `truncate -s 0`, `> file`, `shred` without
+   `-u` — and renaming *within* outputs both SUCCEED in production, so the harness does not flag them
+   either. Renaming a file OUT of outputs fails (`EXDEV`, then `EPERM` on the copy-then-unlink
+   fallback), so that stays a delete. Two consequences: a skill should not stage disposable scratch
    under `outputs/` (in production, cleanup there costs an approval prompt), and a skill's
    "catch-EPERM-then-request-approval" branch cannot be exercised at any harness tier (the `rm` just
    succeeds here). Do not read this gotcha as "delete-deny may not be real in production" — it is real.
+   If a scenario's deletion IS intended, assert `allow_outputs_delete: true` rather than dropping
+   `no_delete_in_outputs` — omitting it does not permit anything.
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >
@@ -854,6 +887,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     `present_files_called` assertion keys are harness-side names and stay valid either way.
     ([`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)
     → "File delivery" has the binary-verified detail; repo-only.)
+
+25. **Two distinct host-inventory consent flags — a record-time one and a verify-time one.** `record
+    --allow-host-inventory-fixture` is the boolean consent to proceed recording a host-inheriting
+    (`protocol`/`hostloop`/`cowork`-resolving-to-hostloop) cassette into a repo-visible path — otherwise
+    `record` refuses (freezing this machine's MCP servers/agents/account into a committed fixture is the
+    risk). `verify-cassettes --allow-host-inventory <regex>` is unrelated: a per-finding suppressor for the
+    scanner's `host-inventory` class on an already-committed cassette. Passing one where the other command
+    wants it fails as an unrecognized flag — they don't interchange. Depth: `references/ci-recipe.md`.
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

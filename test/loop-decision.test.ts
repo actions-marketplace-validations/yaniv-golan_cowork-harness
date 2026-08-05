@@ -73,7 +73,7 @@ describe("readGateBool / resolveSkillDiscoveryGates (A2 discovery gates)", () =>
   // THE inversion pin: if readGateBool were swapped for readGateFlag(baseline, id, "suggestSkillsEnabled")
   // this returns false, and suggest_skills silently disappears from every container/hostloop run.
   it("resolves suggestSkillsEnabled TRUE against the live baseline (kills the readGateFlag inversion)", () => {
-    expect(readGateFlag(LIVE, "245679952", "suggestSkillsEnabled")).toBe(false); // the WRONG reader's answer
+    expect(readGateFlag(LIVE, "245679952", "suggestSkillsEnabled", false)).toBe(false); // the WRONG reader's answer
     expect(resolveSkillDiscoveryGates(LIVE).suggestSkillsEnabled).toBe(true); // the RIGHT one
   });
 
@@ -92,8 +92,10 @@ describe("readGateBool / resolveSkillDiscoveryGates (A2 discovery gates)", () =>
     expect(resolveSkillDiscoveryGates(LIVE, { suggest_enabled: undefined }).suggestSkillsEnabled).toBe(true);
   });
   // Symmetric pin for the proactive line: an explicit `false` knob must WIN over an ON gate. Without
-  // this, `??` -> `||` survives on that line (no committed baseline has 1598976391 on, so the asymmetry
-  // is invisible in practice — which is exactly why it needs a synthetic baseline).
+  // this, `??` -> `||` survives on that line. It uses a SYNTHETIC baseline deliberately: `LIVE` is pinned
+  // to desktop-1.24012.1, where the gate is off, so this asymmetry would be invisible there. (From the
+  // 1.24012.11 baseline the gate IS on, so `latest` would now exercise it — but pinning the synthetic
+  // keeps the guard independent of which baseline happens to be newest.)
   it("an explicit false knob beats an ON gate on the proactive line too (?? not ||)", () => {
     const on = gated({ "1598976391": { on: true } });
     expect(resolveSkillDiscoveryGates(on).proactiveSkillSuggestEnabled).toBe(true);

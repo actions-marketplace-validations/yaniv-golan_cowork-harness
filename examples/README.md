@@ -36,7 +36,8 @@ examples/
   scenarios/   one test each: prompt + scripted answers + assertions
   sessions/    pre-prompt setup (model, mounts, plugins) — referenced by scenarios via `session:`
   skills/      the example skills under test (each a Claude Code plugin folder)
-  data/        sample inputs the scenarios consume (CSVs, a PDF, an mcp.json)
+  data/        sample inputs the scenarios consume (CSVs, a PDF, an mcp.json — a shape sample only; no
+               bundled session wires it in — see docs/discovery.md for `mcp.config` usage)
   replays/     committed synthetic cassettes for token-free, Docker-free `replay`
   matrices/    `run --matrix <file>` compatibility-matrix configs (baseline/model/skill_dir axes)
   answer-policies/  reusable scripted-answer YAML fragments, loaded with `--answer-policy <yaml>` on
@@ -50,6 +51,10 @@ Answer policies: see [docs/scenario.md § Reusable answer policies](../docs/scen
 Matrices: the worked matrix config is `matrices/csv-metrics-matrix.yaml` — see the `run --matrix` bullet under [README → Commands at a glance](../README.md#commands-at-a-glance) ("Flags worth knowing").
 
 `replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
+One cassette, `replays/example-multiselect-gate.cassette.json`, records a `scenarioSource` pointer
+(`../../e2e/scenarios/smoke-multiselect.yaml`) into the harness's own internal `e2e/` tree — a source-checkout-only
+path, since `e2e/` isn't part of the npm package's `files`; the cassette itself still replays fine
+via `npm install`, since a committed cassette carries its own frozen recording independent of that source scenario.
 
 Paths inside a scenario/session resolve **relative to that file** (see
 [../docs/session.md](../docs/session.md#path-expansion)), so this whole `examples/` tree is

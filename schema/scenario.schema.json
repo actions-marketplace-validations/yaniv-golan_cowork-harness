@@ -493,7 +493,7 @@
             "type": "string"
           },
           "no_delete_in_outputs": {
-            "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not FUSE-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun — omit to allow deletes)",
+            "description": "fails if a delete touching mnt/outputs is DETECTED (post-run bash-command scan, not mount-level enforcement — a green means none was detected); only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
             "type": "boolean",
             "const": true
           },
@@ -578,6 +578,25 @@
             "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
             "type": "boolean",
             "const": true
+          },
+          "allow_outputs_delete": {
+            "description": "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. WAIVES the harness's post-hoc detection; it does NOT model production's allow_cowork_file_delete approval handshake, so a skill relying on the live EPERM still behaves differently here. Mutually exclusive with no_delete_in_outputs",
+            "type": "boolean",
+            "const": true
+          },
+          "no_delete_in_mounts": {
+            "description": "fails if a delete is DETECTED in any delete-denied mount (outputs + every `rw` connected folder) that is not waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on every such mount until per-mount approval",
+            "type": "boolean",
+            "const": true
+          },
+          "allow_delete_in": {
+            "description": "(verdict modifier) accept detected deletes in these mounts by NAME (e.g. [\"reports\"]) instead of failing/warning — the per-mount analogue of allow_outputs_delete, mirroring production's per-mount fileDeleteApprovedMounts. WAIVES the harness's post-hoc detection (which still runs and is still recorded); it does NOT model the live approval handshake. Listing \"outputs\" conflicts with no_delete_in_outputs",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "allow_l0_plugin_divergence": {
             "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
@@ -717,5 +736,102 @@
     "prompt"
   ],
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "assert"
+            ],
+            "properties": {
+              "assert": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": [
+                    "no_delete_in_outputs"
+                  ],
+                  "properties": {
+                    "no_delete_in_outputs": {}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "assert"
+            ],
+            "properties": {
+              "assert": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": [
+                    "allow_outputs_delete"
+                  ],
+                  "properties": {
+                    "allow_outputs_delete": {}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "assert"
+            ],
+            "properties": {
+              "assert": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": [
+                    "no_delete_in_outputs"
+                  ],
+                  "properties": {
+                    "no_delete_in_outputs": {}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "assert"
+            ],
+            "properties": {
+              "assert": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": [
+                    "allow_delete_in"
+                  ],
+                  "properties": {
+                    "allow_delete_in": {
+                      "type": "array",
+                      "contains": {
+                        "const": "outputs"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
   "description": "cowork-harness scenario YAML — prompt + scripted answers + assert:. See docs/scenario.md."
 }

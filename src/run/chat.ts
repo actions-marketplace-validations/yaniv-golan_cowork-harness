@@ -321,12 +321,12 @@ export async function cmdChat(args: string[]) {
       })
     : undefined;
   // same web_fetch provenance wiring as execute.ts — ref created before spawn, filled after Run.
-  const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi");
-  const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt");
+  const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
+  const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt", false);
   const provenanceRef: { current?: WebFetchProvenance } = {};
   // coworkWebFetchDedup — per-session cache; kept for the chat REPL's lifetime (= one Cowork session).
   const dedup =
-    viaApiOn && readGateFlag(baseline, "1978029737", "coworkWebFetchDedup")
+    viaApiOn && readGateFlag(baseline, "1978029737", "coworkWebFetchDedup", false)
       ? makeWebFetchDedupCache({
           ttlMs: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupTtlMs") ?? 900000,
           maxEntries: readGateNumber(baseline, "1978029737", "coworkWebFetchDedupMaxEntries") ?? 100,

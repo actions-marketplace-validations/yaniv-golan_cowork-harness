@@ -204,7 +204,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 = verified & failed, exit 2 = usage (incl. an empty dir, unless --allow-empty), exit 3 = could not verify
       [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow-empty]              an EXISTING but cassette-free dir exits 0 (a missing path still fails)
-      [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
+      [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
@@ -357,7 +357,7 @@ Questions:
                                    'answer <dir> --gate N --choose <label>' writes the reply atomically.
 
 Output:
-  --output-format text|json        text = live stream + footer (default); json = one stdout envelope
+  --output-format text|json        text = live stream + footer, written to stderr (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
   --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
                                    line (a raw host path). The probe + hard-fail stay; status.json is still
@@ -404,6 +404,8 @@ const RUN_HELP = `cowork-harness run <scenario.yaml | dir/>
 
   Run one authored scenario, or every *.yaml/*.yml in a directory, with assertions and a CI-ready exit
   code. Verdict-first: on FAIL the failing transcript is printed inline (no spelunking runs/…).
+  ('run' takes no --dry-run: 'record <file.yaml> --dry-run' checks that a scenario LOADS without
+   spending; 'lint <file.yaml>' checks the assertion invariants. Both are token-free.)
 
 Input policy:
   --on-unanswered fail|first       policy for an unscripted question (default: fail — deterministic).
@@ -467,7 +469,7 @@ Matrix testing — one scenario × a cross-product of axes, in one run:
                                                           # a mismatched basename is rejected, not silently renamed)
 
 Output:
-  --output-format text|json        text = verdict + failing transcript (default); json = stdout envelope
+  --output-format text|json        text = verdict + failing transcript, written to stderr (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
   --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
                                    line (a raw host path). The probe + hard-fail stay; status.json is still
@@ -527,7 +529,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
        --view tool-errors        one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars
        --view files              workspaceFiles[] class-grouped tree + diff vs preRunHashes (added/modified/removed/unchanged); needs a run dir (reads result.json)
        --view usage              per-model tokens/cost/cache-read ratio from modelUsage; needs a run dir (reads result.json)
-       --view subagent-research  each dispatch's own WebSearch query + result; needs a run dir (reads result.json's subagents[].webSearches) (live/record lane capture only); UNAVAILABLE on replay, never rendered as zero research
+       --view subagent-research  each dispatch's WebSearch query + result, incl. a nested dispatch's, marked [via nested agent …]; needs a run dir (reads result.json's subagents[].webSearches) (live/record lane capture only); UNAVAILABLE on replay, never rendered as zero research
        --translate-paths  rewrite VM paths to host paths in the tools/default TEXT views only (needs a sibling mounts.json + an effective hostloop run; questions/dispatches views and --output-format json are unaffected)
        --full-results     capture the FULL input + result of every (incl. successful) tool call — resultTextFull/detailFull, capped at 4KB — so an external grader can ground a self-critique finding against the call it cites (default view keeps its 100/120-char slices)
        (default: all views)
@@ -538,6 +540,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   status:
     "usage: status <run-id | run-dir> [--follow] [--output-format text|json]   (check whether a background run is alive, without ps aux — see docs/run-status.md)\n" +
     "       --follow: stream one line per status change until the run reaches a terminal state (done/error); arm a Monitor here\n" +
+    "       streams: the text summary goes to stderr and stdout stays empty; --output-format json and --follow write to stdout\n" +
+    "                (so `status <dir> | grep …` matches nothing and exits instantly — poll with --follow, not a shell loop)\n" +
     '       exit codes: 0 healthy (running/done) · 1 the dir resolved but has no status.json yet (or a malformed one), or the run itself ended in state:"error" · 2 usage error, including an unresolvable <run-id | run-dir> (matches trace/inspect/scaffold) · 3 stale (probably dead — no exit handler can catch SIGKILL)\n' +
     "usage: status --latest-for <scenario-name-or-slug> [--output-format text|json]   (resolve the newest run dir for a scenario by actual run time, NOT `ls -td`'s directory mtime — see docs/scenario.md#output)\n" +
     "       prints the resolved outDir (the canonical run-dir handle); --output-format json emits {scenario, outDir, createdAt, verdict?} (verdict present only once the kept run's result.json carries one)\n" +
@@ -1008,6 +1012,11 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
   const envOutputFormat = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
   const defaultOutput: "text" | "json" = envOutputFormat === "json" ? "json" : "text";
   const flags: CommonFlags = { output: defaultOutput, quiet: false, verbose: false };
+  // INVARIANT for every `fail()` inside this loop: pass `isJsonOutput(args)`, never `flags.output`.
+  // `flags.output` is only populated once the loop REACHES `--output-format`, so reading it here makes
+  // the error envelope depend on flag ORDER — the same bad command line answered a JSON consumer with
+  // plain text when the offending flag came first. `isJsonOutput` scans all of argv and falls back to
+  // COWORK_HARNESS_OUTPUT_FORMAT, so it is correct at any point in the parse.
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     // resolve the equals form generically so every common value-flag accepts `--flag=value`, not
@@ -1044,23 +1053,30 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
     else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
-        fail(commandName, "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
+        fail(commandName, "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
       flags.deciderCmd = v;
     } else if (name === "--decider-dir") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
-        fail(commandName, "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, flags.output === "json");
+        fail(commandName, "usage", `--decider-dir: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
       flags.deciderDir = v;
     } else if (name === "--label") {
       const v = readVal();
       // A generation tag, not free text: reject newlines and cap length so it stays a clean, index-scannable key.
       if (v.includes("\n") || v.includes("\r"))
-        fail(commandName, "usage", "--label must be a single line (no newlines)", undefined, flags.output === "json");
-      if (v.length > 200)
-        fail(commandName, "usage", `--label is too long (${v.length} chars; max 200)`, undefined, flags.output === "json");
+        fail(commandName, "usage", "--label must be a single line (no newlines)", undefined, isJsonOutput(args));
+      if (v.length > 200) fail(commandName, "usage", `--label is too long (${v.length} chars; max 200)`, undefined, isJsonOutput(args));
       flags.label = v;
     } else rest.push(a);
   }
+  // Flag-level validation runs HERE, for every command that takes common flags, so no downstream
+  // early-return (skill's --dry-run) or short-circuit (`externalChannel ? … :`) can skip it.
+  // `--decider-dir` + `--decider-cmd` is a pure flag conflict, checked here rather than inside
+  // resolveExternal so a --dry-run rejects it WITHOUT constructing a channel (fileChannel touches the
+  // directory and installs an exit handler — side effects a preview must not have).
+  if (flags.deciderDir != null && flags.deciderCmd != null)
+    fail(commandName, "usage", "--decider-dir conflicts with --decider-cmd (one terminal channel).", undefined, isJsonOutput(args));
+  validateOnUnanswered(commandName, flags, args);
   return { rest, flags };
 }
 
@@ -1083,13 +1099,37 @@ function resolveOutput(
   return { json: false, render: true, footer: true, plan: { live, progress, verbose, color, compact } };
 }
 
-/** Resolve the on_unanswered default for a command. This is the choke
- *  point BOTH run and skill pass through, so the removed/internal policy values are rejected here — they
- *  can't silently degrade to `fail` (which would pass a no-gate run green under a bogus policy). */
-function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswered {
-  const json = flags.output === "json";
+/** Commands whose own CLI exposes `--decider-llm`. The rest must redirect `--on-unanswered llm` at the
+ *  scenario-YAML spelling: telling a `run`/`probe-dispatch` user to "use --decider-llm" names a flag
+ *  those commands then reject as an unexpected argument. */
+const HAS_DECIDER_LLM_FLAG = new Set(["skill"]);
+
+/** VALIDATE the `--on-unanswered` value (and its conflicts). Split out of `resolvePolicy` and called at
+ *  flag-parse time, because validation and resolution have different lifetimes: resolution is only
+ *  needed when a run is about to happen, so every path that legitimately skipped it — `skill`'s
+ *  `--dry-run` early return, the `externalChannel ? "fail" : resolvePolicy(…)` short-circuit — silently
+ *  skipped validation too, and `--on-unanswered banana --dry-run` exited 0.
+ *
+ *  Takes `args` (not `flags.output`) for the JSON decision: `--output-format` is parsed in the same
+ *  loop as the flag being validated, so reading `flags.output` mid-parse makes the envelope depend on
+ *  flag ORDER. `isJsonOutput` scans the whole argv. */
+function validateOnUnanswered(command: string, flags: CommonFlags, args: string[]): void {
+  const json = isJsonOutput(args);
+  const v = flags.onUnanswered as string | undefined;
+  // A terminal channel and a policy are mutually exclusive whether or not the policy value is valid:
+  // buildDecider takes `opts.external ?? <policy terminal>`, so with a channel the policy terminal is
+  // never constructed and the flag is inert. `--decider-llm` already rejects the same pairing.
+  if (v !== undefined && (flags.deciderDir != null || flags.deciderCmd != null))
+    fail(
+      command,
+      "usage",
+      `--on-unanswered ${v} conflicts with --decider-dir/--decider-cmd (the channel IS the terminal, so the policy would never apply). Drop one.`,
+      undefined,
+      json,
+    );
+  if (v === undefined) return;
   // `external` (the removed stdio channel) → `--decider-dir`/`--decider-cmd` subsume it.
-  if ((flags.onUnanswered as string) === "external")
+  if (v === "external")
     fail(
       command,
       "usage",
@@ -1097,32 +1137,36 @@ function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswer
       undefined,
       json,
     );
-  // The LLM decider's CLI spelling is --decider-llm; we reject the raw policy value on the CLI to keep deciders in the --decider-* family (the scenario-YAML spelling is on_unanswered: llm).
-  if ((flags.onUnanswered as string) === "llm")
+  // The LLM decider's CLI spelling is --decider-llm; the raw policy value is rejected on the CLI to keep
+  // deciders in the --decider-* family (the scenario-YAML spelling is on_unanswered: llm).
+  if (v === "llm")
     fail(
       command,
       "usage",
-      '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.',
+      HAS_DECIDER_LLM_FLAG.has(command)
+        ? '--on-unanswered llm is not a user flag. Use --decider-llm [--intent "<one line>"] to answer live questions with a model.'
+        : `--on-unanswered llm is not a user flag. Set on_unanswered: llm in the scenario YAML instead — \`${command}\` has no --decider-llm flag (only \`skill\`/\`record\` do).`,
       undefined,
       json,
     );
-  if (flags.onUnanswered) {
-    // validate the accepted set. `external`/`llm` are rejected above with redirect messages (the
-    // decider-orthogonality invariant); any OTHER bogus value (e.g. "banana") used to fall through here
-    // and pass unvalidated, with audit metadata reporting a nonsensical policy. Reject it loudly.
-    if (flags.onUnanswered !== "fail" && flags.onUnanswered !== "prompt" && flags.onUnanswered !== "first")
-      fail(
-        command,
-        "usage",
-        `--on-unanswered must be fail|prompt|first (got "${flags.onUnanswered}")`,
-        "for a model/external decider use --decider-llm, --decider-dir, or --decider-cmd",
-        json,
-      );
-    if (command === "run" && flags.onUnanswered === "prompt") {
-      fail(command, "usage", "run rejects --on-unanswered prompt (would break determinism). Use fail|first.", undefined, json);
-    }
-    return flags.onUnanswered;
-  }
+  // Any OTHER bogus value (e.g. "banana") used to fall through unvalidated, with audit metadata
+  // reporting a nonsensical policy. Reject it loudly.
+  if (v !== "fail" && v !== "prompt" && v !== "first")
+    fail(
+      command,
+      "usage",
+      `--on-unanswered must be fail|prompt|first (got "${v}")`,
+      "for a model/external decider use --decider-llm, --decider-dir, or --decider-cmd",
+      json,
+    );
+  if (command === "run" && v === "prompt")
+    fail(command, "usage", "run rejects --on-unanswered prompt (would break determinism). Use fail|first.", undefined, json);
+}
+
+/** RESOLVE the on_unanswered policy for a command — validation already happened at flag-parse time
+ *  (`validateOnUnanswered`), so this is pure and safe to call from a preview/dry-run path. */
+function resolvePolicy(command: "run" | "skill", flags: CommonFlags): OnUnanswered {
+  if (flags.onUnanswered) return flags.onUnanswered;
   if (command === "run") return "fail"; // scenarios are reproducible regression tests
   // skill: adaptive — prompt if a human is at the TTY, else fail (CI/agent)
   return process.stdin.isTTY && !process.env.CI ? "prompt" : "fail";
@@ -1244,6 +1288,10 @@ async function runOneScenario(p: {
       ...extra,
       command: execCommand,
       onUnanswered: policy,
+      // `policy` is RESOLVED (it carries resolvePolicy's default when no flag was passed), so the raw
+      // flag rides along separately — otherwise the override warning cannot tell a user's explicit
+      // `--on-unanswered fail` from the `fail` default and would fire on every defaulted run.
+      onUnansweredFlag: flags.onUnanswered,
       externalChannel,
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
@@ -1504,7 +1552,13 @@ async function cmdRun(rawArgs: string[]) {
     fail(
       "run",
       "usage",
-      `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag.`,
+      // The pointer is appended to the MESSAGE, deliberately not passed as fail()'s `hint`: `hint` WINS over
+      // the auto-derived misplaced-global-flag guidance (`hint ?? misplacedGlobalHint(...)` in envelope.ts), and
+      // a token like `--dotenv,foo` reaches this path while still matching that helper (strayGlobal above
+      // terminates on `(=|$)`, misplacedGlobalHint on `(=|$|[\s,])`). A hint here would silently swallow the
+      // "put it before the subcommand" answer for exactly those tokens.
+      `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag. ` +
+        `To check a scenario without spending: \`record <file.yaml> --dry-run\` (does it load) or \`lint <file.yaml>\` (assertion invariants).`,
       undefined,
       flags.output === "json",
     );
@@ -2015,6 +2069,29 @@ async function cmdSkill(rawArgs: string[]) {
       isJson,
     );
 
+  // Preconditions `run` never needed. `--session-id`/`--resume` are skill-only, and both pin ONE run dir:
+  // every repeat iteration would resolve the same `sess-<id>` outDir and the same-origin freshness wipe
+  // (execute.ts) would delete the previous iteration — N runs, one survivor, while the help text promises
+  // every run is kept. `--resume` additionally chains one session instead of sampling N independent runs.
+  if (repeatFlags.repeatN !== undefined && (sessionId || resume))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --session-id/--resume (both pin a single run dir, so each iteration would overwrite the last instead of producing N independent samples)",
+      undefined,
+      isJson,
+    );
+  // Same invariant the run lane enforces and docs/scenario.md states: an interactive driving agent x N
+  // runs is not a reproducible measurement.
+  if (repeatFlags.repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
+    return void fail(
+      "skill",
+      "usage",
+      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
+      undefined,
+      isJson,
+    );
+
   if (dryRun) {
     out(
       JSON.stringify(
@@ -2025,6 +2102,12 @@ async function cmdSkill(rawArgs: string[]) {
           marketplaces,
           enabled: enables,
           answers,
+          // The preview is what a reader checks the invocation against, so it reports the gate settings
+          // too — omitting them also made the equals-vs-spaced parity test for --on-unanswered vacuous
+          // (it compared two previews that never carried the value).
+          on_unanswered: useLlm ? "llm" : resolvePolicy("skill", flags),
+          ...(flags.deciderDir != null ? { decider: "decider-dir" } : flags.deciderCmd != null ? { decider: "decider-cmd" } : {}),
+          ...(useLlm ? { decider: "decider-llm" } : {}),
           ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
         },
         null,
@@ -2072,28 +2155,6 @@ async function cmdSkill(rawArgs: string[]) {
   const o = resolveOutput("skill", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
   const { repeatN, minPassRate, stopOnDiverge, maxBudgetUsd, allowBudgetStop } = repeatFlags;
-  // Preconditions `run` never needed. `--session-id`/`--resume` are skill-only, and both pin ONE run dir:
-  // every repeat iteration would resolve the same `sess-<id>` outDir and the same-origin freshness wipe
-  // (execute.ts) would delete the previous iteration — N runs, one survivor, while the help text promises
-  // every run is kept. `--resume` additionally chains one session instead of sampling N independent runs.
-  if (repeatN !== undefined && (sessionId || resume))
-    return void fail(
-      "skill",
-      "usage",
-      "--repeat cannot be combined with --session-id/--resume (both pin a single run dir, so each iteration would overwrite the last instead of producing N independent samples)",
-      undefined,
-      o.json,
-    );
-  // Same invariant the run lane enforces and docs/scenario.md states: an interactive driving agent x N
-  // runs is not a reproducible measurement.
-  if (repeatN !== undefined && (flags.deciderDir || flags.deciderCmd))
-    return void fail(
-      "skill",
-      "usage",
-      "--repeat cannot be combined with --decider-dir/--decider-cmd (an interactive driving agent × N runs is not a measurement)",
-      undefined,
-      o.json,
-    );
   // Single-run budget ceiling. The batch path enforces its own cumulative cap between iterations, so this
   // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
   if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
@@ -2727,7 +2788,24 @@ async function cmdSync(args: string[]) {
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the
   // fcache here makes a re-sync refresh them and surfaces real drift instead of silently carrying stale.
-  const baseProvenance = (base.provenance ?? {}) as Record<string, unknown>;
+  // `eipcChannelUuid` is DROPPED rather than carried forward. It claimed via its own $comment to be
+  // "per-build", but nothing ever recomputed it: there is no extractor anywhere, so it arrived only via
+  // the `...baseProvenance` spread below and was copied unchanged into every baseline — one distinct
+  // value across all 20, matching no shipped asar. The real Desktop EIPC channel DOES rotate per build,
+  // so the field was not merely stale, it was structurally incapable of drifting. Nothing reads, types,
+  // or asserts it (absent from PlatformBaseline and from schema/), so removing it breaks no consumer.
+  // Adding an extractor was the alternative and was rejected: it would manufacture a per-build fact with
+  // no consumer, and the harness does not use Desktop IPC. The hazard was the comment, not the value —
+  // a promise of per-build freshness invites a provenance tripwire on ground that cannot move.
+  // Historical baselines keep their recorded value; they are per-release snapshots, not live claims.
+  const { eipcChannelUuid: _droppedEipcChannelUuid, ...provenanceWithoutEipc } = (base.provenance ?? {}) as Record<string, unknown>;
+  // `provenance.$comment` exists solely to annotate eipcChannelUuid, so it goes with the field — an
+  // orphaned "eipcChannelUuid is per-build" note is the exact bait being removed. Conditioned on the text
+  // rather than dropped outright, so a future $comment repurposed for something else survives a re-sync.
+  const baseProvenance =
+    typeof provenanceWithoutEipc.$comment === "string" && provenanceWithoutEipc.$comment.includes("eipcChannelUuid")
+      ? (({ $comment: _droppedEipcComment, ...rest }) => rest)(provenanceWithoutEipc)
+      : provenanceWithoutEipc;
   const baseGates = (baseProvenance.gates ?? {}) as Record<string, unknown>;
   let nextGates: Record<string, unknown> = baseGates;
   if (res.gates) {
@@ -2820,6 +2898,11 @@ async function cmdSync(args: string[]) {
       asarFingerprint: res.asarFingerprint,
       spawnEnvKeys: res.spawnEnvKeys,
       spawnEnvSpreadCount: res.spawnEnvSpreadCount,
+      // Snapshot IDENTITY for the gate block above. `capturedAt` is a date, which is far too coarse: the
+      // payload refetches irregularly (3.7–20.8 min observed) and its membership churns count-neutrally,
+      // so "captured on 2026-08-05" cannot distinguish two materially different reads. Carried forward
+      // from `baseProvenance` when the fcache is unreadable, so an offline sync never blanks it.
+      ...(res.fcache ? { fcache: res.fcache } : {}),
     },
   };
   const diffFlag = !!syncParsed.flags["--diff"];
@@ -4022,6 +4105,7 @@ async function cmdVerifyRun(args: string[]) {
     authoredFilesHealth:
       recomputedAuthored && authoredFilesHealthNonEmpty(recomputedAuthored.health) ? recomputedAuthored.health : undefined,
     outputsDeletes: scan.outputsDeletes,
+    mountDeletes: scan.mountDeletes ?? [],
     questions: sidecarQuestions ?? [],
     hostPathLeaked: scan.hostPathLeaked,
     selfHealRan: scan.selfHealRan,
@@ -4250,11 +4334,76 @@ function cmdAssert(args: string[]) {
   rejectUnknownFlags("assertions", args, ["--list", "--output-format", "--output-format=json", "--output-format=text"], json);
   const shape = Assertion.shape as Record<string, { description?: string }>;
   const keys = Object.keys(shape).map((k) => ({ key: k, description: shape[k].description ?? "" }));
+  // JSON stays a FLAT list — machine consumers key off `assertions[]`, and grouping is a reading aid,
+  // not a contract. Changing this shape would be a covered-surface break (SPEC §12).
   if (json) return void out(jsonPayloadEnvelope("assertions", true, { assertions: keys }));
   const width = Math.max(...keys.map((k) => k.key.length));
   out(`available assertions (${keys.length}) — use under a scenario's \`assert:\` list:\n`);
-  for (const { key, description } of keys) out(`  ${key.padEnd(width)}  ${description}`);
+  const groups = groupAssertionKeys(keys);
+  for (const { title, members } of groups) {
+    if (!members.length) continue;
+    out(`  ${title}`);
+    for (const { key, description } of members) out(`    ${key.padEnd(width)}  ${description}`);
+    out("");
+  }
 }
+
+/** Reading-aid families for `assertions --list`. A flat 71-line dump is authoritative and unscannable;
+ *  a consumer looking for "how do I prove a gate still fires" should not have to read all of it.
+ *
+ *  ORDER MATTERS — first match wins, so the specific rules sit above the broad ones (`no_vm_path_file_op`
+ *  is path-denial, not "tools", even though a looser `tool_`-ish rule could claim it).
+ *
+ *  The `Other` bucket must stay EMPTY: `test/assertions-families.test.ts` fails when a key lands there, so
+ *  adding an assertion key forces a conscious choice of family instead of silently appending to a dump
+ *  nobody reads. That mirrors how `scenario-docs-sync` already forces a doc row for every new key. */
+export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { title: string; members: T[] }[] {
+  const FAMILIES: { title: string; match: (k: string) => boolean }[] = [
+    { title: "Outcome", match: (k) => k === "result" || k === "compaction_occurred" || k === "semantic_matches" },
+    { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
+    { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
+    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") },
+    {
+      title: "Path denial / VM paths",
+      match: (k) => k.includes("path_denied") || k === "no_vm_path_file_op" || k === "transcript_no_host_path",
+    },
+    { title: "Sub-agents", match: (k) => k.startsWith("subagent_") || k === "dispatch_count_max" },
+    {
+      title: "Tools",
+      match: (k) => k.startsWith("tool_") || k === "no_mcp_error" || k === "max_redundant_tool_calls" || k === "max_tool_errors",
+    },
+    { title: "Skills / connectors", match: (k) => k.includes("skill_") || k === "no_skill_triggered" || k === "connector_available" },
+    { title: "Tasks", match: (k) => k.startsWith("task_") || k === "all_tasks_completed" },
+    { title: "Egress", match: (k) => k.startsWith("egress_") },
+    { title: "Files / artifacts / delivery", match: (k) => FILE_FAMILY.has(k) || k.startsWith("computer_links_") },
+    { title: "Budgets", match: (k) => k.startsWith("max_") },
+    { title: "Verdict modifiers (no-op passes on replay)", match: (k) => k.startsWith("allow_") || k === "replay_protocol_fidelity" },
+  ];
+  const out = FAMILIES.map((f) => ({ title: f.title, members: [] as T[] }));
+  const other: T[] = [];
+  for (const entry of keys) {
+    const i = FAMILIES.findIndex((f) => f.match(entry.key));
+    if (i === -1) other.push(entry);
+    else out[i].members.push(entry);
+  }
+  return other.length ? [...out, { title: "Other", members: other }] : out;
+}
+
+/** Named separately because these share no prefix — delivery/filesystem keys are the one family that
+ *  cannot be matched structurally. A new file-ish key must be added here or the family test reds. */
+const FILE_FAMILY = new Set([
+  "file_exists",
+  "user_visible_artifact",
+  "artifact_json",
+  "no_unexpected_files",
+  "input_unmodified",
+  "no_delete_in_outputs",
+  "no_delete_in_mounts",
+  "no_scratchpad_leak",
+  "present_files_called",
+  "no_lost_write_back",
+  "self_heal_ran",
+]);
 
 function cmdTrace(args: string[]) {
   ensureOutputFormat("trace", args);
@@ -4360,8 +4509,11 @@ function cmdTrace(args: string[]) {
     return;
   }
   if (view === "subagent-research") {
-    // subagent-research view: each dispatch's OWN WebSearch query+result (live/record lane capture) —
-    // reads the sibling result.json's subagents[].webSearches; UNAVAILABLE on replay, never "no research".
+    // subagent-research view: each dispatch's WebSearch query+result (live/record lane capture) — reads
+    // the sibling result.json's subagents[].webSearches; UNAVAILABLE on replay, never "no research". A
+    // search made by a NESTED dispatch (one the parent stream never surfaced as its own entry) is
+    // attributed to its nearest ancestor and rendered `[via nested agent …]`, so it is visible without
+    // being mistaken for that ancestor's own research.
     const v = buildSubagentResearchView(file);
     if (json) out(jsonPayloadEnvelope("trace", true, { file, ...v }));
     else out(formatSubagentResearchView(v));

@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.17.0` (baseline `desktop-1.24012.9`).
+Self-contained reference. Tracks `cowork-harness 1.18.0` (baseline `desktop-1.25927.0`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.17.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "1.18.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md)
         run: |
-          V=2.1.219   # match your scenario's pinned baseline's agentVersion
+          V=2.1.221   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
@@ -58,11 +58,24 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.17.0"
-- run: cowork-harness lint scenarios/*.yaml          # no silent false-greens
-- run: cowork-harness verify-cassettes cassettes/    # privacy + staleness
+- run: npm i -g "cowork-harness@>=1.18.0"
+- run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
+                                                    # no silent false-greens. WITHOUT --strict this
+                                                    # step cannot fail on a WARN-class rule (e.g.
+                                                    # vacuous-gate-assert) — it would print the
+                                                    # finding and still exit 0. --min-severity WARN
+                                                    # keeps the advisory INFO class advisory.
+- run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
+                                                    # ALSO fails on a leaked host inventory: recording at
+                                                    # protocol/hostloop freezes YOUR machine's MCP servers,
+                                                    # agents and account org into the cassette. Record
+                                                    # committed fixtures at `container` (sealed) to avoid it.
 - run: cowork-harness replay cassettes/              # token-free content/structure
 ```
+
+Both lines matter: `replay` alone **warns** on a stale recording and exits 0, so dropping the
+`verify-cassettes` step means a skill edit silently stops being tested. (One command instead of two:
+`replay --fail-on-skill-drift`.)
 
 The rest of this doc explains the lane split, recording, privacy, and the full pipeline + live job.
 
@@ -110,6 +123,13 @@ The split is not just about tokens — it decides **where each lane can run**:
   ```bash
   cowork-harness assertions --list --output-format json   # every key, with its replay class
   ```
+
+  **`replay --mutate`** is a distinct, reporting-only diagnostic on this same lane: it perturbs each
+  recorded JSON artifact value one at a time, re-runs the assertions against the perturbed cassette,
+  and reports which perturbations NOTHING caught — those are the fields your `assert:` block leaves
+  unguarded. It never changes the verdict or exit code (it's coverage information, not a check), so
+  don't wire it into a pass/fail gate — read its `::warning::`/`::notice::` output to find `assert:`
+  gaps to close.
 
   Placing a key on this gate from a doc list rather than from `assertions --list` is how a valid
   replay-lane check ends up left off the PR gate. Filesystem/egress assertions are
@@ -177,6 +197,12 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   (`hostloop`, `protocol`) has an **empty** redaction policy — that combination commits real host paths
   the `path` scanner then hard-fails at `verify-cassettes` time. The always-on scanner remains the
   universal net (container-tier recordings can trip it too).
+- **Host-inheriting record refused by default — `--allow-host-inventory-fixture` is the consent.** A
+  `protocol`/`hostloop`/`cowork`-resolving-to-hostloop record into a repo-visible cassette path would
+  freeze THIS machine's MCP server names, agents, and account metadata into a committed fixture, so
+  `record` refuses outright rather than warn. Pass `--allow-host-inventory-fixture` only when the
+  recording session genuinely has no personal MCP servers or plugins to leak — it is a per-record
+  boolean consent, not a pattern.
 - **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path /
   machine-inventory matches it finds in the committed cassettes and **exits non-zero**, so "no leak" is
   a gate, not discipline. Non-zero is not one thing, though: exit `1` means verification RAN and found a
@@ -189,6 +215,13 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   Suppress synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word
   proper names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus
   needs it.)
+- **`--allow-host-inventory <regex>` — the per-finding sibling of the record-time consent above, and a
+  different thing from it.** `verify-cassettes` scans a **structural** `host-inventory` class (an
+  `mcp_servers[].name`/`agents[]` entry outside the harness's own known set, or `account.email`/
+  `.organization`/`.subscriptionType`) over already-committed cassettes. `--allow-host-inventory <regex>`
+  suppresses a specific finding there — it is a scanner allowlist entry, not a record-time green light —
+  and, like `--allow-domain`/`--allow-email`/`--allow-path`/`--allow-machine-inventory`, scopes the
+  pattern to that one class so it can't accidentally clear an unrelated finding.
 
 ```bash
 cowork-harness verify-cassettes cassettes/                       # privacy scan + staleness — exit 1 = verified & failed, exit 3 = could not verify
@@ -246,7 +279,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.17.0"
+      - run: npm i -g "cowork-harness@>=1.18.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -275,7 +308,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.17.0"
+        run: npm i -g "cowork-harness@>=1.18.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:
@@ -301,6 +334,14 @@ sandbox).
 scenario = `result === "success" && assertions.every(pass)`. Exit code is non-zero if any assertion
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
+
+**For the commands in this recipe, stdout carries the machine envelope and nothing else.** Without
+`--output-format json`, `run` / `record` / `replay` / `verify-cassettes` / `status` write their whole
+human rendering — warnings, verdict, `status`'s summary line — to **stderr**, and stdout stays empty.
+A wrapper that captures only stdout gets an empty log and, if it greps that for a state, a silent false
+negative. Capture stderr for the human trail (`2> run.stderr.log`), or ask for JSON and parse stdout.
+(Commands whose whole job is to print a value — `--version`, `assertions --list`, `scaffold`, `gates`,
+`skill --dry-run` — write it to stdout by design, with or without the flag.)
 
 `verify-cassettes` emits its **own** envelope (`{command, ok, coverage, results[]}` with per-file
 `findings`/`staleness`/`unverifiable`/`notes`/`version`/`error`), published as

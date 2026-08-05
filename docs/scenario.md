@@ -19,7 +19,7 @@ The full schema below documents every optional field.
 ```yaml
 name: my-test                             # OPTIONAL — defaults to the filename (sans ext); keys runs/<name>/
 baseline: latest                          # platform baseline: "latest" or "desktop-<ver>"
-session: ../sessions/default.yaml        # the pre-prompt setup (resolved relative to THIS file)
+session: ../sessions/my-session.yaml     # the pre-prompt setup (resolved relative to THIS file)
 fidelity: container                      # protocol | container | microvm | hostloop | cowork (see below)
 execution: local                         # OPTIONAL — orthogonal to fidelity (a privilege/sandbox tier, all
                                          # local today): local (default) | cloud-describe (RESERVED — no
@@ -212,7 +212,10 @@ have an explicit precedence vs `answer`/`choose`, so today's two-key model stays
 
 If no rule matches a question, the **`on_unanswered` policy** decides — the harness never silently
 fabricates an answer. Set it per scenario (`on_unanswered: fail | prompt | first | llm`) or per run
-(`--on-unanswered`). **The two accept different value sets:** the CLI `--on-unanswered` flag takes only
+(`--on-unanswered`). **Where both are set, the scenario's YAML field wins** — a committed scenario is the
+reproducible definition of its own test, so steer it by editing the YAML rather than by passing the flag;
+the harness warns when the two disagree rather than dropping the flag in silence. **The two also accept
+different value sets:** the CLI `--on-unanswered` flag takes only
 `fail|first` on `run` (`fail|prompt|first` on `skill`) — `llm` is a scenario-YAML-only value, never a
 valid `--on-unanswered` argument (the CLI equivalent is the separate `--decider-llm` flag). Default for
 `run` is **`fail`** (the error names the exact `--answer`/`choose` to add, and also now mentions
@@ -349,6 +352,34 @@ without actually running the agent. For **content correctness**, match the asser
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
 if *every* key passes (don't rely on the first; keep one concern per item unless you mean conjunction).
 
+### Which assertion for which question (goal → key)
+
+The full catalog below is a reference, not a chooser — ordered by family rather than by how often
+you need them. Start here instead, then read the row for whichever key you land on. (`cowork-harness
+assertions --list` prints the same set grouped the same way.)
+
+| You want to check that… | Reach for |
+|---|---|
+| the run succeeded at all | `result: success` — the floor under every scenario |
+| a deliverable reached the user | `user_visible_artifact: <path>` — **not** `file_exists`, which misses folder-relative deliverables (+ `no_scratchpad_leak: true` when delivery goes through `present_files`; **`container` only**) |
+| a structured field has the right value | `artifact_json: {artifact, path, equals\|matches\|…}` — phrasing-independent, unlike a transcript regex |
+| the skill said something specific | `transcript_matches: '<rx>'` for stable lexical markers only — never for content the model paraphrases |
+| **a gate still fires at all** | `gate_answer_count_min: 1` — the presence floor. `gate_answers_delivered` alone passes **vacuously** when zero gates fire, so a skill that stops asking stays green; `lint` warns (`vacuous-gate-assert`) if you assert one without a companion |
+| a scripted answer actually reached the model | `gate_answers_delivered: true` — pair it with the floor above |
+| a skill actually **ran** (or must not) | `skill_triggered: <rx>` / `no_skill_triggered: <rx>` — distinct from `skill_available`, which only means it was *offered* |
+| a sub-agent did the work | `subagent_dispatched: <rx>`, `subagent_output_contains: {contains}`, `dispatch_count_max: <N>` |
+| the skill didn't error out of a tool | `tool_no_error: <rx>`, `max_tool_errors: <N>` |
+| it didn't waste repeated identical calls | `max_redundant_tool_calls: <N>` |
+| a to-do workflow finished | `all_tasks_completed: true`, `task_status: {match, status}` |
+| the sandbox actually blocked the network | `egress_denied: <host>` — **live-only**, skipped loud on replay |
+| a pre-existing input wasn't mutated | `input_unmodified: <glob>` (live / `verify-run`) |
+| a hook blocked (or didn't block) a tool | `hook_blocked: <rx>`, `no_hook_blocked: true` — replay needs a `controlOut` cassette |
+| spend stayed inside a ceiling | `max_cost_usd`, `max_tokens`, `max_turns` — on **replay** these assert the *recording's* spend, which never changes |
+
+Two axes decide whether a key you pick actually runs: the **tier** it needs (some are `container`-only) and
+whether it **survives `replay`**. Both are in the key's row below, and the replay classes are summarised in
+[Which assertions survive `replay`](#which-assertions-survive-replay-ci-placement).
+
 | Assertion | Passes when |
 |---|---|
 | `result: success \| error` | the run ended with that status |
@@ -358,7 +389,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`) |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
 | `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — the agent's cwd already **is** the outputs dir (`src/run/execute.ts` sets `hostCwd` to `mnt/outputs`), so a file written there is already under a user-visible root and this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. Prefer writing directly to `outputs/`, or run present_files-delivering skills on `container`. Writing directly to `outputs/` also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
-| `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (forbidden in Cowork) — **only `true` is valid**; writing `false` is rejected by the schema (omit the key entirely to allow deletes in the test) |
+| `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (Cowork's outputs mount fails `unlink`/`rmdir` with `EPERM`) — **only `true` is valid**; writing `false` is rejected by the schema. **Omitting the key does NOT allow deletes**: a detected delete still fails the run via the `outputs_delete` verdict signal, which fires precisely *because* the key was not authored — authoring it turns that signal into an explicit assertion. To accept an intended delete, use `allow_outputs_delete: true`. Detects operations that UNLINK a name; emptying a file in place (`truncate`, `>`, `shred` without `-u`) is not a delete and is permitted by Cowork, so it is not flagged |
+| `no_delete_in_mounts: true` | no delete op touched **any** delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount until per-mount approval, so `no_delete_in_outputs` asserts only part of the real rule; this is the mount-wide form. **Only `true` is valid.** Same post-run-scan caveat: a green means none was *detected*, not that the mount enforced anything |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay-checkable when the cassette carries `artifacts` **and** `preRunPaths`; an **incomplete** post-run filesystem walk (an unreadable subtree — permission/I-O error — not just a missing pre-run manifest) also ⇒ evidence-unavailable, so "no strays" is never trusted from a partial walk |
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. `uploads/**`) whose workRoot-relative path matches has an unchanged content hash after the run (the in-place-mutation detector — the counterpart to `no_unexpected_files`, which only watches for *new* files); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise pass vacuously, verifying nothing); needs the pre-run content-hash manifest (harness ≥0.24 recordings) — same capture caveats as `no_unexpected_files` |
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
@@ -416,6 +448,8 @@ if *every* key passes (don't rely on the first; keep one concern per item unless
 | `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
 | `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap. Also suppresses the sibling `delivery_unobservable` WARN on `lane: remote` (where delivery can't be measured at all — no remote delivery tool is modeled); on that lane the key means "I know delivery is unverifiable here and accept it", **not** "the files were delivered" |
+| `allow_outputs_delete: true` | verdict modifier — accepts a detected outputs delete instead of failing the run, for a skill whose deletion is intended. Needed because omitting `no_delete_in_outputs` does **not** permit deletes: a detected delete fails via the `outputs_delete` signal precisely *because* the key was not authored. **Mutually exclusive** with `no_delete_in_outputs` (asserting both is rejected at load). This WAIVES the harness's post-hoc detection — it does not model Cowork's `allow_cowork_file_delete` approval handshake, so a skill that would catch a real `EPERM` and escalate still behaves differently here |
+| `allow_delete_in: [<mount>…]` | verdict modifier — accepts detected deletes in the named mounts, the per-mount analogue of `allow_outputs_delete` and the modelled counterpart of production's per-mount `fileDeleteApprovedMounts`. Suppresses the `mount_delete` WARN for those mounts and waives them for `no_delete_in_mounts`. **Waives the verdict only** — detection still runs and the hits stay in `result.json` for forensics, exactly as `allow_outputs_delete` behaves. Listing `"outputs"` alongside `no_delete_in_outputs` is rejected at load |
 | `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`) leaked into model-visible text — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
@@ -472,7 +506,7 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only seven codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only eight codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
@@ -482,6 +516,12 @@ pass/fail):
 - `scan_unavailable` (**warn**) — post-run scan evidence unavailable (`RunResult.scan` undefined); the
   host-path and outputs-delete guards did not run this run (assert `no_delete_in_outputs` /
   `transcript_no_host_path` to hard-fail on this instead).
+- `mount_delete` (**warn**) — a delete touched a delete-denied mount other than `outputs` (a `rw`
+  connected folder). Production denies `unlink`/`rmdir` on **every** Cowork FUSE mount until per-mount
+  approval, so the run diverged from what production would have permitted. Warns rather than fails
+  because the harness detects post-hoc what production enforces — the agent already proceeded where it
+  would have hit `EPERM`. Assert `no_delete_in_mounts: true` to hard-fail on it, or
+  `allow_delete_in: ["<mount>"]` to waive that mount.
 - `exec_infra_error` (**warn**, host-loop) — one or more container `exec` calls failed for infrastructure
   reasons (daemon/container-level), so those tool calls returned an error to the agent. The run's other
   evidence is intact, which is why this warns rather than fails — unlike a `hostloop-sidecar` /
@@ -608,7 +648,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
 `present_files_called`, `no_vm_path_file_op`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` / `allow_undelivered_deliverables` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
+`allow_l0_plugin_divergence` / `allow_stall` / `allow_undelivered_deliverables` / `allow_outputs_delete` / `allow_delete_in` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**
@@ -649,7 +689,7 @@ covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`s
 edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
 identity keyed on `appVersion` alone cannot see it.
 
-**Egress + other filesystem** assertions (`no_delete_in_outputs`, `self_heal_ran`,
+**Egress + other filesystem** assertions (`no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
 `semantic_matches`, `no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
 (token + Docker).

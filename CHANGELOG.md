@@ -6,6 +6,373 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-08-06
+
+### Upgrade notes
+
+- **`verify-cassettes` can red a previously-green gate.** The new `host-inventory` finding class flags a
+  cassette recorded at a host-inheriting tier (`protocol`, `hostloop`, or `cowork` resolving to hostloop)
+  that froze the recording machine's own MCP servers / agents / account into its events. Cassettes that
+  passed under 1.17.0 can fail here — that is the point of the check. Re-record against a clean
+  environment, or scope an allow with `--allow-host-inventory <regex>` after reviewing the finding.
+- **Some previously-accepted command lines are now usage errors.** `--on-unanswered` alongside
+  `--decider-dir`/`--decider-cmd` is rejected on `run`, `record`, `skill` and `probe-dispatch` (the
+  channel is the terminal, so the policy was silently inert), and `record` refuses a scenario whose YAML
+  sets `on_unanswered: prompt`. Drop whichever of the pair you did not mean.
+
+### Fixed
+
+- **A scenario's `on_unanswered:` overrode an explicit `--on-unanswered` in silence.** The precedence is
+  intentional and documented (`run --help`: "per-scenario answers/on_unanswered in the YAML take
+  precedence where set") — a committed scenario is the reproducible definition of its own test — but a
+  user who passed the flag got no signal it had been discarded, and the run answered gates by the very
+  policy they were replacing. The harness now warns when the two disagree, naming both values and which
+  one applies. Silent when they agree, so a `run dir/` over a tree that already declares the same policy
+  stays quiet. Precedence is unchanged.
+
+- **`--dry-run` on `skill` validated nothing it previewed.** The dry-run early return sat above four
+  guards, so `skill … --on-unanswered banana --dry-run` exited 0 — as did a `--decider-dir` +
+  `--decider-cmd` pair and both `--repeat` conflicts. `--dry-run` is the advertised pre-flight check, so
+  a guard it skips green-lights an invalid command line. Root cause: `resolvePolicy` both *validated*
+  the flag value and *resolved* the effective policy, and every path that legitimately skipped
+  resolution — the dry-run return, the `externalChannel ? "fail" : …` short-circuit — skipped validation
+  with it. Validation now runs at flag-parse time, so no downstream return can bypass it, and the
+  channel/`--repeat` conflicts moved above the return. The preview also reports the resolved
+  `on_unanswered` and decider channel, which it previously omitted.
+- **`--on-unanswered` alongside `--decider-dir`/`--decider-cmd` is now a usage error** on `run`,
+  `record`, `skill` and `probe-dispatch`. The channel is the terminal, so the policy terminal is never
+  constructed and the flag was silently inert — the same conflict `--decider-llm` already rejected.
+- **`record` rejects a scenario whose YAML sets `on_unanswered: prompt`**, matching `run`. `record`'s
+  `--on-unanswered` enum already excluded `prompt` for determinism, but the scenario field outranks the
+  flag, so a TTY wait stayed reachable on the command that writes a committed fixture.
+- **`probe-dispatch` usage errors named `skill` as the command.** `resolvePolicy`'s signature could only
+  express `run | skill`, so `probe-dispatch` passed `"skill"` and every error envelope it raised carried
+  another command's name.
+
+### Added
+
+- **`verify-cassettes` now fails on a leaked host inventory (`host-inventory` finding class).** A cassette
+  recorded at a host-inheriting tier (`protocol`, `hostloop`, or `cowork` resolving to hostloop) freezes the
+  recording *machine's* own inventory into its `system/init` and command-registry events; committed to a
+  public repo that publishes your tool stack. The existing text scanner could not see it, and neither can
+  `grep`: an MCP server that never connected declares no tools, so no `mcp__<server>__<tool>` token is ever
+  written — the inventory lives in **name fields**. This check reads those fields structurally and flags a
+  foreign `mcp_servers[].name`, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
+  `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
+  `--allow-host-inventory <regex>`; if the name is a genuine Cowork server, add it to `KNOWN_COWORK_SERVERS`
+  instead. **Tier-gated deliberately** — at `container` the agent is sealed, so a foreign server name there
+  can only be one your scenario attached via `mcp.config`, and flagging it would fail a legitimate fixture.
+  What it does *not* cover is documented in [docs/cassette.md](./docs/cassette.md): the command/skill/plugin
+  catalogs and command descriptions are ungated (no clean predicate, only an arbitrary threshold), so treat
+  this as a backstop against a known failure, not proof a cassette is clean.
+
+- **`record` refuses, before spending, to write a host-inheriting recording into a repo-visible path.**
+  Refusing afterwards would be worse than useless — the tokens are gone and the tempting fix is to commit it
+  anyway. The message names the tier, the fix (record at `container`, or `--out` outside the repo — the
+  default `cassettes/` dir is gitignored), and the override `--allow-host-inventory-fixture`. Re-recording an
+  *existing* committed fixture in place **warns** rather than refuses, so `--rerecord-stale` keeps working
+  and the override does not become reflexive; the finding class above still hard-gates the result.
+
+- **Platform baseline `desktop-1.24012.11`, and the proactive skill-suggest mode is now modeled ON.**
+  The Desktop bump itself is near-empty: the staged agent ELF is unchanged (`2.1.219`, same sha), the
+  Cowork system-prompt constant is byte-identical, the sub-agent append is unchanged, and spawn env /
+  mount layout / egress allowlist / `bgEnvStrip` do not move. The one substantive delta is
+  `proactiveSkillSuggestEnabled` flipping ON — by a **server-side** rollout, not a Desktop change (it
+  reads ON on earlier Desktop versions too), so an omitted `skills.proactive_suggest_enabled` now
+  resolves ON and `suggest_skills` declares its proactive description plus an optional `trigger` param
+  by default. `skills.proactive_suggest_enabled: false` restores the old surface per session. The gate's
+  third production effect — a swapped guidance line inside Desktop's generated `<skills_instructions>`
+  block — is **not** modeled, because the harness renders no such section; that is recorded in
+  `docs/fidelity-gaps.md` rather than left implicit.
+
+- **A dark drift sentinel for the `1p-direct-mcp` gate**, new in `1.24012.11`. It arms a Desktop-side
+  direct-MCP pool for MDM-managed 1P servers, is inert for a standard unmanaged account, and is pinned
+  (not modeled) so a production rollout surfaces as a `sync` diff instead of silent widening.
+
+- **`record` reports what changed vs the cassette it replaced.** Re-recording is the only moment where
+  "did my edit change what the agent does?" is observable — replay re-checks a frozen transcript and is
+  structurally blind to it — and until now that answer was discarded: you paid for a re-record and got an
+  opaque new file. An overwrite now prints e.g. `gates 2 → 0, tool calls 5 → 4`, or says explicitly that
+  behaviour is unchanged. Gate count leads because a skill that silently stops asking is the regression
+  this exists to surface. First records print nothing (no prior to compare), and an unreadable prior is
+  simply no delta — never a failed record.
+
+- **`replay --mutate` measures whether your assertions actually test anything.** It perturbs each recorded
+  JSON artifact value (`total: 42 → 43`, `"USD" → "__MUTATED__"`), re-runs the same assertions against the
+  same evidence, and reports every perturbation that **nothing caught** — each one a field your skill
+  produces that no assertion verifies. Cheap: replay has already materialized the artifacts and
+  `evaluate()` is pure, so there is no model call and no sandbox. **Reporting only** — it never changes the
+  verdict or exit code, because an unguarded field is a gap in the scenario rather than a failure of the
+  run. A corpus of 21 cassettes was found to contain seven scenarios asserting nothing meaningful, and only
+  because someone wrote a throwaway script to look.
+
+- **Gate option labels are now fingerprinted against the skill's own prose.** At record time the harness
+  stamps which emitted `AskUserQuestion` labels appear **verbatim** in the skill source, per file, **in the
+  order they appear in that file**; staleness re-checks them. This catches two things `skillHash` cannot:
+  a catalog **reorder** (every label still exists, so an existence check passes by construction — eight
+  cassettes once replayed green through exactly that), and drift in prose that is **delivered to the agent
+  but excluded from the hash** via `.cowork-hashignore` / session `staleness.hash_ignore`, which is outside
+  `skillHash` permanently. Only verbatim-sourced labels are stamped — a model-paraphrased label was never
+  in the prose, so it cannot regress and is never checked. Reported in the existing `skill` drift class, so
+  it rides `--fail-on-skill-drift` / `--strict` rather than adding a severity nobody configured; cassettes
+  recorded before the stamp existed skip the check.
+
+- **`lint` now flags a `gate_answers_delivered` with no presence companion** (`vacuous-gate-assert`, WARN).
+  That key checks every gate that *fired* was delivered non-error — and **zero gates fired passes
+  vacuously**, so the assertion that looks like it guards "the skill still asks its questions" stays green
+  when the skill stops asking altogether. A real corpus had a 0-gate recording sit green for weeks against
+  exactly this assertion. Pair it with `gate_answer_count_min: 1` (shipped since 0.25.0), a
+  `question_asked` regex, or `tool_called: "AskUserQuestion"` — anything that *fails* rather than
+  vacuously passes on an empty gate set. `questions_count_max` deliberately does not count: a maximum is
+  satisfied by zero.
+
+- **`docs/scenario.md` gains a "goal → key" chooser** between the strategy section and the 71-row catalog:
+  *"a gate still fires at all"* → `gate_answer_count_min: 1`, *"a deliverable reached the user"* →
+  `user_visible_artifact`, and so on. The table previously existed only in the agent-facing skill, so a
+  human reading the docs got a reference with no way in.
+
+- **`allow_outputs_delete: true` accepts an outputs delete you meant to happen.** Until now there was no
+  way to say so: asserting `no_delete_in_outputs` fails, writing `false` is schema-rejected, and *omitting*
+  the key permits nothing either — a detected delete still fails the run via the `outputs_delete` signal,
+  which fires precisely **because** the key was not authored. Three doors, all locked, and the docs pointed
+  at the one that does not open (that sentence is now corrected everywhere it appeared). The new key is a
+  **waiver of the harness's post-hoc detection**, not a model of Cowork's `allow_cowork_file_delete`
+  approval handshake — the agent never sees an `EPERM` here, so a skill that would catch one and escalate
+  still behaves differently. Mutually exclusive with `no_delete_in_outputs`, rejected at load and in the
+  published JSON Schema (a zod refinement has no schema representation, so the rule is mirrored by hand and
+  validated by a test — otherwise an editor would green a scenario the loader rejects).
+
+- **Delete detection now covers every delete-denied mount, not just `outputs` — with `no_delete_in_mounts`
+  and `allow_delete_in` to assert on it.** Production denies `unlink`/`rmdir` on `outputs` *and* on every
+  `rw` connected folder until per-mount approval; the harness only ever looked at `outputs`, so a skill
+  deleting inside a connected folder passed here and would have hit `EPERM` in Cowork. The post-run scan
+  now covers all of them and records each hit in `result.json`'s `scan.mountDeletes` (`{mount, command}`;
+  `outputsDeletes` is unchanged, and the new array is a superset). Assert `no_delete_in_mounts: true` to
+  fail on any unwaived delete in a delete-denied mount; waive per mount by name with
+  `allow_delete_in: ["reports"]`, the mount-scoped analogue of `allow_outputs_delete` and a mirror of
+  production's `fileDeleteApprovedMounts`. Listing `"outputs"` there conflicts with `no_delete_in_outputs`
+  and is rejected at load and in the JSON Schema. An unwaived delete outside `outputs` raises the new
+  `mount_delete` signal at **warn**, not fail — deliberately, because production *enforces* with `EPERM`
+  while the harness only *detects after the fact*, and a warn says "this diverges" without failing a run
+  the harness cannot actually adjudicate. `no_delete_in_mounts` is live-only (the scan needs real bash
+  commands), so `lint` flags it on a replay-only scenario.
+
+- **A session can model Cowork's connected *Projects*, not just connected folders.** `projects: [{uuid,
+  from}]` maps to production's `userSelectedProjectUuids` and mounts each one **read-only** at
+  `mnt/.projects/<uuid>` — distinct from `folders:` (`userSelectedFolders`), which can be writable. There
+  is no `mode:` knob by design: production hardcodes `ro` for these, and offering a writable option would
+  model something Cowork does not do. A project never becomes the session cwd — `{{workspaceFolder}}`
+  stays at `outputs`. Pre-run input hashing covers projects too, so `input_unmodified` sees them.
+
+- **`sync` gained three new hard-fail anchors, so a Desktop change cannot pass unnoticed.** The
+  `coworkSyspromptMap` channel is sentinelled: its mode vocabulary is pinned as a closed set
+  (`replace`/`append` — a third mode matters because `replace` *discards* the computed prompt section),
+  along with the key grammar, the `{{promptCacheBoundary}}` startup invariant, and the resolution-status
+  machine that governs server-supplied variants, which degrade **silently** rather than throwing. The
+  mount-mode check widened from 2 pinned anchors to 5, adding `.claude/skills`, `.claude/projects` and the
+  per-uuid project mount — a Desktop build quietly making one writable now fails `sync` instead of
+  slipping through. And a baseline records `provenance.fcache` (content hash, embedded timestamp, feature
+  count), so `sync --diff` can say whether a gate snapshot genuinely moved or was merely refetched, and
+  can name a gate that starts or stops *serving* a key — an unserved key silently falls back to a code
+  default that may not match production.
+
+- **`replay --mutate` now says WHY it found nothing to perturb.** It is diagnostic and exits 0 either
+  way, so `no perturbable values` was the one output most easily misread as "the feature is broken" — it
+  looked identical whether the cassette held no JSON at all, held JSON whose bodies were deliberately not
+  inlined, or held a document with nothing perturbable in it. Three situations, three different fixes, one
+  of which is "nothing, that's by design". The manifest already knew: `truncationReason` records why each
+  body is absent, so the message now names the cause and the remedy — `size` says raise
+  `--max-artifact-bytes`, while an upload says uploads are never inlined, i.e. don't chase it.
+
+- **Platform baseline `desktop-1.25927.0` (agent ELF `2.1.221`), with one behavioural change: the MCP
+  tool timeout default tripled, `60000` → `180000` ms.** If you have a long-running MCP tool that used to
+  be cut off at 60s under emulation, it now gets 180s — matching production. `spawn.env.MCP_TOOL_TIMEOUT`
+  carries the new value; pin `baseline:` explicitly in a scenario to stay on the old one. Everything else
+  holds: the Cowork system prompt is byte-identical, the sub-agent append, egress allowlist and the
+  remaining spawn env are unchanged, and all three committed cassettes replay clean (re-stamped, not
+  re-recorded — their recorded behaviour did not move). The recorded mount layout carries one correction
+  rather than a Desktop change: the decorative `projects` row reads `mode: "r"`, read from the asar, where
+  it was previously `"rw"` from a probe. Cowork mounts a connected project read-only in both versions, so
+  no emulated behaviour moved — the older baseline simply recorded the fact wrongly.
+
+### Changed
+
+- **`status --help`, the `--output-format` help, and the docs state which stream carries what.** Human
+  output goes to stderr and stdout carries the machine envelope — a deliberate convention, stated in the
+  README and `docs/scenario.md` but absent from every `--help`, which is where someone writing a poll loop
+  looks. The gap has a sharp edge: `cowork-harness status <dir>` writes its summary to stderr and leaves
+  stdout **empty**, so `until ! status "$D" | grep -q '● running'; do sleep 30; done` matches nothing, exits
+  1, and returns instantly against a live run — a silent false "done" (measured in the field returning at
+  21s against a run with ~1260s left). `status --help` now names the streams and points at `--follow`;
+  `docs/run-status.md`, the skill's liveness section, and the CI recipe carry the anti-pattern beside the
+  working form. No behaviour change — `--follow` (JSON lines on stdout until a terminal state) and
+  `--output-format json` already answered this; they were just unfindable from the help.
+
+- **`run`'s unexpected-argument error says how to check a scenario without spending.** `run` takes no
+  `--dry-run` (`skill`, `record`, `rehash`, and `prune` do, and `critique` rejects it *with* its reason), so
+  reaching for it there follows the tool's own surface — and the rejection left the reader nowhere to go on a
+  command that costs real money. It now names both token-free checks, which answer different questions:
+  `record <file.yaml> --dry-run` (does the loader accept it) and `lint <file.yaml>` (assertion invariants —
+  lenient, so a WARN there may still not run). `run --help` states the same. The pointer lives in the message
+  rather than the error's `hint` field on purpose: a caller-supplied hint wins over the auto-derived
+  "that global flag goes before the subcommand" guidance, which a token like `--dotenv,foo` still needs.
+
+- **`docs/cassette.md` and the CI recipe now state that `replay` alone does not gate staleness.** A bare
+  `replay` on an edited skill prints `::warning:: cassette stale` and **exits 0**; `verify-cassettes` exits
+  **1** on the same tree. Both belong in CI — that is the order the recipe has always shipped, but the
+  guide led with the single ungated command, so a reader following the headline had a gate that stopped
+  gating the moment their skill moved. Also documents the two ways the drift signal can be silently absent:
+  a pre-fingerprint cassette has nothing to check, and a `COWORK_HARNESS_GITSET` / `COWORK_HARNESS_AGENT_SCOPE`
+  mismatch between record and CI downgrades real drift to a non-failing `format` finding.
+
+- **`no_delete_in_outputs` no longer flags operations Cowork permits.** The guard treated `truncate`,
+  a statement-leading `> file`, and bare `shred` as deletes. Probing a real outputs mount directly with raw
+  syscalls — in a folder-connected session and a folder-less one, which agree on every operation — shows
+  outputs is a **FUSE** mount whose policy is narrower than that: `unlink` and `rmdir` fail `EPERM`, and
+  **nothing else does**. `truncate(f,0)`, `O_TRUNC`, `> f`, renaming within outputs, and renaming onto an
+  existing destination all succeed. The harness was therefore **stricter than the product it emulates** —
+  a fidelity defect pointing the opposite way from the usual concern, and a large false-positive source
+  since `truncate` is ordinary English in a comment. The token set now covers only operations that unlink:
+  `rm`/`unlink`/`rmdir`, `find -delete`, the python equivalents, and `shred` **with** `-u`/`--remove`
+  (bare `shred` overwrites in place and never unlinks). `mv` is unchanged and was already correct — a move
+  out of outputs fails (`EXDEV`, then `EPERM` on the copy-then-unlink fallback) and stays flagged, while a
+  move within outputs is permitted and is not. **Runs that previously failed on an in-place truncation now
+  pass**; a skill emptying a deliverable is a content bug, catchable with content assertions, not a
+  containment violation.
+
+- **A rename inside `outputs/` is no longer reported as a deletion by the filesystem diff.** The
+  outputs-delete guard has two independent detectors — the command scanner and a pre/post path diff — and
+  only the scanner was corrected above. The path diff still treated a vanished name as a removal, so
+  `mv outputs/a.md outputs/b.md` (which production permits) could be flagged. It now clears a vanished path
+  whose content reappears at a **new** path under `outputs/`; "new" is load-bearing, since matching content
+  anywhere would let an unrelated pre-existing file mask a real delete. Overwrite and truncate never reach
+  the check at all — the path is still present. Hashing is lazy, so a run with nothing vanished pays
+  nothing, and every unprovable case still reports.
+
+- **The CI recipe and README now lint with `--strict --min-severity WARN`.** Without `--strict` the lint
+  step **cannot fail** on a WARN-class rule: it prints the finding and exits 0. So the recommended
+  invocation could not enforce `vacuous-gate-assert` — a guard against silent false-greens that was itself
+  a silent false-green. `--min-severity WARN` is the other half: bare `--strict` also fails on the advisory
+  INFO class. If you copied the previous recipe, add both flags.
+
+- **`assertions --list` groups its 71 keys by family** (outcome, transcript, gates, hooks, path denial,
+  sub-agents, tools, skills, tasks, egress, files, budgets, verdict modifiers). The JSON envelope stays
+  flat — grouping is a reading aid, not a contract. A new assertion key that matches no family fails
+  `test/assertions-families.test.ts`, so adding one forces a conscious choice instead of appending to a
+  dump nobody reads.
+
+### Fixed
+
+- **A sub-agent's own sub-agent could research, and `subagents[].webSearches` reported none.** Only
+  dispatches the parent event stream surfaced become `subagents[]` entries, and the capture joined child
+  transcripts to those entries by exact `toolUseId`. A dispatch made *by a sub-agent* has no entry — so
+  its transcript matched nothing and was dropped with a bare `continue`. Measured on a live run: a
+  three-deep chain where the only `WebSearch` ran at depth 3, `modelUsage.webSearchRequests` proved a
+  search had happened, and every `webSearches[]` read empty. For a field whose whole job is grounding a
+  "researched" claim, that is the worst possible shape — indistinguishable from "the sub-agent did not
+  search". A descendant's searches are now attributed to the nearest ancestor that *does* have an entry,
+  each tagged `viaAgentId` / `viaSpawnDepth` so a dispatch's own research stays distinguishable from one
+  made beneath it; `trace --view subagent-research` marks them `[via nested agent …]`. When no ancestor
+  can be found the capture **warns** naming the orphaned agent, because an empty array that silently
+  means "inconclusive" is the defect being removed. Attributed, never appended: `subagents.length` backs
+  the published `dispatch_count_max` assertion, and inflating it would silently re-grade existing
+  scenarios.
+
+- **A gate key the payload does not serve is no longer read as "off".** Cowork reads value-gate keys
+  through an accessor carrying a per-call default, so an unserved key resolves to *that* default — and
+  two keys on the runtime-config gate default to **true**. The harness returned `false` for any absent
+  key, wrong in the silent direction. Reads now state the production default explicitly. Nothing moves
+  today: all three keys the harness reads default to `false` at their call sites, read from the asar
+  rather than assumed — which also settles whether scenarios pinning an older baseline, where one of
+  those keys was unserved, might silently gain a cache. They do not.
+
+- **A plain `npm test` could spend real money.** The fast lane excluded live suites by *filename*, so
+  `live-matrix` and `live-resume-continuity` sat in it, held back only by their own `describe.skipIf`. On a
+  normal dev machine — Docker up, image pulled, agent staged — the single false leg of that check is the
+  token, which put `npm test` one `export CLAUDE_CODE_OAUTH_TOKEN=…` away from a paid run with no warning.
+  The same hand-maintained list had already drifted the other way: `live-resume-continuity` was missing
+  from the live config's `include`, so its assertions ran in **neither** lane. Both configs now use a
+  `test/live-*.test.ts` glob, so adding a live suite never requires remembering two edits. (Note that the
+  live suites read the token from `process.env` or `~/.cowork-harness-token`, **not** the repo `.env` —
+  vitest loads no dotenv — so an empty `.env` was never the reassurance it looked like.)
+
+- **`sync` could not read Desktop 1.25927.0 at all — it reported 25 unknown deltas and refused to write.**
+  Desktop changed its *bundler*, not its behaviour: plain string literals are now emitted with backticks
+  (``settingSources:[`user`]``), export names are mangled to one or two characters (`...o.TASK_TOOL_NAMES`
+  became `...E.vt`), and the bundle split from 101 chunks into 341. Every literal anchor broke at once.
+  `sync` now normalizes substitution-free template literals back to the quoted form before matching, and
+  resolves an exported name by following the referencing chunk's own `require()` binding into the chunk
+  that defines it. Both matter for correctness, not just for getting a green: the old single-bundle regex
+  hop on a two-character name landed on unrelated text and produced two **false** reports — that
+  `CLAUDE_DESIGN_TOOLS` was no longer empty, and that `maxThinkingTokens` no longer resolved to 31999.
+  Both facts were verified unchanged in the asar by hand. This is why the run refused rather than writing:
+  the refusal was right even though most of its reasons were wrong.
+
+- **One path-hook ordering check had been failing open.** The qt-before-containment order guard — which
+  catches a blanket early-allow shape in the PreToolUse hook — located its scan offset with the readable
+  export name. Once that name was mangled the offset became `-1`, and the guard was written to *skip* on a
+  negative offset rather than flag, so it silently stopped running instead of reporting anything. It now
+  reuses the same shape-based anchor used to find the install site, and flags if the two ever disagree.
+  The install-site check itself is now stronger than before: rather than matching a name, it resolves the
+  spread and requires it to still be the gated `Read/Write/Edit/Glob/Grep` set.
+
+- **`cls: "binary"` was missing from the published `verify-cassettes` schema.** The artifact path has been
+  emitting it, so a consumer validating that output against `schema/verify-cassettes.json` would reject a
+  valid envelope. Added, along with a test asserting every emitted `cls` literal is present in both the
+  schema and SPEC.md — the enum is hand-maintained in three places and had already drifted once.
+
+- **The pre-commit cassette check only ran when a *baseline* was staged.** A baseline moves `latest` and
+  stales the fixtures, which is why the check started there — but the commit that adds or re-records a
+  cassette is the one that can introduce a leak, and it stages no baseline, so it skipped the check entirely
+  (including the host-inventory warning printed inside that branch). It now also triggers on a staged
+  `*.cassette.json`.
+
+- **The proactive `suggest_skills` branch now matches production.** Its empty-catalog `note` used to
+  branch proactive-vs-not and return a bare "continue silently", suppressing the `search_plugins` chain
+  production emits for *every* trigger state — silence is only the `proactive` tail. And because
+  `trigger` is optional, a trigger-omitted call is a distinct third path that must not be told to
+  forward a trigger it never supplied; it was previously grouped with `user_asked`. The proactive
+  description also carried the permission to suggest without the constraints that fence it, so the
+  modeled agent over-suggested relative to production.
+
+- **`provenance.eipcChannelUuid` is no longer carried into new baselines.** It advertised itself as
+  "per-build" but no extractor ever existed, so it was copied forward unchanged into all 20 baselines —
+  one value, matching no shipped asar — and was structurally incapable of ever reporting drift. Nothing
+  read, typed, or asserted it. The hazard was the comment: a promise of per-build freshness invites a
+  provenance tripwire on ground that cannot move. Historical baselines keep their recorded value.
+
+- **A comment could be read as an executable outputs delete.** `splitStatements` is quote-blind, so the
+  body of a `python3 -c "…"` or `perl -e '…'` program string is shredded into pseudo-statements and scanned
+  as shell — an English comment mentioning a delete then became evidence of one, and a read-only pipeline
+  could fail a run for touching nothing. Whole-line `#` comments are now dropped before any statement-level
+  decision. The ordering is load-bearing in **both** directions: bash does not treat a backslash inside a
+  comment as a continuation, so `# note \` followed by `rm outputs/x` really does run the `rm` (stripping
+  after joining would have hidden a real delete); while in `rm \` followed by `# outputs/x` the backslash
+  *does* continue and the `#` line is an argument. Both are false negatives if mishandled and both are
+  pinned by tests. The comment-bearing text still feeds the co-occurrence fast path, so
+  `# stage to outputs` + `rm -rf "$UNRESOLVED"` still flags on the rm's own unprovable target.
+
+- **The outputs-delete guard reported `ok` while a delete had been detected.** The roster derived its
+  status from whether the *signal* fired, and the signal is suppressed whenever the scenario authored
+  `no_delete_in_outputs` — so a scenario that authored the key and **failed** it showed a green guard. It
+  now derives from the evidence: `fired` whenever a delete was detected, `ok` only on a clean scan,
+  `unverified` when the scan did not run.
+
+- **A redaction-induced verdict flip now names what flipped.** The self-check reported
+  `pre-redaction pass=true → redacted pass=false` and stopped, so diagnosing it meant replaying both copies
+  by hand. It now appends the failing-assertion diff (already computed, but surfaced only in a branch that
+  is unreachable on a flip) **and** the verdict signal codes — both are needed, because `computeVerdict`
+  folds in non-assertion signals, so a verdict can flip with an unchanged assertion set and a key-only diff
+  would read `[] → []`.
+
+- **`docs/cassette.md` never stated that replay executes nothing.** Every individual fact was documented,
+  but two consequences a reader has to assemble were not. First: a skill's bundled scripts are **not run**
+  on replay — a `Bash` call and its result are frozen text, and `artifact_json` reads the recorded
+  `outputs/` snapshot, so a rewritten or broken `scripts/produce.py` replays green on the old output.
+  Second: staleness is enforced by **`verify-cassettes` (exit 1)**, not by `replay`, which warns and exits
+  0 — so a CI job running `replay` alone does not gate a skill that moved. Both are now stated in the
+  mental model and next to the drift flags, with the division of labor between the two commands named.
+
 ## [1.17.0] — 2026-08-01
 
 Reported by two consumer skills against published 1.16.0, plus a 54-item documentation review against the

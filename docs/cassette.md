@@ -14,6 +14,25 @@ cowork-harness replay  cassettes/my-test.cassette.json # token-free re-evaluatio
 > Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
 > [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
 
+**In CI, run both commands — `replay` alone does not gate staleness.** A recording describes the skill as
+it was on the day you paid for it; once the skill moves, a bare `replay` prints
+`::warning:: cassette stale` and still **exits 0**. `verify-cassettes` exits **1** on the same tree. The
+split is deliberate — `replay` answers *"do the assertions still hold"*, `verify-cassettes` answers *"is
+this recording still current"* — but running only the first means a skill edit silently stops being
+tested:
+
+```bash
+cowork-harness verify-cassettes cassettes/   # privacy + staleness — FAILS on a stale recording
+cowork-harness replay            cassettes/  # token-free content/structure
+```
+
+That is the order the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) ships. If you
+would rather have one command do both, `replay --fail-on-skill-drift` folds the staleness gate in
+(`--strict` also fails on baseline drift). Two caveats worth knowing either way: a cassette recorded
+before fingerprints existed has nothing to check and passes silently, and a `COWORK_HARNESS_GITSET` /
+`COWORK_HARNESS_AGENT_SCOPE` mismatch between record and CI downgrades real drift to a non-failing
+`format` finding.
+
 Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
 **no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml) *(source checkout only — not shipped in the npm package)*). The walkthrough below assumes `container` fidelity, the common case.
 
@@ -30,6 +49,20 @@ replay  (no token, no Docker, no network)
 
 The cassette is NOT a test in isolation — it replays what the agent did in a past live run.
 Use a live `run` for filesystem/egress assertions; use `replay` for the token-free PR gate.
+
+**What a green replay proves — and what it does not.** Replay re-evaluates your assertions against the
+recording. **Nothing is executed**: not the model, and not any script your skill bundles. A `Bash` call and
+its result are frozen text, and `artifact_json` / `file_exists` read the `outputs/` snapshot `record` took —
+so a skill whose real work happens in `scripts/produce.py` can have that script rewritten, or broken, and
+replay stays green on the old output. What replay does gate is everything downstream of the model: your
+scenario still loads, your scripted answers still match the gates that fired, your assertions still hold,
+and the verdict still computes the same way — which is what catches a CLI upgrade or a regression in the
+harness itself. For "does my script still produce the right numbers", test the script directly (see the
+[pytest lane](../python/README.md)); for "does the agent still behave this way", re-record or run live.
+Editing a bundled script *does* change the skill hash and stale every cassette recorded against it — that
+tripwire is what keeps the gap above from going unnoticed. Note which command enforces it: `verify-cassettes`
+hard-fails on staleness, while `replay` only warns — so a CI job that runs `replay` alone will not catch a
+skill that moved. Run both; the drift note in the "Filesystem assertions" section below has the detail.
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
@@ -92,6 +125,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
   "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
   "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified")
+  "preRunOrigin": "local-walk", // provenance of the pre-run baseline (local-walk / remote-unavailable / local-unreadable); `local-unreadable` makes no_unexpected_files/input_unmodified fail evidence-unavailable on replay instead of diffing an incomplete baseline
   "artifacts": [                         // snapshot of outputs/ + connected folders (optional)
     { "path": "outputs/x.json", "bytes": 24, "sha256": "…", "body": "{…}" }, // body inlined ≤ 64 KiB
     { "path": "outputs/big.bin", "bytes": 9e6, "sha256": "…", "truncated": true, "truncationReason": "size" }, // oversized → hash-only (raise --max-artifact-bytes)
@@ -102,7 +136,9 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
   "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
-  "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic
+  "timeline": [ /* … */ ], // harness-observation timeline (see src/agent/timeline.ts): seq/ts/line/type per meaningful in-run event, in total order; `ts` is wall-clock-observation-time, frozen not recomputed on replay — informational only, no verdict impact. ABSENT on a pre-timeline cassette or when timeline.jsonl was empty/unreadable at record time
+  "timelineHeader": { "startedAtMono": "…", "startedAtWall": "…" }, // written once as timeline.jsonl's first line; `startedAtMono` is the raw `process.hrtime.bigint()` start value (as a string) that every `timeline[].ts` is milliseconds-elapsed-since; `startedAtWall` is the wall-clock anchor so absolute times are recoverable from the relative `ts` stream
+  "authoring": { "nonDeterministic": true, "channel": "decider-dir" } // present ONLY when a live decider answered ≥1 gate (see §Answering gates during recording); re-record may drift, replay is still deterministic. `channel` is optional: it is absent when `--on-unanswered first` answered the gate rather than a decider channel, so the stamp serializes as just `{ nonDeterministic: true }`
 }
 ```
 
@@ -190,6 +226,9 @@ separate discovery run to learn the gates, then encoding answers, then recording
 - `--decider-llm [--intent "<one line>"]` — a model answers the gates.
 - `--decider-model <model>` — pins which model answers the gates; requires `--decider-llm`.
 - `--on-unanswered first` — auto-pick option 1 for any unmatched gate.
+
+> `record` takes a different decider subset than `run` and `skill` do — notably it has no `--decider-cmd`.
+> See [decider-dir.md → Decider flags by command](./decider-dir.md#decider-flags-by-command-run-vs-record-vs-skill).
 
 These are rejected together with `--rerecord-stale` (it re-records committed cassettes at the default
 policy). When a gate is actually answered by a live decider (or `--on-unanswered first`), the cassette
@@ -347,6 +386,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
+| `allow_outputs_delete` | verdict modifier — kept on replay → no-op pass (the live outputs-delete scan it waives is zeroed on replay) |
+| `allow_delete_in` | verdict modifier — kept on replay → no-op pass (the live per-mount delete scan it waives is zeroed on replay, same as its outputs-scoped sibling) |
 | `allow_undelivered_deliverables` | verdict modifier — kept on replay → no-op pass (suppresses the `undelivered_deliverables` WARN; a replay runs no scratchpad walk of its own, so the signal is evidence-unavailable there regardless) |
 
 **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
@@ -412,9 +453,20 @@ skill still produces them — `replay --strict` fails the run when the `fingerpr
 drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leaving baseline drift a warning).
 Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.
 
+> **On `replay`, drift WARNS by default — the staleness gate is `verify-cassettes`.** Edit a skill without
+> re-recording and a bare `replay` prints `::warning:: cassette stale … re-record` and still reports
+> success (exit 0); `verify-cassettes` on the same tree exits **1**. That split is deliberate: `replay`
+> answers "do the assertions still hold", `verify-cassettes` answers "is this recording still current", and
+> a stale recording is not by itself a wrong answer. **The consequence is that `replay` alone does not gate
+> staleness.** Run both in CI — this repo does ([`ci.yml`](../.github/workflows/ci.yml) runs the replay
+> fixtures and then `verify-cassettes examples/replays/`) — or, if you want one command to do both, pass
+> `replay --fail-on-skill-drift` (or `--strict`, which also fails on baseline drift). `--reassert` /
+> `--assert-from` imply skill-drift hard-fail already.
+
 ### Still skipped on replay (no filesystem/network in a cassette)
 
-`no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
+`no_delete_in_outputs`, `no_delete_in_mounts` (both need the live post-run bash scan; a cassette freezes no
+commands to re-scan), `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
 stream, so `RunResult.mcpErrors` is absent on replay), `max_peak_rss_bytes` (replay never spawns a sandbox
 to sample, so `RunResult.resources` is absent on replay), `semantic_matches` (an LLM judge call — never
@@ -486,6 +538,21 @@ This is the **O7 guard on the token-free lane**: if a future change to `serializ
 
 `replay_protocol_fidelity` is a synthesized assertion, not user-authored. It will never appear in a
 scenario's `assert:` block; on the live path it would fail as an empty assertion.
+
+### Mutation coverage — `replay --mutate`
+
+`replay --mutate` perturbs each recorded, inlined JSON artifact value in turn, re-runs the scenario's
+assertions against the perturbed tree, and reports which perturbations nothing catches — those are the
+fields your `assert:` block leaves unguarded. Each perturbation is applied, evaluated, and restored
+before the next one runs, so the materialized tree ends the pass unchanged.
+
+This is coverage reporting, not verdict reporting: an uncaught perturbation is a gap in the scenario's
+assertions, not a failure of the run, so `--mutate` never changes replay's verdict or exit code — a green
+replay stays green regardless of what it finds.
+
+```
+cowork-harness replay cassettes/my-scenario.cassette.json --mutate
+```
 
 ### What replay's `RunResult` carries
 
@@ -720,10 +787,43 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   (e.g. `NVCA`, `Cooley GO`, `Acme`) — each `--allow` value is a **pattern**, matched against a finding, not a
   path to allow; each allow must match the **whole** finding token (so a bare-domain allow no longer silently
   clears an email whose domain it matches), and `--allow-domain` / `--allow-email` / `--allow-path` /
-  `--allow-machine-inventory` scope an allow to a single finding class, while `--allow-patterns-file <path>` is a
+  `--allow-machine-inventory` / `--allow-host-inventory` scope an allow to a single finding class, while `--allow-patterns-file <path>` is a
   different thing — it loads allows from a version-controlled **file of patterns** (one regex per line, `#`
   comments), not a path to allow directly. Multi-word proper
-  names are **not** a default class (too noisy). `verify-cassettes` also runs the **staleness**
+  names are **not** a default class (too noisy).
+
+- **`host-inventory` — a structural class, not a regex.** A cassette recorded at a **host-inheriting** tier
+  (`protocol`, `hostloop`, or `cowork` when it resolves to hostloop) freezes the recording *machine's* own
+  inventory into its `system/init` and command-registry events. Committed to a public repo, that publishes
+  your tool stack — this has actually happened here. The text net above cannot see it: an MCP server that
+  never connected (`status: pending`/`needs-auth`/`failed`) **declares no tools**, so no `mcp__<server>__<tool>`
+  token is ever written and `grep mcp__` over the cassette reads clean. The inventory lives in **name
+  fields**. So this check reads specific name fields of the decoded events and flags: an `mcp_servers[].name`
+  outside the harness's own servers, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
+  `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
+  `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
+  `KNOWN_COWORK_SERVERS` instead of allowing it.
+  **`record` carries its own preflight for the same risk.** Recording at a host-inheriting tier
+  (`protocol`, `hostloop`, or `cowork` resolving to hostloop) into a repo-visible cassette path is
+  refused by default — that recording would freeze this machine's MCP servers, agents, and account
+  metadata into a committed fixture. `--allow-host-inventory-fixture` is the boolean consent to record
+  anyway; it is distinct from `verify-cassettes`' `--allow-host-inventory <regex>` above (a per-finding
+  suppressor, not a record-time consent) and is appropriate only when the session has no personal MCP
+  servers or plugins.
+  **Tier-gated on purpose:** at `container` the agent is sealed (`HOME=/tmp`), so a foreign server name there
+  can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
+  it would fail a legitimate fixture.
+  **What it does NOT cover.** Only the name fields above are checked. The catalogs — `slash_commands[]`,
+  `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated: `slash_commands` legitimately
+  varies between clean fixtures and descriptions are unbounded free text, so there is no clean predicate,
+  only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **11% of the
+  removed bytes** and the ungated catalogs about **89%** (the registry command catalog alone ~80%);
+  both measured the same way, as whole JSON values. The check would have caught that fixture (18
+  foreign server names, plus the account org) — but a host recording with *no* configured MCP servers, a
+  plain `account`, and only built-in agents will still pass while carrying the host's full command and skill
+  catalogs. Treat it as a backstop against the demonstrated failure, not as proof a cassette is clean.
+
+`verify-cassettes` also runs the **staleness**
   check (both checks run by default; scope to one with `--skip-privacy` or `--skip-staleness`): a drifted
   `skillHash` (you edited the skill but didn't re-record) fails the gate.
   A third, always-on check compares a committed scenario's `prompt` against the cassette's frozen

@@ -65,6 +65,42 @@ describe("makeSkillsHandler — tool-set gating", () => {
     expect(suggest.description).toMatch(/proactive/i);
   });
 
+  // `toMatch(/proactive/i)` above passes against ANY proactive description, including one missing every
+  // constraint production carries — a vacuous guard. Production's proactive variant is not just
+  // "permission to suggest": it fences the permission with a do-not-call list, a once-per-conversation
+  // dedup, a no-lead-in rule, and trigger-forwarding. Without these the emulated model over-suggests,
+  // so each is pinned separately. Regex-per-rule (not a prose snapshot) so a legitimate rewording that
+  // preserves the semantics does not red the suite.
+  it("proactive description carries production's CONSTRAINTS, not just the permission", async () => {
+    const h = makeSkillsHandler({
+      mountedSkills: [],
+      mountedPluginNames: [],
+      suggestSkillsEnabled: true,
+      proactiveSkillSuggestEnabled: true,
+    });
+    const desc = (await listTools(h)).find((t) => t.name === "suggest_skills")!.description;
+    expect(desc).toMatch(/do not call this when/i); // the negative list exists at all
+    expect(desc).toMatch(/one-off/i); // …one-off task you can just answer
+    expect(desc).toMatch(/not confident a skill would genuinely help/i); // …unsure it helps
+    expect(desc).toMatch(/already rendered a suggestion.*did not engage/is); // once-per-conversation dedup
+    expect(desc).toMatch(/same keywords and the same trigger/i); // forwarding, incl. the trigger
+    expect(desc).toMatch(/do not write a lead-in/i); // no-lead-in rule
+    expect(desc).toMatch(/context_label/i); // …use context_label instead
+  });
+
+  it("the BASE description stays free of proactive-only rules (no trigger to forward there)", async () => {
+    const h = makeSkillsHandler({
+      mountedSkills: [],
+      mountedPluginNames: [],
+      suggestSkillsEnabled: true,
+      proactiveSkillSuggestEnabled: false,
+    });
+    const desc = (await listTools(h)).find((t) => t.name === "suggest_skills")!.description;
+    expect(desc).toMatch(/same keywords/i);
+    expect(desc).not.toMatch(/and the same trigger/i); // the param does not exist on this branch
+    expect(desc).not.toMatch(/do not call this when/i);
+  });
+
   it("proactive:true is a no-op when suggestSkillsEnabled is false (gate #5 precedence)", async () => {
     const h = makeSkillsHandler({
       mountedSkills: [],
@@ -148,28 +184,48 @@ describe("makeSkillsHandler — suggest_skills envelope", () => {
     expect(out.note).toMatch(/search_plugins/i);
   });
 
-  it("proactive: trigger echoed back when supplied, and the note tells the model to stay silent", async () => {
-    const h = makeSkillsHandler({
+  // Production composes the empty note from three conditionals, so the note has THREE distinct shapes,
+  // not two. A prior reconstruction branched proactive-vs-not and returned a bare "continue silently" on
+  // `proactive` — suppressing the search_plugins chain production always emits. These pin the real shape.
+  // `trigger` is optional, so trigger-omitted is a REAL third path, not a synthetic one.
+  const proactiveHandler = () =>
+    makeSkillsHandler({
       mountedSkills: [],
       mountedPluginNames: [],
       suggestSkillsEnabled: true,
       proactiveSkillSuggestEnabled: true,
     });
-    const out = parseText(await callTool(h, "suggest_skills", { trigger: "proactive" }));
+
+  it("proactive: chains into search_plugins WITH trigger-forwarding, and the tail is silence", async () => {
+    const out = parseText(await callTool(proactiveHandler(), "suggest_skills", { trigger: "proactive" }));
     expect(out.trigger).toBe("proactive");
-    expect(out.note).toMatch(/continue silently/i);
+    // The chain is emitted on the proactive path too — this is the assertion the old model failed.
+    expect(out.note).toMatch(/search_plugins/i);
+    expect(out.note).toMatch(/and the same trigger/i);
+    expect(out.note).toMatch(/continue the task without mentioning that you searched/i);
+    // Silence is the TAIL, not the whole note; the disclosure tail must not also appear.
+    expect(out.note).not.toMatch(/in your follow-up/i);
   });
 
-  it("proactive: user_asked trigger gets the user-facing (not silent) note", async () => {
-    const h = makeSkillsHandler({
-      mountedSkills: [],
-      mountedPluginNames: [],
-      suggestSkillsEnabled: true,
-      proactiveSkillSuggestEnabled: true,
-    });
-    const out = parseText(await callTool(h, "suggest_skills", { trigger: "user_asked" }));
+  it("proactive gate + user_asked: forwards the trigger but DISCLOSES the empty search", async () => {
+    const out = parseText(await callTool(proactiveHandler(), "suggest_skills", { trigger: "user_asked" }));
     expect(out.trigger).toBe("user_asked");
-    expect(out.note).toMatch(/tell the user nothing new was found/i);
+    expect(out.note).toMatch(/search_plugins/i);
+    expect(out.note).toMatch(/and the same trigger/i);
+    expect(out.note).toMatch(/in your follow-up/i);
+    expect(out.note).not.toMatch(/without mentioning that you searched/i);
+  });
+
+  it("proactive gate + trigger OMITTED: still chains, but forwards NO trigger (the third path)", async () => {
+    const out = parseText(await callTool(proactiveHandler(), "suggest_skills", { keywords: ["pdf"] }));
+    expect(out.trigger).toBeUndefined();
+    expect(out.note).toMatch(/search_plugins/i);
+    // The load-bearing pin: omitted must NOT tell the model to forward a trigger it never supplied.
+    // On its own this negative would pass against the pre-fix note too (which had no forwarding clause
+    // at all) — it is non-vacuous only as a PAIR with the two `and the same trigger` assertions above,
+    // which prove the clause exists and is therefore genuinely conditional.
+    expect(out.note).not.toMatch(/and the same trigger/i);
+    expect(out.note).toMatch(/in your follow-up/i);
   });
 
   it("calling suggest_skills when the gate is off is rejected (tool truly doesn't exist)", async () => {

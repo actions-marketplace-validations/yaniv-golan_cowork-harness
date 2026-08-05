@@ -195,20 +195,41 @@ describe("readGateFlag (prefixed key + prose/structured shapes)", () => {
 
   it("reads a sub-flag from the committed PROSE string under the prefixed key", () => {
     const b = withGates({ "coworkRuntimeConfig:1978029737": "on(force) coworkWebFetchViaApi=true coworkWebFetchPrompt=true" });
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt", false)).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi", false)).toBe(true);
   });
   it("reads a sub-flag from a decoded STRUCTURED entry", () => {
     const b = withGates({ "coworkRuntimeConfig:1978029737": { on: true, source: "force", value: { coworkWebFetchPrompt: true } } });
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi")).toBe(false); // absent sub-flag
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt", false)).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchViaApi", false)).toBe(false); // absent sub-flag
   });
   it("returns false for a missing gate (no silent true)", () => {
-    expect(readGateFlag(withGates({}), "1978029737", "coworkWebFetchPrompt")).toBe(false);
+    expect(readGateFlag(withGates({}), "1978029737", "coworkWebFetchPrompt", false)).toBe(false);
   });
   it("also resolves a bare-id key (no prefix)", () => {
     const b = withGates({ "1978029737": "coworkWebFetchPrompt=true" });
-    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt")).toBe(true);
+    expect(readGateFlag(b, "1978029737", "coworkWebFetchPrompt", false)).toBe(true);
+  });
+
+  // Production reads these through `Ea(id, key, default, …)`, so an UNSERVED key resolves to that call
+  // site's default — which is `true` for two real keys on this very gate (`bashHostOnlyIntercept`,
+  // `scheduledTaskStaleReapEnabled`). Returning false for them, as this reader used to unconditionally,
+  // is wrong in the silent direction. These three pin the distinction the old signature could not make.
+  it("an ABSENT gate resolves to the production default, including when that default is true", () => {
+    expect(readGateFlag(withGates({}), "1978029737", "bashHostOnlyIntercept", true)).toBe(true);
+  });
+  it("an absent SUB-FLAG on a present gate resolves to the production default", () => {
+    const b = withGates({ "coworkRuntimeConfig:1978029737": { on: true, source: "experiment", value: { coworkWebFetchViaApi: true } } });
+    expect(readGateFlag(b, "1978029737", "bashHostOnlyIntercept", true)).toBe(true);
+    // a SERVED false still beats the default — the default only fills genuine absence
+    const served = withGates({ "coworkRuntimeConfig:1978029737": { on: true, value: { bashHostOnlyIntercept: false } } });
+    expect(readGateFlag(served, "1978029737", "bashHostOnlyIntercept", true)).toBe(false);
+  });
+  it("prose: an explicit `flag=false` beats a true default", () => {
+    const b = withGates({ "coworkRuntimeConfig:1978029737": "on(force) bashHostOnlyIntercept=false" });
+    expect(readGateFlag(b, "1978029737", "bashHostOnlyIntercept", true)).toBe(false);
+    // …while a flag the prose never mentions falls through to the default
+    expect(readGateFlag(b, "1978029737", "scheduledTaskStaleReapEnabled", true)).toBe(true);
   });
 });
 
@@ -378,5 +399,44 @@ describe("web_fetch DNS-rebind SSRF backstop — Path A (provenance), and litera
     const r = await run("http://8.8.8.8/x", tripwire);
     expect(r.text).toBe("BODY"); // public literal passes; DNS short-circuited
     expect(called).toBe(false); // literal IP never hits the resolver
+  });
+});
+
+// ==========================================================================================
+// DELIBERATE FIDELITY, NOT A BUG — but read the scope, which is narrower than it first looked.
+//
+// Production's `webFetchAllowedUrls` is a genuine per-session URL allowlist: measured across 439 live
+// sessions, 21,316 entries, only 74 (0.35%) are over-matches. It is NOT "populated by scraping dotted
+// tokens", which was an earlier characterisation drawn from a single session that happened to contain
+// no real URLs — retracted at source, and corrected here rather than left to rot.
+//
+// What IS real is a small parser over-match: a dotted identifier or filename-shaped token
+// (`os.unlink`, `offer.docx`, `26.xlsx`) parses as a hostname and is persisted. Nearly all are inert
+// because those suffixes are not real TLDs. Our `uen` port reproduces that over-match, which is the
+// faithful behaviour — this test exists so it does not get "fixed" into a divergence. If production
+// ever narrows its extractor, this test should FAIL and be updated, not defended.
+// ==========================================================================================
+describe("webFetchAllowedUrls — the dotted-token over-match is reproduced faithfully", () => {
+  it("over-matches dotted identifiers as hosts, exactly as production does", () => {
+    const pySource = "import os, errno\nos.unlink(p)\nos.rmdir(d)\nerrno.errorcode.get(e)\ne.strerror";
+    expect(extractUrls(pySource)).toEqual([
+      "https://os.unlink/",
+      "https://os.rmdir/",
+      "https://errno.errorcode.get/",
+      "https://e.strerror/",
+    ]);
+  });
+
+  it("over-matches filename-shaped tokens too — the class actually observed in the corpus", () => {
+    expect(extractUrls("attached offer.docx and 26.xlsx")).toEqual(["https://offer.docx/", "https://26.xlsx/"]);
+  });
+
+  it("the common case is still genuine URLs, and a trailing dot is trimmed rather than kept", () => {
+    // The 99.65% case. Also pins ZHA-trimming: `example.com.` yields the host, NOT `example.com./`.
+    // Deduped because the full-URL and bare-domain regexes both match a full URL — `Ien` concatenates
+    // its three passes and dedup happens in the tracker, so the raw extractor legitimately repeats.
+    const urls = [...new Set(extractUrls("see https://a.example/x and example.com. done"))];
+    expect(urls).toEqual(["https://a.example/x", "https://example.com/"]);
+    expect(new ProvenanceTracker().seedFromText("see https://a.example/x and example.com. done")).toBe(2);
   });
 });

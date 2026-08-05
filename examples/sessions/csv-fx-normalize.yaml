@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/session.schema.json
 # Session for the graceful-degradation example (scenarios/csv-fx-normalize.yaml).
 # Mounts the csv-fx-normalize skill and uploads a EUR-denominated CSV.
 # Deliberately NO egress.extra_allow: the FX host (api.frankfurter.app) stays blocked,

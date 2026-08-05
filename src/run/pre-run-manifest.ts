@@ -1,7 +1,7 @@
 import { writeFileSync, readFileSync, statSync, realpathSync, openSync, fstatSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { userVisibleRootsFromPlan, type LaunchPlan } from "../session.js";
+import { userVisibleRootsFromPlan, type LaunchPlan, isConnectedContent } from "../session.js";
 import { collectArtifactPathsWithHealth, collectArtifactPathsAtWithHealth } from "./artifacts.js";
 
 // Written at outDir/ — ABOVE workRoot (work/ at protocol, work/session/mnt elsewhere), the same
@@ -102,7 +102,7 @@ function statCapture(baseDir: string, relPath: string): { mtimeMs: number; size:
  *  assertion fails LOUD as evidence-unavailable at that tier instead. */
 export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir: string, tier: string): void {
   if (!plan.capturePreRun || plan.resume) return;
-  const folderMounts = plan.mounts.filter((m) => m.kind === "folder");
+  const folderMounts = plan.mounts.filter(isConnectedContent); // a read-only project is still an input `input_unmodified` should baseline
   const cap = preRunHashCap();
   const paths: string[] = [];
   const hashes: Record<string, string | null> = {};

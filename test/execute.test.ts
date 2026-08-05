@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, resolve as resolvePath } from "node:path";
 import {
   parseSessionFile,
   parseScenarioFile,
@@ -10,7 +10,9 @@ import {
   parseDialogTimeout,
   slugForPath,
   isOutputsDelete,
+  detectMountDeletes,
   collectArtifacts,
+  onUnansweredOverrideWarning,
   readSessionManifest,
   parseEnvPort,
   resolveSubagentConfigRoot,
@@ -421,11 +423,61 @@ describe("isOutputsDelete — mv direction + target-based safe-prefix suppressio
     expect(isOutputsDelete('rm -rf "$UNDEFINED/data" ; cp a mnt/outputs/b')).toBe(true); // unresolved var
   });
 
-  it("redirect truncation: a statement-leading bare `>` into outputs is a delete", () => {
-    expect(isOutputsDelete("echo > outputs/report.json")).toBe(true);
-    expect(isOutputsDelete("make && > outputs/report.json")).toBe(true);
-    expect(isOutputsDelete("> outputs/report.json")).toBe(true);
-    expect(isOutputsDelete("cat x.csv ; > outputs/data.csv")).toBe(true);
+  // Measured directly against the real outputs mount with raw syscalls: `unlink`/`rmdir` fail EPERM;
+  // truncate(f,0), open(f,"w"), and rename all SUCCEED. Emptying a file is not a containment
+  // violation there, so flagging it here would red runs the real product allows.
+  it("emptying a file in place is NOT a delete — the real product permits it", () => {
+    expect(isOutputsDelete("echo > outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("make && > outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("> outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("cat x.csv ; > outputs/data.csv")).toBe(false);
+    expect(isOutputsDelete("truncate -s 0 mnt/outputs/report.json")).toBe(false);
+    expect(isOutputsDelete("truncate --size=0 outputs/f")).toBe(false);
+    expect(isOutputsDelete("shred mnt/outputs/secret.txt")).toBe(false); // overwrites, never unlinks
+  });
+
+  it("shred unlinks ONLY with -u/--remove, so the flag shape is what makes it a delete", () => {
+    expect(isOutputsDelete("shred -u mnt/outputs/secret.txt")).toBe(true);
+    expect(isOutputsDelete("shred -zu mnt/outputs/secret.txt")).toBe(true); // bundled short opts
+    expect(isOutputsDelete("shred outputs/f -u")).toBe(true); // flag after the operand
+    expect(isOutputsDelete("shred --remove mnt/outputs/secret.txt")).toBe(true);
+    expect(isOutputsDelete("shred --remove=wipesync outputs/f")).toBe(true);
+    // the flag shape must not be satisfied from a LATER statement
+    expect(isOutputsDelete("shred outputs/f\necho -u done")).toBe(false);
+  });
+
+  it("a whole-line comment is prose, never an executable delete", () => {
+    expect(isOutputsDelete("# rm /mnt/outputs/x")).toBe(false);
+    expect(isOutputsDelete("echo ok\n# rm outputs/x")).toBe(false);
+    expect(isOutputsDelete("# mv outputs/a /tmp/a")).toBe(false);
+    // quote-blind splitting shreds a -c program body; a comment line in it must not be evidence
+    expect(isOutputsDelete('python3 -c "import sys\n# rm the old outputs/x rows\nprint(1)"')).toBe(false);
+    // the commented `cd` must not short-circuit past a statement whose own target is provably safe
+    expect(isOutputsDelete("# cd outputs\nrm /tmp/x")).toBe(false);
+  });
+
+  // Comment stripping interacts with line continuations in BOTH directions. Getting either wrong is a
+  // false NEGATIVE — a real delete that stops being flagged — so both are pinned here.
+  it("comment stripping is continuation-aware in both directions", () => {
+    // bash does not continue a comment: the `rm` on the next line RUNS.
+    expect(isOutputsDelete("# note \\\nrm outputs/x")).toBe(true);
+    // here the backslash DOES continue, so `# outputs/x` is an argument to rm, not a comment.
+    expect(isOutputsDelete("rm \\\n# outputs/x")).toBe(true);
+  });
+
+  it("comment stripping preserves the prefer-a-false-positive co-occurrence case", () => {
+    // the outputs reference is only in prose, but the rm's own target is unprovable → still flags
+    expect(isOutputsDelete('# stage to outputs\nrm -rf "$UNRESOLVED"')).toBe(true);
+    // a TRAILING comment leaves the statement starting with `rm`, so it is untouched
+    expect(isOutputsDelete("rm outputs/x # cleanup")).toBe(true);
+    expect(isOutputsDelete("cd outputs && rm -rf *")).toBe(true);
+  });
+
+  // The reported false-positive classes: prose containing a retired token, near an outputs path.
+  it("prose mentioning a non-delete op near outputs is not a delete", () => {
+    expect(isOutputsDelete("echo truncate note >> /mnt/outputs/log.md")).toBe(false); // an APPEND
+    expect(isOutputsDelete('cat /mnt/outputs/a.csv | python3 -c "import sys # truncate old rows" | head')).toBe(false);
+    expect(isOutputsDelete("truncate large sections for display in mnt/outputs/report.md")).toBe(false);
   });
   it("redirect truncation: a normal deliverable WRITE / append is NOT a delete", () => {
     expect(isOutputsDelete("jq '.' input.json > outputs/report.json")).toBe(false);
@@ -719,5 +771,127 @@ describe("classifyWorkspaceFiles", () => {
     const got = classifyWorkspaceFiles(root, ["outputs"], []);
     const entry = got.find((f) => f.path === "outputs/hashed.txt");
     expect(entry?.sha256).toBe(expected);
+  });
+});
+
+// ==========================================================================================
+// Delete detection is per-MOUNT, not outputs-only. Production denies unlink/rmdir on every
+// delete-denied (`rw`) Cowork FUSE mount — a connected folder shows the identical default, and
+// approval is strictly per-mount. Detection was scoped to the literal `outputs`, so a delete in a
+// connected folder produced NO signal at all.
+// ==========================================================================================
+describe("detectMountDeletes — per-mount scope and attribution", () => {
+  // The whole safety argument for widening rests on this: `outputs` behaviour must not move, because
+  // no_delete_in_outputs, its verdict signal and every committed cassette are defined on it.
+  it("EQUIVALENCE: detectMountDeletes(cmd, ['outputs']) matches isOutputsDelete for every shape", () => {
+    const cases = [
+      "rm -rf outputs/report.pdf",
+      "rm -rf /tmp/scratch",
+      "mv outputs/a.pdf /tmp/b.pdf",
+      "mv /tmp/a.pdf outputs/",
+      "cd outputs && rm -f x",
+      '# stage to outputs\nrm -rf "$UNRESOLVED"',
+      "rm -rf outputs.txt",
+      "rm -rf myoutputs/x",
+      "python -c 'import os; os.remove(\"outputs/x\")'",
+      "echo outputs",
+      "find outputs -name '*.tmp' -delete",
+      "truncate -s 0 outputs/a.txt",
+    ];
+    for (const c of cases) {
+      expect(detectMountDeletes(c, ["outputs"]).length > 0, `case: ${c}`).toBe(isOutputsDelete(c));
+    }
+  });
+
+  it("attributes a delete to the connected folder it actually touches", () => {
+    expect(detectMountDeletes("rm -rf reports/old.pdf", ["outputs", "reports"])).toEqual(["reports"]);
+    expect(detectMountDeletes("rm -rf outputs/a.pdf", ["outputs", "reports"])).toEqual(["outputs"]);
+  });
+
+  it("a folder delete is detected — the case that previously produced NO signal at all", () => {
+    expect(isOutputsDelete("rm -rf reports/old.pdf")).toBe(false); // old scope: silent
+    expect(detectMountDeletes("rm -rf reports/old.pdf", ["outputs", "reports"])).toEqual(["reports"]);
+  });
+
+  it("reports every mount a single command deletes in", () => {
+    expect(detectMountDeletes("rm -rf outputs/a reports/b", ["outputs", "reports"]).sort()).toEqual(["outputs", "reports"]);
+  });
+
+  it("a mount NOT in the list is not attributed", () => {
+    expect(detectMountDeletes("rm -rf reports/old.pdf", ["outputs"])).toEqual([]);
+  });
+
+  it("mount names are regex-escaped and dot-boundaries hold in both directions", () => {
+    // A name with a `.` must be matched literally, not as `any char`…
+    expect(detectMountDeletes("rm -rf v1.2/x", ["v1.2"])).toEqual(["v1.2"]);
+    expect(detectMountDeletes("rm -rf v1X2/x", ["v1.2"])).toEqual([]);
+    // …and the right boundary must still reject a LONGER dotted path that merely starts with the name.
+    expect(detectMountDeletes("rm -rf v1.2.3/x", ["v1.2"])).toEqual([]);
+    expect(detectMountDeletes("rm -rf data.json", ["data"])).toEqual([]);
+    // regex metacharacters in a folder name must not blow up or over-match
+    expect(detectMountDeletes("rm -rf a+b/x", ["a+b"])).toEqual(["a+b"]);
+    expect(detectMountDeletes("rm -rf aXb/x", ["a+b"])).toEqual([]);
+  });
+
+  it("mv direction stays per-mount: moving INTO a mount is not a delete from it", () => {
+    expect(detectMountDeletes("mv /tmp/a.pdf reports/", ["reports"])).toEqual([]);
+    expect(detectMountDeletes("mv reports/a.pdf /tmp/", ["reports"])).toEqual(["reports"]);
+  });
+});
+
+// The scenario's `on_unanswered:` outranking `--on-unanswered` is INTENTIONAL and documented
+// (`run --help`: "per-scenario answers/on_unanswered in the YAML take precedence where set"). The
+// defect was that the override happened in silence: a user who passed the flag got no signal it was
+// discarded, so a run answered gates by a policy they had explicitly tried to replace. Precedence is a
+// covered surface and stays put — this only makes the discard visible.
+describe("onUnansweredOverrideWarning", () => {
+  it("warns when the scenario field discards a DIFFERENT explicit flag", () => {
+    const w = onUnansweredOverrideWarning("first", "fail");
+    expect(w).toBeTruthy();
+    // Names both values and which one wins — a warning that doesn't say what actually applied
+    // leaves the reader to guess the precedence it is warning about.
+    expect(w).toContain("first");
+    expect(w).toContain("fail");
+  });
+
+  it("stays silent when both agree (nothing is lost, and a dir batch would drown in it)", () => {
+    expect(onUnansweredOverrideWarning("first", "first")).toBeUndefined();
+  });
+
+  it("stays silent when only the scenario sets it (no flag to discard)", () => {
+    expect(onUnansweredOverrideWarning("first", undefined)).toBeUndefined();
+  });
+
+  it("stays silent when only the flag is given (it applies)", () => {
+    expect(onUnansweredOverrideWarning(undefined, "fail")).toBeUndefined();
+  });
+
+  it("stays silent when neither is set", () => {
+    expect(onUnansweredOverrideWarning(undefined, undefined)).toBeUndefined();
+  });
+});
+
+// The warning above is only as good as its wiring: `onUnansweredFlag` is optional, so a caller that
+// sets the policy but forgets it compiles fine and silently loses the signal. `run` in particular
+// passes a RESOLVED `policy`, so without the companion field the warning can never fire there. This is
+// the same "added to one assembler, not the other" trap that has bitten RunResult fields.
+describe("every executeScenario caller that sets a policy also declares whether the user asked for it", () => {
+  it("onUnanswered: and onUnansweredFlag: appear together at every call site", () => {
+    const files = ["src/cli.ts", "src/run/cassette.ts"];
+    const missing: string[] = [];
+    for (const rel of files) {
+      const src = readFileSync(resolvePath(rel), "utf8");
+      // Each executeScenario(...) options object, sliced to its call.
+      const calls = src.split("executeScenario(").slice(1);
+      expect(calls.length, `no executeScenario call found in ${rel} — did it move?`).toBeGreaterThan(0);
+      calls.forEach((call, i) => {
+        const body = call.slice(0, 2000); // the options literal, comfortably
+        if (body.includes("onUnanswered:") && !body.includes("onUnansweredFlag:")) missing.push(`${rel} call #${i + 1}`);
+      });
+    }
+    expect(
+      missing,
+      "a caller sets onUnanswered: without onUnansweredFlag: — the scenario-overrides-flag warning cannot fire there",
+    ).toEqual([]);
   });
 });

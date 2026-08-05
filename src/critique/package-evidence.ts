@@ -580,8 +580,16 @@ export function packageEvidence(
             : "dispatch";
     for (const w of ws) {
       if (typeof w.query !== "string") continue;
+      // A `viaAgentId` entry was made by a DESCENDANT dispatch and attributed up to this one (the
+      // descendant never got its own subagents[] entry). Say so in the label: without it the evaluator
+      // reads the search as this dispatch's own work and grounds a "researched" claim against the wrong
+      // agent — the same mis-attribution the tag exists to prevent, one layer further out.
+      const via =
+        typeof w.viaAgentId === "string"
+          ? ` ← via nested agent ${w.viaAgentId}${typeof w.viaSpawnDepth === "number" ? ` @depth ${w.viaSpawnDepth}` : ""}`
+          : "";
       researchParts.push(
-        `[${label}] query: ${w.query}\nresult:\n${typeof w.resultText === "string" ? w.resultText : "(no result text captured)"}`,
+        `[${label}${via}] query: ${w.query}\nresult:\n${typeof w.resultText === "string" ? w.resultText : "(no result text captured)"}`,
       );
     }
   }

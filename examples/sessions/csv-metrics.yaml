@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/session.schema.json
 # Session for the worked end-to-end example (examples/scenarios/csv-metrics.yaml).
 # Mounts the csv-metrics skill and uploads the CSV it analyzes.
 # NOTE: no egress.extra_allow — the skill's producer is stdlib-only, so the whole

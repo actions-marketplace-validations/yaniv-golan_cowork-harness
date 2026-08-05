@@ -21,9 +21,10 @@ wire surface — the harness's *own* protocol, not Anthropic's.
    *inner* `response` key; a flattened body is rejected by the agent with `ZodError: expected object,
    received undefined` (`ControlResponse`, `ControlResponseBody`, `AllowBody`, `DenyBody`,
    `McpResponseBody`, `HookOutputBody`).
-5. The AskUserQuestion answer wire-shape: `updatedInput.answers` is `Record<questionText, answer>` —
-   values are always **strings**; a multiSelect answer is a single **comma-joined string** of the chosen
-   labels (e.g. `"Auth, Audit"`), never an array (`Answers`, `QuestionAnswerUpdatedInput`).
+5. The AskUserQuestion answer wire-shape: `updatedInput` requires **both** `questions` and `answers` —
+   `answers` is `Record<questionText, answer>` with values always **strings**; a multiSelect answer is a
+   single **comma-joined string** of the chosen labels (e.g. `"Auth, Audit"`), never an array (`Answers`,
+   `QuestionAnswerUpdatedInput`).
 
 **Out of scope, on purpose** — the Claude Agent SDK's own event stream (`assistant`/`result`/`user`
 tool-result messages, `system/init` capability manifests, `api_metrics`). That surface is Anthropic's,
@@ -169,3 +170,32 @@ least one vector.
   entry records that inheritance explicitly rather than leaving the gap ambiguous between "nothing
   additive was observed" and "nobody updated this file." The last **live** end-to-end control-protocol
   pass remains `2026-07-11 / desktop-1.20186.0` (see DESIGN.md).
+- **2026-08-04** — baseline set extended through `desktop-1.24012.11`. No control-protocol change:
+  `can_use_tool`, `control_request`/`control_response`, `permissionDecision`, `sdkMcpServers`, `hooks`,
+  `present_files` and the whole skills/plugins discovery region were occurrence-counted identical between
+  the 1.24012.9 and 1.24012.11 asars, the staged agent ELF is unchanged (`2.1.219`, same sha), and the
+  Cowork system-prompt constant is byte-identical (same sha256, code-point and section-tag counts — only
+  the minifier-assigned constant id moved). The only substantive delta is a **server-side** GrowthBook
+  flip of `proactiveSkillSuggestEnabled:1598976391`, which changes the `skills` SDK-MCP tool surface but
+  not the control protocol. Verified the cheaper way, as above — **not** by re-running the live tiers, so
+  the `2026-07-11 / desktop-1.20186.0` live scope above is unchanged.
+- **2026-08-05** — baseline set extended through `desktop-1.25927.0` (agent ELF `2.1.221`). **Read the
+  method note before trusting this entry's shape:** Desktop changed its *bundler* in this release — plain
+  string literals are emitted with backticks, export names are mangled to one or two characters, and the
+  graph split from 101 chunks to 341. That **invalidates the occurrence-counting technique** every entry
+  above relies on: raw token counts move for reasons that have nothing to do with behaviour (here
+  `control_request` +1, `hooks` +20, `allowedTools` +4, `interrupt` +1, all on a normalized read), and a
+  literal that is still present can stop matching simply because the build emits it in a different form. Counting
+  was therefore **not** used as the evidence here.
+  What was compared instead is the **subtype set** — protocol-level text that survives minification. It
+  yields exactly one additive discovery: a new `system` message subtype **`api_retry`**, sitting alongside
+  `compact_boundary` in the stream-message filter. No harness change is required: unknown `system` subtypes
+  are already surfaced structurally as a `system_event` rather than dropped (`src/agent/session.ts`), which
+  is precisely the case this generic path was built for. `permission_request` / `permission_response` are
+  **not** gone despite a first-pass reading that suggested it — both are still present; one construction
+  site is merely reshaped past a `subtype:"…"` probe. `can_use_tool`,
+  `control_response`, `permissionDecision`, `sdkMcpServers`, `present_files`, `tool_permission`,
+  `set_permission_mode`, `mcp_message`, `supportedDialogKinds` and `refusal_fallback_prompt` are unchanged.
+  The Cowork system-prompt constant and the sub-agent append are unchanged (their `sync` fingerprint guards
+  did not fire). Verified the cheaper way — **not** by re-running the live tiers, so the
+  `2026-07-11 / desktop-1.20186.0` live scope above is unchanged.

@@ -2,9 +2,9 @@ import { z } from "zod";
 import { warn, writeAllSync } from "../io.js";
 import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, dirname, relative, isAbsolute, resolve, sep } from "node:path";
+import { join, dirname, relative, isAbsolute, resolve, sep, extname } from "node:path";
 import {
   type Scenario,
   type RunResult,
@@ -63,6 +63,7 @@ import { isVmSessionsPath } from "../vm-paths.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields, type AssertContext } from "../assert.js";
+import { planMutations, applyMutation, explainNoMutations } from "./mutate.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
@@ -74,7 +75,16 @@ import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrubField } from "../secrets.js";
-import { scanText, DEFAULT_SCAN_PATTERNS, MANIFEST_SCAN_PATTERNS, type ScanFinding, type AllowInput, type AllowPattern } from "../scan.js";
+import {
+  scanText,
+  scanHostInventory,
+  DEFAULT_SCAN_PATTERNS,
+  MANIFEST_SCAN_PATTERNS,
+  HOST_INVENTORY_CLS,
+  type ScanFinding,
+  type AllowInput,
+  type AllowPattern,
+} from "../scan.js";
 import { parse as parseYaml } from "yaml";
 
 // Synchronous fd writes (match cli.ts): a `process.stdout.write` + `process.exit()` pair truncates the
@@ -610,6 +620,144 @@ export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | u
   return h.digest("hex").slice(0, 16);
 }
 
+/** Prose files a gate option label could plausibly be authored in. Deliberately narrow: this scan reads
+ *  every file under every mounted skill dir, so it must not walk node_modules-sized trees or binaries. */
+const LABEL_PROSE_EXTS = new Set([".md", ".markdown", ".txt", ".yaml", ".yml", ".json"]);
+/** Per-file cap on stamped labels, and total. A pathological catalog must not bloat every cassette. */
+const LABEL_STAMP_MAX = 100;
+
+/** Extract every AskUserQuestion option label a recorded run emitted, from the decision stream.
+ *
+ *  Sourced from `controlOut` because that is where the ANSWERED gate's full payload lands — a
+ *  `control_response` whose `updatedInput.questions[].options[].label` echoes exactly what the model
+ *  offered. Never grep the raw text for `"label"`: MCP tool SCHEMAS contain that key too, and the noise
+ *  would swamp the signal. */
+export function recordedGateLabels(controlOut: readonly (string | object)[] | undefined): string[] {
+  const labels: string[] = [];
+  for (const raw of controlOut ?? []) {
+    try {
+      const e = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+        response?: { response?: { updatedInput?: { questions?: { options?: { label?: unknown }[] }[] } } };
+      };
+      for (const q of e?.response?.response?.updatedInput?.questions ?? [])
+        for (const o of q?.options ?? []) if (typeof o?.label === "string" && o.label.trim()) labels.push(o.label);
+    } catch {
+      /* a malformed controlOut line is another check's finding */
+    }
+  }
+  return [...new Set(labels)];
+}
+
+/** Stamp which emitted labels were VERBATIM in the skill's own prose, per file, ordered by where they
+ *  appear in that file.
+ *
+ *  Scans the DELIVERED dirs and deliberately does NOT apply `hashIgnore` — that asymmetry is the point.
+ *  Hash-ignored prose is mounted and readable by the agent while being invisible to `skillHash`, so it is
+ *  exactly the class no other check can see. Applying the ignore list here would reproduce the blind spot
+ *  this exists to close.
+ *
+ *  Only verbatim matches are stamped. A model-paraphrased label was never in the prose, so it cannot
+ *  regress from absent to absent — checking it would fire on every run and train people to ignore this. */
+export function stampLabelProvenance(labels: string[], dirs: string[]): Fingerprint["labelProvenance"] {
+  if (!labels.length || !dirs.length) return undefined;
+  const out: { file: string; labels: string[] }[] = [];
+  let stamped = 0;
+  for (const dir of [...dirs].sort()) {
+    for (const abs of walkProseFiles(dir)) {
+      if (stamped >= LABEL_STAMP_MAX) break;
+      let text: string;
+      try {
+        text = readFileSync(abs, "utf8");
+      } catch {
+        continue; // unreadable prose is not a finding here; the hash path already reports read errors
+      }
+      // Order BY POSITION IN THE FILE, not by emission order — a catalog reorder changes this sequence
+      // while leaving every label present, which is the case an existence-only check cannot detect.
+      const found = labels
+        .map((l) => ({ l, at: text.indexOf(l) }))
+        .filter((x) => x.at >= 0)
+        .sort((a, b) => a.at - b.at)
+        .map((x) => x.l);
+      if (!found.length) continue;
+      const slice = found.slice(0, Math.max(0, LABEL_STAMP_MAX - stamped));
+      stamped += slice.length;
+      out.push({ file: relative(dir, abs), labels: slice });
+    }
+    if (stamped >= LABEL_STAMP_MAX) break;
+  }
+  return out.length ? out.sort((a, b) => (a.file < b.file ? -1 : 1)) : undefined;
+}
+
+/** Depth-bounded walk for prose files — bounded because this runs on every record over every mounted dir. */
+function walkProseFiles(dir: string, depth = 0): string[] {
+  if (depth > 6) return [];
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "dist") continue;
+    const abs = join(dir, e.name);
+    if (e.isDirectory()) files.push(...walkProseFiles(abs, depth + 1));
+    else if (LABEL_PROSE_EXTS.has(extname(e.name).toLowerCase())) files.push(abs);
+  }
+  return files;
+}
+
+/** Re-check a stamped provenance against the CURRENT prose. Returns human-readable drift descriptions.
+ *  Two drift kinds, both real regressions for a scenario whose `choose:`/`answers:` anchor a label:
+ *    · vanished — the label is gone from the file it was authored in
+ *    · reordered — every label still exists, but their order in the file changed (the catalog case) */
+export function checkLabelProvenance(stamp: Fingerprint["labelProvenance"], dirs: string[]): string[] {
+  if (!stamp?.length || !dirs.length) return [];
+  const drift: string[] = [];
+  for (const { file, labels } of stamp) {
+    let text: string | undefined;
+    for (const dir of dirs) {
+      try {
+        text = readFileSync(join(dir, file), "utf8");
+        break;
+      } catch {
+        /* try the next mounted dir — `file` is dir-relative and dirs may overlap */
+      }
+    }
+    if (text === undefined) continue; // the file itself is gone: skillHash/fileSigs already reports that
+    const missing = labels.filter((l) => !text!.includes(l));
+    if (missing.length) {
+      drift.push(`gate option label(s) no longer in ${file}: ${missing.map((m) => `"${m}"`).join(", ")}`);
+      continue; // an order claim over a changed set would be noise on top of a real finding
+    }
+    const now = labels
+      .map((l) => ({ l, at: text!.indexOf(l) }))
+      .sort((a, b) => a.at - b.at)
+      .map((x) => x.l);
+    // Element-wise, not a joined-string compare: a label may contain any character, so ANY separator
+    // could collide with content (and a literal control byte as separator makes the file grep-hostile).
+    if (now.length !== labels.length || now.some((l, i) => l !== labels[i]))
+      drift.push(`gate option labels reordered in ${file}: recorded [${labels.join(", ")}], now [${now.join(", ")}]`);
+  }
+  return drift;
+}
+
+/** Attach `labelProvenance` to an already-built fingerprint. Separate from `buildFingerprint` because the
+ *  labels come from `controlOut`, which exists only after the run — and best-effort throughout: a stamp is
+ *  a diagnostic bonus, so any failure to resolve the session or read prose yields no stamp rather than
+ *  failing a record that otherwise succeeded. */
+function withLabelProvenance(fp: Fingerprint, controlOut: readonly (string | object)[] | undefined, sessionPath: string): Fingerprint {
+  try {
+    const labels = recordedGateLabels(controlOut);
+    if (!labels.length) return fp;
+    const { dirs } = skillSourceDirs(sessionPath);
+    const labelProvenance = stampLabelProvenance(labels, dirs);
+    return labelProvenance ? { ...fp, labelProvenance } : fp;
+  } catch {
+    return fp;
+  }
+}
+
 export function buildFingerprint(
   sessionPath: string,
   baselineAppVersion: string,
@@ -813,6 +961,11 @@ function isCapabilityManifest(line: string): boolean {
   return false;
 }
 
+/** Tiers whose recordings inherit the host environment, so their transcripts can carry the recording
+ *  machine's own inventory. `cowork` is included because it resolves to container OR hostloop via a baseline
+ *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
+const HOST_INHERITING_TIERS: ReadonlySet<string> = new Set(["protocol", "hostloop", "cowork"]);
+
 export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
@@ -833,6 +986,37 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   cassette.controlOut?.forEach((l, i) =>
     findings.push(...scanText(l, `controlOut[${i}]`, allow, isCapabilityManifest(l) ? MANIFEST : FULL)),
   );
+  // Structural host-inventory scan — the text net above cannot see this class. A recording made at a
+  // host-inheriting tier freezes the recording MACHINE's inventory (its MCP servers, agents, account org)
+  // into the init + command-registry events; committed to a public repo that publishes the operator's tool
+  // stack. It escaped the text net because an unconnected server declares no tools, so no `mcp__*` token is
+  // ever written and a `grep mcp__` reads clean — the inventory lives in NAME fields.
+  //
+  // TIER-GATED, and that gate is load-bearing: `mcp.config`/`mcp.enabled` is a documented, supported way to
+  // attach an MCP server to a session under test, and the cassette freezes only the session PATH, so the
+  // scan cannot subtract what a scenario declared on purpose. At `container` the agent is sealed and no host
+  // inventory can reach it, so a foreign server name there is necessarily scenario-declared and must not be
+  // flagged. `cowork` is treated as host-inheriting because it resolves to container OR hostloop via a
+  // baseline gate — fail closed rather than resolve a baseline inside the privacy scan.
+  // An UNKNOWN tier scans too. `fidelity` is not required by the cassette shape (scenario is a looseObject
+  // over prompt/session/assert), so a cassette that simply omits it would otherwise skip this check
+  // entirely — a silent fail-open on exactly the file a leak would arrive in. Only a tier we can positively
+  // identify as sealed (`container`, `microvm`) is exempt. Same fail-closed reasoning as `cowork`.
+  const tier = (cassette.effectiveFidelity ?? cassette.scenario.fidelity) as string | undefined;
+  if (tier === undefined || HOST_INHERITING_TIERS.has(tier)) {
+    const structural = (lines: string[] | undefined, key: string) =>
+      lines?.forEach((l, i) => {
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(l);
+        } catch {
+          return; // a non-JSON transcript line has no name fields to read
+        }
+        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow));
+      });
+    structural(cassette.events, "events");
+    structural(cassette.controlOut, "controlOut");
+  }
   // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
     findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
@@ -1276,6 +1460,23 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
         if (summary) findings.push({ class: "skill", message: `skill files changed since record — ${summary} — re-record` });
         else findings.push({ class: "skill", message: "local skill/plugin dir contents changed since record — re-record" });
       }
+    }
+  }
+
+  // Gate-option label drift. Two things this catches that the hash above cannot:
+  //   1. a catalog REORDER — every label still exists, so a hash diff names the file but nothing explains
+  //      WHY it matters; the recorded order does. A scenario whose `choose:` anchors a label by position
+  //      is broken by this and by nothing else visible here.
+  //   2. prose that is DELIVERED but hash-ignored (`.cowork-hashignore` / session `staleness.hash_ignore`)
+  //      — outside `skillHash` entirely, so on that path this is the ONLY signal that exists.
+  // Classed `skill` so it rides the existing `--fail-on-skill-drift` / `--strict` gates rather than adding
+  // a fourth severity nobody configured. Cassettes recorded before the stamp existed simply skip it.
+  if (fp.labelProvenance?.length) {
+    try {
+      const { dirs } = skillSourceDirs(cassette.scenario.session, cassetteDir);
+      for (const d of checkLabelProvenance(fp.labelProvenance, dirs)) findings.push({ class: "skill", message: `${d} — re-record` });
+    } catch {
+      /* an unresolvable session is already reported by the hash path above; don't double-report it here */
     }
   }
   return { findings, notes };
@@ -1760,7 +1961,19 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
   if (verdictMismatch || pairsMismatch || msgsMismatch || bodyShaBroken || linksDestroyed) {
     let detail: string;
     if (verdictMismatch) {
-      detail = `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}`;
+      // Name WHAT changed, not just that something did. Two diffs, because either can be the cause and
+      // only one is usually non-empty: the failing-assertion set, and the verdict SIGNAL codes.
+      // `computeVerdict` folds in non-assertion signals (result_error / transport_error /
+      // requiresCapabilityUnmet / …), so a verdict can flip with an UNCHANGED failing-assertion set —
+      // printing only the key diff would then read `[] → []` and send the operator to the wrong layer.
+      const bf = failedKeys(basePairs);
+      const rf = failedKeys(redactedPairs);
+      const bs = vb.signals.map((s) => s.code);
+      const rs = vr.signals.map((s) => s.code);
+      detail =
+        `pre-redaction pass=${vb.pass} → redacted pass=${vr.pass}; ` +
+        `failing assertions: [${bf.join(", ")}] → [${rf.join(", ")}]; ` +
+        `verdict signals: [${bs.join(", ")}] → [${rs.join(", ")}]`;
     } else if (pairsMismatch) {
       const bf = failedKeys(basePairs);
       const rf = failedKeys(redactedPairs);
@@ -1923,6 +2136,10 @@ interface RecordOpts {
   // (a per-scenario warning under pMapBounded fires after siblings already paid, and a shared empty
   // policy would emit N interleaved duplicates) — they set this so the per-record preflight doesn't re-fire.
   skipRedactionPreflight?: boolean;
+  // --allow-host-inventory-fixture: proceed with a host-inheriting record into a repo-tracked path. Named
+  // distinctly from verify-cassettes' `--allow-host-inventory <regex>` (a value-taking class allow) so the
+  // two cannot be confused: this one is a boolean consent to RECORD, not a finding suppressor.
+  allowHostInventoryFixture?: boolean;
   // Live-decider plumbing: answer gates DURING the recording instead of pre-scripting them.
   // `onUnanswered` = --on-unanswered fail|first ("llm" when --decider-llm); `externalChannel` = --decider-dir
   // file rendezvous; `llmIntent` = --decider-llm one-line intent; `deciderChannel` labels the authoring stamp.
@@ -1955,6 +2172,83 @@ export function resolvePreflightTier(scenario: Scenario): string {
  *  Callers emit it BEFORE the agent spawns (that timing is the point). Returns null when nothing is risky.
  *  A malformed .cowork-redact.json THROWS here — pre-spawn, before the run is paid for (strictly earlier
  *  than the post-run load that would throw anyway). */
+/** Tiers whose RECORDING inherits the host environment. Mirrors HOST_INHERITING_TIERS but resolves `cowork`
+ *  for real via resolvePreflightTier, which is cheap and exact pre-spawn. */
+function isHostInheritingRecord(scenario: Scenario): boolean {
+  const tier = resolvePreflightTier(scenario);
+  // "unresolvable" = the baseline failed to load. Stay quiet and let the record itself fail loudly on the
+  // same load moments later — the precedent resolvePreflightTier already documents. Guessing a tier here
+  // would mis-refuse a run that was never going to start.
+  return tier === "protocol" || tier === "hostloop";
+}
+
+/** Is `p` inside a git work tree AND not ignored? Tracked-ness is the wrong test: a brand-new
+ *  `--out examples/replays/new.json` is untracked at this moment and is exactly how a fixture gets created.
+ *  Runs git from the TARGET's own directory, not the process cwd — this repo works in `.worktrees/`, which is
+ *  itself gitignored, so a cwd-relative check would call a worktree path "ignored" and skip the refusal. */
+function isRepoVisiblePath(p: string): boolean {
+  const abs = resolve(p);
+  // Walk up to the nearest EXISTING ancestor before asking git anything. `git -C <nonexistent>` exits 128,
+  // and treating that as "not in a repo" failed OPEN on the most dangerous case there is: the first-ever
+  // record into a new directory (`--out examples/replays/sub/x.json`), which is precisely how a fresh
+  // fixture gets created. The target itself never exists yet, so the parent is always the starting point.
+  let dir = dirname(abs);
+  while (!existsSync(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return false; // walked off the filesystem root — nothing to ask git about
+    dir = up;
+  }
+  const inTree = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  // A git that is absent or erroring (status null / non-zero with no usable answer) is NOT evidence that the
+  // path is safe. Only a definitive "false" — git ran and said this is not a work tree — clears the check.
+  if (inTree.status === null) return true; // git missing/failed to spawn: fail CLOSED
+  if (inTree.status !== 0) return false; // git ran and said "not a work tree"
+  if (inTree.stdout.trim() !== "true") return false;
+  const ignored = spawnSync("git", ["-C", dir, "check-ignore", "-q", abs], { encoding: "utf8" });
+  // check-ignore: 0 = ignored, 1 = not ignored, 128 = error. Only a clean 0 clears it; an error means we
+  // could not prove the path is ignored, so treat it as repo-visible.
+  return ignored.status !== 0;
+}
+
+/**
+ * Decide whether a record may write a host-inheriting transcript to this path.
+ *
+ * REFUSE only for a path that is not already a committed cassette. Refusing an in-place refresh would break
+ * this repo's own `--rerecord-stale` workflow on every host-inheriting fixture, and the predictable result is
+ * that everyone passes the escape flag by reflex — turning the guard off exactly where it matters. For an
+ * existing fixture we warn and let the Layer A scan hard-gate the RESULT at commit/CI time.
+ */
+export function hostInventoryPreflight(
+  scenario: Scenario,
+  plannedCassettePath: string,
+  allowed: boolean,
+): { kind: "ok" } | { kind: "warn"; message: string } | { kind: "refuse"; message: string } {
+  if (allowed) return { kind: "ok" };
+  if (!isHostInheritingRecord(scenario)) return { kind: "ok" };
+  if (!isRepoVisiblePath(plannedCassettePath)) return { kind: "ok" };
+  const tier = resolvePreflightTier(scenario);
+  const why =
+    `fidelity '${tier}' inherits the host environment, so the recording will freeze THIS machine's ` +
+    `MCP servers, agents and account metadata into the cassette`;
+  if (existsSync(plannedCassettePath)) {
+    return {
+      kind: "warn",
+      message:
+        `::warning:: [record] re-recording a repo-tracked cassette at ${tier}: ${why}. ` +
+        `Verify with 'verify-cassettes' before committing — it fails on a host-inventory finding.\n`,
+    };
+  }
+  return {
+    kind: "refuse",
+    message:
+      `refusing to record into a repo-visible path at ${tier} — ${why}, and committing that publishes it.\n` +
+      `  path: ${plannedCassettePath}\n` +
+      `  Fix: record at 'container' fidelity (sealed, HOME=/tmp), or --out a path outside the repo ` +
+      `(the default 'cassettes/' dir is gitignored).\n` +
+      `  Override with --allow-host-inventory-fixture if this session has no personal MCP servers or plugins.`,
+  };
+}
+
 export function redactionPreflightMessage(items: Array<{ scenario: Scenario; policyDirs: string[] }>): string | null {
   const risky: string[] = [];
   for (const it of items) {
@@ -2040,7 +2334,10 @@ export function _findScenarioOnDisk(cassettePath: string, scenarioName: string |
 
 /** Record one scenario FILE → one cassette (parses the file, then shares the live-record tail with the
  *  in-memory path). The file's dir feeds the redaction-policy search (for a co-located .cowork-redact.json). */
-async function recordScenarioFile(file: string, opts: RecordOpts): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
+async function recordScenarioFile(
+  file: string,
+  opts: RecordOpts,
+): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string }> {
   // remember the authored scenario source file so the cassette can persist it (relocatable) for a
   // later `--rerecord-stale` that prefers it over a name-derived guess.
   return recordScenarioObject(parseScenarioFile(file), { ...opts, scenarioSourceFile: file }, [dirname(file)]);
@@ -2062,6 +2359,7 @@ export const RECORD_BOOLEAN_FLAGS = [
   "--verbose",
   "--dry-run",
   "--decider-llm",
+  "--allow-host-inventory-fixture",
 ] as const;
 export const RECORD_VALUE_FLAGS = [
   "--out",
@@ -2082,8 +2380,8 @@ export const RECORD_VALUE_FLAGS = [
 // P9 generalizes this to `replay` and `verify-cassettes`, which had the same two-hand-maintained-strings
 // problem `record` had (see the RECORD_USAGE comment below) AND no coverage guard at all. Generalizing
 // surfaced two things a record-only shape couldn't represent:
-//   - `verify-cassettes` accepts SIX `repeated:` flags (`--allow`/`--allow-domain`/`--allow-email`/
-//     `--allow-path`/`--allow-machine-inventory`/`--allow-patterns-file`, see cmdVerifyCassettes below).
+//   - `verify-cassettes` accepts SEVEN `repeated:` flags (`--allow`/`--allow-domain`/`--allow-email`/
+//     `--allow-path`/`--allow-machine-inventory`/`--allow-host-inventory`/`--allow-patterns-file`, see cmdVerifyCassettes below).
 //     `repeated` is NOT `values` — parseArgs (src/cli-args.ts) collects repeated flags into
 //     `p.repeated[]` (every occurrence kept); a plain `values` flag is last-write-wins (every earlier
 //     occurrence silently discarded). Folding `repeatedFlags` into `valueFlags` here would make the
@@ -2160,7 +2458,8 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>]\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture]\n" +
+  "       --allow-host-inventory-fixture: proceed when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette would freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. Use only when the session has no personal MCP servers or plugins.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
   "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
   "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
@@ -2202,6 +2501,7 @@ export async function cmdRecord(args: string[]) {
     maxArtifactBytes = n;
   }
   const noRedact = p.flags["--no-redact"] ?? false;
+  const allowHostInventoryFixture = p.flags["--allow-host-inventory-fixture"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
   const allowFailing = p.flags["--allow-failing"] ?? false;
   const force = p.flags["--force"] ?? false;
@@ -2213,6 +2513,17 @@ export async function cmdRecord(args: string[]) {
   const intent = p.options["--intent"];
   const deciderModel = p.options["--decider-model"];
   const onUnansweredOpt = p.options["--on-unanswered"] as OnUnanswered | undefined;
+  // `--help` presents these as alternatives (`--decider-dir | --decider-llm | --on-unanswered`) and they
+  // are: buildDecider takes `opts.external ?? <policy terminal>`, so with a channel the policy terminal is
+  // never constructed and the flag is inert. Accepting both silently discarded whichever the user meant.
+  if (deciderDir !== undefined && onUnansweredOpt !== undefined)
+    return fail(
+      "record",
+      "usage",
+      `--on-unanswered ${onUnansweredOpt} conflicts with --decider-dir (the channel IS the terminal, so the policy would never apply). Drop one.`,
+      undefined,
+      asJson,
+    );
   // Bounded batch parallelism (dir-batch / --rerecord-stale). Each record is already fully isolated per run
   // (unique sidecar networks + proxy, per-session run dir), so concurrency is safe — the bound exists to stay
   // under Docker's address pool + model API rate limits. Default 1 (sequential, ordered output).
@@ -2424,6 +2735,8 @@ export async function cmdRecord(args: string[]) {
     } catch (e) {
       return fail("record", "usage", `record --dry-run: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
     }
+    const promptReject = promptPolicyRejection(scenario);
+    if (promptReject) return fail("record", "usage", promptReject, undefined, asJson);
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
@@ -2548,6 +2861,7 @@ export async function cmdRecord(args: string[]) {
             cassettePath: cp,
             maxArtifactBytes,
             skipRedactionPreflight: true,
+            allowHostInventoryFixture,
           });
         } else if (!fromEmbedded) {
           // No on-disk scenario resolved. Re-recording from the embedded snapshot silently DROPS any edits
@@ -2565,7 +2879,7 @@ export async function cmdRecord(args: string[]) {
           const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
-            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true },
+            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true, allowHostInventoryFixture },
           );
         }
         staleBudget.add(budgetFields(r.result).costUsd);
@@ -2669,9 +2983,18 @@ export async function cmdRecord(args: string[]) {
       }
       log(`${tag} recording ${f}…`);
       try {
-        const r = await recordScenarioFile(f, { noRedact, allowFailing, maxArtifactBytes, skipRedactionPreflight: true, ...liveDecider });
+        const r = await recordScenarioFile(f, {
+          noRedact,
+          allowFailing,
+          maxArtifactBytes,
+          skipRedactionPreflight: true,
+          allowHostInventoryFixture,
+          ...liveDecider,
+        });
         batchBudget.add(budgetFields(r.result).costUsd);
         log(`  ✓ ${tag} → ${r.cassettePath} (${r.result.result})`);
+        // the re-record delta (only present when this overwrote a prior cassette) — see describeBehaviourDelta
+        if (r.delta) log(`    ${r.delta}`);
         return true;
       } catch (e) {
         log(`  ✗ ${tag} ${recordErrorText(e)}`);
@@ -2711,11 +3034,15 @@ export async function cmdRecord(args: string[]) {
       force,
       cassettePath,
       maxArtifactBytes,
+      allowHostInventoryFixture,
       externalChannel: channel,
       ...liveDecider,
     });
     if (asJson) out(jsonEnvelope("record", [r.result], { extra: { artifacts: r.artifacts, cassette: r.cassettePath } }));
-    else log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
+    else {
+      log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
+      if (r.delta) log(`  vs the cassette it replaced: ${r.delta}`);
+    }
   } catch (e) {
     return fail("record", "usage", `record: ${recordErrorText(e)}`, undefined, asJson, 1);
   } finally {
@@ -2753,11 +3080,26 @@ export function nullOutScrubbedPreRunHashes(
 /** The live-record TAIL shared by the file (batch/single) and in-memory (re-record) paths: run live, refuse
  *  a failing run unless opted in, snapshot + secret-scrub bodies, opt-in redact + verdict-preserve,
  *  then write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
+/** `on_unanswered: prompt` blocks on a TTY. `run` rejects it outright (it breaks determinism), and
+ *  `record`'s own `--on-unanswered` enum excludes `prompt` for the same reason — but the SCENARIO field
+ *  outranks the flag (`scenario.on_unanswered ?? opts.onUnanswered` in executeScenario), so the enum
+ *  alone left the YAML door open on the command that writes a COMMITTED fixture. Returns the rejection
+ *  message, or undefined when the scenario is recordable. */
+export function promptPolicyRejection(scenario: Scenario): string | undefined {
+  return scenario.on_unanswered === "prompt"
+    ? `scenario "${scenario.name}" sets on_unanswered: prompt — rejected on \`record\` (a TTY wait can't produce a deterministic committed fixture). Use fail|first, or a decider channel.`
+    : undefined;
+}
+
 async function recordScenarioObject(
   scenario: Scenario,
   opts: RecordOpts,
   extraPolicyDirs: string[] = [],
-): Promise<{ result: RunResult; cassettePath: string; artifacts: number }> {
+): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string }> {
+  // Same guard as the --dry-run path, on the funnel every real record passes through (dir batches and
+  // --rerecord-stale never touch the dry-run branch).
+  const promptReject = promptPolicyRejection(scenario);
+  if (promptReject) throw new Error(promptReject);
   // Redaction preflight — MUST fire BEFORE the (paid) agent spawn below; the historical policy-load
   // point after the live run is exactly the after-the-fact discovery this exists to prevent. Same search
   // set as the post-run load. `--no-redact` skips it (explicit known-synthetic opt-out); the batch paths
@@ -2769,11 +3111,24 @@ async function recordScenarioObject(
     ]);
     if (preflight) warn(preflight);
   }
+  // Host-inventory preflight — ALSO before the paid spawn. A host-inheriting tier freezes the recording
+  // machine's own inventory into the transcript, so writing that to a repo-tracked path publishes the
+  // operator's tool stack (this has happened). Refusing after the run would be strictly worse: the tokens
+  // are already spent and the tempting fix is to commit it anyway.
+  {
+    const plannedCassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
+    const verdict = hostInventoryPreflight(scenario, plannedCassettePath, opts.allowHostInventoryFixture === true);
+    if (verdict.kind === "refuse") return fail("record", "usage", verdict.message, undefined, isJsonOutput(process.argv)) as never;
+    if (verdict.kind === "warn") warn(verdict.message);
+  }
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
   const result = await executeScenario(scenario, {
     command: "record",
     onUnanswered: opts.onUnanswered,
+    // record's `onUnanswered` is already explicit-only (`p.options["--on-unanswered"]`, undefined when
+    // the flag is absent), unlike run's resolved `policy` — so the same value serves both roles here.
+    onUnansweredFlag: opts.onUnanswered,
     externalChannel: opts.externalChannel,
     llmIntent: opts.llmIntent,
     llmModel: opts.llmModel,
@@ -2925,13 +3280,15 @@ async function recordScenarioObject(
   // The STAMPED version — the minimum a reader needs to interpret THIS scenario, not the build's max
   // (CASSETTE_VERSION). Nearly every scenario (lane: local/omitted) stamps v10, unchanged (P8).
   const stampedVersion = requiredVersionFor(relocatable);
+  // Read once — the decision stream feeds both the cassette body and the label-provenance stamp below.
+  const recordedControlOut = safeLines(join(result.outDir, "control-out.jsonl"));
   const base: Cassette = {
     $schema: cassetteSchemaUrl(stampedVersion),
     generator: "cowork-harness",
     cassetteVersion: stampedVersion,
     scenario: relocatable,
     events: safeLines(join(result.outDir, "events.jsonl")),
-    controlOut: safeLines(join(result.outDir, "control-out.jsonl")),
+    controlOut: recordedControlOut,
     effectiveFidelity: result.effectiveFidelity,
     artifacts,
     userVisibleRoots: recordRoots,
@@ -2950,7 +3307,14 @@ async function recordScenarioObject(
     // Persist the RUN-TIME fingerprint (computed by execute.ts WITH the resolved baseline object, so it
     // carries promptAssetsHash) rather than recomputing here without the object — a recompute would
     // silently drop promptAssetsHash. The `??` fallback only fires for a result that never carried one.
-    fingerprint: result.fingerprint ?? buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
+    // Label provenance is stamped HERE, not in buildFingerprint: it needs `controlOut` (the emitted gate
+    // options), which only exists after the run. See stampLabelProvenance for why it scans the DELIVERED
+    // dirs rather than the hashed set.
+    fingerprint: withLabelProvenance(
+      result.fingerprint ?? buildFingerprint(scenario.session, result.baseline, undefined, scenario.skills),
+      recordedControlOut,
+      scenario.session,
+    ),
     authoring,
     timeline: timeline?.events,
     timelineHeader: timeline?.header,
@@ -2994,8 +3358,80 @@ async function recordScenarioObject(
       /* an unreadable/malformed existing cassette is not a collision signal — let the write proceed */
     }
   }
+  // Behaviour delta vs the cassette this one REPLACES. Re-recording is the only moment where "did my edit
+  // change what the agent does?" is observable at all — replay re-checks a frozen transcript and is
+  // structurally blind to it. Without this the answer is discarded every time: you pay for a re-record and
+  // get an opaque new blob. A real corpus lost weeks to a skill that silently stopped asking its gates,
+  // found eventually by diffing an old cassette against a new one BY HAND.
+  //
+  // Read BEFORE the write (the file is about to be overwritten) and buffer in memory — never a `.bak`,
+  // which would become a committed-artifact and privacy question. Recorded only on an overwrite; a first
+  // record has no prior to compare. Best-effort: an unreadable prior is simply no delta, never an error —
+  // this is a reporting nicety appended to a successful record, and must not turn one into a failure.
+  const priorSummary = existsSync(cassettePath) ? behaviourSummaryOfFile(cassettePath) : undefined;
   writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // atomic — no partial cassette on a mid-write crash
-  return { result, cassettePath, artifacts: artifacts.length };
+  const delta = priorSummary ? describeBehaviourDelta(priorSummary, behaviourSummary(cassette)) : undefined;
+  return { result, cassettePath, artifacts: artifacts.length, delta };
+}
+
+/** The behavioural dimensions worth reporting across a re-record. Deliberately small and structural: these
+ *  are the things whose CHANGE means the skill behaves differently, as opposed to the model rewording
+ *  itself (which changes on every re-record and would make the delta pure noise). `gates` leads because a
+ *  skill that stops asking is the regression this exists to surface. */
+export interface BehaviourSummary {
+  gates: number;
+  toolCalls: number;
+  artifacts: number;
+}
+
+/** Count the AskUserQuestion gates a cassette recorded. Sourced from `controlOut` (the decision stream),
+ *  where an answered gate appears as a control_response whose `updatedInput` carries `questions[]` — the
+ *  same shape the replay decision pipeline reads. A cassette without controlOut reports 0 gates, which is
+ *  indistinguishable from "no gates fired"; that ambiguity is why the delta line says "0 → 2" rather than
+ *  claiming a regression. */
+export function behaviourSummary(cassette: Pick<Cassette, "controlOut" | "events" | "artifacts">): BehaviourSummary {
+  let gates = 0;
+  for (const raw of cassette.controlOut ?? []) {
+    try {
+      const e = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const qs = e?.response?.response?.updatedInput?.questions;
+      if (Array.isArray(qs) && qs.length) gates += 1;
+    } catch {
+      /* a malformed controlOut line is another check's finding, not this one's */
+    }
+  }
+  let toolCalls = 0;
+  for (const raw of cassette.events ?? []) {
+    try {
+      const e = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const blocks = e?.message?.content;
+      if (Array.isArray(blocks)) for (const b of blocks) if (b?.type === "tool_use") toolCalls += 1;
+    } catch {
+      /* ditto */
+    }
+  }
+  return { gates, toolCalls, artifacts: (cassette.artifacts ?? []).length };
+}
+
+function behaviourSummaryOfFile(path: string): BehaviourSummary | undefined {
+  try {
+    return behaviourSummary(JSON.parse(readFileSync(path, "utf8")) as Cassette);
+  } catch {
+    return undefined; // unreadable prior ⇒ no delta; never fail a successful record over a reporting extra
+  }
+}
+
+/** Render the delta, or state explicitly that behaviour is unchanged. Silence would be ambiguous between
+ *  "nothing moved" and "nobody looked" — the distinction this whole feature exists to make. */
+export function describeBehaviourDelta(before: BehaviourSummary, after: BehaviourSummary): string {
+  const parts: string[] = [];
+  const d = (label: string, a: number, b: number) => {
+    if (a !== b) parts.push(`${label} ${a} → ${b}`);
+  };
+  d("gates", before.gates, after.gates);
+  d("tool calls", before.toolCalls, after.toolCalls);
+  d("artifacts", before.artifacts, after.artifacts);
+  return parts.length ? parts.join(", ") : "no behavioural change (transcript wording only)";
 }
 
 /** A synthetic `result:"error"` RunResult for an unreadable/invalid cassette in a directory replay — so
@@ -3450,6 +3886,7 @@ export function compactSchemaError(message: string, limit = 200): string {
 export const REPLAY_BOOLEAN_FLAGS = [
   "--strict",
   "--fail-on-skill-drift",
+  "--mutate",
   "--reassert",
   "--write",
   "--allow-failing",
@@ -3475,7 +3912,8 @@ export const REPLAY_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // one; this one was missing --best-effort-future-cassette entirely, undiscoverable at the exact point
 // (`cassette format too new: …`) that tells a user to pass it — the P9 bug this generalization fixes).
 export const REPLAY_USAGE =
-  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "       --mutate: perturb each recorded JSON artifact value, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. Reporting only; never changes the verdict or exit code.\n" +
   "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
@@ -3544,6 +3982,7 @@ export async function cmdReplay(args: string[]) {
   if (allowFailing && !write)
     warn("::notice:: [replay] --allow-failing only affects --write's verdict gate; it is a no-op without --write\n");
   const failOnSkillDrift = (p.flags["--fail-on-skill-drift"] ?? false) || reassertMode; // narrower gate: only skill-source drift fails
+  const mutate = p.flags["--mutate"] ?? false;
   if (strict && p.flags["--fail-on-skill-drift"])
     warn(
       "::notice:: [replay] --strict and --fail-on-skill-drift both passed — --strict is the superset (fails on every class), so --fail-on-skill-drift is redundant here\n",
@@ -3716,6 +4155,7 @@ export async function cmdReplay(args: string[]) {
       result = await replayCassette(cassette, renderer ? [renderer] : [], {
         strict,
         failOnSkillDrift,
+        mutate,
         cassetteDir: dirname(f),
         bestEffortFutureCassette,
         notesSink: collectNotes,
@@ -3863,6 +4303,7 @@ export const VERIFY_CASSETTES_REPEATED_FLAGS = [
   "--allow-email",
   "--allow-path",
   "--allow-machine-inventory",
+  "--allow-host-inventory",
   "--allow-patterns-file",
 ] as const;
 
@@ -3878,7 +4319,7 @@ export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
 // recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
 export const VERIFY_CASSETTES_USAGE =
-  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
   "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
   "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.";
@@ -3969,6 +4410,7 @@ export async function cmdVerifyCassettes(args: string[]) {
   for (const src of p.repeated["--allow-email"] ?? []) addAllow(src, "email", "--allow-email");
   for (const src of p.repeated["--allow-path"] ?? []) addAllow(src, "path", "--allow-path");
   for (const src of p.repeated["--allow-machine-inventory"] ?? []) addAllow(src, "machine-inventory", "--allow-machine-inventory");
+  for (const src of p.repeated["--allow-host-inventory"] ?? []) addAllow(src, HOST_INVENTORY_CLS, "--allow-host-inventory");
   for (const file of p.repeated["--allow-patterns-file"] ?? []) {
     let body: string;
     try {
@@ -4532,6 +4974,7 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   "egress_denied",
   "egress_allowed",
   "no_delete_in_outputs",
+  "no_delete_in_mounts",
   "self_heal_ran",
   "transcript_no_host_path",
   "no_mcp_error",
@@ -4559,6 +5002,9 @@ export async function replayCassette(
     failOnSkillDrift?: boolean;
     cassetteDir?: string;
     bestEffortFutureCassette?: boolean;
+    /** --mutate: perturb recorded values and report which perturbations no assertion catches. Reporting
+     *  only — never changes the verdict (an unguarded field is a gap in the scenario, not a failed run). */
+    mutate?: boolean;
     /** Batch collector — when set, staleness notes go here INSTEAD of stderr (see the emission site). */
     notesSink?: (notes: string[]) => void;
   } = {},
@@ -4859,6 +5305,8 @@ export async function replayCassette(
   // computer_links_resolve's replay-lane folder-prefix resolution (Finding 24/25) — computed once,
   // outside the try, since it doesn't depend on anything materializeManifest produced.
   const folderPrefixResolution = buildFolderPrefixMap(cassette);
+  // Populated only under --mutate; surfaced after the verdict so it reads as coverage info, not a failure.
+  let mutationReport: { planned: number; uncaught: string[] } | undefined;
   // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
@@ -4931,7 +5379,7 @@ export async function replayCassette(
     // evaluate() ctx and the returned RunResult can't disagree about which baseline semantics were used
     // (moot for replay's own no_unexpected_files — the materialized tree has no real symlinks — but honest).
     const replayLinkAware = (cassette.cassetteVersion ?? 0) >= 10;
-    const assertions = evaluate(replayable, {
+    const assertCtx: AssertContext = {
       transcript: rec.transcript,
       toolsCalled: rec.toolsCalled,
       subagentTools: rec.subagentTools,
@@ -4956,6 +5404,7 @@ export async function replayCassette(
       // instead of spuriously matching against "".
       postRunHashes: Object.fromEntries((cassette.artifacts ?? []).flatMap((e) => (e.sha256 ? [[e.path, e.sha256] as const] : []))),
       outputsDeletes: [],
+      mountDeletes: [], // replay has no live scan — the same shape outputsDeletes already uses here
       questions: rec.questions,
       hostPathLeaked: false,
       selfHealRan: false,
@@ -5016,7 +5465,53 @@ export async function replayCassette(
         linkPaths: replayLinkPaths, // a link entry's placeholder proves existence, not resolution — fail evidence-unavailable
       },
       ...budgetFields(rec),
-    });
+    };
+    const assertions = evaluate(replayable, assertCtx);
+
+    // MUTATION COVERAGE (--mutate). A green replay says the assertions passed; it cannot say whether they
+    // would have FAILED had the output been wrong. A real 21-cassette corpus turned out to contain seven
+    // scenarios asserting nothing meaningful — found only because someone wrote a throwaway script.
+    //
+    // The check: perturb one recorded value, re-run the SAME assertions against the SAME context, and see
+    // whether any of them notices. Nothing noticed ⇒ that field is unguarded. Cheap because replay already
+    // materialized the artifacts to disk and `evaluate()` is pure and synchronous — no model, no sandbox.
+    //
+    // Reporting only: never changes the verdict or the exit code. An unguarded field is a gap in YOUR
+    // assertions, not a failure of this run, and turning it into one would red every existing corpus at
+    // once. The mutated file is always restored, including when an assertion throws.
+    if (opts.mutate) {
+      const inlined = (cassette.artifacts ?? [])
+        .filter((a): a is typeof a & { body: string } => typeof a.body === "string" && !a.truncated)
+        .map((a) => ({ path: a.path, body: a.body }));
+      const plan = planMutations(inlined);
+      const uncaught: string[] = [];
+      const baselineFailed = new Set(assertions.map((a, i) => (a.pass ? -1 : i)).filter((i) => i >= 0));
+      for (const m of plan) {
+        const abs = join(replayWorkRoot, m.file);
+        let original: string;
+        try {
+          original = readFileSync(abs, "utf8");
+        } catch {
+          continue; // not materialized (out of a user-visible root) — nothing to perturb
+        }
+        try {
+          writeFileSync(abs, applyMutation(original, m));
+          const after = evaluate(replayable, assertCtx);
+          // "Caught" = some assertion that PASSED on the real value now fails. Comparing against the
+          // baseline failure set (not `every(pass)`) keeps an already-red assertion from masking the gap.
+          const caught = after.some((a, i) => !a.pass && !baselineFailed.has(i));
+          if (!caught) uncaught.push(m.label);
+        } finally {
+          writeFileSync(abs, original); // restore unconditionally — a thrown assert must not leave a mutated tree
+        }
+      }
+      mutationReport = { planned: plan.length, uncaught };
+      if (!plan.length) log(`::notice:: [mutate] ${explainNoMutations(cassette.artifacts ?? [], inlined)}`);
+      else if (uncaught.length) {
+        log(`::warning:: [mutate] ${uncaught.length}/${plan.length} perturbation(s) CAUGHT BY NOTHING — these fields are unguarded:`);
+        for (const u of uncaught) log(`    ${u}`);
+      } else log(`::notice:: [mutate] all ${plan.length} perturbation(s) were caught — assertions cover every perturbed field`);
+    }
 
     // under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
     // warning. --fail-on-skill-drift is the narrower gate: only the skill-source classes fail (incl.

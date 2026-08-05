@@ -16,11 +16,17 @@ assert:
   - dispatch_count_max: 1            # exactly one dispatch — so the matched write is THE child's
   - subagent_tool_used: "Write"
   - subagent_file_write:
-      # The agent resolves the relative artifacts/ path against its outputs cwd, so the recorded raw
-      # path is the absolute .../mnt/outputs/artifacts/probe.json (and per-run variable via local_<id>).
-      # Anchor the suffix to the outputs mount: a foo/artifacts/probe.json can't satisfy it (no
-      # /mnt/outputs/ prefix), and no_vm_path_file_op separately rejects any /sessions attempt.
-      path_suffix: "/mnt/outputs/artifacts/probe.json"
+      # Matches the RAW recorded path — which is what the model passed, NOT a resolved absolute path.
+      # The prompt above pins the exact relative spelling `artifacts/probe.json` and tells the child not
+      # to prefix it, so demanding a `/mnt/outputs/` prefix here contradicted this scenario's own
+      # instruction and failed against a run that behaved correctly. Cwd-relative `artifacts/…` IS the
+      # documented host-loop contract (docs/subagents.md).
+      #
+      # The outputs anchor is not lost, it just lives in the right assertion: a stray
+      # `foo/artifacts/probe.json` would satisfy this suffix but then FAIL the exact-path `artifact_json`
+      # checks below, which resolve against the outputs mount. `no_vm_path_file_op` separately rejects any
+      # `/sessions` attempt. The three together still prove dispatch → child write → landed in outputs.
+      path_suffix: "artifacts/probe.json"
   - no_vm_path_file_op: true
   - artifact_json:                    # exact path (not a suffix) — proves the file landed in outputs
       artifact: "outputs/artifacts/probe.json"
