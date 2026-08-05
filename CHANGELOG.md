@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-08-06
+
+### Upgrade notes
+
+- **`verify-cassettes` can red a previously-green gate.** The new `host-inventory` finding class flags a
+  cassette recorded at a host-inheriting tier (`protocol`, `hostloop`, or `cowork` resolving to hostloop)
+  that froze the recording machine's own MCP servers / agents / account into its events. Cassettes that
+  passed under 1.17.0 can fail here — that is the point of the check. Re-record against a clean
+  environment, or scope an allow with `--allow-host-inventory <regex>` after reviewing the finding.
+- **Some previously-accepted command lines are now usage errors.** `--on-unanswered` alongside
+  `--decider-dir`/`--decider-cmd` is rejected on `run`, `record`, `skill` and `probe-dispatch` (the
+  channel is the terminal, so the policy was silently inert), and `record` refuses a scenario whose YAML
+  sets `on_unanswered: prompt`. Drop whichever of the pair you did not mean.
+
 ### Fixed
 
 - **A scenario's `on_unanswered:` overrode an explicit `--on-unanswered` in silence.** The precedence is
