@@ -220,6 +220,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A gate key the payload does not serve is no longer read as "off".** Cowork reads value-gate keys
+  through an accessor carrying a per-call default, so an unserved key resolves to *that* default — and
+  two keys on the runtime-config gate default to **true**. The harness returned `false` for any absent
+  key, wrong in the silent direction. Reads now state the production default explicitly. Nothing moves
+  today: all three keys the harness reads default to `false` at their call sites, read from the asar
+  rather than assumed — which also settles whether scenarios pinning an older baseline, where one of
+  those keys was unserved, might silently gain a cache. They do not.
+
 - **A plain `npm test` could spend real money.** The fast lane excluded live suites by *filename*, so
   `live-matrix` and `live-resume-continuity` sat in it, held back only by their own `describe.skipIf`. On a
   normal dev machine — Docker up, image pulled, agent staged — the single false leg of that check is the
