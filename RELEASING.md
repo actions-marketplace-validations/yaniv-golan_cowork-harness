@@ -220,7 +220,13 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - Planning notes belong in a gitignored location excluded from the npm tarball; never commit or publish them.
 - If the tag was placed on the wrong commit (e.g. a follow-up fix was needed), delete the local tag
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
-- The live `scenario suite` CI stage runs on **same-repo** PRs (where the `ANTHROPIC_API_KEY` secret is
-  available) and on pushes to `main`; it is skipped only on **fork** PRs (or when the secret is unset). So
-  a same-repo release-branch PR DOES exercise the live suite and spend API budget — the `build` + `test` +
-  `boundary` stages alone are sufficient to gate a release if you'd rather not.
+- The live `scenario suite` CI stage is skipped on **fork** PRs and, independently, soft-skips whenever
+  `ANTHROPIC_API_KEY` is unset — logging `ANTHROPIC_API_KEY not set — skipping live scenario suite` and
+  exiting 0. **Observed 2026-08-06 on PR #104/#105: the key was not available and the suite skipped** —
+  the job log carries `##[warning]ANTHROPIC_API_KEY not set`, which is the authoritative evidence
+  (`gh secret list` is also empty, but it sees only repo-level Actions secrets, so absence there alone
+  would not prove it). A green check on that job is therefore NOT evidence of live validation —
+  `ci.yml` prints that warning in the job summary itself, and `npm run preflight` raises its own
+  `live-suite key reminder` WARN for the same reason.
+  Re-read this bullet if a key is ever added; the `build` + `test` + `image-recipe` + `boundary` stages
+  are what actually gate a release today.

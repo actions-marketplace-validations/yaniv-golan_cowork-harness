@@ -443,6 +443,36 @@ jobs:
       - run: npm ci
       - run: npm run ci
 
+  # ── Stage 2: agent image recipe — COMPILE it, on every PR ──────────────────────────
+  # `boundary` PULLS the published image (deliberately: it exercises the consumer path) and hard-fails
+  # rather than falling back on the canonical repo, and the only other build lives in `scenarios`, which
+  # soft-skips without ANTHROPIC_API_KEY. So before this job, a Dockerfile.agent change could go green
+  # through the merge gate WITHOUT EVER BEING BUILT — `publish-image.yml` compiled it only after the
+  # release tag, turning a broken recipe into a failed release instead of a failed PR.
+  #
+  # Both variants: `publish-image.yml` also publishes `cowork-agent-full` from this same Dockerfile via
+  # COWORK_FULL_PARITY=1 (Layer B — tesseract/LibreOffice/opencv/onnxruntime). A base-only gate would let
+  # a Layer-B-breaking edit through and die after the tag.
+  #
+  # NB any conditional here belongs on a STEP, never on the job: this job is in `ci-green.needs`, which
+  # has no `if: always()`, so a SKIPPED job skips ci-green and the required `typecheck · test · build`
+  # context never reports — leaving every PR unmergeable (see release-preflight.ts's orphaned-context
+  # check, which exists because that happened here for 676 commits).
+  image-recipe:
+    name: agent image recipe (arm64 build)
+    runs-on: ubuntu-24.04-arm # must match Cowork's linux/arm64 guest; x86 needs binfmt that is not set up
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the lean/core image (the default COWORK_AGENT_IMAGE)
+        run: docker build --platform linux/arm64 -t cowork-agent-base:ci -f docker/Dockerfile.agent .
+      - name: Build the full-parity image (COWORK_FULL_PARITY=1 — Layer B)
+        run: |
+          docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 \
+            -t cowork-agent-full:ci -f docker/Dockerfile.agent .
+
   # ── Aggregation gate: carries the `typecheck · test · build` status the branch ruleset requires,
   # kept meaningful after the unit→build+test split — green ONLY when the fast build gate, every unit
   # test shard AND the Node-22 floor check pass, so any of them going red blocks a merge exactly as the
@@ -451,7 +481,7 @@ jobs:
   ci-green:
     name: typecheck · test · build
     runs-on: ubuntu-latest
-    needs: [build, test, floor]
+    needs: [build, test, floor, image-recipe]
     permissions:
       contents: read
     steps:
