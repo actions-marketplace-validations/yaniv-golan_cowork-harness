@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **The agent image can be published at an immutable `:2-r<N>` revision tag without moving `:2`.**
+  `docker/agent-image.json` carries the image's own revision counter (deliberately not the harness
+  version — a version-keyed co-tag encodes something that was never the image's identity, and
+  republishing at an existing version would repoint a tag a pin depends on). A manual
+  `publish-image.yml` run now defaults to `immutable_only`, publishing `:2-r<N>` for both variants and
+  leaving the floating `:2` untouched, so no existing consumer's next pull changes. Release tag pushes
+  are unaffected. The workflow refuses to repoint an existing `:2-r<N>` and fails **closed** when it
+  cannot enumerate tags — an inconclusive check must never read as "tag absent". See
+  [docs/maintenance.md](./docs/maintenance.md#publishing-an-agent-image-revision).
+
 ### Changed
 
 - **The agent image's base layer is pinned by digest.** `docker/Dockerfile.agent` builds

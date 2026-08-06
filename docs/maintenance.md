@@ -235,6 +235,36 @@ force the partial write with `--allow-empty` and then bridge the missing field:
 
 Then please file the unknown delta upstream so the extractor catches up.
 
+## Publishing an agent-image revision
+
+The agent image is published by this repo's `publish-image.yml`, not by Anthropic. It carries two tag
+shapes with different promises:
+
+| Tag | Promise | Moved by |
+|---|---|---|
+| `:2` | floating — whatever the newest publish produced | release tag pushes (and a manual run with `immutable_only` unchecked) |
+| `:2-r<N>` | **immutable** — never repointed once published | a manual run, once per `revision` bump |
+| `:2-<version>` | legacy co-tag, keyed to the harness version that shipped it | release tag pushes |
+
+`:2-r<N>` is the one a harness pin can depend on, which is why the publish workflow refuses to overwrite
+an existing one and fails **closed** if it cannot enumerate the tags to check.
+
+To publish a new revision:
+
+1. Bump `revision` in `docker/agent-image.json` in the **same commit** as the `Dockerfile.agent` change,
+   and merge it. The revision lives in that file, never in a workflow input, so the tag that gets
+   published and the digest a harness pins can never be keyed to different numbers.
+2. Run the workflow from `main` with `immutable_only` **checked** (the default). This publishes
+   `:2-r<N>` for both variants and leaves `:2` exactly where it is — so no existing consumer's next pull
+   changes.
+3. Read the `PINNABLE …= sha256:…` line from each build step's log and write those digests into
+   `variants["<local ref>"].digest` in `docker/agent-image.json`.
+4. Move `:2` only when you intend consumers to get the new image — and, once a harness pin exists, in
+   the same release that ships the updated pin, so the tag, the revision, and the pin agree.
+
+`workflow_dispatch` resolves the workflow file from the **default branch**, so a change to
+`publish-image.yml` must be on `main` before it can be dispatched.
+
 ## Why CI can't sync for you
 
 `sync` needs the installed desktop app + its `app.asar`, which isn't present on CI runners. So syncing is a

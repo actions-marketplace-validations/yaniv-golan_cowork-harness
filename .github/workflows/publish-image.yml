@@ -21,6 +21,15 @@ on:
         type: boolean
         required: false
         default: false
+      immutable_only:
+        description: >-
+          Publish ONLY the immutable `:2-r<N>` tag and leave the floating `:2` where it is. This is the
+          safe default for a manual run: it creates the artifact a harness pin can point at without
+          changing what any existing consumer gets on their next pull. Uncheck only when you deliberately
+          intend to move `:2`.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -55,9 +64,55 @@ jobs:
             echo "::error::tag v$TAG does not match package.json version $PKG"; exit 1
           fi
 
-      - name: Resolve the package version (tags float on `:2`, this pins an immutable co-tag)
-        id: pkg
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Resolve the publish plan (which tags this run is allowed to move)
+        id: plan
+        # Two publish shapes, deliberately kept apart:
+        #   tag push   -> unchanged legacy behaviour: floating `:2` + the `:2-<version>` co-tag.
+        #   dispatch   -> the immutable `:2-r<N>` tag, and `:2` ONLY if immutable_only was unchecked.
+        # The revision comes from docker/agent-image.json, never from an input, so the tag that gets
+        # published and the digest a harness pins can never be keyed to different numbers.
+        run: |
+          set -euo pipefail
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "revision=$(jq -r .revision docker/agent-image.json)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "push_rtag=true"  >> "$GITHUB_OUTPUT"
+            echo "push_vtag=false" >> "$GITHUB_OUTPUT"
+            echo "push_floating=${{ inputs.immutable_only }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_rtag=false" >> "$GITHUB_OUTPUT"
+            echo "push_vtag=true"  >> "$GITHUB_OUTPUT"
+            echo "push_floating=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refuse to repoint an existing immutable revision tag
+        if: steps.plan.outputs.push_rtag == 'true'
+        # `:2-r<N>` is a promise a harness pin depends on, so this is fail-CLOSED: an inconclusive query
+        # (auth, 5xx, a failed page mid-pagination) must block, never be read as "tag absent". Exit status
+        # is captured directly rather than via `|| echo SENTINEL`, which cannot distinguish a partial
+        # `--paginate` result from a clean empty one. No pipeline into `grep -q` either: under `pipefail`
+        # an early `grep` exit SIGPIPEs the writer and the match is silently lost above the pipe buffer
+        # (measured: fine at 3.9 KB, missed at 108 KB).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REV="2-r${{ steps.plan.outputs.revision }}"
+          for PKG in cowork-agent-base cowork-agent-full; do
+            if ! TAGS=$(gh api --paginate \
+                 "/users/${{ github.repository_owner }}/packages/container/$PKG/versions" \
+                 --jq '.[].metadata.container.tags[]?'); then
+              echo "::error::could not enumerate $PKG tags — refusing to publish on an inconclusive check"
+              exit 1
+            fi
+            while IFS= read -r t; do
+              if [ "$t" = "$REV" ]; then
+                echo "::error::$PKG:$REV already exists — bump \`revision\` in docker/agent-image.json"
+                exit 1
+              fi
+            done <<< "$TAGS"
+          done
+          echo "no collision on :$REV for either variant"
 
       - name: Log in to GHCR
         uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v3.6.0
@@ -67,23 +122,37 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build + push cowork-agent-base (lean/core image — the default COWORK_AGENT_IMAGE)
+        env:
+          REPO: ghcr.io/${{ github.repository_owner }}/cowork-agent-base
+          VERSION: ${{ steps.plan.outputs.version }}
+          REVISION: ${{ steps.plan.outputs.revision }}
         run: |
+          set -euo pipefail
           docker build --platform linux/arm64 -f docker/Dockerfile.agent \
-            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2 \
-            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2-${{ steps.pkg.outputs.version }} \
-            .
-          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2
-          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2-${{ steps.pkg.outputs.version }}
+            -t "$REPO:2" -t "$REPO:2-$VERSION" -t "$REPO:2-r$REVISION" .
+          if [ "${{ steps.plan.outputs.push_floating }}" = "true" ]; then docker push "$REPO:2"; fi
+          if [ "${{ steps.plan.outputs.push_vtag }}" = "true" ]; then docker push "$REPO:2-$VERSION"; fi
+          if [ "${{ steps.plan.outputs.push_rtag }}" = "true" ]; then
+            docker push "$REPO:2-r$REVISION"
+            echo "PINNABLE $REPO:2-r$REVISION = $(docker image inspect "$REPO:2-r$REVISION" --format '{{index .RepoDigests 0}}' | cut -d@ -f2)"
+          fi
 
       - name: Build + push cowork-agent-full (COWORK_FULL_PARITY=1 — OCR/Office/markitdown/opencv/table-extraction)
         # Override the base title/description baked into the Dockerfile so the `full` package page is
         # self-describing (the Dockerfile's default LABELs name the base variant).
+        env:
+          REPO: ghcr.io/${{ github.repository_owner }}/cowork-agent-full
+          VERSION: ${{ steps.plan.outputs.version }}
+          REVISION: ${{ steps.plan.outputs.revision }}
         run: |
+          set -euo pipefail
           docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -f docker/Dockerfile.agent \
             --label org.opencontainers.image.title=cowork-agent-full \
             --label "org.opencontainers.image.description=Full-parity sandbox runtime image for cowork-harness: the cowork-agent-base toolchain plus OCR (tesseract), LibreOffice, opencv/onnxruntime, and PDF-table extraction — a fidelity-matched Ubuntu 22.04 (linux/arm64) mirror of Claude Cowork's guest rootfs. Contains NO Anthropic binary — the agent is bind-mounted from the user's own Claude Desktop install at run time." \
-            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2 \
-            -t ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2-${{ steps.pkg.outputs.version }} \
-            .
-          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2
-          docker push ghcr.io/${{ github.repository_owner }}/cowork-agent-full:2-${{ steps.pkg.outputs.version }}
+            -t "$REPO:2" -t "$REPO:2-$VERSION" -t "$REPO:2-r$REVISION" .
+          if [ "${{ steps.plan.outputs.push_floating }}" = "true" ]; then docker push "$REPO:2"; fi
+          if [ "${{ steps.plan.outputs.push_vtag }}" = "true" ]; then docker push "$REPO:2-$VERSION"; fi
+          if [ "${{ steps.plan.outputs.push_rtag }}" = "true" ]; then
+            docker push "$REPO:2-r$REVISION"
+            echo "PINNABLE $REPO:2-r$REVISION = $(docker image inspect "$REPO:2-r$REVISION" --format '{{index .RepoDigests 0}}' | cut -d@ -f2)"
+          fi

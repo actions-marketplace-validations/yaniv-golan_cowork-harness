@@ -1,0 +1,7 @@
+{
+  "revision": 1,
+  "variants": {
+    "cowork-agent-base:2": { "digest": null },
+    "cowork-agent-full:2": { "digest": null }
+  }
+}
