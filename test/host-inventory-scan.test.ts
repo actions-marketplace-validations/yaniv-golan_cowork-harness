@@ -4,7 +4,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { scanHostInventory, KNOWN_COWORK_SERVERS, KNOWN_BUILTIN_AGENTS, HOST_INVENTORY_CLS, DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
+import {
+  scanHostInventory,
+  KNOWN_COWORK_SERVERS,
+  KNOWN_BUILTIN_AGENTS,
+  KNOWN_BUILTIN_SKILLS,
+  HOST_INVENTORY_CLS,
+  DEFAULT_SCAN_PATTERNS,
+} from "../src/scan.js";
 import { collectDeclaredPlugins } from "../src/run/cassette.js";
 import { makeSkillsHandler } from "../src/hostloop/skills-handler.js";
 import { makePluginsHandler } from "../src/hostloop/plugins-handler.js";
@@ -418,5 +425,77 @@ describe("verify-cassettes — findings rollup", () => {
     const rollup = out.split("\n").findIndex((l) => l.startsWith("findings by class:"));
     const firstRow = out.split("\n").findIndex((l) => l.includes("[unscanned]"));
     expect(rollup, "the rollup must precede the rows it summarizes").toBeLessThan(firstRow);
+  });
+});
+
+// `skills[]` sits in the same init payload as `mcp_servers`/`agents` and was read by no axis. It is a
+// real leak vector, not a theoretical one: at `protocol` with local OAuth the harness keeps the
+// OPERATOR'S REAL CLAUDE_CONFIG_DIR (src/runtime/protocol.ts — a fresh dir breaks OAuth), so the
+// personal skills installed there are discoverable and would be frozen into a committed fixture.
+//
+// Two exemptions, mirroring the agents axis: the agent's own built-ins, and a `<plugin>:<skill>` whose
+// plugin the same recording declares.
+describe("scanHostInventory — skills[]", () => {
+  it("does NOT flag the agent's built-in skills", () => {
+    expect(scanHostInventory(init({ skills: [...KNOWN_BUILTIN_SKILLS] }), "events[0]", [])).toEqual([]);
+  });
+
+  it("flags a bare skill outside the built-in roster — a personal skill from the operator's config dir", () => {
+    const f = scanHostInventory(init({ skills: ["deep-research", "my-private-notes"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["my-private-notes"]);
+    expect(f[0].where).toContain("skills[]");
+  });
+
+  it("does NOT flag a skill namespaced to a plugin the same init declares", () => {
+    const payload = init({ plugins: [{ name: "my-pdf-skill" }], skills: ["deep-research", "my-pdf-skill:my-pdf-skill"] });
+    expect(scanHostInventory(payload, "events[0]", [])).toEqual([]);
+  });
+
+  it("flags a skill namespaced to a plugin that was never declared", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "my-pdf-skill" }], skills: ["hookify:writing-rules"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["hookify:writing-rules"]);
+  });
+
+  it("honours externally-harvested plugin names, as the agents axis does", () => {
+    const payload = { response: { response: { skills: ["codex:codex-cli-runtime"] } } };
+    expect(scanHostInventory(payload, "events[0]", [])).toHaveLength(1);
+    expect(scanHostInventory(payload, "events[0]", [], ["codex"])).toEqual([]);
+  });
+
+  it("is suppressible by an allow pattern like every other host-inventory finding", () => {
+    const ev = init({ skills: ["my-private-notes"] });
+    expect(scanHostInventory(ev, "events[0]", [{ cls: HOST_INVENTORY_CLS, re: /my-private-notes/ }])).toEqual([]);
+    expect(scanHostInventory(ev, "events[0]", [])).toHaveLength(1); // non-vacuous: it really was suppressed
+  });
+});
+
+// Every shipped cassette must stay clean under the new axis — these are the fixtures CI verifies, and a
+// roster that is wrong reds the repo's own gate before it ever reaches a consumer.
+describe("skills[] axis — the committed fixtures stay clean", () => {
+  it("no shipped cassette trips the skills axis", () => {
+    const root = resolve(__dirname, "..");
+    const files = [
+      join(root, "cassettes/skill-loads.cassette.json"),
+      ...["example-pdf-skill", "example-multiselect-gate", "hostloop-computer-links"].map((n) =>
+        join(root, `examples/replays/${n}.cassette.json`),
+      ),
+    ].filter((f) => existsSync(f));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const c = JSON.parse(readFileSync(f, "utf8"));
+      for (const line of c.events ?? []) {
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const skillFindings = scanHostInventory(decoded, "events", []).filter((x) => x.where.includes("skills[]"));
+        expect(
+          skillFindings.map((x) => x.sample),
+          `${f} tripped the skills axis`,
+        ).toEqual([]);
+      }
+    }
   });
 });

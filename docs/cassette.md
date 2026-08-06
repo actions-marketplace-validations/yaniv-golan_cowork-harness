@@ -821,14 +821,25 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   token is ever written and `grep mcp__` over the cassette reads clean. The inventory lives in **name
   fields**. So this check reads specific name fields of the decoded events and flags: an `mcp_servers[].name`
   outside the harness's own servers, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
-  `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
+  `.organization` / `.subscriptionType`, an `agents[]` entry outside the built-in roster, and a `skills[]`
+  entry outside the agent's own built-ins. The skills axis is not theoretical: at `protocol` with local
+  OAuth the harness keeps the operator's **real `CLAUDE_CONFIG_DIR`** (a fresh one breaks OAuth), so the
+  personal skills installed there are discoverable, and a skill name says what you have installed exactly
+  as an MCP server name does. Suppress with
   `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
   `KNOWN_COWORK_SERVERS` instead of allowing it.
   **A plugin the scenario mounted is not host inventory.** Its agents join the roster — at `hostloop`,
   that roster *is* the fixture — so an agent namespaced `<plugin>:<agent>` whose plugin the same recording
   declares in `plugins[]` is exempt, exactly as an `mcp.config`-attached server is. The provenance comes
   from the cassette itself, so this applies to recordings you already have; no re-record, and no allow
-  regex to invent. A foreign agent, or one namespaced to a plugin the run never mounted, still flags.
+  regex to invent. A foreign agent, or one namespaced to a plugin the run never mounted, still flags. The
+  same exemption covers `skills[]`.
+  **`plugins[].name` is deliberately NOT an axis.** That array is the harness's own declaration channel —
+  every entry arrives from a `--plugin-dir` the harness passed, and the settings it writes carry an
+  explicit `enabledPlugins` allowlist. Across every committed fixture, including `protocol` and `hostloop`
+  recordings made on a machine with many host plugins installed, it holds only the scenario's own. A field
+  that carries nothing but declarations would produce false positives and catch nothing — the failure this
+  class has already had once.
   **`record` carries its own preflight for the same risk.** Recording at a host-inheriting tier
   (`protocol`, `hostloop`, or `cowork` resolving to hostloop) into a repo-visible cassette path is
   refused by default — that recording would freeze this machine's MCP servers, agents, and account

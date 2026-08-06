@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`verify-cassettes` now reads `skills[]` as host inventory.** A skill name says what the operator has
+  installed, exactly as an MCP server name does, and the field was read by no axis. This is not
+  theoretical: at `protocol` with local OAuth the harness keeps the operator's REAL `CLAUDE_CONFIG_DIR`
+  (a fresh one breaks OAuth), so personal skills installed there are discoverable and would be frozen
+  into a committed fixture. Two exemptions mirror the agents axis — the agent's own built-ins, and a
+  `<plugin>:<skill>` whose plugin the same recording declares. `plugins[].name` is deliberately left
+  unscanned: that array is the harness's own declaration channel and holds nothing but scenario-declared
+  entries across every fixture, including `protocol`/`hostloop` recordings made on a plugin-rich machine.
+
 - **`replay --mutate` can be scoped, and its caps raised.** `--mutate-include <glob>` /
   `--mutate-exclude <glob>` (repeatable; exclude last) restrict which artifact paths are perturbed — `*`
   stays inside a path segment, `**` crosses them. A corpus dominated by per-run `handoff/` internals
