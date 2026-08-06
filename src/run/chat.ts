@@ -32,6 +32,7 @@ import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
+import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 const log = (s: string) => process.stderr.write(s);
 
@@ -293,7 +294,7 @@ export async function cmdChat(args: string[]) {
   }
   log(`type your message (/help for commands)\n`);
 
-  const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
+  const runner = resolveContainerRuntime();
   let containerName: string | undefined;
   let child: { kill?: (s?: NodeJS.Signals) => void } | undefined;
   let record: import("./run.js").RunRecord | undefined;
@@ -599,8 +600,8 @@ async function* ttyTurns(rl: readline.Interface): AsyncGenerator<string> {
 function chatRaw(folder: string, model?: string) {
   const baseline = loadBaseline("latest");
   const agent = resolveAgentBinary(baseline);
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
-  const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
+  const image = resolveAgentImage();
+  const runner = resolveContainerRuntime();
   log(`cowork chat --raw — native interactive cowork mode (egress sandbox NOT applied in --raw)\n`);
   const dockerArgs = [
     "run",

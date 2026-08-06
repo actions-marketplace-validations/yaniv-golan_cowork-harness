@@ -13,6 +13,7 @@ import { makePluginsHandler } from "../hostloop/plugins-handler.js";
 import { combineSdkMcp } from "../agent/session.js";
 import { listMountedSkills } from "../run/skill-metadata.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
+import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
 
 /**
  * L1 — container parity runtime. Runs the staged in-VM agent in a sandboxed arm64
@@ -65,12 +66,12 @@ export function spawnContainer(
   const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
 
   const agentHost = resolveAgentBinary(baseline);
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
+  const image = resolveAgentImage();
   // Explicit opts take priority over process.env (concurrency-safe); env var is the
   // manual/dev fallback for direct `docker run` invocations that bypass the sidecar.
   const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
   const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
-  const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
+  const runner = resolveContainerRuntime();
 
   // NOTE: local marketplaces are resolved to --plugin-dir in buildLaunchPlan (the in-VM
   // agent loads via --plugin-dir; the `claude plugin marketplace add` registry is inert
