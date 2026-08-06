@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,6 +29,27 @@ const json = (p: string) => JSON.parse(r(p)) as Record<string, any>;
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
 /** Same shape as check-versions.ts's SEMVER check — kept local so this file has no side-effecting import. */
+/** Job names `ci.yml` declares — the `name:` where present, else the job id (which is what GitHub
+ *  reports as the status-check context when a job declares no name). */
+export function ciJobNames(yamlText: string): string[] {
+  const doc = parseYaml(yamlText) as { jobs?: Record<string, { name?: string } | null> } | null;
+  return Object.entries(doc?.jobs ?? {}).map(([id, job]) => job?.name ?? id);
+}
+
+/** Required status-check contexts that NO job in the workflow can report.
+ *
+ *  A branch ruleset lives in GitHub settings, not in the repo, so renaming a job silently orphans any
+ *  context pinned to the old name — and a required check that is never reported never resolves, leaving
+ *  every PR BLOCKED however green CI is. An admin can bypass that; an outside contributor cannot.
+ *
+ *  A matrix job reports one context per cell (`unit tests (sharded) (1)`) while the workflow declares
+ *  only the stem, so a context is also satisfied when it is that stem followed by a parenthesised
+ *  suffix. A bare prefix is NOT accepted — `unit tests` must not silently match `unit tests (sharded)`. */
+export function unreportedRequiredContexts(required: readonly string[], jobNames: readonly string[]): string[] {
+  const exact = new Set(jobNames);
+  return required.filter((ctx) => !exact.has(ctx) && !jobNames.some((n) => ctx.startsWith(`${n} (`) && ctx.endsWith(")")));
+}
+
 export function isValidSemver(v: string): boolean {
   return SEMVER.test(v);
 }
@@ -166,6 +188,46 @@ function checkLiveSuiteKeyReminder(): CheckResult {
 }
 
 /**
+ * Best-effort, WARN-only: does every REQUIRED status check correspond to a job that can report it?
+ *
+ * A branch ruleset is GitHub settings, not repo content, so nothing in the repo can catch a job rename
+ * orphaning a pinned context — `0ead103` did exactly that and every PR was BLOCKED for 676 commits.
+ * WARN rather than FAIL because reading a ruleset needs admin scope: no `gh`, no auth, or a repo with no
+ * ruleset must degrade to a skip, never a hard block on releasing.
+ */
+function checkRulesetContexts(): CheckResult {
+  const NAME = "ruleset required-checks match real jobs";
+  const gh = run("gh", ["api", "repos/{owner}/{repo}/rules/branches/main"]);
+  if (!gh.ok) {
+    return { name: NAME, status: "SKIP", detail: "gh unavailable, unauthenticated, or lacking admin scope — ruleset not read" };
+  }
+  let required: string[];
+  try {
+    const rules = JSON.parse(gh.stdout) as { type: string; parameters?: { required_status_checks?: { context: string }[] } }[];
+    required = rules
+      .filter((x) => x.type === "required_status_checks")
+      .flatMap((x) => x.parameters?.required_status_checks ?? [])
+      .map((c) => c.context);
+  } catch {
+    return { name: NAME, status: "SKIP", detail: "could not parse the ruleset response" };
+  }
+  if (!required.length) return { name: NAME, status: "PASS", detail: "no required status checks configured" };
+
+  const jobs = ciJobNames(r(".github/workflows/ci.yml"));
+  const orphans = unreportedRequiredContexts(required, jobs);
+  return orphans.length
+    ? {
+        name: NAME,
+        status: "WARN",
+        detail:
+          `required context(s) reported by NO job in ci.yml: ${orphans.map((o) => `"${o}"`).join(", ")}. ` +
+          "A required check that is never reported never resolves, so every PR stays BLOCKED however green CI is — " +
+          "an admin can bypass it, an outside contributor cannot. Fix the ruleset context or the job name.",
+      }
+    : { name: NAME, status: "PASS", detail: `${required.length} required context(s) all map to a job` };
+}
+
+/**
  * [P4b] The check that directly prevents the 0.33.0 mis-tag: tagging a release-branch/PR head instead
  * of the merge commit. Only meaningful right before the tag push, so it is gated behind --for-tag and,
  * unlike checks 1-4, is a HARD failure there (tagging is near-irreversible).
@@ -279,10 +341,10 @@ function main(): void {
     checkTagDoesNotExist(version),
     checkWorkingTreeClean(),
   ];
-  const warnResult = checkLiveSuiteKeyReminder();
+  const warnResults = [checkRulesetContexts(), checkLiveSuiteKeyReminder()];
 
   for (const res of hardResults) printResult(res);
-  printResult(warnResult);
+  for (const res of warnResults) printResult(res);
 
   let forTagResult: CheckResult | undefined;
   if (forTag) {

@@ -21,7 +21,13 @@
 # so omitting it here was an infidelity (a false negative). We preinstall the rootfs stack,
 # pinned to the rootfs's versions.
 
-FROM --platform=linux/arm64 ubuntu:22.04
+# Base pinned by DIGEST, not by the floating `22.04` tag. This Dockerfile has no COPY/ADD — every byte
+# comes from the base plus apt and pip — so with a floating base, rebuilding an unchanged recipe produced
+# a different image, and "the recipe didn't change" said nothing about the contents. The digest below is
+# the multi-arch INDEX digest (`docker buildx imagetools inspect ubuntu:22.04 --format
+# '{{.Manifest.Digest}}'`); `--platform` selects the arm64 manifest from it. Refresh it DELIBERATELY (to
+# pick up base security updates), never incidentally — a bump here changes every layer beneath.
+FROM --platform=linux/arm64 ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f
 
 ENV DEBIAN_FRONTEND=noninteractive
 

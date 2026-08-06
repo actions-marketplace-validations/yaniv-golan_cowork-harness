@@ -249,9 +249,12 @@ export const realProbe: DoctorProbe = {
     }
     const rm = ri.stdout.match(/^Digest:\s+(sha256:[0-9a-f]{64})/m);
     if (!rm) return { state: "unknown", detail: "unexpected registry response" };
+    // Digest inequality proves the local image DIFFERS from what `:2` points at today — not that the
+    // published one is newer. `:2` floats and can be repointed in either direction, so claiming "newer"
+    // asserts a direction this comparison never measured. Report the difference; the remedy re-pulls.
     return localDigest === rm[1]
       ? { state: "current", detail: `matches the published ${ghcrRef}` }
-      : { state: "stale", detail: `local ${local} differs from the current published ${ghcrRef} — a newer image is available`, ghcrRef };
+      : { state: "stale", detail: `local ${local} no longer matches the current published ${ghcrRef}`, ghcrRef };
   },
 };
 

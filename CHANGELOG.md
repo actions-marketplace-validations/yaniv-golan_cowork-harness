@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent image's base layer is pinned by digest.** `docker/Dockerfile.agent` builds
+  `FROM ubuntu:22.04@sha256:3b06811b…` instead of the floating `22.04` tag. This Dockerfile has no
+  `COPY`/`ADD` — every byte comes from the base plus apt and pip — so with a floating base, rebuilding
+  an unchanged recipe produced a different image and "the recipe didn't change" said nothing about the
+  contents. Rebuild locally to pick this up; the toolchain versions are unchanged (verified: Ubuntu
+  22.04, Node 22.22.3, numpy 2.2.6 / pandas 2.3.3 / openpyxl 3.1.5, `LANG=C.UTF-8`, uid-1000 `ubuntu`).
+
+### Fixed
+
+- **`doctor`'s stale-image warning claimed a direction it never measured.** The check compares the local
+  pulled digest against whatever `ghcr.io/…/cowork-agent-base:2` points at now, which establishes that
+  the two differ — not that the published one is newer. `:2` floats and can be repointed either way. The
+  detail now reads `local <image> no longer matches the current published <ref>`; the `warn` status and
+  the re-pull remedy are unchanged, as is JSON output (`state` already carried this).
+
 ## [1.19.0] — 2026-08-06
 
 Follow-up to the consumer report against published 1.18.0: two false-positive/misreporting fixes in the

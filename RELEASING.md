@@ -65,6 +65,24 @@ When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) 
 release run. Running `npm run preflight -- --for-tag` right before the tag push mechanically catches
 this (it asserts `HEAD == origin/main` and that a push-event `ci.yml` run succeeded for `HEAD`).
 
+## The `main` ruleset, and the one drift it can hide
+
+A branch ruleset lives in GitHub settings, not in the repo, so nothing here can catch it drifting.
+Renaming a CI job orphans any required-check context pinned to the old name, and a required check that no
+job reports **never resolves** — every PR stays `BLOCKED` no matter how green CI is. That happened once:
+`0ead103` renamed the python job on 2026-07-08 and the ruleset kept the old name for 676 commits.
+
+`npm run preflight` now warns when a required context matches no job. It is WARN-only and SKIPs without
+`gh`/admin scope, so it never blocks a release on a read it could not perform.
+
+**Merge expectations, by who is opening the PR:**
+
+- **Non-admin PR** — requires an approving code-owner review. Working as intended.
+- **Admin's own PR** — cannot be self-approved (GitHub forbids it), so it merges through the admin-role
+  bypass on the ruleset. If a plain `gh pr merge <n> --merge` is refused, use
+  `gh pr merge <n> --merge --admin`. The bypass is keyed on the **admin role**, not on any username, so it
+  survives adding or changing admins.
+
 ## Versioning (semver)
 
 As of `1.0.0`, semver is enforced against the **covered surfaces enumerated in
@@ -146,7 +164,8 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       could never change its behaviour. The CHANGELOG is the release record.)
 - [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
       tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
-      the push-to-main live suite will soft-skip and this release won't be live-validated in CI).
+      the push-to-main live suite will soft-skip and this release won't be live-validated in CI; warns if a
+      ruleset **required status check** names no job in `ci.yml`).
 - [ ] `npm run format:check` — fix any issues (`npm run format:write`).
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
@@ -201,7 +220,13 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - Planning notes belong in a gitignored location excluded from the npm tarball; never commit or publish them.
 - If the tag was placed on the wrong commit (e.g. a follow-up fix was needed), delete the local tag
   (`git tag -d vX.Y.Z`), re-create it on the correct commit, and push it.
-- The live `scenario suite` CI stage runs on **same-repo** PRs (where the `ANTHROPIC_API_KEY` secret is
-  available) and on pushes to `main`; it is skipped only on **fork** PRs (or when the secret is unset). So
-  a same-repo release-branch PR DOES exercise the live suite and spend API budget — the `build` + `test` +
-  `boundary` stages alone are sufficient to gate a release if you'd rather not.
+- The live `scenario suite` CI stage is skipped on **fork** PRs and, independently, soft-skips whenever
+  `ANTHROPIC_API_KEY` is unset — logging `ANTHROPIC_API_KEY not set — skipping live scenario suite` and
+  exiting 0. **Observed 2026-08-06 on PR #104/#105: the key was not available and the suite skipped** —
+  the job log carries `##[warning]ANTHROPIC_API_KEY not set`, which is the authoritative evidence
+  (`gh secret list` is also empty, but it sees only repo-level Actions secrets, so absence there alone
+  would not prove it). A green check on that job is therefore NOT evidence of live validation —
+  `ci.yml` prints that warning in the job summary itself, and `npm run preflight` raises its own
+  `live-suite key reminder` WARN for the same reason.
+  Re-read this bullet if a key is ever added; the `build` + `test` + `image-recipe` + `boundary` stages
+  are what actually gate a release today.
