@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { changelogHasVersionSection, tagExists, isValidSemver } from "../scripts/release-preflight.js";
+import {
+  changelogHasVersionSection,
+  tagExists,
+  isValidSemver,
+  ciJobNames,
+  unreportedRequiredContexts,
+} from "../scripts/release-preflight.js";
 
 describe("isValidSemver", () => {
   it("accepts a plain X.Y.Z version", () => {
@@ -88,5 +94,66 @@ describe("tagExists", () => {
 
   it("handles an empty local/remote input without throwing", () => {
     expect(tagExists([], [], "1.0.0")).toBe(false);
+  });
+});
+
+// A branch ruleset is GitHub SETTINGS, not repo content — no test, workflow, or diff review can see it.
+// Renaming a CI job therefore silently orphans any ruleset context pinned to the old name, and a required
+// check that no job reports never resolves: every PR sits BLOCKED forever, however green CI is. That went
+// unnoticed for 676 commits after `0ead103` renamed the python job. An admin can bypass it; an outside
+// contributor cannot, so it is contribution-blocking, not just release friction.
+describe("ciJobNames", () => {
+  const yaml = `
+name: ci
+jobs:
+  build:
+    name: build · typecheck · guards
+    runs-on: ubuntu-latest
+  test:
+    name: unit tests (sharded)
+    strategy:
+      matrix:
+        shard: [1, 2]
+  floor:
+    runs-on: ubuntu-latest
+`;
+  it("uses the declared name where present", () => {
+    expect(ciJobNames(yaml)).toContain("build · typecheck · guards");
+  });
+
+  it("falls back to the job id when a job declares no name", () => {
+    expect(ciJobNames(yaml)).toContain("floor");
+  });
+
+  it("returns [] for a workflow with no jobs rather than throwing", () => {
+    expect(ciJobNames("name: ci\non: push\n")).toEqual([]);
+  });
+});
+
+describe("unreportedRequiredContexts", () => {
+  const jobs = ["build · typecheck · guards", "unit tests (sharded)", "pytest helper lane (-m 'not cowork')"];
+
+  it("reports a context no job declares — the defect this exists to catch", () => {
+    expect(unreportedRequiredContexts(["pytest cowork-lane (helper self-checks)"], jobs)).toEqual([
+      "pytest cowork-lane (helper self-checks)",
+    ]);
+  });
+
+  it("accepts an exact match", () => {
+    expect(unreportedRequiredContexts(["build · typecheck · guards"], jobs)).toEqual([]);
+  });
+
+  // A matrix job reports one context per cell — "unit tests (sharded) (1)" — while the workflow declares
+  // only the stem. Treating those as unreported would warn on a correctly-pinned matrix job.
+  it("accepts a matrix-expanded context against its declared stem", () => {
+    expect(unreportedRequiredContexts(["unit tests (sharded) (1)", "unit tests (sharded) (4)"], jobs)).toEqual([]);
+  });
+
+  it("does not accept a mere prefix that is not a matrix expansion", () => {
+    expect(unreportedRequiredContexts(["unit tests"], jobs)).toEqual(["unit tests"]);
+  });
+
+  it("returns [] when nothing is required", () => {
+    expect(unreportedRequiredContexts([], jobs)).toEqual([]);
   });
 });
