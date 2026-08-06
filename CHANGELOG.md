@@ -6,8 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-08-06
+
 Follow-up to the consumer report against published 1.18.0: two false-positive/misreporting fixes in the
 tooling 1.18.0 introduced, plus the scoping and summary controls those reports asked for.
+
+### Upgrade notes
+
+- **The new `skills[]` axis can fail a cassette that passed under 1.18.0.** It applies only at
+  host-inheriting tiers (`protocol`, `hostloop`, or `cowork` resolving to hostloop). A flagged entry is a
+  skill name from the recording machine; re-record against a clean environment, or scope an allow with
+  `--allow-host-inventory <regex>` after reviewing the finding.
+- **Conversely, `host-inventory` failures on a plugin's own agents go away.** If 1.18.0 forced you to add
+  an allow regex for `<plugin>:<agent>` entries, that exemption is now automatic and the regex can be
+  removed. No re-record is needed.
 
 ### Added
 
