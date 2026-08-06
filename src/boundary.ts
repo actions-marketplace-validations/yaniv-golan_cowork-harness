@@ -4,6 +4,7 @@ import { tmpdir, userInfo, homedir } from "node:os";
 import { join } from "node:path";
 import type { PlatformBaseline } from "./types.js";
 import { startEgressSidecar } from "./egress/sidecar.js";
+import { resolveAgentImage, resolveContainerRuntime } from "./runtime/agent-image.js";
 
 /**
  * Boundary self-test — proves the runtime reproduces Cowork's LIMITATIONS, not
@@ -41,8 +42,8 @@ export function boundaryAllowList(baseline: PlatformBaseline, session?: Boundary
 }
 
 export function runBoundaryChecks(baseline: PlatformBaseline, session?: BoundarySessionEgress): BoundaryResult[] {
-  const runtime = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
+  const runtime = resolveContainerRuntime();
+  const image = resolveAgentImage();
   const results: BoundaryResult[] = [];
 
   // Stand up the real per-run boundary (internal network + allowlist proxy), exactly

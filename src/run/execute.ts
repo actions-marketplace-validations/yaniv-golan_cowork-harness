@@ -87,6 +87,7 @@ import {
 } from "./pre-run-manifest.js";
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { computeVerdict } from "./verdict.js";
+import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
 // re-exported here for the existing importers (cassette.ts, tests).
@@ -570,7 +571,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // them by a unique per-invocation token, NOT the (now-stable) sessionId, so a `--resume` after a
   // failed run can't collide with the prior run's leftovers. The persistent state is the work dir.
   const runToken = `r${process.hrtime.bigint().toString(36)}`;
-  const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
+  const runner = resolveContainerRuntime();
 
   const containerLike = effectiveFidelity === "container" || effectiveFidelity === "hostloop";
   let egress: RunResult["egress"] = [];
@@ -634,8 +635,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       effectiveFidelity === "microvm"
         ? probeMicrovmOmitted(instanceName(baseline))
         : probeImageOmitted({
-            runtime: process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
-            image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
+            runtime: resolveContainerRuntime(),
+            image: resolveAgentImage(),
             tier: effectiveFidelity,
           });
     const allowMissing = scenario.assert.some((a) => a.allow_missing_capability === true);
@@ -1274,8 +1275,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         effectiveFidelity === "microvm"
           ? probeMicrovmOmitted(instanceName(baseline))
           : probeImageOmitted({
-              runtime: process.env.COWORK_CONTAINER_RUNTIME ?? "docker",
-              image: process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2",
+              runtime: resolveContainerRuntime(),
+              image: resolveAgentImage(),
               tier: effectiveFidelity,
             });
       omittedFamilies = omitted;

@@ -17,6 +17,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A blank `COWORK_AGENT_IMAGE` or `COWORK_CONTAINER_RUNTIME` produced an empty ref instead of the
+  default.** Both were resolved with `process.env.X ?? "default"`, which passes `""` straight through, so
+  a bare `COWORK_AGENT_IMAGE=` in a `.env` or a shell export made every container invocation fail with an
+  opaque runtime error. A blank or whitespace-only value now falls back to the default. Both are resolved
+  in one place (`src/runtime/agent-image.ts`) rather than at the 7 and 10 call sites that previously
+  duplicated the expression, so the default and the override semantics can no longer drift apart.
+
 - **`doctor`'s stale-image warning claimed a direction it never measured.** The check compares the local
   pulled digest against whatever `ghcr.io/…/cowork-agent-base:2` points at now, which establishes that
   the two differ — not that the published one is newer. `:2` floats and can be repointed either way. The

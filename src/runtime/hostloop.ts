@@ -29,6 +29,7 @@ import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
 import { combineSdkMcp, type HookBundle } from "../agent/session.js";
 import { stripComments } from "../prompt.js";
+import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
 
 /** The path-gate's own PreToolUse hook callback id — exported so RunRecord.pathDenials' pretooluse
  *  producer (run.ts) and its replay reconstruction (cassette.ts) can filter to THIS gate's own
@@ -179,8 +180,8 @@ export function spawnHostLoop(
   // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer
   // VM ELF when the pin was pruned by a Desktop update, instead of hard-failing a run that doesn't execute it.
   const agentVmHost = resolveAgentBinary(baseline, { parityMount: true });
-  const image = process.env.COWORK_AGENT_IMAGE ?? "cowork-agent-base:2";
-  const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
+  const image = resolveAgentImage();
+  const runner = resolveContainerRuntime();
 
   // Host-loop deltas: native Bash/WebFetch/NotebookEdit OFF (shell goes through the workspace
   // SDK-MCP server — driver handles mcp_message), the workspace tools pre-approved, the

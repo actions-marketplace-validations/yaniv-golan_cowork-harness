@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunResult } from "../types.js";
+import { resolveContainerRuntime } from "../runtime/agent-image.js";
 
 type EgressEntry = RunResult["egress"][number];
 
@@ -97,7 +98,7 @@ function tryRun(fn: () => void) {
 }
 
 export function startEgressSidecar(allow: string[], outDir: string, runId: string): EgressSidecar {
-  const runner = process.env.COWORK_CONTAINER_RUNTIME ?? "docker";
+  const runner = resolveContainerRuntime();
   const intNet = `cowork-int-${runId}`;
   const outNet = `cowork-out-${runId}`;
   const proxyName = `cowork-proxy-${runId}`;
