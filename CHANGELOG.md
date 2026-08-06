@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`doctor`'s stale-image warning claimed a direction it never measured.** The check compares the local
+  pulled digest against whatever `ghcr.io/…/cowork-agent-base:2` points at now, which establishes that
+  the two differ — not that the published one is newer. `:2` floats and can be repointed either way. The
+  detail now reads `local <image> no longer matches the current published <ref>`; the `warn` status and
+  the re-pull remedy are unchanged, as is JSON output (`state` already carried this).
+
 ## [1.19.0] — 2026-08-06
 
 Follow-up to the consumer report against published 1.18.0: two false-positive/misreporting fixes in the
