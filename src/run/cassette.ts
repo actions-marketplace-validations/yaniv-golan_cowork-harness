@@ -63,7 +63,14 @@ import { isVmSessionsPath } from "../vm-paths.js";
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
 import { evaluate, budgetFields, type AssertContext } from "../assert.js";
-import { planMutations, applyMutation, explainNoMutations } from "./mutate.js";
+import {
+  planMutationsWithStats,
+  summarizeMutationPlan,
+  matchesAnyGlob,
+  applyMutation,
+  explainNoMutations,
+  type MutationCoverage,
+} from "./mutate.js";
 import { anyGlobMatches } from "../glob.js";
 import { extractComputerLinks } from "./computer-links.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "./renderer.js";
@@ -966,6 +973,39 @@ function isCapabilityManifest(line: string): boolean {
  *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
 const HOST_INHERITING_TIERS: ReadonlySet<string> = new Set(["protocol", "hostloop", "cowork"]);
 
+/** Plugin names the scenario mounted, harvested from anywhere in the event stream.
+ *
+ *  `system/init` carries `plugins[]` beside `agents[]`, so that surface is self-sufficient — but the
+ *  registry `control_response` lists agents with NO plugin array of its own. Collecting once over the
+ *  whole stream and passing the result into every scan covers both, and keeps `scanHostInventory` a pure
+ *  function of one payload plus explicit context. Tolerant by construction: a non-JSON line, a missing
+ *  `plugins`, or a bare-string entry are all normal, not errors. */
+export function collectDeclaredPlugins(events: string[] | undefined): string[] {
+  const names = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const v of node) visit(v);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const o = node as Record<string, unknown>;
+    if (Array.isArray(o.plugins))
+      for (const p of o.plugins) {
+        const n = typeof p === "string" ? p : (p as Record<string, unknown> | null)?.name;
+        if (typeof n === "string" && n) names.add(n);
+      }
+    for (const v of Object.values(o)) visit(v);
+  };
+  for (const line of events ?? []) {
+    try {
+      visit(JSON.parse(line));
+    } catch {
+      continue; // a non-JSON transcript line declares no plugins
+    }
+  }
+  return [...names];
+}
+
 export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
@@ -1004,6 +1044,11 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   // identify as sealed (`container`, `microvm`) is exempt. Same fail-closed reasoning as `cowork`.
   const tier = (cassette.effectiveFidelity ?? cassette.scenario.fidelity) as string | undefined;
   if (tier === undefined || HOST_INHERITING_TIERS.has(tier)) {
+    // Harvest the plugin names the SCENARIO mounted, once, across the whole event stream — then hand them
+    // to every scan. `system/init` carries `plugins[]` beside `agents[]` so it is self-sufficient, but the
+    // registry `control_response` lists agents with no plugin array of its own; without this pre-pass that
+    // surface keeps flagging the scenario's own plugin agents. See scanHostInventory's A4.
+    const declaredPlugins = collectDeclaredPlugins(cassette.events);
     const structural = (lines: string[] | undefined, key: string) =>
       lines?.forEach((l, i) => {
         let decoded: unknown;
@@ -1012,7 +1057,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
         } catch {
           return; // a non-JSON transcript line has no name fields to read
         }
-        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow));
+        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins));
       });
     structural(cassette.events, "events");
     structural(cassette.controlOut, "controlOut");
@@ -3512,6 +3557,7 @@ function replayErrorResult(file: string): RunResult {
     effectiveFidelity: undefined,
     fidelityWarnings: undefined,
     staleness: undefined,
+    mutation: undefined, // the protocol-error stub carries no mutation report
     skippedAssertions: undefined,
     toolResults: undefined,
     l0PluginDivergence: undefined,
@@ -3895,7 +3941,14 @@ export const REPLAY_BOOLEAN_FLAGS = [
   "--quiet",
   "--verbose",
 ] as const;
-export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from"] as const;
+export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from", "--mutate-max-per-file", "--mutate-max-total"] as const;
+
+// A SEPARATE axis from REPLAY_VALUE_FLAGS, for the same reason VERIFY_CASSETTES_REPEATED_FLAGS is one:
+// parseArgs collects every occurrence of a repeated flag into p.repeated[], while a value flag keeps only
+// the LAST. Scoping is inherently multi-pattern ("everything but handoff/ and tmp/"), so folding these in
+// would silently honour one pattern and drop the rest — a semantic regression, not a refactor. `replay`
+// had no repeated-flag axis at all before these.
+export const REPLAY_REPEATED_FLAGS = ["--mutate-include", "--mutate-exclude"] as const;
 
 // Both inert on `replay` — parsed into p.flags, never read anywhere in cmdReplay below (verified by
 // reading every `p.flags["--quiet"]`/`p.flags["--verbose"]` site in this file: none exists outside
@@ -3913,7 +3966,9 @@ export const REPLAY_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (`cassette format too new: …`) that tells a user to pass it — the P9 bug this generalization fixes).
 export const REPLAY_USAGE =
   "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
-  "       --mutate: perturb each recorded JSON artifact value, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. Reporting only; never changes the verdict or exit code.\n" +
+  "       --mutate: perturb recorded JSON artifact values, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. SAMPLES: max 10 values per file, 50 total (per-file applies first), so `N/N caught by nothing` is N of the sample, not of your corpus; when a cap binds the report names it and the eligible total. Reporting only; never changes the verdict or exit code.\n" +
+  "       --mutate-include <glob> / --mutate-exclude <glob>: scope which artifact paths are perturbed (repeatable; exclude wins). `*` stays inside a path segment, `**` crosses them — so `--mutate-exclude 'handoff/**'` drops per-run internals nobody should assert on, and the sample is spent on deliverables instead.\n" +
+  "       --mutate-max-per-file <n> / --mutate-max-total <n>: raise the sampling caps (default 10 / 50). Per-file is applied FIRST, so with a handful of artifacts raising only --mutate-max-total changes nothing. Cost is linear — one full assertion re-run per perturbation.\n" +
   "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
@@ -3930,6 +3985,7 @@ export async function cmdReplay(args: string[]) {
       // fork this list back into a local literal (that's the drift P9 generalized P3's fix to prevent).
       booleans: [...REPLAY_BOOLEAN_FLAGS],
       values: [...REPLAY_VALUE_FLAGS],
+      repeated: [...REPLAY_REPEATED_FLAGS],
       enums: { "--output-format": ["text", "json"] },
       aliases: { "-q": "--quiet" },
     });
@@ -3983,6 +4039,31 @@ export async function cmdReplay(args: string[]) {
     warn("::notice:: [replay] --allow-failing only affects --write's verdict gate; it is a no-op without --write\n");
   const failOnSkillDrift = (p.flags["--fail-on-skill-drift"] ?? false) || reassertMode; // narrower gate: only skill-source drift fails
   const mutate = p.flags["--mutate"] ?? false;
+  // Scoping + cap overrides for --mutate. Repeated flags come back as arrays; exclude is applied after
+  // include so "everything under outputs/, except the scratch subtree" reads the obvious way.
+  const mutateInclude = p.repeated["--mutate-include"] ?? [];
+  const mutateExclude = p.repeated["--mutate-exclude"] ?? [];
+  const mutateCap = (flag: string): number | undefined => {
+    const raw = p.options[flag];
+    if (raw === undefined) return undefined;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1)
+      return fail("replay", "usage", `${flag} must be a positive integer (got "${raw}")`, undefined, asJson) as never;
+    return n;
+  };
+  const mutateMaxPerFile = mutateCap("--mutate-max-per-file");
+  const mutateMaxTotal = mutateCap("--mutate-max-total");
+  // These only shape a --mutate pass; accepting them silently without it would look like scoping worked.
+  if (!mutate) {
+    const orphan = [
+      mutateInclude.length ? "--mutate-include" : "",
+      mutateExclude.length ? "--mutate-exclude" : "",
+      mutateMaxPerFile !== undefined ? "--mutate-max-per-file" : "",
+      mutateMaxTotal !== undefined ? "--mutate-max-total" : "",
+    ].filter(Boolean);
+    if (orphan.length)
+      return fail("replay", "usage", `${orphan.join(", ")} require(s) --mutate (they only shape a mutation pass).`, undefined, asJson);
+  }
   if (strict && p.flags["--fail-on-skill-drift"])
     warn(
       "::notice:: [replay] --strict and --fail-on-skill-drift both passed — --strict is the superset (fails on every class), so --fail-on-skill-drift is redundant here\n",
@@ -4156,6 +4237,10 @@ export async function cmdReplay(args: string[]) {
         strict,
         failOnSkillDrift,
         mutate,
+        mutateInclude,
+        mutateExclude,
+        mutateMaxPerFile,
+        mutateMaxTotal,
         cassetteDir: dirname(f),
         bestEffortFutureCassette,
         notesSink: collectNotes,
@@ -4340,7 +4425,7 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     command: "replay",
     booleanFlags: REPLAY_BOOLEAN_FLAGS,
     valueFlags: REPLAY_VALUE_FLAGS,
-    repeatedFlags: [],
+    repeatedFlags: REPLAY_REPEATED_FLAGS,
     aliases: { "-q": "--quiet" },
     usage: REPLAY_USAGE,
     allowlist: REPLAY_ALLOWLIST,
@@ -4587,6 +4672,20 @@ export async function cmdVerifyCassettes(args: string[]) {
     if (!doStaleness) log("⚠ cowork-harness: --skip-staleness: staleness check was skipped");
     if (!doPrivacy) log("⚠ cowork-harness: --skip-privacy: privacy scan was skipped");
     if (!doScenarioDrift) log("⚠ cowork-harness: --skip-scenario-drift: scenario prompt-drift check was skipped");
+    // A per-class count, printed ONCE ahead of the per-file rows. A sweep that surfaces hundreds of
+    // findings of a single class reads as hundreds of separate problems; a consumer piped the output
+    // through `uniq -c` to discover 240 findings were one class with one cause. This is additive — every
+    // per-file row below still prints, so the attribution the `notes` rationale protects is untouched.
+    // It answers "what kind, and how many" before the reader starts scrolling, not instead of it.
+    const byClass = new Map<string, number>();
+    for (const r of results) for (const f of r.findings) byClass.set(f.cls, (byClass.get(f.cls) ?? 0) + 1);
+    if (byClass.size)
+      log(
+        `findings by class: ${[...byClass.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([cls, n]) => `${cls} ${n}`)
+          .join(" · ")}`,
+      );
     for (const r of results) {
       if (r.error) log(`✗ ${r.file}: [error] ${r.error}`);
       for (const f of r.findings) log(`${f.cls === "unscanned" ? "·" : "✗"} ${r.file}: [${f.cls}] ${f.where} — ${f.sample}`);
@@ -5005,6 +5104,12 @@ export async function replayCassette(
     /** --mutate: perturb recorded values and report which perturbations no assertion catches. Reporting
      *  only — never changes the verdict (an unguarded field is a gap in the scenario, not a failed run). */
     mutate?: boolean;
+    /** --mutate scoping + cap overrides. Filtering happens BEFORE planning, so the caps then bind on the
+     *  filtered set — which is the point: spend a bounded sample on the artifacts you actually assert on. */
+    mutateInclude?: readonly string[];
+    mutateExclude?: readonly string[];
+    mutateMaxPerFile?: number;
+    mutateMaxTotal?: number;
     /** Batch collector — when set, staleness notes go here INSTEAD of stderr (see the emission site). */
     notesSink?: (notes: string[]) => void;
   } = {},
@@ -5306,7 +5411,10 @@ export async function replayCassette(
   // outside the try, since it doesn't depend on anything materializeManifest produced.
   const folderPrefixResolution = buildFolderPrefixMap(cassette);
   // Populated only under --mutate; surfaced after the verdict so it reads as coverage info, not a failure.
-  let mutationReport: { planned: number; uncaught: string[] } | undefined;
+  // Surfaced on the RunResult so `--mutate --output-format json` is machine-readable. It was previously
+  // assigned here and never read by anything, so every consumer had to scrape stderr — which is how the
+  // capped denominator went unnoticed in the first place.
+  let mutationReport: RunResult["mutation"];
   // materializeManifest created a temp dir (`replayWorkRoot`) above; everything below uses it and
   // then returns. Wrap the rest in try/finally so the temp dir is removed on every exit path (normal
   // return OR a throw from evaluate/assert building) — otherwise `cwh-replay-*` dirs leak under tmpdir
@@ -5483,7 +5591,21 @@ export async function replayCassette(
       const inlined = (cassette.artifacts ?? [])
         .filter((a): a is typeof a & { body: string } => typeof a.body === "string" && !a.truncated)
         .map((a) => ({ path: a.path, body: a.body }));
-      const plan = planMutations(inlined);
+      // planMutationsWITHSTATS, not planMutations: the plan is CAPPED (10 per file, 50 total), so
+      // reporting `uncaught/plan.length` alone reads as "N of your N fields are unguarded" when N is a
+      // sample. A consumer aggregated twenty such lines into "1,020 perturbations, 0 caught" and came one
+      // step from concluding their assertions verified nothing — the truth was their asserted paths were
+      // never in the sample. The stats form exists precisely to make that discoverable; it was simply
+      // never wired to its only caller.
+      const include = opts.mutateInclude ?? [];
+      const exclude = opts.mutateExclude ?? [];
+      // Filter BEFORE planning so the caps bind on what survived, not on the whole corpus. An artifact
+      // dropped here is absent from `eligible` too — the report describes the scope you asked for.
+      const scoped = inlined.filter((a) => (include.length === 0 || matchesAnyGlob(a.path, include)) && !matchesAnyGlob(a.path, exclude));
+      const planOpts = { maxPerFile: opts.mutateMaxPerFile, maxTotal: opts.mutateMaxTotal };
+      const stats = planMutationsWithStats(scoped, planOpts);
+      const plan = stats.mutations;
+      const coverage = summarizeMutationPlan(stats, planOpts);
       const uncaught: string[] = [];
       const baselineFailed = new Set(assertions.map((a, i) => (a.pass ? -1 : i)).filter((i) => i >= 0));
       for (const m of plan) {
@@ -5505,12 +5627,38 @@ export async function replayCassette(
           writeFileSync(abs, original); // restore unconditionally — a thrown assert must not leave a mutated tree
         }
       }
-      mutationReport = { planned: plan.length, uncaught };
-      if (!plan.length) log(`::notice:: [mutate] ${explainNoMutations(cassette.artifacts ?? [], inlined)}`);
+      mutationReport = {
+        sampled: plan.length,
+        eligible: coverage.eligible,
+        truncatedBy: coverage.truncatedBy,
+        caps: coverage.caps,
+        uncaught,
+      };
+      // Only when truncation actually happened: on a corpus under both caps the counts ARE the whole
+      // truth and the parenthetical is noise. Naming the binding cap matters — the per-file cap is
+      // checked first, so "raise --mutate-max-total" is inert advice whenever per-file bound.
+      const scope = coverage.truncatedBy
+        ? ` (sampled ${coverage.sampled} of ${coverage.eligible} eligible value(s)` +
+          (coverage.truncatedBy === "per-file"
+            ? `; per-file cap ${coverage.caps.perFile} reached on ${coverage.filesAtPerFileCap} file(s)`
+            : `; total cap ${coverage.caps.total} reached`) +
+          `)`
+        : "";
+      if (!plan.length)
+        // Attribute an empty plan to the FILTERS when they are what emptied it — otherwise the generic
+        // "no perturbable values" explanation sends the reader looking for a JSON deliverable they have.
+        log(
+          scoped.length === 0 && inlined.length > 0
+            ? `::notice:: [mutate] --mutate-include/--mutate-exclude filtered out all ${inlined.length} inlined JSON artifact(s) — nothing left to perturb`
+            : `::notice:: [mutate] ${explainNoMutations(cassette.artifacts ?? [], scoped)}`,
+        );
       else if (uncaught.length) {
-        log(`::warning:: [mutate] ${uncaught.length}/${plan.length} perturbation(s) CAUGHT BY NOTHING — these fields are unguarded:`);
+        log(
+          `::warning:: [mutate] ${uncaught.length}/${plan.length} sampled perturbation(s) CAUGHT BY NOTHING — these fields are unguarded${scope}:`,
+        );
         for (const u of uncaught) log(`    ${u}`);
-      } else log(`::notice:: [mutate] all ${plan.length} perturbation(s) were caught — assertions cover every perturbed field`);
+      } else
+        log(`::notice:: [mutate] all ${plan.length} sampled perturbation(s) were caught — assertions cover every perturbed field${scope}`);
     }
 
     // under --strict, EVERY staleness finding becomes a failing assertion (non-zero exit), not just a
@@ -5619,6 +5767,7 @@ export async function replayCassette(
     return assembleRunResult({
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       command: "replay", // #48
+      mutation: mutationReport, // --mutate only; undefined otherwise
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,

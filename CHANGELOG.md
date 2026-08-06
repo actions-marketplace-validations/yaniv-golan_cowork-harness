@@ -6,6 +6,61 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-08-06
+
+Follow-up to the consumer report against published 1.18.0: two false-positive/misreporting fixes in the
+tooling 1.18.0 introduced, plus the scoping and summary controls those reports asked for.
+
+### Upgrade notes
+
+- **The new `skills[]` axis can fail a cassette that passed under 1.18.0.** It applies only at
+  host-inheriting tiers (`protocol`, `hostloop`, or `cowork` resolving to hostloop). A flagged entry is a
+  skill name from the recording machine; re-record against a clean environment, or scope an allow with
+  `--allow-host-inventory <regex>` after reviewing the finding.
+- **Conversely, `host-inventory` failures on a plugin's own agents go away.** If 1.18.0 forced you to add
+  an allow regex for `<plugin>:<agent>` entries, that exemption is now automatic and the regex can be
+  removed. No re-record is needed.
+
+### Added
+
+- **`verify-cassettes` reads `skills[]` as a `host-inventory` axis.** A skill name discloses what is
+  installed on the recording machine, the same class of disclosure as an MCP server name, and the field
+  was previously read by no axis. Two exemptions: the agent's built-in skills, and a `<plugin>:<skill>`
+  whose plugin the same recording declares in `plugins[]`. Host-inheriting tiers only — at `protocol`
+  with local OAuth the harness keeps the operator's real `CLAUDE_CONFIG_DIR`, so personally installed
+  skills are discoverable there. `plugins[].name` is deliberately not scanned: that array holds only
+  entries the harness supplied via `--plugin-dir`, so it carries no host inventory to find.
+- **`replay --mutate` accepts scoping and cap overrides.** `--mutate-include <glob>` and
+  `--mutate-exclude <glob>` (both repeatable; exclude applied last) restrict which artifact paths are
+  perturbed — `*` matches within a path segment, `**` across them. Filtering is applied before planning,
+  so an out-of-scope artifact is excluded from the eligible count as well. `--mutate-max-per-file <n>`
+  and `--mutate-max-total <n>` raise the sampling caps (defaults 10 and 50); prefer the per-file one,
+  which binds first. Any of these without `--mutate` is a usage error. Cost is linear — one full
+  assertion re-run per perturbation.
+
+### Changed
+
+- **`verify-cassettes` prints a per-class findings count before the per-file listing**, e.g.
+  `findings by class: host-inventory 240`. Informational classes such as `unscanned` are counted too, so
+  the header agrees with the rows beneath it. The per-file rows are unchanged — the rollup is additive.
+  JSON output is unchanged; `findings[].cls` already carried this.
+
+### Fixed
+
+- **`replay --mutate` reported its sample as though it were the full set.** The plan is capped at 10
+  values per file and 50 in total, with the per-file cap applied first, but the report showed only
+  `<uncaught>/<planned>`. It now appends the eligible total and names the binding cap — `(sampled 30 of
+  120 eligible value(s); per-file cap 10 reached on 3 file(s))` — and omits the note entirely when
+  nothing was truncated. A bare ratio from 1.18.0 or earlier describes the sample, not the corpus.
+- **`replay --mutate` produced no machine-readable output.** Coverage now rides the JSON envelope as
+  `mutation`, carrying `sampled`, `eligible`, `truncatedBy`, `caps`, and `uncaught`.
+- **The `host-inventory` check flagged the scenario's own plugin agents.** At `hostloop` the agent roster
+  necessarily includes the agents of the mounted plugin, so any plugin declaring agents failed the gate
+  on upgrade to 1.18.0. An agent named `<plugin>:<agent>` whose plugin the same recording declares in
+  `plugins[]` is now exempt, matching the existing carve-out for `mcp.config`-attached servers. The
+  exemption is derived from the cassette, so it applies to recordings made before this release without
+  re-recording. A foreign agent, or one namespaced to a plugin the run never declared, still flags.
+
 ## [1.18.0] — 2026-08-06
 
 ### Upgrade notes
@@ -22,6 +77,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique --help` and `docs/critique.md` misstated the tier prerequisites.** Both said the `container`
+  and `hostloop` tiers need an authenticated `claude` CLI on PATH. They need a token in the environment
+  or `.env` (`CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` as a CI fallback) — the graded turns run
+  the staged agent binary, not the host CLI. The evaluator passes are what require `claude` on PATH,
+  overridable with `COWORK_HARNESS_CLAUDE_BIN`.
 - **A scenario's `on_unanswered:` overrode an explicit `--on-unanswered` in silence.** The precedence is
   intentional and documented (`run --help`: "per-scenario answers/on_unanswered in the YAML take
   precedence where set") — a committed scenario is the reproducible definition of its own test — but a

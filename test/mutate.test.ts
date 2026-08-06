@@ -1,7 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { planMutations, planMutationsWithStats, applyMutation, explainNoMutations, type Mutation } from "../src/run/mutate.js";
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import {
+  planMutations,
+  planMutationsWithStats,
+  summarizeMutationPlan,
+  matchesAnyGlob,
+  applyMutation,
+  explainNoMutations,
+  type Mutation,
+} from "../src/run/mutate.js";
 
 function artifact(path: string, doc: unknown) {
   return { path, body: JSON.stringify(doc) };
@@ -242,5 +253,206 @@ describe("explainNoMutations — the empty plan says WHY", () => {
 
   it("never claims a reason it wasn't given", () => {
     expect(explainNoMutations([{ path: "a.json" }], [])).toMatch(/unrecorded reason/);
+  });
+});
+
+// `truncatedTotal` cannot say WHICH cap bound — despite the name, mutate.ts sets it for per-file
+// truncation too. The distinction is the whole point of the message: the per-file cap is checked BEFORE
+// the total, so with a handful of artifacts the total is never reached and advising "--mutate-max-total"
+// would be advice that changes nothing. This is what a consumer read as "50 of your 50 fields are
+// unguarded" when 50 was a sample.
+describe("summarizeMutationPlan", () => {
+  const doc = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, i + 1]));
+  const art = (path: string, n: number) => ({ path, body: JSON.stringify(doc(n)) });
+
+  it("reports no truncation when everything fit", () => {
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 3)]));
+    expect(s.truncatedBy).toBeNull();
+    expect(s.sampled).toBe(3);
+    expect(s.eligible).toBe(3);
+  });
+
+  it("attributes truncation to the per-file cap when the total was never reached", () => {
+    // 3 files x 10 taken = 30 sampled, well under the 50 total — only the per-file cap bound.
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 40), art("b.json", 40), art("c.json", 40)]));
+    expect(s.sampled).toBe(30);
+    expect(s.eligible).toBe(120);
+    expect(s.truncatedBy).toBe("per-file");
+    expect(s.filesAtPerFileCap).toBe(3);
+  });
+
+  it("attributes to the total cap when it is reached, since raising per-file alone would not help", () => {
+    const arts = Array.from({ length: 10 }, (_, i) => art(`f${i}.json`, 40));
+    const s = summarizeMutationPlan(planMutationsWithStats(arts));
+    expect(s.sampled).toBe(50); // 10 files x 10 = 100 wanted, total cap bit first
+    expect(s.truncatedBy).toBe("total");
+  });
+
+  it("carries the caps in effect so a message can name the flag that raises them", () => {
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 3)]));
+    expect(s.caps).toEqual({ perFile: 10, total: 50 });
+  });
+
+  it("reflects overridden caps rather than the defaults", () => {
+    const s = summarizeMutationPlan(planMutationsWithStats([art("a.json", 9)], { maxPerFile: 2, maxTotal: 4 }), {
+      maxPerFile: 2,
+      maxTotal: 4,
+    });
+    expect(s.caps).toEqual({ perFile: 2, total: 4 });
+    expect(s.sampled).toBe(2);
+  });
+});
+
+// The planner is unit-tested above, but the SENTENCE a human reads was not covered anywhere — and the
+// sentence is what went wrong in the field. "50/50 perturbation(s) CAUGHT BY NOTHING" parses as "50 of
+// your 50 fields are unguarded"; 50 was a sample cap. A consumer aggregated twenty such lines into
+// "1,020 perturbations, 0 caught" and came one step from reporting that their assertions verified
+// nothing. These assert the emitted text, spawning the built CLI on a synthetic cassette (token-free).
+describe("replay --mutate — the report is self-describing", () => {
+  const CLI = resolve("dist/cli.js");
+  const can = existsSync(CLI);
+  const base = JSON.parse(readFileSync(resolve("examples/replays/example-pdf-skill.cassette.json"), "utf8"));
+
+  /** A cassette carrying `files` JSON artifacts of `leaves` perturbable values each. */
+  function cassetteWith(dir: string, files: number, leaves: number): string {
+    const c = JSON.parse(JSON.stringify(base));
+    c.artifacts = Array.from({ length: files }, (_, f) => {
+      const body = JSON.stringify(Object.fromEntries(Array.from({ length: leaves }, (_, i) => [`k${i}`, i + 1])));
+      return { path: `outputs/a${f}.json`, bytes: body.length, sha256: createHash("sha256").update(body).digest("hex"), body };
+    });
+    c.scenario.assert = [{ result: "success" }];
+    const p = join(dir, "m.cassette.json");
+    writeFileSync(p, JSON.stringify(c));
+    return p;
+  }
+
+  const replay = (file: string, extra: string[] = []) =>
+    spawnSync("node", [CLI, "replay", file, "--mutate", ...extra], { encoding: "utf8" });
+
+  it.skipIf(!can)("names the eligible total and the per-file cap when per-file truncates", () => {
+    const p = cassetteWith(mkdtempSync(join(tmpdir(), "mut-")), 3, 40);
+    const out = replay(p).stdout + replay(p).stderr;
+    expect(out).toMatch(/sampled 30 of 120 eligible/);
+    expect(out).toMatch(/per-file cap 10 reached on 3 file\(s\)/);
+    // The bare ratio must no longer stand alone as if it were the whole corpus.
+    expect(out).toMatch(/30\/30 sampled perturbation/);
+  });
+
+  it.skipIf(!can)("adds no cap parenthetical when nothing was truncated", () => {
+    const p = cassetteWith(mkdtempSync(join(tmpdir(), "mut-")), 1, 3);
+    const out = replay(p).stdout + replay(p).stderr;
+    expect(out).toMatch(/\[mutate\]/);
+    expect(out).not.toMatch(/eligible value\(s\)/);
+    expect(out).not.toMatch(/cap \d+ reached/);
+  });
+
+  it.skipIf(!can)("surfaces the coverage on the JSON envelope so it need not be scraped from text", () => {
+    const p = cassetteWith(mkdtempSync(join(tmpdir(), "mut-")), 3, 40);
+    const r = replay(p, ["--output-format", "json"]);
+    const m = JSON.parse(r.stdout).results[0].mutation;
+    expect(m.sampled).toBe(30);
+    expect(m.eligible).toBe(120);
+    expect(m.truncatedBy).toBe("per-file");
+    expect(m.caps).toEqual({ perFile: 10, total: 50 });
+    expect(m.uncaught).toHaveLength(30);
+  });
+});
+
+// A dedicated matcher: analyze-skill's is module-private, is a FILESYSTEM expander rather than a string
+// matcher, accepts only `dir/*.md`-shaped inputs, and is case-insensitive — all wrong here. Artifact
+// paths are recorded strings, compared case-sensitively.
+describe("matchesAnyGlob", () => {
+  it("matches a literal path", () => {
+    expect(matchesAnyGlob("outputs/a.json", ["outputs/a.json"])).toBe(true);
+  });
+
+  it("`*` stays within one segment", () => {
+    expect(matchesAnyGlob("outputs/a.json", ["outputs/*.json"])).toBe(true);
+    expect(matchesAnyGlob("outputs/deep/a.json", ["outputs/*.json"])).toBe(false);
+  });
+
+  it("`**` crosses segments — the shape needed to scope a whole subtree", () => {
+    expect(matchesAnyGlob("handoff/run-1/state.json", ["handoff/**"])).toBe(true);
+    expect(matchesAnyGlob("outputs/report.json", ["handoff/**"])).toBe(false);
+  });
+
+  it("is case-SENSITIVE (artifact paths are recorded strings, not filenames to be guessed at)", () => {
+    expect(matchesAnyGlob("Outputs/a.json", ["outputs/*.json"])).toBe(false);
+  });
+
+  it("is true when any pattern matches, false for an empty pattern list", () => {
+    expect(matchesAnyGlob("outputs/a.json", ["nope/**", "outputs/**"])).toBe(true);
+    expect(matchesAnyGlob("outputs/a.json", [])).toBe(false);
+  });
+
+  it("treats regex metacharacters in a pattern as literals", () => {
+    expect(matchesAnyGlob("outputs/a+b.json", ["outputs/a+b.json"])).toBe(true);
+    expect(matchesAnyGlob("outputs/axb.json", ["outputs/a+b.json"])).toBe(false);
+  });
+});
+
+// The reporter's corpus was dominated by per-run `handoff/` internals nobody should assert on, so the
+// signal about delivered artifacts was buried in noise it would be WRONG to act on. Scoping turns the
+// number into a work-list; the caps then bind on what survived, which is the point.
+describe("replay --mutate — scoping and cap overrides", () => {
+  const CLI = resolve("dist/cli.js");
+  const can = existsSync(CLI);
+  const base = JSON.parse(readFileSync(resolve("examples/replays/example-pdf-skill.cassette.json"), "utf8"));
+
+  function cassette(dir: string, paths: string[], leaves: number): string {
+    const c = JSON.parse(JSON.stringify(base));
+    c.artifacts = paths.map((p) => {
+      const body = JSON.stringify(Object.fromEntries(Array.from({ length: leaves }, (_, i) => [`k${i}`, i + 1])));
+      return { path: p, bytes: body.length, sha256: createHash("sha256").update(body).digest("hex"), body };
+    });
+    c.scenario.assert = [{ result: "success" }];
+    const f = join(dir, "s.cassette.json");
+    writeFileSync(f, JSON.stringify(c));
+    return f;
+  }
+  const json = (file: string, extra: string[]) =>
+    JSON.parse(spawnSync("node", [CLI, "replay", file, "--mutate", "--output-format", "json", ...extra], { encoding: "utf8" }).stdout)
+      .results[0].mutation;
+
+  const paths = ["outputs/report.json", "handoff/run-1/state.json", "handoff/run-2/state.json"];
+
+  it.skipIf(!can)("--mutate-exclude drops a whole subtree from the sample AND from the eligible count", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    const m = json(f, ["--mutate-exclude", "handoff/**"]);
+    expect(m.sampled).toBe(10); // one surviving file, per-file cap
+    expect(m.eligible).toBe(40); // the excluded files are not counted as "missed" — they were out of scope
+    expect(m.uncaught.every((u: string) => u.startsWith("outputs/"))).toBe(true);
+  });
+
+  it.skipIf(!can)("--mutate-include restricts to matching paths", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    expect(json(f, ["--mutate-include", "outputs/**"]).eligible).toBe(40);
+  });
+
+  it.skipIf(!can)("exclude wins over include", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    const m = json(f, ["--mutate-include", "**", "--mutate-exclude", "handoff/**"]);
+    expect(m.eligible).toBe(40);
+  });
+
+  it.skipIf(!can)("repeated --mutate-exclude honours EVERY occurrence, not just the last", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 40);
+    const m = json(f, ["--mutate-exclude", "handoff/run-1/**", "--mutate-exclude", "handoff/run-2/**"]);
+    expect(m.eligible).toBe(40); // both patterns applied; only outputs/ survives
+  });
+
+  it.skipIf(!can)("--mutate-max-per-file raises the cap that actually binds", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), ["outputs/a.json"], 40);
+    expect(json(f, []).sampled).toBe(10);
+    expect(json(f, ["--mutate-max-per-file", "25"]).sampled).toBe(25);
+    // Raising only the total cannot help while per-file binds — the trap the report now names.
+    expect(json(f, ["--mutate-max-total", "500"]).sampled).toBe(10);
+  });
+
+  it.skipIf(!can)("the scoping flags require --mutate rather than silently doing nothing", () => {
+    const f = cassette(mkdtempSync(join(tmpdir(), "sc-")), paths, 3);
+    const r = spawnSync("node", [CLI, "replay", f, "--mutate-exclude", "handoff/**"], { encoding: "utf8" });
+    expect(r.status).toBe(2);
+    expect(r.stdout + r.stderr).toMatch(/require\(s\) --mutate/);
   });
 });

@@ -80,6 +80,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     effectiveFidelity: undefined,
     fidelityWarnings: undefined,
     staleness: undefined,
+    mutation: undefined,
     skippedAssertions: undefined,
     toolResults: undefined,
     l0PluginDivergence: undefined,

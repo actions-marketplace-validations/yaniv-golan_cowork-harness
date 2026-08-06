@@ -541,10 +541,31 @@ scenario's `assert:` block; on the live path it would fail as an empty assertion
 
 ### Mutation coverage — `replay --mutate`
 
-`replay --mutate` perturbs each recorded, inlined JSON artifact value in turn, re-runs the scenario's
+`replay --mutate` perturbs recorded, inlined JSON artifact values one at a time, re-runs the scenario's
 assertions against the perturbed tree, and reports which perturbations nothing catches — those are the
 fields your `assert:` block leaves unguarded. Each perturbation is applied, evaluated, and restored
 before the next one runs, so the materialized tree ends the pass unchanged.
+
+> **It samples. Read the ratio accordingly.** The plan is capped at **10 values per file and 50 in
+> total** — the per-file cap is applied first, so a corpus of N JSON artifacts yields at most `10 × N`
+> perturbations no matter how much total budget is left. A line reading `50/50 … CAUGHT BY NOTHING` means
+> 50 of the *sampled* values, not 50 of your fields, and aggregating such lines across many cassettes
+> produces a number that describes the sample rather than the corpus. Whenever a cap binds, the report
+> appends the eligible total and names the cap that bound — `(sampled 30 of 120 eligible value(s);
+> per-file cap 10 reached on 3 file(s))` — and omits that note entirely when nothing was truncated, so
+> its absence means the counts are the whole truth. `--output-format json` carries the same facts under
+> `mutation` (`sampled` / `eligible` / `truncatedBy` / `caps` / `uncaught`), which is the right surface to
+> aggregate over.
+
+**Scope it, and raise the cap that binds.** `--mutate-include <glob>` / `--mutate-exclude <glob>` (both
+repeatable, exclude applied last) restrict which artifact paths are perturbed — `*` stays inside a path
+segment, `**` crosses them, so `--mutate-exclude 'handoff/**'` drops per-run internals nobody should
+assert on and spends the sample on deliverables instead. Filtering happens before planning, so an
+out-of-scope artifact is absent from `eligible` too: the report describes the scope you asked for rather
+than counting what you deliberately excluded as missed. `--mutate-max-per-file <n>` / `--mutate-max-total
+<n>` raise the caps; reach for the per-file one first, since it is applied first and with a handful of
+artifacts the total is never the binding constraint. Cost is linear — one full assertion re-run per
+perturbation.
 
 This is coverage reporting, not verdict reporting: an uncaught perturbation is a gap in the scenario's
 assertions, not a failure of the run, so `--mutate` never changes replay's verdict or exit code — a green
@@ -800,9 +821,25 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   token is ever written and `grep mcp__` over the cassette reads clean. The inventory lives in **name
   fields**. So this check reads specific name fields of the decoded events and flags: an `mcp_servers[].name`
   outside the harness's own servers, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
-  `.organization` / `.subscriptionType`, and an `agents[]` entry outside the built-in roster. Suppress with
+  `.organization` / `.subscriptionType`, an `agents[]` entry outside the built-in roster, and a `skills[]`
+  entry outside the agent's own built-ins. The skills axis is not theoretical: at `protocol` with local
+  OAuth the harness keeps the operator's **real `CLAUDE_CONFIG_DIR`** (a fresh one breaks OAuth), so the
+  personal skills installed there are discoverable, and a skill name says what you have installed exactly
+  as an MCP server name does. Suppress with
   `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
   `KNOWN_COWORK_SERVERS` instead of allowing it.
+  **A plugin the scenario mounted is not host inventory.** Its agents join the roster — at `hostloop`,
+  that roster *is* the fixture — so an agent namespaced `<plugin>:<agent>` whose plugin the same recording
+  declares in `plugins[]` is exempt, exactly as an `mcp.config`-attached server is. The provenance comes
+  from the cassette itself, so this applies to recordings you already have; no re-record, and no allow
+  regex to invent. A foreign agent, or one namespaced to a plugin the run never mounted, still flags. The
+  same exemption covers `skills[]`.
+  **`plugins[].name` is deliberately NOT an axis.** That array is the harness's own declaration channel —
+  every entry arrives from a `--plugin-dir` the harness passed, and the settings it writes carry an
+  explicit `enabledPlugins` allowlist. Across every committed fixture, including `protocol` and `hostloop`
+  recordings made on a machine with many host plugins installed, it holds only the scenario's own. A field
+  that carries nothing but declarations would produce false positives and catch nothing — the failure this
+  class has already had once.
   **`record` carries its own preflight for the same risk.** Recording at a host-inheriting tier
   (`protocol`, `hostloop`, or `cowork` resolving to hostloop) into a repo-visible cassette path is
   refused by default — that recording would freeze this machine's MCP servers, agents, and account
@@ -874,6 +911,13 @@ leak/drift":
 |---|---|---|
 | `0` | clean | none |
 | `1` | **verification RAN and found a real problem** | `findings[]` (a PII/privacy match), `staleness[]` (a genuine, non-`unverifiable-*` drift finding), and/or `scenarioDrift[]` |
+
+> **Triage first, then read the rows.** Text output opens with a per-class count —
+> `findings by class: host-inventory 240` — before the per-file listing. A sweep that surfaces hundreds
+> of findings of one class reads as hundreds of separate problems until you know that; the header says
+> what kind and how many in one line. It is additive: every per-file row still prints, because which
+> file carries which finding is the answer a per-file audit exists to give. JSON consumers already have
+> `findings[].cls` and need no rollup.
 | `2` | usage error (e.g. `--skip-privacy`+`--skip-staleness` together, zero cassettes under a dir) | n/a |
 | `3` | **verification could NOT complete** | `unverifiable[]` (an `unverifiable-*`-class staleness finding), `version[]` (the cassette is from a newer harness than this one understands), and/or `error` (a malformed/unreadable cassette, or a per-file crash) |
 

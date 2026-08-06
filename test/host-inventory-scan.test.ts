@@ -4,7 +4,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { scanHostInventory, KNOWN_COWORK_SERVERS, KNOWN_BUILTIN_AGENTS, HOST_INVENTORY_CLS, DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
+import {
+  scanHostInventory,
+  KNOWN_COWORK_SERVERS,
+  KNOWN_BUILTIN_AGENTS,
+  KNOWN_BUILTIN_SKILLS,
+  HOST_INVENTORY_CLS,
+  DEFAULT_SCAN_PATTERNS,
+} from "../src/scan.js";
+import { collectDeclaredPlugins } from "../src/run/cassette.js";
 import { makeSkillsHandler } from "../src/hostloop/skills-handler.js";
 import { makePluginsHandler } from "../src/hostloop/plugins-handler.js";
 import { makeWorkspaceHandler } from "../src/hostloop/workspace-handler.js";
@@ -300,5 +308,194 @@ describe("hostInventoryPreflight — Layer B", () => {
     const v = hostInventoryPreflight(scn("hostloop"), existing, false);
     expect(v.kind).toBe("warn");
     if (v.kind === "warn") expect(v.message).toContain("verify-cassettes");
+  });
+});
+
+// A plugin mounted BY the scenario contributes its own agents to the roster — at `hostloop` that is the
+// fixture, not a leak of the recording machine's inventory. The sibling check A1 already carves out the
+// equivalent case for `mcp.config`-attached servers; A4 flagged every plugin-with-agents consumer on
+// upgrade and left them to invent a regex.
+//
+// The provenance is already in the payload: `plugins[]` sits beside `agents[]` in the same init object,
+// and a plugin's agents are namespaced `<plugin>:<agent>` (the two cases above encode that convention).
+// So the subtraction is derivable at scan time from an already-recorded cassette — no re-record.
+describe("scanHostInventory — scenario-declared plugin agents", () => {
+  it("does NOT flag an agent namespaced to a plugin the same init declares", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "codex" }], agents: ["Plan", "codex:codex-rescue"] }), "events[0]", []);
+    expect(f).toEqual([]);
+  });
+
+  it("still flags an agent namespaced to a plugin that is NOT declared", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "codex" }], agents: ["hookify:conversation-analyzer"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["hookify:conversation-analyzer"]);
+  });
+
+  it("still flags a non-namespaced foreign agent even when plugins are declared", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "codex" }], agents: ["some-host-agent"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["some-host-agent"]);
+  });
+
+  it("applies to the {name} object shape too", () => {
+    const f = scanHostInventory(
+      init({ plugins: [{ name: "hookify" }], agents: [{ name: "hookify:conversation-analyzer" }] }),
+      "events[0]",
+      [],
+    );
+    expect(f).toEqual([]);
+  });
+
+  // The registry `control_response` carries agents with no sibling `plugins[]`, so the caller harvests
+  // plugin names from the events array and passes them in. Without that, this surface keeps false-positiving.
+  it("accepts externally-harvested plugin names for payloads with no sibling plugins[]", () => {
+    const noSibling = { response: { response: { agents: [{ name: "codex:codex-rescue" }] } } };
+    expect(scanHostInventory(noSibling, "events[0]", [])).toHaveLength(1); // no context → still flagged
+    expect(scanHostInventory(noSibling, "events[0]", [], ["codex"])).toEqual([]);
+  });
+});
+
+// The registry `control_response` lists agents with no sibling `plugins[]`, so the plugin names are
+// harvested once from the whole event stream and handed to every scan. A per-event scan alone would
+// leave that surface false-positiving on the scenario's own plugin agents.
+describe("collectDeclaredPlugins", () => {
+  const line = (o: unknown) => JSON.stringify(o);
+
+  it("collects plugin names from a system/init event", () => {
+    const names = collectDeclaredPlugins([line({ type: "system", subtype: "init", plugins: [{ name: "my-pdf-skill" }] })]);
+    expect(names).toEqual(["my-pdf-skill"]);
+  });
+
+  it("dedupes across events and tolerates a plugins[] of bare strings", () => {
+    const names = collectDeclaredPlugins([
+      line({ plugins: [{ name: "a" }, "b"] }),
+      line({ plugins: [{ name: "a" }, { name: "c" }] }),
+    ]).sort();
+    expect(names).toEqual(["a", "b", "c"]);
+  });
+
+  it("skips non-JSON lines and events without plugins instead of throwing", () => {
+    expect(collectDeclaredPlugins(["not json", line({ type: "assistant" })])).toEqual([]);
+  });
+
+  it("returns empty for undefined events (a cassette may carry none)", () => {
+    expect(collectDeclaredPlugins(undefined)).toEqual([]);
+  });
+});
+
+// 240 findings printed as 240 indistinguishable lines. A consumer had to pipe through `uniq -c` to learn
+// they were all one class with one cause — a detour that a single header line removes. Additive on
+// purpose: the per-file rows are the audit trail and the rationale at the `notes` loop is right that
+// collapsing them would destroy attribution, so the rollup PRECEDES the list and replaces nothing.
+describe("verify-cassettes — findings rollup", () => {
+  const CLI = resolve(__dirname, "../dist/cli.js");
+  const FIXTURES = resolve(__dirname, "../examples/replays");
+
+  /** Two host-inheriting cassettes, each carrying a foreign server ⇒ several findings of ONE class. */
+  const twoBadCassettes = (dir: string) => {
+    for (const n of ["a", "b"]) {
+      const c = JSON.parse(readFileSync(join(FIXTURES, "hostloop-computer-links.cassette.json"), "utf8"));
+      const i = c.events.findIndex((l: string) => typeof l === "string" && l.includes('"mcp_servers"'));
+      const ev = JSON.parse(c.events[i]);
+      ev.mcp_servers = [...(ev.mcp_servers ?? []), { name: "plaud", status: "pending" }];
+      c.events[i] = JSON.stringify(ev);
+      writeFileSync(join(dir, `${n}.cassette.json`), JSON.stringify(c, null, 2));
+    }
+  };
+
+  it("prints a per-class count before the per-finding list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rollup-"));
+    twoBadCassettes(dir);
+    const r = spawnSync(process.execPath, [CLI, "verify-cassettes", dir], { encoding: "utf8" });
+    const out = r.stdout + r.stderr;
+    expect(out).toMatch(new RegExp(`findings by class:.*${HOST_INVENTORY_CLS} \\d+`));
+    // The rollup is additive — every per-file row survives, so attribution is not lost.
+    expect(out).toContain("a.cassette.json");
+    expect(out).toContain("b.cassette.json");
+  });
+
+  // It summarizes the findings list as it stands, INFORMATIONAL classes included. `unscanned` is a
+  // finding (the `·` rows), so counting it is what makes the header agree with the list beneath it —
+  // and "what did this sweep decline to scan" is worth a number of its own. A gate-passing cassette
+  // therefore still gets a rollup; only a genuinely finding-free one has nothing to print.
+  it("counts informational classes too, so the header agrees with the list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rollup-clean-"));
+    writeFileSync(join(dir, "ok.cassette.json"), readFileSync(join(FIXTURES, "example-pdf-skill.cassette.json"), "utf8"));
+    const r = spawnSync(process.execPath, [CLI, "verify-cassettes", dir], { encoding: "utf8" });
+    const out = r.stdout + r.stderr;
+    expect(out).toMatch(/findings by class: unscanned 1/);
+    const rollup = out.split("\n").findIndex((l) => l.startsWith("findings by class:"));
+    const firstRow = out.split("\n").findIndex((l) => l.includes("[unscanned]"));
+    expect(rollup, "the rollup must precede the rows it summarizes").toBeLessThan(firstRow);
+  });
+});
+
+// `skills[]` sits in the same init payload as `mcp_servers`/`agents` and was read by no axis. It is a
+// real leak vector, not a theoretical one: at `protocol` with local OAuth the harness keeps the
+// OPERATOR'S REAL CLAUDE_CONFIG_DIR (src/runtime/protocol.ts — a fresh dir breaks OAuth), so the
+// personal skills installed there are discoverable and would be frozen into a committed fixture.
+//
+// Two exemptions, mirroring the agents axis: the agent's own built-ins, and a `<plugin>:<skill>` whose
+// plugin the same recording declares.
+describe("scanHostInventory — skills[]", () => {
+  it("does NOT flag the agent's built-in skills", () => {
+    expect(scanHostInventory(init({ skills: [...KNOWN_BUILTIN_SKILLS] }), "events[0]", [])).toEqual([]);
+  });
+
+  it("flags a bare skill outside the built-in roster — a personal skill from the operator's config dir", () => {
+    const f = scanHostInventory(init({ skills: ["deep-research", "my-private-notes"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["my-private-notes"]);
+    expect(f[0].where).toContain("skills[]");
+  });
+
+  it("does NOT flag a skill namespaced to a plugin the same init declares", () => {
+    const payload = init({ plugins: [{ name: "my-pdf-skill" }], skills: ["deep-research", "my-pdf-skill:my-pdf-skill"] });
+    expect(scanHostInventory(payload, "events[0]", [])).toEqual([]);
+  });
+
+  it("flags a skill namespaced to a plugin that was never declared", () => {
+    const f = scanHostInventory(init({ plugins: [{ name: "my-pdf-skill" }], skills: ["hookify:writing-rules"] }), "events[0]", []);
+    expect(f.map((x) => x.sample)).toEqual(["hookify:writing-rules"]);
+  });
+
+  it("honours externally-harvested plugin names, as the agents axis does", () => {
+    const payload = { response: { response: { skills: ["codex:codex-cli-runtime"] } } };
+    expect(scanHostInventory(payload, "events[0]", [])).toHaveLength(1);
+    expect(scanHostInventory(payload, "events[0]", [], ["codex"])).toEqual([]);
+  });
+
+  it("is suppressible by an allow pattern like every other host-inventory finding", () => {
+    const ev = init({ skills: ["my-private-notes"] });
+    expect(scanHostInventory(ev, "events[0]", [{ cls: HOST_INVENTORY_CLS, re: /my-private-notes/ }])).toEqual([]);
+    expect(scanHostInventory(ev, "events[0]", [])).toHaveLength(1); // non-vacuous: it really was suppressed
+  });
+});
+
+// Every shipped cassette must stay clean under the new axis — these are the fixtures CI verifies, and a
+// roster that is wrong reds the repo's own gate before it ever reaches a consumer.
+describe("skills[] axis — the committed fixtures stay clean", () => {
+  it("no shipped cassette trips the skills axis", () => {
+    const root = resolve(__dirname, "..");
+    const files = [
+      join(root, "cassettes/skill-loads.cassette.json"),
+      ...["example-pdf-skill", "example-multiselect-gate", "hostloop-computer-links"].map((n) =>
+        join(root, `examples/replays/${n}.cassette.json`),
+      ),
+    ].filter((f) => existsSync(f));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const c = JSON.parse(readFileSync(f, "utf8"));
+      for (const line of c.events ?? []) {
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const skillFindings = scanHostInventory(decoded, "events", []).filter((x) => x.where.includes("skills[]"));
+        expect(
+          skillFindings.map((x) => x.sample),
+          `${f} tripped the skills axis`,
+        ).toEqual([]);
+      }
+    }
   });
 });
