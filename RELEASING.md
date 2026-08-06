@@ -29,8 +29,8 @@ branch and opening a PR lets CI prove the exact SHA before anything lands on `ma
 Phase 1: git checkout -b release/X.Y.Z
          git push origin release/X.Y.Z
          gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
-         # CI runs on the PR. For a same-repo release branch the live scenario stage ALSO runs
-         #   (the ANTHROPIC_API_KEY secret is available); it is skipped only on fork PRs.
+         # CI runs on the PR. The live scenario stage soft-skips whenever ANTHROPIC_API_KEY is
+         #   unavailable — which is the case today; see "best-effort (not a publish gate)" above.
   ↓  CI passes
 Phase 2: gh pr merge <number> --merge   (or merge via GitHub UI)
          git checkout main && git pull origin main
@@ -64,6 +64,15 @@ When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) 
 :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`, re-tag on `main` HEAD, re-push, and cancel the misfired
 release run. Running `npm run preflight -- --for-tag` right before the tag push mechanically catches
 this (it asserts `HEAD == origin/main` and that a push-event `ci.yml` run succeeded for `HEAD`).
+
+> **A merge-commit run can be CANCELLED, not just red.** `ci.yml` sets
+> `concurrency: cancel-in-progress: true` on `ci-${{ github.ref }}`, so merging a second PR while the
+> first merge's `main` run is still going kills the earlier run. Observed 2026-08-06: merging #104 then
+> #105 two minutes apart left `c2f2688` with `conclusion: cancelled` and only `75b3b6c` green. The publish
+> gate requires `conclusion == success` for the *tagged* SHA, so tagging that earlier commit would poll
+> ~30 min and then fail. Tagging `main` HEAD after the last merge (Phase 3 above) avoids this by
+> construction — this is a second, independent reason for that rule. Note `ci.yml` grew an arm64 image
+> build in `ee0b21f`, which widens the window.
 
 ## The `main` ruleset, and the one drift it can hide
 
