@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent image's base layer is pinned by digest.** `docker/Dockerfile.agent` builds
+  `FROM ubuntu:22.04@sha256:3b06811b…` instead of the floating `22.04` tag. This Dockerfile has no
+  `COPY`/`ADD` — every byte comes from the base plus apt and pip — so with a floating base, rebuilding
+  an unchanged recipe produced a different image and "the recipe didn't change" said nothing about the
+  contents. Rebuild locally to pick this up; the toolchain versions are unchanged (verified: Ubuntu
+  22.04, Node 22.22.3, numpy 2.2.6 / pandas 2.3.3 / openpyxl 3.1.5, `LANG=C.UTF-8`, uid-1000 `ubuntu`).
+
 ### Fixed
 
 - **`doctor`'s stale-image warning claimed a direction it never measured.** The check compares the local
