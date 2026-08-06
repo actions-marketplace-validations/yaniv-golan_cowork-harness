@@ -6,54 +6,48 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+Follow-up to the consumer report against published 1.18.0: two false-positive/misreporting fixes in the
+tooling 1.18.0 introduced, plus the scoping and summary controls those reports asked for.
+
 ### Added
 
-- **`verify-cassettes` now reads `skills[]` as host inventory.** A skill name says what the operator has
-  installed, exactly as an MCP server name does, and the field was read by no axis. This is not
-  theoretical: at `protocol` with local OAuth the harness keeps the operator's REAL `CLAUDE_CONFIG_DIR`
-  (a fresh one breaks OAuth), so personal skills installed there are discoverable and would be frozen
-  into a committed fixture. Two exemptions mirror the agents axis — the agent's own built-ins, and a
-  `<plugin>:<skill>` whose plugin the same recording declares. `plugins[].name` is deliberately left
-  unscanned: that array is the harness's own declaration channel and holds nothing but scenario-declared
-  entries across every fixture, including `protocol`/`hostloop` recordings made on a plugin-rich machine.
-
-- **`replay --mutate` can be scoped, and its caps raised.** `--mutate-include <glob>` /
-  `--mutate-exclude <glob>` (repeatable; exclude last) restrict which artifact paths are perturbed — `*`
-  stays inside a path segment, `**` crosses them. A corpus dominated by per-run `handoff/` internals
-  buried the signal about delivered artifacts under noise it would be wrong to act on;
-  `--mutate-exclude 'handoff/**'` spends the bounded sample on deliverables instead. Filtering runs
-  before planning, so an out-of-scope artifact is absent from `eligible` too. `--mutate-max-per-file <n>`
-  / `--mutate-max-total <n>` raise the caps — per-file first, since it binds first.
+- **`verify-cassettes` reads `skills[]` as a `host-inventory` axis.** A skill name discloses what is
+  installed on the recording machine, the same class of disclosure as an MCP server name, and the field
+  was previously read by no axis. Two exemptions: the agent's built-in skills, and a `<plugin>:<skill>`
+  whose plugin the same recording declares in `plugins[]`. Host-inheriting tiers only — at `protocol`
+  with local OAuth the harness keeps the operator's real `CLAUDE_CONFIG_DIR`, so personally installed
+  skills are discoverable there. `plugins[].name` is deliberately not scanned: that array holds only
+  entries the harness supplied via `--plugin-dir`, so it carries no host inventory to find.
+- **`replay --mutate` accepts scoping and cap overrides.** `--mutate-include <glob>` and
+  `--mutate-exclude <glob>` (both repeatable; exclude applied last) restrict which artifact paths are
+  perturbed — `*` matches within a path segment, `**` across them. Filtering is applied before planning,
+  so an out-of-scope artifact is excluded from the eligible count as well. `--mutate-max-per-file <n>`
+  and `--mutate-max-total <n>` raise the sampling caps (defaults 10 and 50); prefer the per-file one,
+  which binds first. Any of these without `--mutate` is a usage error. Cost is linear — one full
+  assertion re-run per perturbation.
 
 ### Changed
 
-- **`verify-cassettes` opens with a per-class count.** `findings by class: host-inventory 240` prints
-  before the per-file listing. A sweep surfacing hundreds of findings of a single class read as hundreds
-  of separate problems — a consumer piped the output through `uniq -c` to discover 240 findings were one
-  class with one cause. Additive: every per-file row still prints, because which file carries which
-  finding is what a per-file audit is for. JSON consumers already had `findings[].cls`.
+- **`verify-cassettes` prints a per-class findings count before the per-file listing**, e.g.
+  `findings by class: host-inventory 240`. Informational classes such as `unscanned` are counted too, so
+  the header agrees with the rows beneath it. The per-file rows are unchanged — the rollup is additive.
+  JSON output is unchanged; `findings[].cls` already carried this.
 
 ### Fixed
 
-- **`replay --mutate` reported a sample as if it were the whole corpus.** The plan is capped (10 values
-  per file, 50 total), but the report read `50/50 perturbation(s) CAUGHT BY NOTHING` with no indication
-  that 50 was a sample. A consumer aggregated twenty such lines into "1,020 perturbations, 0 caught" and
-  came one step from concluding their assertions verified nothing; the truth was their asserted paths
-  were never sampled. The report now says `sampled 30 of 120 eligible value(s)` and names the cap that
-  bound — which matters, because the per-file cap is applied first, so advising anyone to raise the total
-  is inert whenever per-file was the binding constraint. The note is omitted entirely when nothing was
-  truncated, so its absence means the counts are the whole truth. `planMutationsWithStats`, which exists
-  precisely to expose this, had never been wired to its only caller.
-- **`replay --mutate` had no machine-readable output.** The internal report was assembled and never read,
-  so every consumer had to scrape stderr — which is how the capped denominator went unnoticed. It now
-  rides the JSON envelope as `mutation` (`sampled` / `eligible` / `truncatedBy` / `caps` / `uncaught`).
-- **The host-inventory check flagged the scenario's own plugin agents.** At `hostloop` the agent roster
-  necessarily contains the agents of the plugin under test — the fixture itself — so every
-  plugin-with-agents consumer hit false positives on upgrade, with "invent an allow regex" as the only
-  remedy. An agent namespaced `<plugin>:<agent>` whose plugin the same recording declares is now exempt,
-  matching the carve-out the MCP-server check already made. The provenance comes from the cassette, so
-  this applies to recordings you already have — no re-record. A foreign agent, or one namespaced to a
-  plugin the run never mounted, still flags.
+- **`replay --mutate` reported its sample as though it were the full set.** The plan is capped at 10
+  values per file and 50 in total, with the per-file cap applied first, but the report showed only
+  `<uncaught>/<planned>`. It now appends the eligible total and names the binding cap — `(sampled 30 of
+  120 eligible value(s); per-file cap 10 reached on 3 file(s))` — and omits the note entirely when
+  nothing was truncated. A bare ratio from 1.18.0 or earlier describes the sample, not the corpus.
+- **`replay --mutate` produced no machine-readable output.** Coverage now rides the JSON envelope as
+  `mutation`, carrying `sampled`, `eligible`, `truncatedBy`, `caps`, and `uncaught`.
+- **The `host-inventory` check flagged the scenario's own plugin agents.** At `hostloop` the agent roster
+  necessarily includes the agents of the mounted plugin, so any plugin declaring agents failed the gate
+  on upgrade to 1.18.0. An agent named `<plugin>:<agent>` whose plugin the same recording declares in
+  `plugins[]` is now exempt, matching the existing carve-out for `mcp.config`-attached servers. The
+  exemption is derived from the cassette, so it applies to recordings made before this release without
+  re-recording. A foreign agent, or one namespaced to a plugin the run never declared, still flags.
 
 ## [1.18.0] — 2026-08-06
 
@@ -71,6 +65,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique --help` and `docs/critique.md` misstated the tier prerequisites.** Both said the `container`
+  and `hostloop` tiers need an authenticated `claude` CLI on PATH. They need a token in the environment
+  or `.env` (`CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` as a CI fallback) — the graded turns run
+  the staged agent binary, not the host CLI. The evaluator passes are what require `claude` on PATH,
+  overridable with `COWORK_HARNESS_CLAUDE_BIN`.
 - **A scenario's `on_unanswered:` overrode an explicit `--on-unanswered` in silence.** The precedence is
   intentional and documented (`run --help`: "per-scenario answers/on_unanswered in the YAML take
   precedence where set") — a committed scenario is the reproducible definition of its own test — but a
