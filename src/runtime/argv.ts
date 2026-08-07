@@ -258,10 +258,13 @@ export interface DockerRunInput {
   lockdown: boolean;
   sessionRoot: string;
   sessionHost: string;
-  // Absent for hostloop's VM sidecar: the agent process is a native macOS spawn, not a container
-  // occupant, so there is no agent binary to bind-mount and no `claude …` argv to run — the sidecar
-  // exists solely as a `docker exec` target for bash/web_fetch. container/microvm always pass both
-  // (unchanged behavior — this is purely additive).
+  // `agentArgv` is absent for hostloop's VM sidecar: the agent is a native macOS spawn, not a container
+  // occupant, so no `claude …` argv runs there — the sidecar exists solely as a `docker exec` target for
+  // bash/web_fetch, and without an argv it runs the keep-alive default below.
+  // `agentHost`/`agentIn` are NOT absent there, despite what this comment claimed for weeks: hostloop
+  // still binds the staged ELF read-only for parity/inspection. "No agent runs in the sidecar" is true
+  // of the argv and false of the bind; conflating them is what made the golden snapshot model a
+  // container that does not exist at that tier. container/microvm pass all three.
   agentHost?: string;
   agentIn?: string;
   image: string;

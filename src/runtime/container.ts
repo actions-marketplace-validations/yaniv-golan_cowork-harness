@@ -67,10 +67,17 @@ export function spawnContainer(
 
   const agentHost = resolveAgentBinary(baseline);
   const image = resolveAgentImage();
-  // Explicit opts take priority over process.env (concurrency-safe); env var is the
-  // manual/dev fallback for direct `docker run` invocations that bypass the sidecar.
-  const proxyHost = opts.egressProxy ?? process.env.COWORK_EGRESS_PROXY ?? "http://egress-proxy:8080";
-  const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
+  // Both are always supplied by the caller: every container-like tier stands up a sidecar before
+  // spawning, and a construction throw aborts the run rather than reaching here. The literal defaults
+  // remain only as a total-function guard for a hand-constructed call, and match docker/compose.yml's
+  // service names so a direct-compose rig still resolves.
+  //
+  // Each of these once had an env-var fallback wedged in front of the default, advertised in README as a
+  // working override. Neither could ever execute, because the explicit value is never absent. They were
+  // deleted rather than wired up at the sidecar: redirecting a run at a proxy the harness did not start
+  // would silently move the very boundary `boundary-check` exists to prove.
+  const proxyHost = opts.egressProxy ?? "http://egress-proxy:8080";
+  const network = opts.dockerNetwork ?? "cowork-net";
   const runner = resolveContainerRuntime();
 
   // NOTE: local marketplaces are resolved to --plugin-dir in buildLaunchPlan (the in-VM

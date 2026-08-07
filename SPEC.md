@@ -159,10 +159,13 @@ docker run --rm -i --platform linux/arm64 --network <net>
   -v <configDir>/skills:/sessions/<id>/mnt/.claude/skills:ro
   -v <configDir>/projects:/sessions/<id>/mnt/.claude/projects:ro
   cowork-agent-base:2
-  sleep infinity                                                     # NO agent runs here
+  -v <staged ELF>:/usr/local/bin/claude:ro   (parity/inspection; nothing spawned runs it)
+  sleep infinity                                                     # NO agent ARGV runs here
 ```
-No agent binary is bind-mounted into this container and no `claude …` argv runs in it — it exists solely
-as a `docker exec` target. The full `.claude` dir is NOT bound wholesale (that shape is VM-loop only);
+No `claude …` argv runs in this container — it exists solely as a `docker exec` target. The agent ELF
+**is** bind-mounted (`-v <staged ELF>:/usr/local/bin/claude:ro`), for parity and inspection only: nothing
+the harness spawns executes it here, since the agent is the native host process. Read "no agent runs" as
+a statement about the argv, not about the bind. The full `.claude` dir is NOT bound wholesale (that shape is VM-loop only);
 this sidecar sees only `.claude/skills` + `.claude/projects`, matching production. `bash`'s exec cwd is
 `/sessions/<id>/mnt/<firstConnectedFolder ?? "outputs">` (production's real `vmCwd` semantics — never the
 bare session root or bare `mnt/`).

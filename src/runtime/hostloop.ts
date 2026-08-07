@@ -178,7 +178,8 @@ export function spawnHostLoop(
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
   // on a leftover same-named container. cwd/work dir stay keyed by sessionId (stable for resume).
   const containerName = `cowork-hl-${opts.runToken ?? sessionId}`;
-  const network = opts.dockerNetwork ?? process.env.COWORK_DOCKER_NETWORK ?? "cowork-net";
+  // Always supplied by the caller (see container.ts for why the removed env-var branch was unreachable).
+  const network = opts.dockerNetwork ?? "cowork-net";
 
   // Stage the writable session tree: NO folder copies (bind-mounted real paths instead), uploads/
   // plugins still staged (copies — same fidelity boundary as before), mcp.json staged into the CONFIG

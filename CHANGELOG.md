@@ -63,6 +63,23 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Two documented networking overrides never worked.** `COWORK_EGRESS_PROXY` and
+  `COWORK_DOCKER_NETWORK` sat behind values the caller always supplies — every container-like tier builds
+  its egress sidecar before spawning, so the env branch could not execute in any tier, and `microvm`
+  never read them at all. README advertised both as working knobs, which is worse than an undocumented
+  dead branch: the docs vouched for a promise the code could not keep. They are removed rather than
+  wired up — redirecting a run at a proxy or network the harness did not create would silently move the
+  boundary `boundary-check` exists to prove. `COWORK_PROXY_IMAGE`, in the same README bullet, is
+  genuinely live and unchanged.
+- **The golden host-loop snapshot asserted a container that does not exist at that tier.** It was built
+  from the container-shaped helper, so it pinned a full agent env and a `claude -p …` argv for a sidecar
+  that has neither — the same "test a shape nothing runs" defect that let host-loop bash egress die
+  unnoticed. It now models the real sidecar: proxy env only, `sleep infinity`, and the ELF bound
+  read-only for parity. `SPEC.md` §3.4 and `dockerRunArgv`'s own doc comment both claimed no agent binary
+  is bind-mounted there, which was false since the host/VM split; both now say what actually happens —
+  no agent *argv* runs in the sidecar, but the ELF *is* bound.
+
+
 - **`hostloop` `bash` had no egress at all — a regression dating to v0.21.0.** The VM sidecar that `bash`
   runs in via `docker exec` was spawned with an empty env on a Docker network with no route off-box, so
   shell commands could reach **neither allowlisted nor denied hosts**: both failed identically with a DNS

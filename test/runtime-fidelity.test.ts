@@ -183,6 +183,20 @@ describe("host-loop sidecar leaves CLAUDE_PLUGIN_ROOT UNSET (matches real host-l
     expect(src).toContain("env: hostLoopSidecarEnv(opts.egressProxy)");
   });
 
+  it("no unreachable process.env egress fallbacks survive in the spawn paths", () => {
+    // `opts.egressProxy`/`opts.dockerNetwork` are ALWAYS supplied — every container-like tier builds a
+    // sidecar before spawning and all four call sites pass its values — so a `?? process.env.COWORK_*`
+    // branch behind them can never execute. Two such branches were documented in README as working
+    // knobs, which is worse than an undocumented dead branch: the docs vouched for a promise the code
+    // could not keep. Deleted rather than wired up, because redirecting the sandbox at an
+    // operator-supplied proxy would silently move the boundary `boundary-check` proves.
+    const container = readFileSync(join(SRC, "runtime", "container.ts"), "utf8");
+    const hostloop = readFileSync(join(SRC, "runtime", "hostloop.ts"), "utf8");
+    expect(container).not.toContain("process.env.COWORK_EGRESS_PROXY");
+    expect(container).not.toContain("process.env.COWORK_DOCKER_NETWORK");
+    expect(hostloop).not.toContain("process.env.COWORK_DOCKER_NETWORK");
+  });
+
   it("the old unresolvable sentinel is gone from the host-loop sidecar", () => {
     // Regression guard: re-introducing a `/host/plugins/unmounted` sentinel would leak a bogus path into
     // guest bash again (the very drift from real host-loop this removed).

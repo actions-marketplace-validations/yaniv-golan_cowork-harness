@@ -3,6 +3,7 @@ import { loadBaseline } from "../src/baseline.js";
 import type { LaunchPlan } from "../src/session.js";
 import { agentArgs, spawnEnv, dockerRunArgv } from "../src/runtime/argv.js";
 import { microvmAgentArgs } from "../src/runtime/microvm.js";
+import { hostLoopSidecarEnv } from "../src/runtime/hostloop.js";
 import { makeWorkspaceHandler } from "../src/hostloop/workspace-handler.js";
 import { serializeDecision, type DecisionRequest } from "../src/agent/session.js";
 import { ScriptedDecider, PermissionDefaultDecider, type Decision, type RunContext } from "../src/decide/decider.js";
@@ -42,6 +43,29 @@ const dockerInput = (agentArgv: string[], name?: string) => ({
   image: "cowork-agent-base:2",
   env: spawnEnv(baseline, { configGuest, proxyHost: "http://egress-proxy:8080" }),
   agentArgv,
+  name,
+});
+
+/**
+ * The host-loop VM sidecar's REAL shape — deliberately NOT `dockerInput` with overrides, because
+ * conflating the two is how the previous version of this case came to assert a container that does not
+ * exist at this tier (full agent env, a `claude -p …` argv) for weeks.
+ *
+ * Three differences from the container shape, all load-bearing:
+ *   - env is `hostLoopSidecarEnv` (proxy keys only) — no agent env, and no CLAUDE_PLUGIN_ROOT
+ *   - NO `agentArgv`, so the container runs `sleep infinity`; the agent is a native host process
+ *   - the ELF bind IS present. It is mounted for parity/inspection and run by nothing the harness
+ *     spawns, which is easy to misread as "no bind" — SPEC once said exactly that, wrongly.
+ */
+const hostLoopSidecarInput = (name: string) => ({
+  network: "cowork-net",
+  lockdown: true,
+  sessionRoot,
+  sessionHost: "/HOST/SESSION",
+  agentHost: "/HOST/claude",
+  agentIn: "/usr/local/bin/claude",
+  image: "cowork-agent-base:2",
+  env: hostLoopSidecarEnv("http://egress-proxy:8080"),
   name,
 });
 
@@ -149,15 +173,15 @@ describe("golden — host-loop (deltas)", () => {
     extraAllowedTools: ["mcp__workspace__bash"],
   });
   it("agentArgs snapshot", () => expect(args).toMatchSnapshot());
-  it("dockerRunArgv snapshot (named for docker exec)", () =>
-    expect(redactHostPlatformArgv(dockerRunArgv(dockerInput(args, `cowork-hl-${ID}`)))).toMatchSnapshot());
+  it("VM sidecar dockerRunArgv snapshot (no agent env, no agent argv, ELF bound for parity)", () =>
+    expect(dockerRunArgv(hostLoopSidecarInput(`cowork-hl-${ID}`))).toMatchSnapshot());
 
   it("SPEC §3.4 host-loop invariants", () => {
     expect(args.slice(args.indexOf("--disallowedTools"))).toEqual(expect.arrayContaining(["Bash", "WebFetch", "NotebookEdit"]));
     const toolsAfter = args.slice(args.indexOf("--tools"));
     expect(toolsAfter).toContain("mcp__workspace__bash");
     expect(toolsAfter).not.toContain("Bash");
-    expect(dockerRunArgv(dockerInput(args, `cowork-hl-${ID}`))).toContain("--name");
+    expect(dockerRunArgv(hostLoopSidecarInput(`cowork-hl-${ID}`))).toContain("--name");
     const env = spawnEnv(baseline, { configGuest, proxyHost: "P", extra: { CLAUDE_PLUGIN_ROOT: "/host/plugins/my-skill" } });
     expect(env.CLAUDE_PLUGIN_ROOT).toMatch(/^\/host\//); // unmounted host path -> self-heal
   });
