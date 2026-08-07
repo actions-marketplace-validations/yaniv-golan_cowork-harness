@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, readFileS
 import { tmpdir } from "node:os";
 import { join, isAbsolute, resolve as resolvePath } from "node:path";
 import {
+  gateAssertContradiction,
   parseSessionFile,
   parseScenarioFile,
   scanEvents,
@@ -893,5 +894,61 @@ describe("every executeScenario caller that sets a policy also declares whether 
       missing,
       "a caller sets onUnanswered: without onUnansweredFlag: — the scenario-overrides-flag warning cannot fire there",
     ).toEqual([]);
+  });
+});
+
+// --- gateAssertContradiction: refuse an unsatisfiable gate pairing BEFORE the spawn ----------------
+// `questions_count_max: 0` ("no sub-question was ever asked") cannot hold alongside an assertion that
+// REQUIRES a gate: any delivered gate records at least one question. The scenario is a guaranteed waste
+// of a paid run, and `lint` — which reports the same thing — is opt-in, so the refusal has to sit on the
+// execution path. Sited in executeScenario because run/skill/record all funnel through it.
+//
+// The two keys can live in SEPARATE `assert:` entries, which is why the check is over the whole array;
+// an entry-level check could never see the pair. (Same reason `Scenario.superRefine` exists for the
+// no_delete_in_outputs/allow_outputs_delete pair — see the function's own note on why this one is not
+// there.)
+describe("gateAssertContradiction", () => {
+  const sc = (assert: unknown[]) => ({ name: "t", prompt: "hi", assert }) as unknown as Parameters<typeof gateAssertContradiction>[0];
+
+  it("flags a zero-question declaration paired with a gate floor, across separate entries", () => {
+    const msg = gateAssertContradiction(sc([{ questions_count_max: 0 }, { gate_answer_count_min: 1 }]));
+    expect(msg).toMatch(/no run can satisfy both/);
+    expect(msg, "the message must name the offending keys, not just complain").toMatch(/gate_answer_count_min/);
+  });
+
+  it("flags it within a single entry too", () => {
+    expect(gateAssertContradiction(sc([{ questions_count_max: 0, gate_answer_count_min: 1 }]))).toBeDefined();
+  });
+
+  it.each([
+    ["question_asked", { question_asked: "which format" }],
+    // `: false` demands a CONFIRMED delivery failure, so it needs a gate to have fired — a presence
+    // requirement in disguise, and the pair lint would otherwise stop reporting once the vacuous-gate
+    // rule became value-aware.
+    ["gate_answers_delivered: false", { gate_answers_delivered: false }],
+    ["a floor above 1", { gate_answer_count_min: 5 }],
+  ])("flags %s as a presence requirement", (_label, presence) => {
+    expect(gateAssertContradiction(sc([{ questions_count_max: 0 }, presence]))).toBeDefined();
+  });
+
+  it.each([
+    ["the declaration alone", [{ questions_count_max: 0 }]],
+    ["a nonzero max with a floor", [{ questions_count_max: 1 }, { gate_answer_count_min: 1 }]],
+    // `>= 0` holds at zero gates, so it requires nothing and contradicts nothing.
+    ["a zero floor", [{ questions_count_max: 0 }, { gate_answer_count_min: 0 }]],
+    // `: true` passes VACUOUSLY at zero gates — merely inert next to the declaration, not contradictory.
+    // lint says so; it is not worth refusing a run over.
+    ["gate_answers_delivered: true", [{ questions_count_max: 0 }, { gate_answers_delivered: true }]],
+    ["presence assertions with no declaration", [{ gate_answer_count_min: 1 }, { question_asked: "x" }]],
+    ["an empty assert list", []],
+  ])("does not flag %s", (_label, asserts) => {
+    expect(gateAssertContradiction(sc(asserts))).toBeUndefined();
+  });
+
+  it("ignores tool_not_called — it reads a different channel than the gate keys", () => {
+    // A fixture-driven `protocol` run can inject a gate on the control channel without it reaching the
+    // tool log, so "no AskUserQuestion tool call" + "a gate fired" is NOT a provable contradiction.
+    // Assuming otherwise would hard-fail a legitimate protocol scenario.
+    expect(gateAssertContradiction(sc([{ questions_count_max: 0 }, { tool_not_called: "AskUserQuestion" }]))).toBeUndefined();
   });
 });

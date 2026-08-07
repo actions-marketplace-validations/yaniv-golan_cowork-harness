@@ -836,10 +836,13 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     sub-question count and a matching footer total — read that off instead of the tool-call count when
     sizing the budget.
 
-19. **`gate_answers_delivered` passes vacuously when no gate fires — use `gate_answer_count_min: 1` to
-    also require a gate.** Whether a gate fires is model-dependent, so `gate_answers_delivered: true`
-    alone can't catch "the gate never fired at all"; pair it with `gate_answer_count_min` when
-    presence matters, not just delivery.
+19. **`gate_answers_delivered` passes vacuously when no gate fires — pair it, or drop it.** Whether a
+    gate fires is model-dependent, so `gate_answers_delivered: true` alone can't catch "the gate never
+    fired at all". If the scenario is meant to gate, pair it with `gate_answer_count_min: 1` (a floor of
+    `0` witnesses nothing). If the scenario is gate-clean by design, drop the key — it asserts nothing
+    there — and declare `questions_count_max: 0`, which fails loudly if a gate ever appears. Asserting
+    `questions_count_max: 0` alongside a gate-presence key is unsatisfiable: `run`/`skill`/`record`
+    refuse it before spending.
 
 20. **A `mode: r` connected folder's contents are recorded body-less, not excluded.** `record` captures a
     read-only folder's files as path + hash only (`truncated: true`, no `body`) — it's an input the agent

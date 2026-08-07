@@ -559,6 +559,23 @@ def test_min_severity_filters_json_identically(tmp_path):
 # passes vacuously at zero and leaves the hole open.
 
 RULE = "vacuous-gate-assert"
+CONTRA = "gate-assert-contradiction"
+
+
+def _findings(yaml_body, tmp_path):
+    """Like _rules but returns the Finding objects, so a test can assert on message/fix TEXT.
+    The one-sided remedy this rule shipped with was invisible to every rule-id-only assertion."""
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\nfidelity: container\nprompt: hi\n" + yaml_body,
+        encoding="utf-8",
+    )
+    return list(scenario.lint_file(str(f)))
+
+
+def _one(rule, yaml_body, tmp_path):
+    """The single finding for `rule`, or None."""
+    return next((f for f in _findings(yaml_body, tmp_path) if f.rule == rule), None)
 
 
 def test_gate_answers_delivered_alone_warns(tmp_path):
@@ -569,6 +586,7 @@ def test_gate_answers_delivered_alone_warns(tmp_path):
     "companion",
     [
         "gate_answer_count_min: 1",  # the explicit floor
+        "gate_answer_count_min: 2",  # any floor >= 1 witnesses presence
         'question_asked: "which format"',  # fails "no question matched" on an empty set
         'tool_called: "AskUserQuestion"',  # fails "tool not called"
     ],
@@ -589,14 +607,228 @@ def test_tool_called_for_an_unrelated_tool_is_not_a_companion(tmp_path):
     assert RULE in _rules(body, tmp_path)
 
 
-def test_tool_called_regex_matching_the_gate_tool_counts(tmp_path):
-    # `tool_called` is a user REGEX over observed tool names, so the check asks whether THEIR pattern
-    # would match the gate tool -- not whether they typed the name exactly.
-    body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "Ask.*Question"\n'
+# --- D1: the rule must read the assertion's VALUE, not just its key --------------------------------
+# `gate_answers_delivered: false` is the INVERSE assertion: it demands at least one gate whose answer
+# was confirmed NOT delivered (src/assert.ts, the `failedConfirmed.length > 0` branch). Zero gates FAILS
+# it. So it is not the vacuous direction, and `gate_answer_count_min` -- which counts delivered === true
+# -- is not its companion. Firing here reds a correct negative-path scenario under CI's
+# `--strict --min-severity WARN`, with a message whose stated premise is inverted.
+
+
+def test_gate_answers_delivered_false_does_not_warn(tmp_path):
+    assert RULE not in _rules("assert:\n  - gate_answers_delivered: false\n", tmp_path)
+
+
+def test_gate_answers_delivered_false_with_unrelated_key_does_not_warn(tmp_path):
+    body = "assert:\n  - gate_answers_delivered: false\n  - result: success\n"
     assert RULE not in _rules(body, tmp_path)
 
 
-def test_malformed_tool_called_regex_does_not_crash_the_linter(tmp_path):
-    # An uncompilable regex is a different rule's finding; this one must not raise on it.
+def test_both_true_and_false_authored_still_warns(tmp_path):
+    # The `true` half still needs a companion; the `false` half does not excuse it.
+    body = "assert:\n  - gate_answers_delivered: true\n  - gate_answers_delivered: false\n"
+    assert RULE in _rules(body, tmp_path)
+
+
+# --- D1b: the COMPANION side is value-blind too, and that one is a fail-open -----------------------
+# `gate_answer_count_min: 0` is legal (the schema is nonnegative) and always true (`delivered >= 0`),
+# so it witnesses nothing -- yet name-only membership let it silence this rule. That is a silent
+# false-green wearing the paired idiom's clothes: strictly worse than D1's loud false positive.
+
+
+def test_gate_answer_count_min_zero_is_not_a_companion(tmp_path):
+    body = "assert:\n  - gate_answers_delivered: true\n  - gate_answer_count_min: 0\n"
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_gate_answer_count_min_true_is_not_a_companion(tmp_path):
+    # Python's `True >= 1` is true -- without an explicit bool exclusion a schema-invalid `: true`
+    # would read as a floor of 1 and silence the rule.
+    body = "assert:\n  - gate_answers_delivered: true\n  - gate_answer_count_min: true\n"
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_gate_answer_count_min_negative_is_not_a_companion(tmp_path):
+    body = "assert:\n  - gate_answers_delivered: true\n  - gate_answer_count_min: -1\n"
+    assert RULE in _rules(body, tmp_path)
+
+
+@pytest.mark.parametrize("floor", ["1.0", "1e0"])
+def test_yaml_1_1_numeric_spellings_still_count_as_a_floor(floor, tmp_path):
+    # THE DIALECT TRAP. This linter parses with PyYAML (YAML 1.1): `1.0` arrives as a float and `1e0`
+    # as a STRING. The harness loads scenarios with the npm `yaml` package (YAML 1.2 core), which
+    # resolves both to the integer 1, and `z.number().int()` accepts them. So both are fully loadable
+    # scenarios with a real floor of 1 -- an `isinstance(v, int)` test would red them under --strict,
+    # a NEW false positive of exactly the class this rule exists to remove.
+    body = f"assert:\n  - gate_answers_delivered: true\n  - gate_answer_count_min: {floor}\n"
+    assert RULE not in _rules(body, tmp_path)
+
+
+# --- D3: `tool_called` is a GLOB, not a regex ------------------------------------------------------
+# `tool_called` is glob-matched by the harness (src/types.ts `toolGlob`, src/assert.ts `toolMatches`):
+# anchored, case-SENSITIVE, only `*` and `?` special, and a value carrying a regex metacharacter is
+# REJECTED at scenario load. Reading it as a case-insensitive `re.search` was wrong on three axes at
+# once and produced four false positives plus a fail-open.
+
+
+@pytest.mark.parametrize(
+    "glob",
+    [
+        "AskUserQuestion",  # exact
+        "Ask*Question",     # `*` = any run within a segment
+        "*Question",        # leading wildcard
+        "**/AskUserQuestion",  # whole-segment `**` matches ZERO segments
+        "**/*",
+    ],
+)
+def test_tool_called_glob_matching_the_gate_tool_counts(glob, tmp_path):
+    body = f'assert:\n  - gate_answers_delivered: true\n  - tool_called: "{glob}"\n'
+    assert RULE not in _rules(body, tmp_path)
+
+
+def test_tool_called_wrong_case_is_not_a_companion(tmp_path):
+    # THE FAIL-OPEN. Glob matching is case-sensitive, so this pattern can never match the real tool --
+    # a scenario that looks paired but whose companion cannot fire. `re.IGNORECASE` exempted it.
+    body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "askuserquestion"\n'
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_tool_called_regexish_value_is_not_a_companion(tmp_path):
+    # `Ask.*Question` is REJECTED by `toolGlob` at load, so a scenario carrying it can never run. The
+    # old test enshrined it as the way to pair by pattern -- teaching an unloadable scenario. Under
+    # glob semantics the `.` is literal, it matches nothing, and the rule correctly still fires.
+    body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "Ask.*Question"\n'
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_malformed_tool_called_value_does_not_crash_the_linter(tmp_path):
+    # `[unclosed` is likewise toolGlob-rejected at load. Under glob semantics there is nothing to
+    # compile, so the linter cannot raise -- it just doesn't match. (The old name said "regex"; the
+    # field was never a regex.)
     body = 'assert:\n  - gate_answers_delivered: true\n  - tool_called: "[unclosed"\n'
     assert RULE in _rules(body, tmp_path)
+
+
+def test_non_string_tool_called_does_not_crash_the_linter(tmp_path):
+    body = "assert:\n  - gate_answers_delivered: true\n  - tool_called: [a, b]\n"
+    assert RULE in _rules(body, tmp_path)
+
+
+def test_glob_port_matches_the_typescript_engine():
+    """Differential guard: `_tool_glob_matches` is a port of globToRegExp (src/glob.ts). The expected
+    column was produced by running `anyGlobMatches([p], "AskUserQuestion")` against the TS engine.
+
+    A flat per-character loop passes most of this table but gets every `**/` row wrong: a whole-segment
+    `**` matches ZERO segments, so `**/AskUserQuestion` matches a bare `AskUserQuestion`. That is a
+    property of the PATTERN's segments, not of the subject, so "a tool name contains no `/`" does not
+    make the flat form equivalent.
+
+    Known-benign engine differences, all inert against a constant ASCII subject: `re.escape` escapes a
+    superset of globToRegExp's escape set; Python's `$` also matches before a trailing newline; and JS
+    `[^/]` is a UTF-16 code UNIT while Python's is a code POINT, so `?` would diverge on an astral
+    subject -- relevant only if this helper is ever reused against real tool names.
+    """
+    expected = {
+        "AskUserQuestion": True,
+        "Ask*Question": True,
+        "*Question": True,
+        "askuserquestion": False,
+        "**/AskUserQuestion": True,
+        "**/*": True,
+        "**/**": True,
+        "**/**/AskUserQuestion": True,
+        "*/AskUserQuestion": False,
+        "**": True,
+        "*": True,
+        "?skUserQuestion": True,
+        "AskUserQuestio?": True,
+        "Ask**Question": True,
+        "": False,
+        "Ask/Question": False,
+        "**/": False,
+        "/AskUserQuestion": False,
+        "Ask\\Question": False,
+        "AskUserQuestion*": True,
+        "A*n": True,
+        "mcp__x__*": False,
+        "Ask?*Question": True,
+        "AskUserQuestioné": False,
+        "**//AskUserQuestion": False,
+        "AskUserQuestion/": False,
+        "Ask.*Question": False,
+        "??????????????????": False,
+        "******************": True,
+    }
+    actual = {p: scenario._tool_glob_matches(p, "AskUserQuestion") for p in expected}
+    assert actual == expected
+
+
+# --- D4: a statically unsatisfiable gate pair -------------------------------------------------------
+# `questions_count_max: 0` says "no sub-question was ever asked". Any DELIVERED gate records at least
+# one question (the harness pushes one entry per sub-question before answering, and a zero-question
+# gate throws), so pairing it with a presence assertion can never be satisfied. Both sides read the
+# same control channel, which is what makes the contradiction provable from the YAML alone.
+
+
+@pytest.mark.parametrize(
+    "presence",
+    [
+        "gate_answer_count_min: 1",
+        "gate_answer_count_min: 5",
+        'question_asked: "which format"',
+        "gate_answers_delivered: false",  # demands a CONFIRMED delivery failure => >= 1 gate
+    ],
+)
+def test_zero_questions_plus_presence_is_a_contradiction(presence, tmp_path):
+    body = f"assert:\n  - questions_count_max: 0\n  - {presence}\n"
+    assert CONTRA in _rules(body, tmp_path)
+
+
+def test_contradiction_is_detected_within_a_single_assert_entry(tmp_path):
+    body = "assert:\n  - {questions_count_max: 0, gate_answer_count_min: 1}\n"
+    assert CONTRA in _rules(body, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "assert:\n  - questions_count_max: 0\n",  # alone: a legitimate zero-gate declaration
+        "assert:\n  - questions_count_max: 1\n  - gate_answer_count_min: 1\n",  # satisfiable
+        "assert:\n  - questions_count_max: 0\n  - gate_answer_count_min: 0\n",  # >= 0 holds at zero
+        "assert:\n  - questions_count_max: 0\n  - gate_answers_delivered: true\n",  # both vacuous at 0
+        "assert:\n  - gate_answer_count_min: 1\n  - question_asked: \"x\"\n",
+    ],
+)
+def test_satisfiable_gate_combinations_are_not_flagged(body, tmp_path):
+    assert CONTRA not in _rules(body, tmp_path)
+
+
+def test_contradiction_is_an_error_so_lint_fails_without_strict(tmp_path):
+    # Severity mirrors the runtime refusal: `run`/`skill`/`record` reject this scenario before
+    # spending, so the linter must not need `--strict` to say so.
+    f = _one(CONTRA, "assert:\n  - questions_count_max: 0\n  - gate_answer_count_min: 1\n", tmp_path)
+    assert f is not None and f.severity == "ERROR"
+
+
+# --- WS2: the remedy must carry BOTH branches -------------------------------------------------------
+# The shipped fix line only ever said "add a presence companion". For a scenario that is gate-clean by
+# design every branch of it is wrong, and the correct fix -- drop the key, it asserts nothing there --
+# was never named. A consumer followed it into a contradiction and paid for a live run to find out.
+
+
+def test_remedy_offers_both_pairing_and_dropping(tmp_path):
+    f = _one(RULE, "assert:\n  - gate_answers_delivered: true\n", tmp_path)
+    assert f is not None
+    assert "gate_answer_count_min: 1" in f.fix, "the pairing branch went missing"
+    assert "questions_count_max: 0" in f.fix, "the zero-gate-intent branch went missing"
+    assert "drop" in f.fix.lower() or "remove" in f.fix.lower(), "the drop-it branch went missing"
+
+
+def test_zero_gate_declaration_switches_the_message_to_drop_it(tmp_path):
+    # The scenario has already said it expects no gates, so "add a companion" is wrong advice: the key
+    # is inert here. Same rule id, different message -- and it must NOT go silent, because
+    # `questions_count_max: 0` is still not a presence companion.
+    body = "assert:\n  - gate_answers_delivered: true\n  - questions_count_max: 0\n"
+    f = _one(RULE, body, tmp_path)
+    assert f is not None
+    assert "inert" in f.message.lower() or "asserts nothing" in f.message.lower()

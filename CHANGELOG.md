@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Four scenario shapes that lint clean today may newly fail `cowork-harness lint --strict
+  --min-severity WARN`** (the invocation the CI recipe teaches). None is a false alarm — each is a
+  scenario that was already not testing what it looked like it tested:
+  1. `questions_count_max: 0` paired with a gate-presence key → new `gate-assert-contradiction` ERROR
+     (and the run itself is now refused).
+  2. `gate_answers_delivered: true` paired with `gate_answer_count_min: 0` → the zero floor no longer
+     counts as a companion. **Most likely to already be in an existing corpus.** Fix: raise the floor to
+     `1`, or drop `gate_answers_delivered`.
+  3. `tool_called: "askuserquestion"` (or any wrong-case spelling) alongside `gate_answers_delivered`
+     → the glob is case-sensitive and never matched the gate; it no longer silences the rule.
+  4. `tool_called: "Ask.*Question"` → a regex-shaped value, already rejected at scenario load by the
+     tool-glob schema, no longer silences the rule either. Use `Ask*Question`.
+
+  Conversely, `gate_answers_delivered: false` **stops** warning — if you carry a suppression for it, it
+  can go.
+
 ### Added
 
 - **`doctor` checks the agent image against a digest this release pins, offline.** The check previously
@@ -27,6 +45,17 @@ All notable changes to this project are documented here. The format is based on
   are unaffected. The workflow refuses to repoint an existing `:2-r<N>` and fails **closed** when it
   cannot enumerate tags — an inconclusive check must never read as "tag absent". See
   [docs/maintenance.md](./docs/maintenance.md#publishing-an-agent-image-revision).
+
+- **`run` / `skill` / `record` now refuse an unsatisfiable gate pairing before spawning, and `lint`
+  reports it as `gate-assert-contradiction` (ERROR).** `questions_count_max: 0` says no sub-question was
+  ever asked; any delivered gate records at least one. So pairing it with `gate_answer_count_min: >= 1`,
+  `question_asked`, or `gate_answers_delivered: false` can never be satisfied — previously that cost a
+  live run to discover. `questions_count_max: 0` **on its own** is the supported way to declare a
+  gate-clean scenario and is unaffected.
+
+  This is a **command-level** refusal, not a schema change: `schema/scenario.schema.json` still accepts
+  the document, so the covered input contract ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
+  is untouched and no cassette is affected.
 
 ### Changed
 
@@ -62,6 +91,29 @@ All notable changes to this project are documented here. The format is based on
   22.04, Node 22.22.3, numpy 2.2.6 / pandas 2.3.3 / openpyxl 3.1.5, `LANG=C.UTF-8`, uid-1000 `ubuntu`).
 
 ### Fixed
+
+- **`lint`'s `vacuous-gate-assert` rule was wrong in four ways, two of them silent.** The rule exists to
+  catch a `gate_answers_delivered` that guards nothing, and it read only assertion **key names**, never
+  their values:
+  - It fired on `gate_answers_delivered: **false**`, whose premise is the opposite — that assertion
+    demands a confirmed delivery *failure*, so zero gates fails it. A correct negative-path scenario was
+    told, in a build-failing warning, that it passed vacuously.
+  - It accepted `gate_answer_count_min: **0**` as the presence companion. `delivered >= 0` always holds,
+    so the pairing everyone reads as "and a gate must actually fire" asserted nothing — a silent
+    false-green wearing the correct idiom's clothes.
+  - It matched `tool_called` with a case-insensitive `re.search`, but that field is a **glob**
+    (anchored, case-sensitive, only `*`/`?` special). Valid globs that do pin the gate
+    (`Ask*Question`, `*Question`, `**/AskUserQuestion`, `**/*`) were flagged anyway, while
+    `askuserquestion` — which can never match — silenced the rule. The matcher is now a port of the
+    harness's own glob engine, with a differential test against it.
+  - Its remedy only ever said "add a presence companion". For a scenario that is gate-clean **by
+    design** every branch of that was wrong, and the correct fix — drop the key, it asserts nothing
+    there — was never named. The fix line now carries both branches, and when a scenario already
+    declares `questions_count_max: 0` the finding says the key is *inert here, drop it* rather than
+    telling you to add a gate.
+
+  Thanks to the founder-skills consumer whose report surfaced the one-sided remedy; the other three came
+  out of investigating it.
 
 - **`expect_denied` could not tell an empty egress channel from an allowed host.** The expansion into
   `egress_denied` assertions was duplicated in the live run and the verify path, and both reported a bare

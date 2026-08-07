@@ -273,7 +273,53 @@ export function resolveSubagentConfigRoot(
   return undefined;
 }
 
+/** A statically unsatisfiable gate pairing, or `undefined` when the scenario is runnable.
+ *
+ *  `questions_count_max: 0` says no sub-question was ever asked. Any DELIVERED gate records at least one
+ *  question — `handleDecision` pushes one entry per sub-question BEFORE answering, and a gate carrying
+ *  zero questions throws — so pairing it with an assertion that REQUIRES a gate can never be satisfied.
+ *  The two keys can sit in separate `assert:` entries, so the check is over the whole array.
+ *
+ *  Refused rather than merely warned because the scenario is a guaranteed waste of a paid run, and
+ *  `lint` (which reports the same thing as `gate-assert-contradiction`) is opt-in — the consumer report
+ *  behind this check had not run it.
+ *
+ *  WHY HERE AND NOT IN THE SCHEMA. Its sibling contradiction (`no_delete_in_outputs` +
+ *  `allow_outputs_delete`) lives in `Scenario.superRefine`, which is the more consistent home. It is not
+ *  available: `schema/scenario.schema.json` is a covered surface and SPEC.md §12 makes tightening
+ *  validation on a previously-valid document a MAJOR bump. This follows `promptPolicyRejection`
+ *  (cassette.ts) instead — a command-level refusal of something the schema still accepts. Move it into
+ *  `superRefine` at the next major.
+ *
+ *  DELIBERATELY EXCLUDES `tool_not_called`. It reads the tool log, while these keys read the control
+ *  channel; a fixture-driven `protocol` run can inject a gate on the control channel alone, so a
+ *  cross-channel contradiction is not provable from the YAML. Pure → unit-testable without a spawn. */
+export function gateAssertContradiction(scenario: Scenario): string | undefined {
+  const asserts = scenario.assert ?? [];
+  if (!asserts.some((a) => a.questions_count_max === 0)) return undefined;
+  const presence: string[] = [];
+  if (asserts.some((a) => a.gate_answer_count_min !== undefined && a.gate_answer_count_min >= 1))
+    presence.push("`gate_answer_count_min: >= 1`");
+  if (asserts.some((a) => a.question_asked !== undefined)) presence.push("`question_asked`");
+  // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
+  // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
+  // inert alongside the declaration (lint says so; it is not worth refusing a run over).
+  if (asserts.some((a) => a.gate_answers_delivered === false)) presence.push("`gate_answers_delivered: false`");
+  if (!presence.length) return undefined;
+  return (
+    `scenario "${scenario.name}" asserts \`questions_count_max: 0\` alongside ${presence.join(" and ")} — no run can satisfy both, ` +
+    `so this would spend a run to fail. A delivered gate records at least one question, so requiring a gate to be present ` +
+    `contradicts requiring zero questions. Keep the zero-gate declaration and drop the presence assertion, or drop ` +
+    `\`questions_count_max: 0\` if the scenario really does expect a gate.`
+  );
+}
+
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
+  // Refuse a scenario no run can satisfy BEFORE the spawn — the whole point is not to pay for it.
+  // Sited here rather than in each command because every lane funnels through executeScenario
+  // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
+  const contradiction = gateAssertContradiction(scenario);
+  if (contradiction) throw new UsageError(contradiction);
   // mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.
   if (opts.resume && !opts.sessionId) throw new Error("resume requires sessionId (--session-id was not provided)");

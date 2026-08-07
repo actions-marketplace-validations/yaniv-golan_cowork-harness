@@ -26,6 +26,7 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  on_unanswered: agent / invalid value            (schema rejects `agent`)
   E  authored `replay_protocol_fidelity` assertion   (replay-synthesized only)
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
+  E  `questions_count_max: 0` + a gate-presence assert (unsatisfiable; run/skill/record refuse it)
   W  `transcript_no_host_path` on `fidelity: cowork` (tier resolves per baseline gate —
                                                       incompatible if it lands hostloop)
   W  `no_scratchpad_leak` on `fidelity: cowork`    (tier resolves per baseline gate)
@@ -338,6 +339,63 @@ def _all_assert_keys(items):
     return keys
 
 
+def _assert_values(items, key):
+    """Every value authored for `key` across the assert items (a key may repeat across entries).
+
+    `_all_assert_keys` sees only NAMES, which is how this linter shipped two value-blind gate checks:
+    one firing on an assertion whose premise it inverted, one exempting a floor of zero."""
+    return [item[key] for item in items if isinstance(item, dict) and key in item]
+
+
+def _numeric(v):
+    """The number the HARNESS would see for a YAML scalar, or None if it isn't one.
+
+    NOT `isinstance(v, int)`. This linter parses with PyYAML (YAML 1.1); the harness loads scenarios
+    with the npm `yaml` package (YAML 1.2 core). `1.0` reaches Python as a float and `1e0` as a STRING,
+    yet npm yaml resolves both to the integer 1 and `z.number().int()` accepts them -- so both are
+    loadable scenarios that an int-only test would mis-read.
+
+    The dialect cuts the other way too, benignly: PyYAML resolves `1_000` -> 1000 and `1:30` -> 90
+    (sexagesimal), which npm yaml leaves as strings that `z.number()` REJECTS at load. Those read as a
+    number here and are refused by the loader -- silent lint, loud load. Same shape as `no`/`off`
+    resolving to False in 1.1 but staying strings in 1.2."""
+    if isinstance(v, bool):
+        return None  # `True >= 1` is true in Python; a schema-invalid `: true` is not a floor
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None
+
+
+def _tool_glob_matches(pattern, name):
+    """Port of `globToRegExp` (src/glob.ts) for a tool name.
+
+    `tool_called` is a GLOB, not a regex (src/types.ts `toolGlob`, src/assert.ts `toolMatches`):
+    anchored, CASE-SENSITIVE, only `*` and `?` special, every other character literal. A value carrying
+    a regex metacharacter is rejected at scenario load, so reading this field with `re.search` was wrong
+    on three axes at once -- it flagged valid globs, and exempted a wrong-case glob that can never match.
+
+    Segment-aware on purpose: a whole-segment `**` matches ZERO segments, so `**/AskUserQuestion`
+    matches a bare `AskUserQuestion`. That is a property of the pattern's segments, not the subject's,
+    which is why "a tool name contains no `/`" does not make a flat per-character loop equivalent."""
+    segments = pattern.replace("\\", "/").split("/")
+    rx = "^"
+    for i, seg in enumerate(segments):
+        last = i == len(segments) - 1
+        if seg == "**":
+            rx += "(?:[^/]+(?:/[^/]+)*)?" if last else "(?:[^/]+/)*"
+            continue
+        for ch in seg:
+            rx += "[^/]*" if ch == "*" else "[^/]" if ch == "?" else re.escape(ch)
+        if not last:
+            rx += "/"
+    return re.match(rx + "$", name) is not None
+
+
 def _is_positional_choose(choose):
     """True if a `choose` value selects by POSITION — `first` or a 1-based index (scalar or in a
     multiSelect list) — as opposed to an exact label. Positional answers are order-dependent (H1)."""
@@ -600,37 +658,109 @@ def lint_doc(doc, path, raw_lines):
     # 0 gates sit green for weeks against a scenario asserting exactly this key.
     #
     # A companion is anything that FAILS (rather than vacuously passes) on an empty gate set:
-    #   · gate_answer_count_min — the explicit floor
-    #   · question_asked        — fails "no question matched" against an empty question list
-    #   · tool_called matching AskUserQuestion — fails "tool not called"
+    #   · gate_answer_count_min WITH A FLOOR >= 1 — the explicit floor. The value matters: `: 0` is legal
+    #     (the schema is nonnegative) and `delivered >= 0` always holds, so a zero floor witnesses nothing
+    #     and must not silence this rule. Reading the key NAME alone made the "looks paired" scenario a
+    #     silent false-green — worse than the loud one this rule was written for.
+    #   · question_asked — fails "no question matched" against an empty question list, for ANY pattern
+    #     (`.some` over an empty list is false, so no value gate is needed here).
+    #   · tool_called whose GLOB matches AskUserQuestion — fails "tool not called".
     # `questions_count_max` is deliberately NOT a companion: a MAX passes vacuously at zero, so pairing it
     # leaves the hole wide open. The harness's own `scaffold` emits `question_asked` alongside this key,
     # which is why the exemption must include it — otherwise this rule reds the tool's own output.
-    if "gate_answers_delivered" in assert_keys:
-        has_companion = bool(assert_keys & {"gate_answer_count_min", "question_asked"})
+    #
+    # VALUE, not just key. `gate_answers_delivered: false` is the INVERSE assertion — it demands at least
+    # one gate whose answer was confirmed NOT delivered, so zero gates FAILS it. It is not the vacuous
+    # direction, and `gate_answer_count_min` (which counts delivered === true) is not its companion.
+    # Firing there reds a correct negative-path scenario under CI's `--strict --min-severity WARN`, with a
+    # message whose premise is inverted. Skip on `is False` specifically, so a schema-invalid non-bool
+    # still warns rather than opening a new hole. (`no`/`off` also reach here as False under PyYAML's
+    # YAML 1.1 but are rejected by the loader as strings — see _numeric for the same dialect gap.)
+    delivered_values = _assert_values(items, "gate_answers_delivered")
+    if any(v is not False for v in delivered_values):
+        has_companion = "question_asked" in assert_keys or any(
+            (n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")
+        )
         if not has_companion:
             for item in items:
                 tc = item.get("tool_called")
-                if not isinstance(tc, str):
-                    continue
-                # `tool_called` is a user regex over observed tool names; ask whether THEIR pattern would
-                # match the gate tool rather than string-comparing. A bad regex is somebody else's finding.
-                try:
-                    if re.search(tc, "AskUserQuestion", re.IGNORECASE):
-                        has_companion = True
-                        break
-                except re.error:
-                    continue
+                # A GLOB, not a regex (src/types.ts toolGlob) — ask whether THEIR pattern would match the
+                # gate tool under the harness's own matching rules. A non-str value is somebody else's
+                # finding; a glob cannot fail to compile, so there is nothing to guard against here.
+                if isinstance(tc, str) and _tool_glob_matches(tc, "AskUserQuestion"):
+                    has_companion = True
+                    break
         if not has_companion:
+            # The scenario may already have DECLARED that it expects no gates. Then "add a companion" is
+            # wrong advice — the key is inert, and the fix is to drop it. Same rule id, different message;
+            # it must not go silent, because `questions_count_max: 0` is still not a presence companion.
+            declares_zero_gates = any(_numeric(v) == 0 for v in _assert_values(items, "questions_count_max"))
+            if declares_zero_gates:
+                findings.append(
+                    Finding(
+                        "WARN",
+                        "vacuous-gate-assert",
+                        "`gate_answers_delivered` is inert here — this scenario already declares it expects "
+                        "no gates (`questions_count_max: 0`), and zero gates fired passes "
+                        "`gate_answers_delivered` VACUOUSLY, so the key asserts nothing.",
+                        "Drop `gate_answers_delivered` — `questions_count_max: 0` already states the intent "
+                        "and fails loudly if a gate ever appears. If the scenario is meant to gate after all, "
+                        "drop `questions_count_max: 0` and pair the delivery check with "
+                        "`gate_answer_count_min: 1`.",
+                        path,
+                    )
+                )
+            else:
+                findings.append(
+                    Finding(
+                        "WARN",
+                        "vacuous-gate-assert",
+                        "`gate_answers_delivered` has no presence companion — zero gates fired passes it "
+                        "VACUOUSLY, so this assertion stays green if the skill stops asking altogether "
+                        "(exactly the regression it looks like it is guarding).",
+                        "If the scenario is meant to gate, pair it with `gate_answer_count_min: 1` (a floor "
+                        'of 0 witnesses nothing) — or a `question_asked: "<rx>"`, or `tool_called: '
+                        '"AskUserQuestion"` — so a gate must actually fire. If the scenario is gate-clean by '
+                        "design, DROP `gate_answers_delivered` (it asserts nothing there) and declare the "
+                        "intent with `questions_count_max: 0` (or `tool_not_called: \"AskUserQuestion\"`), "
+                        "which fails loudly if a gate ever appears.",
+                        path,
+                    )
+                )
+
+    # E: a statically unsatisfiable gate pair — the scenario can never pass, on any lane.
+    #
+    # `questions_count_max: 0` says no sub-question was ever asked. Any DELIVERED gate records at least one
+    # question (the harness pushes one entry per sub-question BEFORE answering, and a gate carrying zero
+    # questions throws), so pairing that with a presence assertion is unsatisfiable. Both sides read the
+    # same control channel, which is what makes this provable from the YAML alone — deliberately NOT
+    # extended to `tool_not_called`, which reads the tool log: a fixture-driven `protocol` run can inject a
+    # gate on the control channel alone, so a cross-channel "contradiction" is not provable here.
+    #
+    # ERROR because `run`/`skill`/`record` refuse the scenario outright (see promptPolicyRejection's
+    # sibling in src/run/cassette.ts) — the same reason `on_unanswered: agent` is an ERROR. Note the pair
+    # is unsatisfiable, not always-red: on a lane where gate evidence is absent it is not evaluated at all
+    # (verify-run fails evidence-unavailable; a controlOut-less cassette SKIPS these keys on replay).
+    # Either way it guards nothing.
+    if any(_numeric(v) == 0 for v in _assert_values(items, "questions_count_max")):
+        presence = []
+        if any((n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")):
+            presence.append("gate_answer_count_min: >= 1")
+        if "question_asked" in assert_keys:
+            presence.append("question_asked")
+        if any(v is False for v in _assert_values(items, "gate_answers_delivered")):
+            presence.append("gate_answers_delivered: false")
+        if presence:
             findings.append(
                 Finding(
-                    "WARN",
-                    "vacuous-gate-assert",
-                    "`gate_answers_delivered` has no presence companion — zero gates fired passes it "
-                    "VACUOUSLY, so this assertion stays green if the skill stops asking altogether "
-                    "(exactly the regression it looks like it is guarding).",
-                    'Pair it with `gate_answer_count_min: 1` (or a `question_asked: "<rx>"`, or '
-                    '`tool_called: "AskUserQuestion"`) so a gate must actually fire.',
+                    "ERROR",
+                    "gate-assert-contradiction",
+                    f"`questions_count_max: 0` cannot hold alongside {' and '.join(presence)} — no run can "
+                    "satisfy both. A delivered gate records at least one question, so requiring a gate to be "
+                    "present contradicts requiring zero questions. (Where gate evidence is absent the pair "
+                    "isn't satisfied either — it simply isn't evaluated.)",
+                    "Keep the zero-gate declaration and drop the presence assertion, or drop "
+                    "`questions_count_max: 0` if the scenario really does expect a gate.",
                     path,
                 )
             )
@@ -1615,8 +1745,13 @@ def build_scenario(args):
         # sub-questions each gate bundles. Any number emitted here would be a guess: too low false-reds
         # on the first run, too high is a dead tripwire. A budget must come from observation, not
         # fabrication — so emit it COMMENTED OUT with the calibration path, not a made-up value.
+        # `<N> >= 1` is not decoration: this block also emits gate-PRESENCE assertions, and
+        # `questions_count_max: 0` alongside one of those is unsatisfiable — refused by run/skill/record
+        # and flagged as `gate-assert-contradiction`. Zero is the natural value to reach for on a
+        # gate-clean scenario, so the hint has to say where it does NOT belong.
         content_lines.append(
-            "  # - questions_count_max: <N>   # BUDGET — calibrate from a real run: `trace --view "
+            "  # - questions_count_max: <N>   # BUDGET (N >= 1 — `0` contradicts the gate assertions "
+            "below; use it only in a scenario with none) — calibrate from a real run: `trace --view "
             "questions` prints the SUB-question total (what this asserts); set N to that + headroom."
         )
         content_lines.append("  - gate_answers_delivered: true   # the steered answers actually reached the model")
