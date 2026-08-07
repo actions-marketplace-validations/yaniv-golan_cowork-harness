@@ -63,6 +63,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`expect_denied` could not tell an empty egress channel from an allowed host.** The expansion into
+  `egress_denied` assertions was duplicated in the live run and the verify path, and both reported a bare
+  `expected <host> to be denied` even when the proxy had recorded nothing at all — so a tier whose shell
+  could reach no host read identically to one that correctly denied the host you asked about. The two
+  copies now share one helper with three distinct outcomes, and the verify path passes its
+  `egressMissing` signal through, so a `result.json` with no `egress` field reports evidence-unavailable
+  rather than a failed assertion. Assertion *outcomes* are unchanged — only the message, and only in the
+  cases that were previously indistinguishable.
+
+
 - **Two documented networking overrides never worked.** `COWORK_EGRESS_PROXY` and
   `COWORK_DOCKER_NETWORK` sat behind values the caller always supplies — every container-like tier builds
   its egress sidecar before spawning, so the env branch could not execute in any tier, and `microvm`
