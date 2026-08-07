@@ -293,7 +293,23 @@ export function resolveSubagentConfigRoot(
  *
  *  DELIBERATELY EXCLUDES `tool_not_called`. It reads the tool log, while these keys read the control
  *  channel; a fixture-driven `protocol` run can inject a gate on the control channel alone, so a
- *  cross-channel contradiction is not provable from the YAML. Pure → unit-testable without a spawn. */
+ *  cross-channel contradiction is not provable from the YAML.
+ *
+ *  ONE STATED LIMIT, so the proof does not read as unconditional. It holds for any run dir the harness
+ *  produced: both sides derive from one `rec`, and on the lanes where they arrive via separate sidecars
+ *  (`verify-run` reads `questions` from trace.json and `gateDeliveries` from result.json) an absent
+ *  sidecar fails evidence-unavailable rather than passing. A HAND-EDITED run dir can still defeat it —
+ *  `questions: []` in trace.json alongside a delivered gate in result.json would pass both halves — and
+ *  verify-run's existing skew guard (cli.ts, `gateQuestionCount < sidecarQuestions.length`) is
+ *  one-directional: it catches trace-records-MORE, not trace-records-FEWER. A hand-edited run dir is not
+ *  a supported input, so this is a note, not a hole to plug here.
+ *
+ *  NOT THE ONLY PAIR OF ITS SHAPE. `hook_blocked` + `no_hook_blocked`, `path_denied` + `no_path_denied`,
+ *  and `vm_path_denied` + `no_path_denied` are unsatisfiable for the same reason (presence vs absence on
+ *  one evidence channel). They are deliberately NOT handled here — each is a separate user-visible
+ *  refusal that deserves its own review rather than riding along on this one.
+ *
+ *  Pure → unit-testable without a spawn. */
 export function gateAssertContradiction(scenario: Scenario): string | undefined {
   const asserts = scenario.assert ?? [];
   if (!asserts.some((a) => a.questions_count_max === 0)) return undefined;

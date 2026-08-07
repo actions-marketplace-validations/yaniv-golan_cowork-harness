@@ -758,6 +758,18 @@ def test_glob_port_matches_the_typescript_engine():
         "Ask.*Question": False,
         "??????????????????": False,
         "******************": True,
+        # Backslash handling: globToRegExp normalizes `\` to `/` before splitting, so `**\*` is really
+        # `**/*` (matches) while `\**` is `/**` (a leading empty segment, so it cannot).
+        "\\**": False,
+        "**\\*": True,
+        # Control characters are literal under both engines.
+        "Ask\nQuestion": False,
+        "Ask\tQuestion": False,
+        # Non-BMP and fullwidth: the docstring's code-unit-vs-code-point caveat is about `?` against an
+        # ASTRAL SUBJECT, which cannot arise while the subject is a fixed ASCII tool name. These pin
+        # that non-ASCII in the PATTERN is simply literal, and agree with the TS engine.
+        "\U0001d504skUserQuestion": False,
+        "Ａｓｋ*": False,
     }
     actual = {p: scenario._tool_glob_matches(p, "AskUserQuestion") for p in expected}
     assert actual == expected

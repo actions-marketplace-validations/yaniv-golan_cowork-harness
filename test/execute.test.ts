@@ -1,9 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { UsageError } from "../src/errors.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute, resolve as resolvePath } from "node:path";
 import {
+  executeScenario,
   gateAssertContradiction,
   parseSessionFile,
   parseScenarioFile,
@@ -950,5 +952,52 @@ describe("gateAssertContradiction", () => {
     // tool log, so "no AskUserQuestion tool call" + "a gate fired" is NOT a provable contradiction.
     // Assuming otherwise would hard-fail a legitimate protocol scenario.
     expect(gateAssertContradiction(sc([{ questions_count_max: 0 }, { tool_not_called: "AskUserQuestion" }]))).toBeUndefined();
+  });
+});
+
+// WIRING, not just the predicate. The unit tests above all call `gateAssertContradiction` directly, so
+// they stay green if the CALL SITE inside executeScenario is deleted — verified: removing it left the
+// whole suite passing. That is the same shape as the defect this change is about (a check that looks
+// guarded and isn't), so it gets its own guard.
+//
+// The scenario carries a deliberately bogus `baseline` as an ORDERING probe: loadBaseline runs a few
+// lines below the refusal and throws on it. Getting the contradiction message back therefore proves the
+// refusal ran FIRST — i.e. before anything that could stage, spawn, or spend. If the call site goes
+// away, this test fails with the baseline error instead.
+//
+// This covers all three commands by construction: `run` and `skill` share one executeScenario call
+// (cli.ts, `execCommand: "run" | "skill"`), and `record` reaches it via recordScenarioObject
+// (cassette.ts) — there is no fourth spawn path. The structural half of that claim is pinned below.
+describe("executeScenario refuses a contradictory scenario before doing any work", () => {
+  const contradictory = {
+    name: "wired",
+    prompt: "hi",
+    baseline: "desktop-0.0.0-does-not-exist",
+    assert: [{ questions_count_max: 0 }, { gate_answer_count_min: 1 }],
+  } as unknown as Parameters<typeof executeScenario>[0];
+
+  it("rejects with the contradiction, not with the later baseline failure", async () => {
+    await expect(executeScenario(contradictory)).rejects.toThrow(/no run can satisfy both/);
+  });
+
+  it("rejects as a UsageError, so the CLI maps it to the usage category", async () => {
+    await expect(executeScenario(contradictory)).rejects.toBeInstanceOf(UsageError);
+  });
+
+  it("still reaches the baseline failure when the scenario is not contradictory (probe is live)", async () => {
+    // Canary: proves the bogus baseline really does throw, so the test above is measuring the refusal's
+    // precedence rather than a scenario that would have failed identically either way.
+    const ok = { ...(contradictory as Record<string, unknown>), assert: [{ questions_count_max: 0 }] };
+    await expect(executeScenario(ok as Parameters<typeof executeScenario>[0])).rejects.not.toThrow(/no run can satisfy both/);
+  });
+
+  it("has no spawn path that bypasses executeScenario", () => {
+    // Structural tripwire for the claim the tests above rest on. A new command that spawns the agent
+    // without funnelling through executeScenario would silently skip this refusal (and every other
+    // guard executeScenario owns).
+    const cli = readFileSync(resolvePath("src/cli.ts"), "utf8");
+    const cassette = readFileSync(resolvePath("src/run/cassette.ts"), "utf8");
+    expect(cli.match(/\bexecuteScenario\(/g)?.length, "run/skill's shared call site went missing").toBe(1);
+    expect(cassette.match(/\bexecuteScenario\(/g)?.length, "record's call site went missing").toBe(1);
   });
 });

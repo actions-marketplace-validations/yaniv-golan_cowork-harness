@@ -115,7 +115,13 @@ have:
    indexed runs — better than a single observation.
 3. **Set the budget with headroom:** observed × 1.5, rounded up (agentic run lengths vary run to
    run; a budget at the observed value flakes).
-4. **Replay-class note:** `max_turns` / `tool_calls_max` / `dispatch_count_max` re-evaluate
+4. **`questions_count_max: 0` is a declaration, not a budget.** If the observed value is zero, you are
+   writing "this scenario expects no gates" — which is supported and useful, but it is then **mutually
+   exclusive** with `gate_answer_count_min: >= 1`, `question_asked` and `gate_answers_delivered: false`
+   (a delivered gate records at least one question). `run` / `skill` / `record` refuse that pairing
+   before spending, and `lint` reports `gate-assert-contradiction`. Drop `gate_answers_delivered`
+   alongside it too — it asserts nothing when no gate fires.
+5. **Replay-class note:** `max_turns` / `tool_calls_max` / `dispatch_count_max` re-evaluate
    token-free on replay; `questions_count_max` needs `controlOut` (Recipe 1's tree applies).
    `max_cost_usd` / `max_tokens` on replay assert the FROZEN recording's spend — near-zero signal
    as a regression gate; if you need a cost gate, put it on the live lane via `stats` (history) or
