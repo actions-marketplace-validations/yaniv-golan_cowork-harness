@@ -180,8 +180,12 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
      # so `doctor` reports the freshness check as skipped rather than comparing it to the pin:
      docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
      ```
-     This **core** image mirrors the real Cowork rootfs's document/data toolchain (Node 22, openpyxl/pandas/pdf/docx/pptx, …); override the tag with `COWORK_AGENT_IMAGE`. For OCR / LibreOffice / markitdown / opencv / PDF-table skills, build the **full-parity** image instead and point `COWORK_AGENT_IMAGE` at it:
+     This **core** image mirrors the real Cowork rootfs's document/data toolchain (Node 22, openpyxl/pandas/pdf/docx/pptx, …); override the tag with `COWORK_AGENT_IMAGE`. For OCR / LibreOffice / markitdown / opencv / PDF-table skills, use the **full-parity** image instead and point `COWORK_AGENT_IMAGE` at it. It is published and pinned exactly like the core image:
      ```bash
+     # Preferred — pinned, so `doctor` can verify it:
+     docker pull ghcr.io/yaniv-golan/cowork-agent-full:2-r1
+     docker tag  ghcr.io/yaniv-golan/cowork-agent-full:2-r1 cowork-agent-full:2
+     # Or build it yourself (same unpinnable caveat as the core image):
      docker build --platform linux/arm64 --build-arg COWORK_FULL_PARITY=1 -t cowork-agent-full:2 -f docker/Dockerfile.agent .
      ```
      (A run on the core image that uses an omitted capability is flagged with a `missing_capability`
