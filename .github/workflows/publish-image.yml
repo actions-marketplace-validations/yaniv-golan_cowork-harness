@@ -21,6 +21,14 @@ on:
         type: boolean
         required: false
         default: false
+      dry_run:
+        description: >-
+          Run the pre-flight checks (CI gate + the immutable-tag collision guard) and STOP before building
+          or pushing anything. This is how the guard's refusal path gets exercised without risking a
+          repointed `:2-r<N>`: dispatch with a revision that already exists and confirm the run fails.
+        type: boolean
+        required: false
+        default: false
       immutable_only:
         description: >-
           Publish ONLY the immutable `:2-r<N>` tag and leave the floating `:2` where it is. This is the
@@ -128,7 +136,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Stop here on a dry run (guard exercised, nothing built or pushed)
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "::notice::dry_run — CI gate and collision guard passed; no image was built or pushed."
+          exit 0
+
       - name: Build + push cowork-agent-base (lean/core image — the default COWORK_AGENT_IMAGE)
+        if: ${{ !inputs.dry_run }}
         env:
           REPO: ghcr.io/${{ github.repository_owner }}/cowork-agent-base
           VERSION: ${{ steps.plan.outputs.version }}
@@ -145,6 +160,7 @@ jobs:
           fi
 
       - name: Build + push cowork-agent-full (COWORK_FULL_PARITY=1 — OCR/Office/markitdown/opencv/table-extraction)
+        if: ${{ !inputs.dry_run }}
         # Override the base title/description baked into the Dockerfile so the `full` package page is
         # self-describing (the Dockerfile's default LABELs name the base variant).
         env:

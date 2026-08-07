@@ -6,6 +6,7 @@ import {
   agentBuildLine,
   freshnessFor,
   ghcrRefFor,
+  registryDigestFrom,
   type DoctorProbe,
   type DoctorCheck,
   type ImageFreshness,
@@ -533,5 +534,64 @@ describe("freshnessFor (pure pin comparison — the injectable probe cannot reac
     // Pulling the floating `:2` cannot satisfy a pin to an older revision — a floating remedy leaves the
     // user in a permanent warn loop, and inverts the signal once a newer revision is published.
     expect((f as { pinnedRef: string }).pinnedRef).toBe(`ghcr.io/yaniv-golan/cowork-agent-base@${A}`);
+  });
+});
+
+describe("registryDigestFrom (which RepoDigest counts as 'this image, from the registry')", () => {
+  const D1 = "sha256:" + "1".repeat(64);
+  const D2 = "sha256:" + "2".repeat(64);
+  const GHCR = "ghcr.io/yaniv-golan/cowork-agent-full";
+
+  it("matches the BARE local name, not just the ghcr-qualified one", () => {
+    // The regression this exists for: `cowork-agent-full:2` carries only `cowork-agent-full@sha256:…`
+    // (no registry prefix), so a ghcr-only filter missed it, reported `local`, and silently skipped the
+    // pin check for every full-parity user.
+    expect(registryDigestFrom([`cowork-agent-full@${D1}`], GHCR, "cowork-agent-full:2")).toBe(D1);
+  });
+
+  it("matches the ghcr-qualified form", () => {
+    expect(registryDigestFrom([`${GHCR}@${D1}`], GHCR, "cowork-agent-full:2")).toBe(D1);
+  });
+
+  it("prefers the ghcr-qualified digest when both forms are present and disagree", () => {
+    // A machine can hold digests for the same name from two registries. The published one wins.
+    expect(registryDigestFrom([`cowork-agent-full@${D2}`, `${GHCR}@${D1}`], GHCR, "cowork-agent-full:2")).toBe(D1);
+  });
+
+  it("is null for a genuinely local build (empty RepoDigests)", () => {
+    expect(registryDigestFrom([], GHCR, "cowork-agent-full:2")).toBeNull();
+  });
+
+  it("ignores an unrelated image's digest", () => {
+    expect(registryDigestFrom([`some-other/image@${D1}`], GHCR, "cowork-agent-full:2")).toBeNull();
+  });
+
+  it("does not treat a name PREFIX as a match", () => {
+    // `cowork-agent-full-extra@…` must not satisfy `cowork-agent-full`.
+    expect(registryDigestFrom([`cowork-agent-full-extra@${D1}`], GHCR, "cowork-agent-full:2")).toBeNull();
+  });
+});
+
+describe("image-freshness is offline", () => {
+  it("the freshness path spawns no network-reaching command", () => {
+    // The check's whole selling point over the old GHCR round-trip is that it works with no network and
+    // no `docker buildx`. That property was previously argued from "I removed the call" — which is not a
+    // thing that can fail later. This asserts it: the only spawn in imageFreshness is a LOCAL
+    // `image inspect` (a daemon-socket call), and the pin is read from disk.
+    const src = readFileSync(resolve("src/run/doctor.ts"), "utf8");
+    const body = src.slice(src.indexOf("imageFreshness(): ImageFreshness {"));
+    // Strip line comments: the body legitimately EXPLAINS the removed round-trip, and a guard that trips
+    // on its own rationale would just get the rationale deleted.
+    const fn = body
+      .slice(0, body.indexOf("\n  },"))
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("//"))
+      .join("\n");
+    for (const forbidden of ["buildx", "imagetools", "curl", "fetch(", "https://"]) {
+      expect(fn, `imageFreshness must not reach the network (found ${forbidden})`).not.toContain(forbidden);
+    }
+    // Exactly one spawn, and it is the local inspect.
+    expect(fn.match(/spawnSync\(/g)?.length ?? 0).toBe(1);
+    expect(fn).toContain('"image", "inspect"');
   });
 });

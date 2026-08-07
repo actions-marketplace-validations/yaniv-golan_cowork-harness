@@ -11,7 +11,12 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but NEVER a run on `main`. A `main` run is what `require-ci-success`
+  # consults for the tagged/dispatched SHA, so cancelling one turns a perfectly good commit into an
+  # unpublishable one — it reads `conclusion: cancelled`, not `success`. Observed twice on 2026-08-06/07:
+  # merging a second PR minutes after the first left the earlier merge commit cancelled, and the publish
+  # gate correctly refused it. PR runs stay cancellable, which is where the cost saving actually is.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # ── Stage 1: static checks + build + token-free smoke (fast gate; no Docker, no secrets).
