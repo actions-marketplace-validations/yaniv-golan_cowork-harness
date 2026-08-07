@@ -152,7 +152,7 @@ For "must use MCP, not a host tool," give the session an MCP server for the capa
 For the full catalog of what the harness deliberately does NOT reproduce vs real Cowork, see [fidelity-gaps.md](./fidelity-gaps.md). The gaps most relevant to the limitations model are:
 
 - At `container` tier, stdio **MCP servers run alongside the agent**, whereas Cowork runs them host-side (split execution). This host/VM split is **not reproduced at any tier** — `microvm` runs MCP inside the guest too — so a skill that depends on it (e.g. an MCP server reaching host-only resources) is an unreproduced gap. See [discovery.md](./discovery.md).
-- The `container` **and `microvm`** egress boundary is a proxy + firewall, not a kernel gVisor netstack. Domain allow/deny is identical; raw-packet behavior is not.
+- The `container`, `microvm` **and `hostloop`** egress boundary is a proxy + firewall, not a kernel gVisor netstack. Domain allow/deny is identical; raw-packet behavior is not. (`hostloop` is on this list for its `bash` sidecar, which shares the proxy; its native file tools have no container around them at all.) A client that ignores proxy env — a raw socket, a Go binary, `node`'s built-in `fetch` — therefore reaches **nothing** rather than escaping: containment comes from the `internal` network with no route off-box, not from the env vars. That is stricter than production, not looser.
 - The sandbox is a **fidelity fixture, not a security boundary** against malicious code — see [SECURITY.md](../SECURITY.md).
 - **Read-only mounts ARE enforced; outputs delete-deny is still post-hoc.**
   - `mode:r` mounts (uploads = asar `'ro'`; local/remote plugins) get a per-mount nested `:ro` bind on the Docker tiers, so a write to them fails in the guest — matching Cowork.
