@@ -119,7 +119,7 @@ have:
    writing "this scenario expects no gates" — which is supported and useful, but it is then **mutually
    exclusive** with `gate_answer_count_min: >= 1`, `question_asked` and `gate_answers_delivered: false`
    (a delivered gate records at least one question). `run` / `skill` / `record` refuse that pairing
-   before spending, and `lint` reports `gate-assert-contradiction`. Drop `gate_answers_delivered`
+   before spending, and `lint` reports `assert-contradiction`. Drop `gate_answers_delivered`
    alongside it too — it asserts nothing when no gate fires.
 5. **Replay-class note:** `max_turns` / `tool_calls_max` / `dispatch_count_max` re-evaluate
    token-free on replay; `questions_count_max` needs `controlOut` (Recipe 1's tree applies).

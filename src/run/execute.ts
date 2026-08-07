@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
-import type { RunResult, InfraErrorSource } from "../types.js";
+import type { RunResult, InfraErrorSource, Assertion } from "../types.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
@@ -273,16 +273,57 @@ export function resolveSubagentConfigRoot(
   return undefined;
 }
 
-/** A statically unsatisfiable gate pairing, or `undefined` when the scenario is runnable.
+/** Groups of assertions that cannot all hold. Each group pairs ONE assertion demanding that a record
+ *  NOT exist with the assertions demanding that the same record DOES exist, on a single evidence channel.
  *
- *  `questions_count_max: 0` says no sub-question was ever asked. Any DELIVERED gate records at least one
- *  question — `handleDecision` pushes one entry per sub-question BEFORE answering, and a gate carrying
- *  zero questions throws — so pairing it with an assertion that REQUIRES a gate can never be satisfied.
- *  The two keys can sit in separate `assert:` entries, so the check is over the whole array.
+ *  Verified against the assertion implementations, not the schema prose — a scope split (one side
+ *  counting only main-agent records, say) would make a pair satisfiable after all. There is none: both
+ *  halves of each group read one list, and where that list is missing BOTH fail evidence-unavailable
+ *  rather than passing. On a tier where a key is not served, both halves fail too (the denial keys are
+ *  hostloop-only), so a wrong tier never produces a both-pass either. */
+const CONTRADICTION_GROUPS: {
+  absence: { label: string; test: (a: Assertion) => boolean };
+  presences: { label: string; test: (a: Assertion) => boolean }[];
+  why: string;
+}[] = [
+  {
+    // `questions_count_max: 0` says no sub-question was ever asked. Any DELIVERED gate records at least
+    // one — `handleDecision` pushes one entry per sub-question BEFORE answering, and a gate carrying
+    // zero questions throws.
+    absence: { label: "`questions_count_max: 0`", test: (a) => a.questions_count_max === 0 },
+    presences: [
+      { label: "`gate_answer_count_min: >= 1`", test: (a) => a.gate_answer_count_min !== undefined && a.gate_answer_count_min >= 1 },
+      { label: "`question_asked`", test: (a) => a.question_asked !== undefined },
+      // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
+      // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
+      // inert alongside the declaration (lint says so; not worth refusing a run over).
+      { label: "`gate_answers_delivered: false`", test: (a) => a.gate_answers_delivered === false },
+    ],
+    why: "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",
+  },
+  {
+    absence: { label: "`no_hook_blocked: true`", test: (a) => a.no_hook_blocked === true },
+    presences: [{ label: "`hook_blocked`", test: (a) => a.hook_blocked !== undefined }],
+    why: "both read the same hook-event list — the block `hook_blocked` requires is the one `no_hook_blocked` requires not to exist",
+  },
+  {
+    absence: { label: "`no_path_denied: true`", test: (a) => a.no_path_denied === true },
+    presences: [
+      { label: "`path_denied`", test: (a) => a.path_denied !== undefined },
+      { label: "`vm_path_denied: true`", test: (a) => a.vm_path_denied === true },
+    ],
+    why: "both read the same path-denial list — the denial the positive key requires is one `no_path_denied` requires not to exist",
+  },
+];
+
+/** Every statically unsatisfiable assertion pairing in the scenario, or `undefined` when it is runnable.
  *
- *  Refused rather than merely warned because the scenario is a guaranteed waste of a paid run, and
- *  `lint` (which reports the same thing as `gate-assert-contradiction`) is opt-in — the consumer report
- *  behind this check had not run it.
+ *  The two halves of a pair can sit in SEPARATE `assert:` entries, so the check is over the whole array —
+ *  an entry-level check could never see them.
+ *
+ *  Refused rather than merely warned because such a scenario is a guaranteed waste of a paid run, and
+ *  `lint` (which reports the same thing as `assert-contradiction`) is opt-in — the consumer report behind
+ *  this check had not run it.
  *
  *  WHY HERE AND NOT IN THE SCHEMA. Its sibling contradiction (`no_delete_in_outputs` +
  *  `allow_outputs_delete`) lives in `Scenario.superRefine`, which is the more consistent home. It is not
@@ -291,42 +332,40 @@ export function resolveSubagentConfigRoot(
  *  (cassette.ts) instead — a command-level refusal of something the schema still accepts. Move it into
  *  `superRefine` at the next major.
  *
- *  DELIBERATELY EXCLUDES `tool_not_called`. It reads the tool log, while these keys read the control
- *  channel; a fixture-driven `protocol` run can inject a gate on the control channel alone, so a
- *  cross-channel contradiction is not provable from the YAML.
+ *  DELIBERATELY EXCLUDES `tool_called` + `tool_not_called` on the same glob. That pair IS unsatisfiable
+ *  on one channel, but it is a different feature with its own glob-overlap semantics (two globs can
+ *  partially overlap, which none of these boolean pairs can) — it deserves its own design, not a row here.
+ *  Also excludes `tool_not_called` as a gate-contradiction witness: it reads the tool log while the gate
+ *  keys read the control channel, and a fixture-driven `protocol` run can gate on the control channel
+ *  alone, so that cross-channel contradiction is not provable from the YAML.
  *
  *  ONE STATED LIMIT, so the proof does not read as unconditional. It holds for any run dir the harness
  *  produced: both sides derive from one `rec`, and on the lanes where they arrive via separate sidecars
  *  (`verify-run` reads `questions` from trace.json and `gateDeliveries` from result.json) an absent
- *  sidecar fails evidence-unavailable rather than passing. A HAND-EDITED run dir can still defeat it —
- *  `questions: []` in trace.json alongside a delivered gate in result.json would pass both halves — and
- *  verify-run's existing skew guard (cli.ts, `gateQuestionCount < sidecarQuestions.length`) is
- *  one-directional: it catches trace-records-MORE, not trace-records-FEWER. A hand-edited run dir is not
- *  a supported input, so this is a note, not a hole to plug here.
- *
- *  NOT THE ONLY PAIR OF ITS SHAPE. `hook_blocked` + `no_hook_blocked`, `path_denied` + `no_path_denied`,
- *  and `vm_path_denied` + `no_path_denied` are unsatisfiable for the same reason (presence vs absence on
- *  one evidence channel). They are deliberately NOT handled here — each is a separate user-visible
- *  refusal that deserves its own review rather than riding along on this one.
+ *  sidecar fails evidence-unavailable rather than passing. A HAND-EDITED run dir can still defeat the
+ *  gate group — `questions: []` in trace.json alongside a delivered gate in result.json would pass both
+ *  halves — and verify-run's existing skew guard (cli.ts, `gateQuestionCount < sidecarQuestions.length`)
+ *  is one-directional: it catches trace-records-MORE, not trace-records-FEWER. A hand-edited run dir is
+ *  not a supported input, so this is a note, not a hole to plug here.
  *
  *  Pure → unit-testable without a spawn. */
-export function gateAssertContradiction(scenario: Scenario): string | undefined {
+export function assertContradiction(scenario: Scenario): string | undefined {
   const asserts = scenario.assert ?? [];
-  if (!asserts.some((a) => a.questions_count_max === 0)) return undefined;
-  const presence: string[] = [];
-  if (asserts.some((a) => a.gate_answer_count_min !== undefined && a.gate_answer_count_min >= 1))
-    presence.push("`gate_answer_count_min: >= 1`");
-  if (asserts.some((a) => a.question_asked !== undefined)) presence.push("`question_asked`");
-  // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
-  // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
-  // inert alongside the declaration (lint says so; it is not worth refusing a run over).
-  if (asserts.some((a) => a.gate_answers_delivered === false)) presence.push("`gate_answers_delivered: false`");
-  if (!presence.length) return undefined;
+  const clauses: string[] = [];
+  for (const g of CONTRADICTION_GROUPS) {
+    if (!asserts.some((a) => g.absence.test(a))) continue;
+    const hits = g.presences.filter((pres) => asserts.some((a) => pres.test(a))).map((pres) => pres.label);
+    // Report EVERY contradictory group, not just the first — a scenario can carry more than one, and
+    // fixing them one refusal at a time costs a round trip each.
+    if (hits.length) clauses.push(`${g.absence.label} alongside ${hits.join(" and ")} (${g.why})`);
+  }
+  if (!clauses.length) return undefined;
+  // "both" is wrong once a scenario carries more than one contradictory group — and a scenario that
+  // carries two is exactly the one whose message gets read carefully.
+  const closing = clauses.length === 1 ? "no run can satisfy both" : "no run can satisfy all of them";
   return (
-    `scenario "${scenario.name}" asserts \`questions_count_max: 0\` alongside ${presence.join(" and ")} — no run can satisfy both, ` +
-    `so this would spend a run to fail. A delivered gate records at least one question, so requiring a gate to be present ` +
-    `contradicts requiring zero questions. Keep the zero-gate declaration and drop the presence assertion, or drop ` +
-    `\`questions_count_max: 0\` if the scenario really does expect a gate.`
+    `scenario "${scenario.name}" asserts ${clauses.join("; and ")} — ${closing}, so this would spend a run to fail. ` +
+    `Keep the negative assertion and drop the positive one, or drop the negative if the scenario really does expect the record.`
   );
 }
 
@@ -334,7 +373,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Refuse a scenario no run can satisfy BEFORE the spawn — the whole point is not to pay for it.
   // Sited here rather than in each command because every lane funnels through executeScenario
   // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
-  const contradiction = gateAssertContradiction(scenario);
+  const contradiction = assertContradiction(scenario);
   if (contradiction) throw new UsageError(contradiction);
   // mirror the CLI guard (cli.ts:488) — a library caller skipping the CLI would otherwise get
   // a confusing `cannot resume "undefined"` error deep inside the resume branch.

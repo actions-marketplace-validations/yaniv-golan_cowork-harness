@@ -11,8 +11,9 @@ All notable changes to this project are documented here. The format is based on
 - **Four scenario shapes that lint clean today may newly fail `cowork-harness lint --strict
   --min-severity WARN`** (the invocation the CI recipe teaches). None is a false alarm — each is a
   scenario that was already not testing what it looked like it tested:
-  1. `questions_count_max: 0` paired with a gate-presence key → new `gate-assert-contradiction` ERROR
-     (and the run itself is now refused).
+  1. A presence assertion paired with its absence sibling → new `assert-contradiction` ERROR (and the
+     run itself is now refused): `questions_count_max: 0` with a gate-presence key, `no_hook_blocked`
+     with `hook_blocked`, or `no_path_denied` with `path_denied`/`vm_path_denied`.
   2. `gate_answers_delivered: true` paired with `gate_answer_count_min: 0` → the zero floor no longer
      counts as a companion. **Most likely to already be in an existing corpus.** Fix: raise the floor to
      `1`, or drop `gate_answers_delivered`.
@@ -46,12 +47,19 @@ All notable changes to this project are documented here. The format is based on
   cannot enumerate tags — an inconclusive check must never read as "tag absent". See
   [docs/maintenance.md](./docs/maintenance.md#publishing-an-agent-image-revision).
 
-- **`run` / `skill` / `record` now refuse an unsatisfiable gate pairing before spawning, and `lint`
-  reports it as `gate-assert-contradiction` (ERROR).** `questions_count_max: 0` says no sub-question was
-  ever asked; any delivered gate records at least one. So pairing it with `gate_answer_count_min: >= 1`,
-  `question_asked`, or `gate_answers_delivered: false` can never be satisfied — previously that cost a
-  live run to discover. `questions_count_max: 0` **on its own** is the supported way to declare a
-  gate-clean scenario and is unaffected.
+- **`run` / `skill` / `record` now refuse an unsatisfiable assertion pairing before spawning, and
+  `lint` reports it as `assert-contradiction` (ERROR).** Three pairs, each one assertion requiring a
+  record to exist next to its sibling requiring none to, on a single evidence channel:
+  - `questions_count_max: 0` with `gate_answer_count_min: >= 1`, `question_asked`, or
+    `gate_answers_delivered: false` — a delivered gate records at least one question.
+  - `no_hook_blocked` with `hook_blocked` — one hook-event list.
+  - `no_path_denied` with `path_denied` or `vm_path_denied` — one path-denial list.
+
+  Previously each cost a live run to discover. Where the evidence is absent both halves fail
+  evidence-unavailable rather than passing, and the denial keys are hostloop-only so a wrong tier fails
+  both too — no combination produced a silent both-pass, only a guaranteed one. Each negative key
+  **on its own** is unaffected; `questions_count_max: 0` in particular remains the supported way to
+  declare a gate-clean scenario.
 
   This is a **command-level** refusal, not a schema change: `schema/scenario.schema.json` still accepts
   the document, so the covered input contract ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))

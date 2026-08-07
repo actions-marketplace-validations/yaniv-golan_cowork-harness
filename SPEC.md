@@ -459,7 +459,13 @@ green replay does not imply the recording is still valid. Each finding is surfac
   question, so `questions_count_max: 0` cannot hold alongside `gate_answer_count_min: >= 1`,
   `question_asked`, or `gate_answers_delivered: false`. This is a **command-level** refusal, not a
   schema tightening: `schema/scenario.schema.json` still accepts the document, so §12's covered
-  input contract is unchanged. `lint` reports the same pairing as `gate-assert-contradiction` (ERROR).
+  input contract is unchanged. `lint` reports the same pairing as `assert-contradiction` (ERROR).
+- **The same refusal covers every presence/absence pair on one evidence channel.** Besides the gate
+  pair above: `hook_blocked` + `no_hook_blocked` (one hook-event list) and `path_denied` /
+  `vm_path_denied` + `no_path_denied` (one path-denial list). In each case one assertion requires a
+  record to exist and its sibling requires none to, so no run satisfies both. Where the evidence is
+  absent both halves fail evidence-unavailable rather than passing, and the denial keys are
+  hostloop-only so a wrong tier fails both too — no combination produces a both-pass.
 - **`questions_count_max` counts sub-questions, not `AskUserQuestion` tool calls/gates.** A bundled
   gate with K sub-questions counts as K (`src/run/run.ts`'s recorder pushes one `rec.questions` entry
   per sub-question; `src/assert.ts` compares against that count). `trace --view questions` shows the

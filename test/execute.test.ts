@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, isAbsolute, resolve as resolvePath } from "node:path";
 import {
   executeScenario,
-  gateAssertContradiction,
+  assertContradiction,
   parseSessionFile,
   parseScenarioFile,
   scanEvents,
@@ -899,7 +899,7 @@ describe("every executeScenario caller that sets a policy also declares whether 
   });
 });
 
-// --- gateAssertContradiction: refuse an unsatisfiable gate pairing BEFORE the spawn ----------------
+// --- assertContradiction: refuse an unsatisfiable gate pairing BEFORE the spawn ----------------
 // `questions_count_max: 0` ("no sub-question was ever asked") cannot hold alongside an assertion that
 // REQUIRES a gate: any delivered gate records at least one question. The scenario is a guaranteed waste
 // of a paid run, and `lint` — which reports the same thing — is opt-in, so the refusal has to sit on the
@@ -909,17 +909,17 @@ describe("every executeScenario caller that sets a policy also declares whether 
 // an entry-level check could never see the pair. (Same reason `Scenario.superRefine` exists for the
 // no_delete_in_outputs/allow_outputs_delete pair — see the function's own note on why this one is not
 // there.)
-describe("gateAssertContradiction", () => {
-  const sc = (assert: unknown[]) => ({ name: "t", prompt: "hi", assert }) as unknown as Parameters<typeof gateAssertContradiction>[0];
+describe("assertContradiction", () => {
+  const sc = (assert: unknown[]) => ({ name: "t", prompt: "hi", assert }) as unknown as Parameters<typeof assertContradiction>[0];
 
   it("flags a zero-question declaration paired with a gate floor, across separate entries", () => {
-    const msg = gateAssertContradiction(sc([{ questions_count_max: 0 }, { gate_answer_count_min: 1 }]));
+    const msg = assertContradiction(sc([{ questions_count_max: 0 }, { gate_answer_count_min: 1 }]));
     expect(msg).toMatch(/no run can satisfy both/);
     expect(msg, "the message must name the offending keys, not just complain").toMatch(/gate_answer_count_min/);
   });
 
   it("flags it within a single entry too", () => {
-    expect(gateAssertContradiction(sc([{ questions_count_max: 0, gate_answer_count_min: 1 }]))).toBeDefined();
+    expect(assertContradiction(sc([{ questions_count_max: 0, gate_answer_count_min: 1 }]))).toBeDefined();
   });
 
   it.each([
@@ -930,7 +930,7 @@ describe("gateAssertContradiction", () => {
     ["gate_answers_delivered: false", { gate_answers_delivered: false }],
     ["a floor above 1", { gate_answer_count_min: 5 }],
   ])("flags %s as a presence requirement", (_label, presence) => {
-    expect(gateAssertContradiction(sc([{ questions_count_max: 0 }, presence]))).toBeDefined();
+    expect(assertContradiction(sc([{ questions_count_max: 0 }, presence]))).toBeDefined();
   });
 
   it.each([
@@ -944,18 +944,53 @@ describe("gateAssertContradiction", () => {
     ["presence assertions with no declaration", [{ gate_answer_count_min: 1 }, { question_asked: "x" }]],
     ["an empty assert list", []],
   ])("does not flag %s", (_label, asserts) => {
-    expect(gateAssertContradiction(sc(asserts))).toBeUndefined();
+    expect(assertContradiction(sc(asserts))).toBeUndefined();
+  });
+
+  // The same shape, on the OTHER two evidence channels QUESTION_GATE_KEYS covers. Each pair is one
+  // assertion demanding a record exist and its sibling demanding none exist, both reading one list:
+  // hookEvents for the hook pair, pathDenials for the two denial pairs. Verified at the implementation
+  // level, not inferred from the schema descriptions — a scope split (e.g. one side counting only
+  // main-agent records) would have made them satisfiable after all, and there is none.
+  it.each([
+    ["hook_blocked + no_hook_blocked", [{ hook_blocked: "Bash" }, { no_hook_blocked: true }]],
+    ["path_denied + no_path_denied", [{ path_denied: {} }, { no_path_denied: true }]],
+    ["vm_path_denied + no_path_denied", [{ vm_path_denied: true }, { no_path_denied: true }]],
+    ["a pair inside one entry", [{ hook_blocked: "Bash", no_hook_blocked: true }]],
+  ])("flags %s", (_label, asserts) => {
+    expect(assertContradiction(sc(asserts))).toBeDefined();
+  });
+
+  it.each([
+    ["hook_blocked alone", [{ hook_blocked: "Bash" }]],
+    ["no_hook_blocked alone", [{ no_hook_blocked: true }]],
+    ["no_path_denied alone", [{ no_path_denied: true }]],
+    // Two POSITIVE denial assertions ask for two records that can coexist — no contradiction.
+    ["vm_path_denied + path_denied", [{ vm_path_denied: true }, { path_denied: {} }]],
+    // Two negatives on different channels are jointly satisfiable by a run that did neither.
+    ["no_hook_blocked + no_path_denied", [{ no_hook_blocked: true }, { no_path_denied: true }]],
+  ])("does not flag %s", (_label, asserts) => {
+    expect(assertContradiction(sc(asserts))).toBeUndefined();
+  });
+
+  it("names every contradictory pair it found, not just the first", () => {
+    // A scenario can carry more than one; reporting one at a time costs a round trip per pair.
+    const msg = assertContradiction(
+      sc([{ questions_count_max: 0 }, { gate_answer_count_min: 1 }, { hook_blocked: "Bash" }, { no_hook_blocked: true }]),
+    )!;
+    expect(msg).toMatch(/questions_count_max/);
+    expect(msg).toMatch(/hook_blocked/);
   });
 
   it("ignores tool_not_called — it reads a different channel than the gate keys", () => {
     // A fixture-driven `protocol` run can inject a gate on the control channel without it reaching the
     // tool log, so "no AskUserQuestion tool call" + "a gate fired" is NOT a provable contradiction.
     // Assuming otherwise would hard-fail a legitimate protocol scenario.
-    expect(gateAssertContradiction(sc([{ questions_count_max: 0 }, { tool_not_called: "AskUserQuestion" }]))).toBeUndefined();
+    expect(assertContradiction(sc([{ questions_count_max: 0 }, { tool_not_called: "AskUserQuestion" }]))).toBeUndefined();
   });
 });
 
-// WIRING, not just the predicate. The unit tests above all call `gateAssertContradiction` directly, so
+// WIRING, not just the predicate. The unit tests above all call `assertContradiction` directly, so
 // they stay green if the CALL SITE inside executeScenario is deleted — verified: removing it left the
 // whole suite passing. That is the same shape as the defect this change is about (a check that looks
 // guarded and isn't), so it gets its own guard.

@@ -26,7 +26,10 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  on_unanswered: agent / invalid value            (schema rejects `agent`)
   E  authored `replay_protocol_fidelity` assertion   (replay-synthesized only)
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
-  E  `questions_count_max: 0` + a gate-presence assert (unsatisfiable; run/skill/record refuse it)
+  E  a presence assert + its absence sibling            (unsatisfiable; run/skill/record refuse it:
+                                                       questions_count_max:0 vs gate presence,
+                                                       no_hook_blocked vs hook_blocked,
+                                                       no_path_denied vs path_denied/vm_path_denied)
   W  `transcript_no_host_path` on `fidelity: cowork` (tier resolves per baseline gate —
                                                       incompatible if it lands hostloop)
   W  `no_scratchpad_leak` on `fidelity: cowork`    (tier resolves per baseline gate)
@@ -728,42 +731,80 @@ def lint_doc(doc, path, raw_lines):
                     )
                 )
 
-    # E: a statically unsatisfiable gate pair — the scenario can never pass, on any lane.
+    # E: a statically unsatisfiable assert pairing — the scenario can never pass, on any lane.
     #
-    # `questions_count_max: 0` says no sub-question was ever asked. Any DELIVERED gate records at least one
-    # question (the harness pushes one entry per sub-question BEFORE answering, and a gate carrying zero
-    # questions throws), so pairing that with a presence assertion is unsatisfiable. Both sides read the
-    # same control channel, which is what makes this provable from the YAML alone — deliberately NOT
-    # extended to `tool_not_called`, which reads the tool log: a fixture-driven `protocol` run can inject a
-    # gate on the control channel alone, so a cross-channel "contradiction" is not provable here.
+    # Each group pairs ONE assertion demanding a record NOT exist with the assertions demanding the SAME
+    # record does exist, on a single evidence channel:
+    #   · questions_count_max: 0 vs gate presence — a delivered gate records at least one question (the
+    #     harness pushes one entry per sub-question BEFORE answering, and a zero-question gate throws).
+    #   · no_hook_blocked vs hook_blocked — one hook-event list.
+    #   · no_path_denied vs path_denied / vm_path_denied — one path-denial list.
+    # Verified against the assertion implementations, not the schema prose: a scope split would make a
+    # pair satisfiable, and there is none. Where the evidence is missing BOTH halves fail
+    # evidence-unavailable rather than passing, and the denial keys are hostloop-only so a wrong tier
+    # fails both too — no combination yields a both-pass.
     #
-    # ERROR because `run`/`skill`/`record` refuse the scenario outright (see promptPolicyRejection's
-    # sibling in src/run/cassette.ts) — the same reason `on_unanswered: agent` is an ERROR. Note the pair
-    # is unsatisfiable, not always-red: on a lane where gate evidence is absent it is not evaluated at all
+    # Deliberately NOT extended to `tool_not_called` as a gate witness: it reads the tool log while the
+    # gate keys read the control channel, and a fixture-driven `protocol` run can gate on the control
+    # channel alone, so that cross-channel contradiction is not provable from the YAML.
+    #
+    # ERROR because `run`/`skill`/`record` refuse the scenario outright (assertContradiction in
+    # src/run/execute.ts) — the same reason `on_unanswered: agent` is an ERROR. Note the pairing is
+    # unsatisfiable, not always-red: on a lane where the evidence is absent it is not evaluated at all
     # (verify-run fails evidence-unavailable; a controlOut-less cassette SKIPS these keys on replay).
     # Either way it guards nothing.
-    if any(_numeric(v) == 0 for v in _assert_values(items, "questions_count_max")):
-        presence = []
-        if any((n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")):
-            presence.append("gate_answer_count_min: >= 1")
-        if "question_asked" in assert_keys:
-            presence.append("question_asked")
-        if any(v is False for v in _assert_values(items, "gate_answers_delivered")):
-            presence.append("gate_answers_delivered: false")
-        if presence:
-            findings.append(
-                Finding(
-                    "ERROR",
-                    "gate-assert-contradiction",
-                    f"`questions_count_max: 0` cannot hold alongside {' and '.join(presence)} — no run can "
-                    "satisfy both. A delivered gate records at least one question, so requiring a gate to be "
-                    "present contradicts requiring zero questions. (Where gate evidence is absent the pair "
-                    "isn't satisfied either — it simply isn't evaluated.)",
-                    "Keep the zero-gate declaration and drop the presence assertion, or drop "
-                    "`questions_count_max: 0` if the scenario really does expect a gate.",
-                    path,
-                )
+    contradiction_groups = [
+        (
+            "`questions_count_max: 0`",
+            any(_numeric(v) == 0 for v in _assert_values(items, "questions_count_max")),
+            [
+                (
+                    "gate_answer_count_min: >= 1",
+                    any((n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")),
+                ),
+                ("question_asked", "question_asked" in assert_keys),
+                ("gate_answers_delivered: false", any(v is False for v in _assert_values(items, "gate_answers_delivered"))),
+            ],
+            "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",
+        ),
+        (
+            "`no_hook_blocked: true`",
+            any(v is True for v in _assert_values(items, "no_hook_blocked")),
+            [("hook_blocked", "hook_blocked" in assert_keys)],
+            "both read the same hook-event list — the block `hook_blocked` requires is the one `no_hook_blocked` requires not to exist",
+        ),
+        (
+            "`no_path_denied: true`",
+            any(v is True for v in _assert_values(items, "no_path_denied")),
+            [
+                ("path_denied", "path_denied" in assert_keys),
+                ("vm_path_denied: true", any(v is True for v in _assert_values(items, "vm_path_denied"))),
+            ],
+            "both read the same path-denial list — the denial the positive key requires is one `no_path_denied` requires not to exist",
+        ),
+    ]
+    clauses = []
+    for absence_label, absent, presences, why in contradiction_groups:
+        if not absent:
+            continue
+        hits = [label for label, present in presences if present]
+        # Report EVERY contradictory group, not just the first — a scenario can carry more than one.
+        if hits:
+            clauses.append(f"{absence_label} alongside {' and '.join(hits)} ({why})")
+    if clauses:
+        findings.append(
+            Finding(
+                "ERROR",
+                "assert-contradiction",
+                # "both" is wrong once more than one group is named -- and a scenario carrying two is
+                # exactly the one whose message gets read carefully.
+                f"{'; and '.join(clauses)} — "
+                + ("no run can satisfy both." if len(clauses) == 1 else "no run can satisfy all of them."),
+                "Keep the negative assertion and drop the positive one, or drop the negative if the "
+                "scenario really does expect the record.",
+                path,
             )
+        )
 
     # W: mixed-class assert item → the live-only half is dropped on replay (manifest-backed keys are NOT)
     for idx, item in enumerate(items):
@@ -1747,7 +1788,7 @@ def build_scenario(args):
         # fabrication — so emit it COMMENTED OUT with the calibration path, not a made-up value.
         # `<N> >= 1` is not decoration: this block also emits gate-PRESENCE assertions, and
         # `questions_count_max: 0` alongside one of those is unsatisfiable — refused by run/skill/record
-        # and flagged as `gate-assert-contradiction`. Zero is the natural value to reach for on a
+        # and flagged as `assert-contradiction`. Zero is the natural value to reach for on a
         # gate-clean scenario, so the hint has to say where it does NOT belong.
         content_lines.append(
             "  # - questions_count_max: <N>   # BUDGET (N >= 1 — `0` contradicts the gate assertions "

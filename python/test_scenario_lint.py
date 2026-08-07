@@ -559,7 +559,7 @@ def test_min_severity_filters_json_identically(tmp_path):
 # passes vacuously at zero and leaves the hole open.
 
 RULE = "vacuous-gate-assert"
-CONTRA = "gate-assert-contradiction"
+CONTRA = "assert-contradiction"
 
 
 def _findings(yaml_body, tmp_path):
@@ -812,6 +812,41 @@ def test_contradiction_is_detected_within_a_single_assert_entry(tmp_path):
     ],
 )
 def test_satisfiable_gate_combinations_are_not_flagged(body, tmp_path):
+    assert CONTRA not in _rules(body, tmp_path)
+
+
+# The same shape on the other two evidence channels: one assertion demands a record exist, its sibling
+# demands none exist, and both read one list (hookEvents for the hook pair, pathDenials for the denial
+# pairs). Verified against the assertion implementations rather than the schema prose -- a scope split
+# would have made them satisfiable, and there is none.
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "assert:\n  - hook_blocked: \"Bash\"\n  - no_hook_blocked: true\n",
+        "assert:\n  - path_denied: {}\n  - no_path_denied: true\n",
+        "assert:\n  - vm_path_denied: true\n  - no_path_denied: true\n",
+        "assert:\n  - {hook_blocked: \"Bash\", no_hook_blocked: true}\n",
+    ],
+)
+def test_denial_and_hook_presence_absence_pairs_are_contradictions(body, tmp_path):
+    assert CONTRA in _rules(body, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'assert:\n  - hook_blocked: "Bash"\n',
+        "assert:\n  - no_hook_blocked: true\n",
+        "assert:\n  - no_path_denied: true\n",
+        # two POSITIVE denial assertions can both be satisfied by one run
+        "assert:\n  - vm_path_denied: true\n  - path_denied: {}\n",
+        # two negatives on different channels are jointly satisfiable
+        "assert:\n  - no_hook_blocked: true\n  - no_path_denied: true\n",
+    ],
+)
+def test_satisfiable_hook_and_denial_combinations_are_not_flagged(body, tmp_path):
     assert CONTRA not in _rules(body, tmp_path)
 
 
