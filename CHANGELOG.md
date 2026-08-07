@@ -6,7 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.20.0] — 2026-08-07
+
 ### Upgrade notes
+
+- **Two `COWORK_*` env vars are removed from the covered surface, and this is deliberately NOT a major
+  bump.** `COWORK_EGRESS_PROXY` and `COWORK_DOCKER_NETWORK` leave the documented env-var set that
+  [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract) covers, and
+  [RELEASING.md](./RELEASING.md#versioning-semver)'s rule reads "a removal … means a **major** bump".
+  The exception is taken knowingly: both knobs were **provably inert** — every container-like tier built
+  its egress sidecar before the env branch could execute, and `microvm` never read them at all (see
+  *Fixed*, below) — so no run's behaviour changes in either direction, and no configuration that worked
+  before stops working. Setting either variable was a no-op before this release and is a no-op after it.
+  Recorded here rather than left silent, so the contract is departed from on purpose and once, not by
+  accident. `COWORK_PROXY_IMAGE` is genuinely live and unchanged.
+
+  Note for anyone auditing this later: `npm run check:surface` does **not** catch a removal like this.
+  It compares the current code against the committed snapshot, which was regenerated in the same
+  commits — so it reports `+0 -0 ~0`. The removal is visible only by diffing
+  `test/fixtures/surface-baseline.json` across the release boundary
+  (`git diff v1.19.0..v1.20.0 -- test/fixtures/surface-baseline.json`).
 
 - **Four scenario shapes that lint clean today may newly fail `cowork-harness lint --strict
   --min-severity WARN`** (the invocation the CI recipe teaches). None is a false alarm — each is a
