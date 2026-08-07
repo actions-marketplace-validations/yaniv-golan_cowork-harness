@@ -1,7 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { runDoctorChecks, agentBuildLine, ghcrRefFor, type DoctorProbe, type DoctorCheck, type ImageFreshness } from "../src/run/doctor.js";
+import {
+  runDoctorChecks,
+  agentBuildLine,
+  freshnessFor,
+  ghcrRefFor,
+  type DoctorProbe,
+  type DoctorCheck,
+  type ImageFreshness,
+} from "../src/run/doctor.js";
 
 const OK_PROBE: DoctorProbe = {
   nodeMajor: () => 22,
@@ -301,13 +309,19 @@ describe("doctor — agent image freshness (advisory, network best-effort)", () 
   it("stale → warn (never a blocking fail) with a re-pull + retag remedy", () => {
     const cs = runDoctorChecks(
       "container",
-      withFreshness({ state: "stale", detail: "local cowork-agent-base:2 differs …", ghcrRef: "ghcr.io/yaniv-golan/cowork-agent-base:2" }),
+      withFreshness({
+        state: "stale",
+        detail: "local cowork-agent-base:2 differs …",
+        ghcrRef: "ghcr.io/yaniv-golan/cowork-agent-base:2",
+        pinnedRef: "ghcr.io/yaniv-golan/cowork-agent-base@sha256:" + "a".repeat(64),
+      }),
     );
     const f = get(cs, "image-freshness");
     expect(f.status).toBe("warn");
     expect(f.required).toBe(false);
-    expect(f.remedy).toMatch(/pull ghcr\.io\/yaniv-golan\/cowork-agent-base:2/);
-    expect(f.remedy).toMatch(/tag ghcr\.io\/yaniv-golan\/cowork-agent-base:2 cowork-agent-base:2/);
+    // Digest-addressed: pulling the floating `:2` cannot satisfy a pin to an older revision.
+    expect(f.remedy).toMatch(/pull ghcr\.io\/yaniv-golan\/cowork-agent-base@sha256:a{64}/);
+    expect(f.remedy).toMatch(/tag ghcr\.io\/yaniv-golan\/cowork-agent-base@sha256:a{64} cowork-agent-base:2/);
     expect(blocking(cs)).toEqual([]); // advisory only
   });
 
@@ -328,7 +342,10 @@ describe("doctor — agent image freshness (advisory, network best-effort)", () 
   });
 
   it("is not emitted for microvm (no Docker agent image) even if the probe implements it", () => {
-    const cs = runDoctorChecks("microvm", withFreshness({ state: "stale", detail: "x", ghcrRef: "ghcr.io/y/z:2" }));
+    const cs = runDoctorChecks(
+      "microvm",
+      withFreshness({ state: "stale", detail: "x", ghcrRef: "ghcr.io/y/z:2", pinnedRef: "ghcr.io/y/z@sha256:" + "b".repeat(64) }),
+    );
     expect(cs.find((c) => c.id === "image-freshness")).toBeUndefined();
   });
 
@@ -483,5 +500,38 @@ describe("doctor — agent check parity-mount tolerance by tier", () => {
     expect(agent.detail).toMatch(/2\.1\.177/);
     expect(agent.detail).toMatch(/2\.1\.178/);
     expect(blocking(cs)).not.toContain("agent");
+  });
+});
+
+describe("freshnessFor (pure pin comparison — the injectable probe cannot reach realProbe)", () => {
+  const A = "sha256:" + "a".repeat(64);
+  const B = "sha256:" + "b".repeat(64);
+  const REF = "ghcr.io/yaniv-golan/cowork-agent-base:2";
+
+  it("is unknown for a custom image with no published counterpart", () => {
+    expect(freshnessFor("my/custom:latest", null, A, A).state).toBe("unknown");
+  });
+
+  it("is local when the image has no registry digest, even if a pin exists", () => {
+    // README documents `docker build` as supported; a local build has empty RepoDigests and can never
+    // match a registry pin. Failing it would break the documented workflow.
+    expect(freshnessFor("cowork-agent-base:2", REF, null, A).state).toBe("local");
+  });
+
+  it("is unpinned — not current — when this build carries no pin", () => {
+    // Must never read as `current`: "no pin" is not "matches".
+    expect(freshnessFor("cowork-agent-base:2", REF, A, null).state).toBe("unpinned");
+  });
+
+  it("is current when the local digest equals the pin", () => {
+    expect(freshnessFor("cowork-agent-base:2", REF, A, A).state).toBe("current");
+  });
+
+  it("is stale when they differ, and offers a DIGEST-addressed remedy", () => {
+    const f = freshnessFor("cowork-agent-base:2", REF, B, A);
+    expect(f.state).toBe("stale");
+    // Pulling the floating `:2` cannot satisfy a pin to an older revision — a floating remedy leaves the
+    // user in a permanent warn loop, and inverts the signal once a newer revision is published.
+    expect((f as { pinnedRef: string }).pinnedRef).toBe(`ghcr.io/yaniv-golan/cowork-agent-base@${A}`);
   });
 });

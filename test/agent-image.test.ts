@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_IMAGE_DEFAULT, resolveAgentImage, resolveContainerRuntime } from "../src/runtime/agent-image.js";
+import { AGENT_IMAGE_DEFAULT, pinnedDigestFor, resolveAgentImage, resolveContainerRuntime } from "../src/runtime/agent-image.js";
 
 // The agent image ref and the container runtime were each resolved by a duplicated
 // `process.env.X ?? "default"` expression at 7 and 10 call sites respectively. Duplication of a DEFAULT
@@ -64,5 +64,31 @@ describe("single-source guard", () => {
       .filter((f) => f !== RESOLVER)
       .filter((f) => /process\.env\.COWORK_(AGENT_IMAGE|CONTAINER_RUNTIME)\b/.test(readFileSync(f, "utf8")));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("pinnedDigestFor", () => {
+  it("returns a real digest for each published variant — an unpinned release is a fail-open", () => {
+    // The whole point of the pin: a null pin makes doctor report `skip`, which is indistinguishable from
+    // "checked and fine". This assertion is what stops a release shipping a check that does nothing.
+    expect(pinnedDigestFor("cowork-agent-base:2")).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(pinnedDigestFor("cowork-agent-full:2")).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("pins the full-parity variant independently of the base", () => {
+    // A shared pin would give every COWORK_AGENT_IMAGE=cowork-agent-full:2 user a permanent false `stale`.
+    expect(pinnedDigestFor("cowork-agent-full:2")).not.toBe(pinnedDigestFor("cowork-agent-base:2"));
+  });
+
+  it("keys by the FULL local ref, so a different tag of a published name is NOT pinned", () => {
+    // `image.split(":")[0]` would match every tag of the name — including `:probe` (which the recipe
+    // test's own build instructions produce) and any future `:3`, each getting a bogus `stale`.
+    expect(pinnedDigestFor("cowork-agent-base:probe")).toBeNull();
+    expect(pinnedDigestFor("cowork-agent-base:3")).toBeNull();
+    expect(pinnedDigestFor("cowork-agent-base")).toBeNull();
+  });
+
+  it("returns null for a custom image rather than pretending it is pinned", () => {
+    expect(pinnedDigestFor("my-registry.corp/custom:latest")).toBeNull();
   });
 });

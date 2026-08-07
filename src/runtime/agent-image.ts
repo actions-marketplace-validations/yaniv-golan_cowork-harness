@@ -1,3 +1,8 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { warn } from "../io.js";
+
 /** Single source of truth for WHICH agent image the harness runs and WHICH container runtime runs it.
  *
  *  Both were previously resolved by a duplicated `process.env.X ?? "default"` expression — the image at 7
@@ -25,4 +30,42 @@ export function resolveAgentImage(env: NodeJS.ProcessEnv = process.env): string 
 
 export function resolveContainerRuntime(env: NodeJS.ProcessEnv = process.env): string {
   return override(env.COWORK_CONTAINER_RUNTIME, CONTAINER_RUNTIME_DEFAULT);
+}
+
+interface AgentImageManifest {
+  revision: number;
+  variants: Record<string, { digest: string | null }>;
+}
+
+const MANIFEST_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "docker", "agent-image.json");
+
+/** The registry manifest digest this harness build expects `image` to resolve to, or null when the image
+ *  is not one we publish. Read from DISK, never the network — the check must work offline, which the
+ *  previous `docker buildx imagetools inspect` round-trip could not.
+ *
+ *  Keyed by the FULL local ref (`cowork-agent-base:2`), never by the name alone: keying by name would pin
+ *  every tag of a published name, so `cowork-agent-base:probe` or a future `:3` would be compared against
+ *  the `:2` digest and reported stale forever. Mirrors `ghcrRefFor`'s full-tag map in doctor.ts, and a
+ *  test cross-checks the two key sets.
+ *
+ *  A MALFORMED entry warns loudly rather than returning null: silently degrading a corrupt pin to
+ *  "unpinned" makes operator error indistinguishable from "no pin configured", which is the fail-open
+ *  class this pin exists to close. `repo@sha256:…` is accepted and normalized, because that is exactly
+ *  what `docker inspect .RepoDigests` prints and therefore what a hand-written entry is likely to be. */
+export function pinnedDigestFor(image: string): string | null {
+  let manifest: AgentImageManifest;
+  try {
+    manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8")) as AgentImageManifest;
+  } catch {
+    return null; // `docker/` ships in package.json files[], so this is a broken install, not a normal path
+  }
+  const raw = manifest.variants?.[image]?.digest;
+  if (raw === null || raw === undefined) return null;
+  const normalized = typeof raw === "string" && raw.includes("@") ? raw.slice(raw.indexOf("@") + 1) : raw;
+  if (typeof normalized === "string" && /^sha256:[0-9a-f]{64}$/.test(normalized)) return normalized;
+  warn(
+    `::warning:: [image] docker/agent-image.json has a malformed digest for ${image} (${String(raw)}) — ` +
+      `the agent-image pin is NOT being checked this run.\n`,
+  );
+  return null;
 }

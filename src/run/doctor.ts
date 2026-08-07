@@ -17,7 +17,7 @@ import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName } from "../runtime/lima.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { writeAllSync } from "../io.js";
-import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
+import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
 // `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer);
@@ -31,16 +31,45 @@ const isLive = (t: Tier) => LIVE_TIERS.includes(t);
 
 type Status = "ok" | "fail" | "warn" | "skip";
 
-/** Result of the advisory image-freshness probe (container/hostloop/cowork only):
- *  - `current` — the local pulled image matches the published GHCR `:2` digest.
- *  - `stale`   — it's a PULLED image whose digest no longer matches the current published `:2` (re-pull).
- *  - `local`   — built locally (no registry digest to compare); not a warning, just uncomparable.
- *  - `unknown` — offline / buildx unavailable / custom `COWORK_AGENT_IMAGE` — verification skipped. */
+/** Result of the advisory image-freshness probe (container/hostloop/cowork only). Compared against the
+ *  digest this harness build PINS (`docker/agent-image.json`), read from disk — so unlike the previous
+ *  registry round-trip, the check works OFFLINE and its verdict has a direction:
+ *  - `current`  — the local pulled image is the digest this build pins.
+ *  - `stale`    — a PULLED image that is not the pinned digest; `pinnedRef` is digest-addressed so the
+ *                 remedy converges (pulling floating `:2` would not, once a newer revision exists).
+ *  - `local`    — built locally (empty RepoDigests, so nothing to compare); not a warning.
+ *  - `unpinned` — this build publishes no digest for that image; never reported as `current`.
+ *  - `unknown`  — custom `COWORK_AGENT_IMAGE`, or the local inspect failed (daemon down). A stopped
+ *                 daemon must land here, NOT in `local` — "built locally" would be a confident lie. */
 export type ImageFreshness =
   | { state: "current"; detail: string }
-  | { state: "stale"; detail: string; ghcrRef: string }
+  | { state: "stale"; detail: string; ghcrRef: string; pinnedRef: string }
   | { state: "local"; detail: string }
+  | { state: "unpinned"; detail: string }
   | { state: "unknown"; detail: string };
+
+/** The whole freshness DECISION, with no spawning, so it is testable. The probe seam the doctor tests use
+ *  injects `imageFreshness` wholesale, so a comparison living inside `realProbe` would have zero coverage:
+ *  probe-level tests can only ever exercise the `state -> status` mapping.
+ *
+ *  `ghcrRef` is nullable because its only producer, `ghcrRefFor`, returns `string | null`.
+ *  `localDigest` is null for a locally-built image (empty RepoDigests); `pin` is null when this build
+ *  publishes no digest for that image. I/O failures stay in the caller and surface as `unknown` — a user
+ *  whose Docker daemon is down must never be told their image was "built locally". */
+export function freshnessFor(local: string, ghcrRef: string | null, localDigest: string | null, pin: string | null): ImageFreshness {
+  if (!ghcrRef) return { state: "unknown", detail: `${local} is a custom image — no published counterpart to compare` };
+  if (!localDigest) return { state: "local", detail: `${local} was built locally (no registry digest to compare)` };
+  if (!pin) return { state: "unpinned", detail: `this build pins no digest for ${local} — freshness not checked` };
+  if (localDigest === pin) return { state: "current", detail: `matches the digest this harness version pins` };
+  return {
+    state: "stale",
+    detail: `local ${local} is not the digest this harness version pins`,
+    ghcrRef,
+    // Digest-addressed, NOT the floating `:2`: once a newer revision is published, pulling `:2` still
+    // would not equal an older pin, so a floating remedy never converges.
+    pinnedRef: `${ghcrRef.split(":")[0]}@${pin}`,
+  };
+}
 
 export interface DoctorCheck {
   id: string;
@@ -90,10 +119,10 @@ export interface DoctorProbe {
   // test doubles don't need updating: when a probe doesn't implement it, doctor falls back to a real
   // PATH check (mirrors realProbe's implementation below).
   hasPython3?(): boolean;
-  // Advisory, network best-effort (container/hostloop/cowork only): is the local pulled agent image the
-  // current published GHCR `:2`? OPTIONAL — omitted by test doubles so the freshness check is simply NOT
-  // run (keeps unit tests hermetic and offline; only realProbe touches the network). A locally-BUILT image
-  // returns `local` (uncomparable), never a false "stale".
+  // Advisory (container/hostloop/cowork only): is the local pulled agent image the digest this build
+  // pins? OFFLINE — the pin is read from `docker/agent-image.json`, so this no longer touches the network
+  // at all; the only I/O is a local `image inspect`. OPTIONAL — omitted by test doubles so the check is
+  // simply NOT run. A locally-BUILT image returns `local` (uncomparable), never a false "stale".
   imageFreshness?(): ImageFreshness;
 }
 
@@ -221,7 +250,7 @@ export const realProbe: DoctorProbe = {
     const runtime = this.runtimeName();
     const local = this.imageName();
     const ghcrRef = ghcrRefFor(local);
-    if (!ghcrRef) return { state: "unknown", detail: `${local} is a custom image — not compared to GHCR` };
+    if (!ghcrRef) return freshnessFor(local, null, null, null);
     const repo = ghcrRef.split(":")[0]; // ghcr.io/owner/name (RepoDigests key on the digest side)
 
     // Local registry digest — present ONLY on a pulled image; a locally-built image has an empty RepoDigests.
@@ -229,6 +258,7 @@ export const realProbe: DoctorProbe = {
       encoding: "utf8",
       timeout: 5000,
     });
+    // I/O failure is NOT "built locally" — a stopped daemon must report `unknown`, not a confident `local`.
     if (li.error || li.status !== 0) return { state: "unknown", detail: "could not inspect the local image" };
     let localDigest: string | null = null;
     try {
@@ -240,22 +270,10 @@ export const realProbe: DoctorProbe = {
     } catch {
       /* fall through → treated as a local build */
     }
-    if (!localDigest) return { state: "local", detail: `${local} was built locally (no GHCR digest to compare)` };
-
-    // Remote digest for the floating `:2` — best-effort, offline-tolerant. Parse the `Digest:` line rather
-    // than a Go-template field so it survives buildx output-shape churn across Docker versions.
-    const ri = spawnSync(runtime, ["buildx", "imagetools", "inspect", ghcrRef], { encoding: "utf8", timeout: 8000 });
-    if (ri.error || ri.status !== 0 || typeof ri.stdout !== "string") {
-      return { state: "unknown", detail: "could not reach GHCR (offline, or `docker buildx` unavailable)" };
-    }
-    const rm = ri.stdout.match(/^Digest:\s+(sha256:[0-9a-f]{64})/m);
-    if (!rm) return { state: "unknown", detail: "unexpected registry response" };
-    // Digest inequality proves the local image DIFFERS from what `:2` points at today — not that the
-    // published one is newer. `:2` floats and can be repointed in either direction, so claiming "newer"
-    // asserts a direction this comparison never measured. Report the difference; the remedy re-pulls.
-    return localDigest === rm[1]
-      ? { state: "current", detail: `matches the published ${ghcrRef}` }
-      : { state: "stale", detail: `local ${local} no longer matches the current published ${ghcrRef}`, ghcrRef };
+    // Compared against the digest this build PINS, read from disk. The previous implementation asked GHCR
+    // what `:2` points at *now*, which needed network + buildx (degrading to `unknown` offline) and could
+    // only ever establish that two digests differ — never which one this harness expected.
+    return freshnessFor(local, ghcrRef, localDigest, pinnedDigestFor(local));
   },
 };
 
@@ -445,7 +463,8 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         title: "Agent image freshness",
         status: f.state === "current" ? "ok" : f.state === "stale" ? "warn" : "skip",
         detail: f.detail,
-        remedy: f.state === "stale" ? `re-pull to match: ${runtime} pull ${f.ghcrRef} && ${runtime} tag ${f.ghcrRef} ${image}` : undefined,
+        remedy:
+          f.state === "stale" ? `re-pull to match: ${runtime} pull ${f.pinnedRef} && ${runtime} tag ${f.pinnedRef} ${image}` : undefined,
         required: false,
       });
     }

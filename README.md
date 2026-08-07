@@ -173,6 +173,11 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
 2. **A runtime + agent image, matching your tier:**
    - **`container` / `hostloop` (Docker, arm64):**
      ```bash
+     # Preferred — the image this release pins, digest-addressed so it cannot drift:
+     docker pull ghcr.io/yaniv-golan/cowork-agent-base:2-r1
+     docker tag  ghcr.io/yaniv-golan/cowork-agent-base:2-r1 cowork-agent-base:2
+     # Or build it yourself (offline / customised). A locally built image has no registry digest,
+     # so `doctor` reports the freshness check as skipped rather than comparing it to the pin:
      docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
      ```
      This **core** image mirrors the real Cowork rootfs's document/data toolchain (Node 22, openpyxl/pandas/pdf/docx/pptx, …); override the tag with `COWORK_AGENT_IMAGE`. For OCR / LibreOffice / markitdown / opencv / PDF-table skills, build the **full-parity** image instead and point `COWORK_AGENT_IMAGE` at it:
