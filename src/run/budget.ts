@@ -118,6 +118,35 @@ export function batchBudgetTracker(
   };
 }
 
+/** Summed worst-case cost of a batch, plus the scenarios that contributed nothing because they have no
+ *  priced history. Pure (a history lookup, no spend), which is why it is safe to report unconditionally.
+ *
+ *  Split out of `preflightBatchBudget` so the number can be SHOWN, not only used to refuse. It was
+ *  previously computed and discarded unless it happened to exceed a cap, so the only way to learn what a
+ *  batch would cost was to bisect `--max-budget-usd` — reported by a consumer who had to do exactly
+ *  that to size a 24-scenario re-record. */
+export function estimateBatchCost(scenarios: string[]): { known: number; unpriced: string[] } {
+  let known = 0;
+  const unpriced: string[] = [];
+  for (const s of scenarios) {
+    const worst = worstObservedCost(s);
+    if (worst === undefined) unpriced.push(s);
+    else known += worst;
+  }
+  return { known, unpriced };
+}
+
+/** The one-line estimate, phrased so a partially-unpriced total can never read as authoritative. An
+ *  unqualified "$0.00" over a corpus that has never run is worse than no number at all. */
+export function batchCostEstimateLine(scenarios: string[], est: { known: number; unpriced: string[] }): string {
+  const bound = est.unpriced.length ? " — LOWER BOUND" : "";
+  const detail = est.unpriced.length
+    ? ` (${est.unpriced.length}/${scenarios.length} scenario(s) have no priced run history and contribute $0: ` +
+      `${est.unpriced.slice(0, 5).join(", ")}${est.unpriced.length > 5 ? `, +${est.unpriced.length - 5} more` : ""})`
+    : ` (all ${scenarios.length} scenario(s) priced from prior runs)`;
+  return `estimated batch cost: $${est.known.toFixed(4)}${bound}${detail}`;
+}
+
 /**
  * Cumulative pre-flight for a `record` BATCH: refuse before spending anything if the summed worst-case
  * cost of every resolved scenario exceeds the cap.
@@ -132,19 +161,17 @@ export function batchBudgetTracker(
  * with the same sentence.
  */
 export function preflightBatchBudget(command: string, scenarios: string[], maxBudgetUsd: number, json: boolean): void {
-  let known = 0;
-  const unpriced: string[] = [];
-  for (const s of scenarios) {
-    const worst = worstObservedCost(s);
-    if (worst === undefined) unpriced.push(s);
-    else known += worst;
-  }
+  const { known, unpriced } = estimateBatchCost(scenarios);
   if (unpriced.length)
     log(
       `::warning:: --max-budget-usd: ${unpriced.length}/${scenarios.length} scenario(s) have no priced run history and contribute $0 to the estimate ` +
         `(${unpriced.slice(0, 5).join(", ")}${unpriced.length > 5 ? `, +${unpriced.length - 5} more` : ""}) — ` +
         `the batch total below is a LOWER BOUND, so the cap is weaker than it looks until those have run once.`,
     );
+  // Report the total on the PASSING path too. A cap that silently permits tells the user nothing about
+  // how close they came, and deriving the number by bisecting the cap is not a workflow.
+  if (known <= maxBudgetUsd)
+    log(`::notice:: --max-budget-usd $${maxBudgetUsd.toFixed(4)}: ${batchCostEstimateLine(scenarios, { known, unpriced })}`);
   if (known > maxBudgetUsd)
     fail(
       command,

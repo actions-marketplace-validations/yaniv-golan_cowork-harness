@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.19.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.20.0`
 (baseline `desktop-1.26832.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -329,9 +329,9 @@ same set live from the schema.
 | `present_files_called: true` | at least one file was actually delivered via the `present_files` tool (`RunResult.presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak` (which passes vacuously when nothing was presented). Pair them to require a delivery **and** require it not to leak. Content-class (re-derives identically on replay). **`fidelity: container` or `hostloop`** — the harness serves `present_files` at both (hostloop via a handler mirroring production's own host-loop branch: validate the path, pass it through, no promotion). `protocol` and `microvm` report cannot-verify. See the `no_scratchpad_leak` row, which stays container-only for a different reason; and see the lane note there — the tool name differs on remote Cowork. **Only `true` is valid** |
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
-| `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail); **zero gates fired passes vacuously** — pair with `gate_answer_count_min` to also require a gate |
-| `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests |
-| `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — presence companion to `gate_answers_delivered`'s vacuous-pass |
+| `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail); **zero gates fired passes vacuously** — pair with `gate_answer_count_min: >= 1` to also require a gate, or drop this key and declare `questions_count_max: 0` in a scenario that expects none |
+| `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests. Requires a gate, so **mutually exclusive** with `questions_count_max: 0` (refused by `run`/`skill`/`record`) |
+| `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — presence companion to `gate_answers_delivered`'s vacuous-pass. **`: 0` asserts nothing** and does not satisfy that pairing; `>= 1` is **mutually exclusive** with `questions_count_max: 0` (refused by `run`/`skill`/`record`) |
 | `hook_blocked: <regex>` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — evidence-unavailable if hook telemetry is absent. Replay: needs a `controlOut` cassette (a custom hook's decision lives only there, not the recorded stream) |
 | `no_hook_blocked: true` | no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional hook block) — evidence-unavailable if hook telemetry is absent. Replay: needs a `controlOut` cassette. **Only `true` is valid** |
 | `vm_path_denied: true` | **`fidelity: hostloop` only** — at least one recorded path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — evidence-unavailable if path-denial telemetry is absent. Replay: needs a `controlOut` cassette. Any other tier FAILS "cannot verify". **Only `true` is valid** |

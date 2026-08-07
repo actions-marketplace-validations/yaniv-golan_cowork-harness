@@ -371,9 +371,9 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
-| `gate_answers_delivered: true` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min` to also require a gate |
+| `gate_answers_delivered: true` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min: >= 1` to also require a gate, or drop it and declare `questions_count_max: 0` in a gate-clean scenario |
 | `gate_answers_delivered: false` | the inverse — asserts a *confirmed* delivery failure (at least one gate whose `delivered === false`); an unobserved (`null`) delivery satisfies neither `true` nor `false` |
-| `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass |
+| `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass. **`: 0` asserts nothing**; `>= 1` is mutually exclusive with `questions_count_max: 0` |
 | `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
 | `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
@@ -621,7 +621,12 @@ genuinely had no such tool. Re-record those.
 
 ```bash
 cowork-harness record scenarios/ --dry-run          # preview + REAL loader check (schema errors surface here), write nothing
+                                                    # ALSO refuses what the real record would: on_unanswered: prompt,
+                                                    # and a statically unsatisfiable assert pairing
+                                                    # (assert-contradiction). Reports EVERY offender, not the first.
+                                                    # Prints the batch cost estimate summed from prior-run history.
 cowork-harness record scenarios/ --dry-run --quiet  # the same check shaped for CI: silent on success, loud on failure
+                                                    # (--quiet mutes the preview, never a refusal)
 cowork-harness record scenarios/ --max-budget-usd 2.50   # refuse up front if the batch's cost history exceeds the cap
 cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/

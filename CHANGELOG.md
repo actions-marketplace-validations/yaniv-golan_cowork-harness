@@ -6,7 +6,64 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.20.0] — 2026-08-07
+
+### Upgrade notes
+
+- **`record --dry-run` now refuses what the real `record` refuses, so a batch preflight can no longer
+  green a scenario the paid run rejects.** It already ran the real loader; it now also applies the
+  scenario-level refusals — `on_unanswered: prompt` (previously enforced in the single-file arm only,
+  never in a directory batch) and the new unsatisfiable-assert pairing. A directory dry run reports
+  **every** offender rather than stopping at the first, since the point of previewing N scenarios is to
+  learn about all N in one pass, and exits 1 when any is refused. `--quiet` still mutes the readiness
+  preview and never a refusal. Caught by a founder-skills consumer who noted that the refusal shipped on
+  the execution path only — while `record --dry-run` is what we document, in four places, as the
+  token-free way to validate a scenario, and is what their CI and re-record script call.
+
+- **Two `COWORK_*` env vars are removed from the covered surface, and this is deliberately NOT a major
+  bump.** `COWORK_EGRESS_PROXY` and `COWORK_DOCKER_NETWORK` leave the documented env-var set that
+  [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract) covers, and
+  [RELEASING.md](./RELEASING.md#versioning-semver)'s rule reads "a removal … means a **major** bump".
+  The exception is taken knowingly: both knobs were **provably inert** — every container-like tier built
+  its egress sidecar before the env branch could execute, and `microvm` never read them at all (see
+  *Fixed*, below) — so no run's behaviour changes in either direction, and no configuration that worked
+  before stops working. Setting either variable was a no-op before this release and is a no-op after it.
+  Recorded here rather than left silent, so the contract is departed from on purpose and once, not by
+  accident. `COWORK_PROXY_IMAGE` is genuinely live and unchanged.
+
+  Note for anyone auditing this later: `npm run check:surface` does **not** catch a removal like this.
+  It compares the current code against the committed snapshot, which was regenerated in the same
+  commits — so it reports `+0 -0 ~0`. The removal is visible only by diffing
+  `test/fixtures/surface-baseline.json` across the release boundary
+  (`git diff v1.19.0..v1.20.0 -- test/fixtures/surface-baseline.json`).
+
+- **Four scenario shapes that lint clean today may newly fail `cowork-harness lint --strict
+  --min-severity WARN`** (the invocation the CI recipe teaches). None is a false alarm — each is a
+  scenario that was already not testing what it looked like it tested:
+  1. A presence assertion paired with its absence sibling → new `assert-contradiction` ERROR (and the
+     run itself is now refused): `questions_count_max: 0` with a gate-presence key, `no_hook_blocked`
+     with `hook_blocked`, or `no_path_denied` with `path_denied`/`vm_path_denied`.
+  2. `gate_answers_delivered: true` paired with `gate_answer_count_min: 0` → the zero floor no longer
+     counts as a companion. **Most likely to already be in an existing corpus.** Fix: raise the floor to
+     `1`, or drop `gate_answers_delivered`.
+  3. `tool_called: "askuserquestion"` (or any wrong-case spelling) alongside `gate_answers_delivered`
+     → the glob is case-sensitive and never matched the gate; it no longer silences the rule.
+  4. `tool_called: "Ask.*Question"` → a regex-shaped value, already rejected at scenario load by the
+     tool-glob schema, no longer silences the rule either. Use `Ask*Question`.
+
+  Conversely, `gate_answers_delivered: false` **stops** warning — if you carry a suppression for it, it
+  can go.
+
 ### Added
+
+- **`record --dry-run` reports the batch cost estimate, with or without `--max-budget-usd`.** The
+  summed worst-case cost from prior-run history was already computed on every batch preflight and then
+  discarded unless it happened to exceed a cap — so the only way to learn what a re-record would cost
+  was to bisect `--max-budget-usd` until it refused. It is now printed on the passing path (text) and
+  carried as `estimatedCostUsd` + `unpricedScenarios` in the `--output-format json` payload, and the
+  refusal path is unchanged. A total summed over partially-unpriced history is labelled a **LOWER
+  BOUND** and names the scenarios contributing $0, so a fresh corpus's `$0.0000` can never read as
+  authoritative.
 
 - **`doctor` checks the agent image against a digest this release pins, offline.** The check previously
   asked GHCR what the floating `:2` tag pointed at *at that moment*: it needed network and
@@ -27,6 +84,24 @@ All notable changes to this project are documented here. The format is based on
   are unaffected. The workflow refuses to repoint an existing `:2-r<N>` and fails **closed** when it
   cannot enumerate tags — an inconclusive check must never read as "tag absent". See
   [docs/maintenance.md](./docs/maintenance.md#publishing-an-agent-image-revision).
+
+- **`run` / `skill` / `record` now refuse an unsatisfiable assertion pairing before spawning, and
+  `lint` reports it as `assert-contradiction` (ERROR).** Three pairs, each one assertion requiring a
+  record to exist next to its sibling requiring none to, on a single evidence channel:
+  - `questions_count_max: 0` with `gate_answer_count_min: >= 1`, `question_asked`, or
+    `gate_answers_delivered: false` — a delivered gate records at least one question.
+  - `no_hook_blocked` with `hook_blocked` — one hook-event list.
+  - `no_path_denied` with `path_denied` or `vm_path_denied` — one path-denial list.
+
+  Previously each cost a live run to discover. Where the evidence is absent both halves fail
+  evidence-unavailable rather than passing, and the denial keys are hostloop-only so a wrong tier fails
+  both too — no combination produced a silent both-pass, only a guaranteed one. Each negative key
+  **on its own** is unaffected; `questions_count_max: 0` in particular remains the supported way to
+  declare a gate-clean scenario.
+
+  This is a **command-level** refusal, not a schema change: `schema/scenario.schema.json` still accepts
+  the document, so the covered input contract ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
+  is untouched and no cassette is affected.
 
 ### Changed
 
@@ -62,6 +137,29 @@ All notable changes to this project are documented here. The format is based on
   22.04, Node 22.22.3, numpy 2.2.6 / pandas 2.3.3 / openpyxl 3.1.5, `LANG=C.UTF-8`, uid-1000 `ubuntu`).
 
 ### Fixed
+
+- **`lint`'s `vacuous-gate-assert` rule was wrong in four ways, two of them silent.** The rule exists to
+  catch a `gate_answers_delivered` that guards nothing, and it read only assertion **key names**, never
+  their values:
+  - It fired on `gate_answers_delivered: **false**`, whose premise is the opposite — that assertion
+    demands a confirmed delivery *failure*, so zero gates fails it. A correct negative-path scenario was
+    told, in a build-failing warning, that it passed vacuously.
+  - It accepted `gate_answer_count_min: **0**` as the presence companion. `delivered >= 0` always holds,
+    so the pairing everyone reads as "and a gate must actually fire" asserted nothing — a silent
+    false-green wearing the correct idiom's clothes.
+  - It matched `tool_called` with a case-insensitive `re.search`, but that field is a **glob**
+    (anchored, case-sensitive, only `*`/`?` special). Valid globs that do pin the gate
+    (`Ask*Question`, `*Question`, `**/AskUserQuestion`, `**/*`) were flagged anyway, while
+    `askuserquestion` — which can never match — silenced the rule. The matcher is now a port of the
+    harness's own glob engine, with a differential test against it.
+  - Its remedy only ever said "add a presence companion". For a scenario that is gate-clean **by
+    design** every branch of that was wrong, and the correct fix — drop the key, it asserts nothing
+    there — was never named. The fix line now carries both branches, and when a scenario already
+    declares `questions_count_max: 0` the finding says the key is *inert here, drop it* rather than
+    telling you to add a gate.
+
+  Thanks to the founder-skills consumer whose report surfaced the one-sided remedy; the other three came
+  out of investigating it.
 
 - **`expect_denied` could not tell an empty egress channel from an allowed host.** The expansion into
   `egress_denied` assertions was duplicated in the live run and the verify path, and both reported a bare

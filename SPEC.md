@@ -450,7 +450,22 @@ green replay does not imply the recording is still valid. Each finding is surfac
   N gates fired AND were delivered non-error — the presence companion, mirroring
   `computer_links_resolve` (zero-passes) paired with `transcript_contains` (presence). Both keys fail
   evidence-unavailable, never vacuous-pass, when gate-delivery telemetry itself is absent from
-  `result.json` (an old/partial run on the verify-run lane).
+  `result.json` (an old/partial run on the verify-run lane). A floor of `gate_answer_count_min: 0` is
+  **not** that companion — `delivered >= 0` always holds. In a scenario that expects no gates, the
+  correct form is `questions_count_max: 0` alone, without `gate_answers_delivered`.
+- **`questions_count_max: 0` and a gate-presence assertion are mutually exclusive**, and `run` / `skill`
+  / `record` **refuse** such a scenario before spawning (exit 2 on `run`/`skill`, 1 on `record` — the
+  same convention as the `on_unanswered: prompt` refusal). A delivered gate records at least one
+  question, so `questions_count_max: 0` cannot hold alongside `gate_answer_count_min: >= 1`,
+  `question_asked`, or `gate_answers_delivered: false`. This is a **command-level** refusal, not a
+  schema tightening: `schema/scenario.schema.json` still accepts the document, so §12's covered
+  input contract is unchanged. `lint` reports the same pairing as `assert-contradiction` (ERROR).
+- **The same refusal covers every presence/absence pair on one evidence channel.** Besides the gate
+  pair above: `hook_blocked` + `no_hook_blocked` (one hook-event list) and `path_denied` /
+  `vm_path_denied` + `no_path_denied` (one path-denial list). In each case one assertion requires a
+  record to exist and its sibling requires none to, so no run satisfies both. Where the evidence is
+  absent both halves fail evidence-unavailable rather than passing, and the denial keys are
+  hostloop-only so a wrong tier fails both too — no combination produces a both-pass.
 - **`questions_count_max` counts sub-questions, not `AskUserQuestion` tool calls/gates.** A bundled
   gate with K sub-questions counts as K (`src/run/run.ts`'s recorder pushes one `rec.questions` entry
   per sub-question; `src/assert.ts` compares against that count). `trace --view questions` shows the

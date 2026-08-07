@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.19.0
-  tracks-harness: cowork-harness 1.19.0 (baseline desktop-1.26832.0)
+  version: 1.20.0
+  tracks-harness: cowork-harness 1.20.0 (baseline desktop-1.26832.0)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.19.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.20.0` (baseline
 > `desktop-1.26832.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.19.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.19.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.19.0"`. **Pin `@>=1.19.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.20.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.20.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.20.0"`. **Pin `@>=1.20.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -324,7 +324,10 @@ reworded gate or a `choose:` the run never offered fails here in ~1s instead of 
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
-`cowork-harness record <file.yaml> --dry-run`; `lint` checks the assertion invariants (both above).
+`cowork-harness record <file.yaml> --dry-run` — it runs the real loader AND the same scenario-level
+refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing), so it
+cannot green something a paid run would reject. On a directory it reports every offender and the batch
+cost estimate. `lint` checks the assertion invariants (both above).
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
@@ -836,10 +839,13 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     sub-question count and a matching footer total — read that off instead of the tool-call count when
     sizing the budget.
 
-19. **`gate_answers_delivered` passes vacuously when no gate fires — use `gate_answer_count_min: 1` to
-    also require a gate.** Whether a gate fires is model-dependent, so `gate_answers_delivered: true`
-    alone can't catch "the gate never fired at all"; pair it with `gate_answer_count_min` when
-    presence matters, not just delivery.
+19. **`gate_answers_delivered` passes vacuously when no gate fires — pair it, or drop it.** Whether a
+    gate fires is model-dependent, so `gate_answers_delivered: true` alone can't catch "the gate never
+    fired at all". If the scenario is meant to gate, pair it with `gate_answer_count_min: 1` (a floor of
+    `0` witnesses nothing). If the scenario is gate-clean by design, drop the key — it asserts nothing
+    there — and declare `questions_count_max: 0`, which fails loudly if a gate ever appears. Asserting
+    `questions_count_max: 0` alongside a gate-presence key is unsatisfiable: `run`/`skill`/`record`
+    refuse it before spending.
 
 20. **A `mode: r` connected folder's contents are recorded body-less, not excluded.** `record` captures a
     read-only folder's files as path + hash only (`truncated: true`, no `body`) — it's an input the agent
