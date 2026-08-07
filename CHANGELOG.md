@@ -30,6 +30,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Platform baseline `desktop-1.26832.0` (agent ELF `2.1.222`), with no behavioural change to the
+  modeled spawn contract.** The ELF's SHA-256 matches Anthropic's official `linux-arm64` release
+  checksum. The Cowork system prompt, the sub-agent append, `coworkSyspromptMap`, the mount-mode
+  anchors and the egress allowlist are all unchanged — the whole sentinel set passed. All three
+  committed cassettes replay clean (re-stamped, not re-recorded — no live agent runs at replay tier, so
+  their recorded behaviour could not move).
+
+  Desktop constructs one new spawn-env key, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. It is
+  **allowlisted rather than pinned**: both of its construction sites sit inside the
+  `accountType === "3p"` object literal and are further conditional on `telemetry.disableNonessential`,
+  alongside `DISABLE_GROWTHBOOK`/`DISABLE_TELEMETRY`, which are allowlisted for the same reason. Pinning
+  it would bake a third-party-provider key into a baseline that describes the first-party spawn.
+
+  Two gate movements worth naming, neither of which changes emulated behaviour.
+  `scheduledTaskToolsApprovableByAutoMode` flipped to force-on, but Cowork spawns with
+  `CLAUDE_CODE_DISABLE_CRON=1` regardless and the scheduled-task tool set is unchanged. And
+  `coworkRuntimeConfig` began *serving* `skillsSyncIntervalMs`/`pluginsSyncIntervalMs` (20 min) plus
+  `pluginsFullSyncStalenessMs` (1 h) instead of letting them fall back to code defaults — the code
+  reading them already shipped. Cowork therefore re-syncs host skills and plugins into a live session
+  roughly every 20 minutes; the harness stages once per run and never re-stages, which is a deliberate
+  divergence — it stages from a git-tracked, immutable-per-run source, so there is no mid-run mutation
+  for it to observe.
+
+
 - **The agent image's base layer is pinned by digest.** `docker/Dockerfile.agent` builds
   `FROM ubuntu:22.04@sha256:3b06811b…` instead of the floating `22.04` tag. This Dockerfile has no
   `COPY`/`ADD` — every byte comes from the base plus apt and pip — so with a floating base, rebuilding

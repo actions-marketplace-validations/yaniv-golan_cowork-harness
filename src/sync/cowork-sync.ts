@@ -1450,6 +1450,11 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "user-settings-conditional (default absent)",
   CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: "server-pushed per-account map (default absent)",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
+  // Doubly conditional: the 3p branch AND `telemetry.disableNonessential`. Its two construction sites
+  // sit inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK/DISABLE_TELEMETRY
+  // below, so it is allowlisted for the identical reason rather than pinned — pinning would bake a
+  // 3p-only key into a baseline that describes the 1p spawn.
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "3p-provider-only branch (+ telemetry.disableNonessential); harness models 1p",
   CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: "3p-provider-only branch; harness models 1p",
   DISABLE_GROWTHBOOK: "3p-provider-only branch; harness models 1p",
   DISABLE_TELEMETRY: "3p-provider-only branch; harness models 1p",
