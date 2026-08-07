@@ -10,6 +10,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **`record --dry-run` now refuses what the real `record` refuses, so a batch preflight can no longer
+  green a scenario the paid run rejects.** It already ran the real loader; it now also applies the
+  scenario-level refusals — `on_unanswered: prompt` (previously enforced in the single-file arm only,
+  never in a directory batch) and the new unsatisfiable-assert pairing. A directory dry run reports
+  **every** offender rather than stopping at the first, since the point of previewing N scenarios is to
+  learn about all N in one pass, and exits 1 when any is refused. `--quiet` still mutes the readiness
+  preview and never a refusal. Caught by a founder-skills consumer who noted that the refusal shipped on
+  the execution path only — while `record --dry-run` is what we document, in four places, as the
+  token-free way to validate a scenario, and is what their CI and re-record script call.
+
 - **Two `COWORK_*` env vars are removed from the covered surface, and this is deliberately NOT a major
   bump.** `COWORK_EGRESS_PROXY` and `COWORK_DOCKER_NETWORK` leave the documented env-var set that
   [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract) covers, and
@@ -45,6 +55,15 @@ All notable changes to this project are documented here. The format is based on
   can go.
 
 ### Added
+
+- **`record --dry-run` reports the batch cost estimate, with or without `--max-budget-usd`.** The
+  summed worst-case cost from prior-run history was already computed on every batch preflight and then
+  discarded unless it happened to exceed a cap — so the only way to learn what a re-record would cost
+  was to bisect `--max-budget-usd` until it refused. It is now printed on the passing path (text) and
+  carried as `estimatedCostUsd` + `unpricedScenarios` in the `--output-format json` payload, and the
+  refusal path is unchanged. A total summed over partially-unpriced history is labelled a **LOWER
+  BOUND** and names the scenarios contributing $0, so a fresh corpus's `$0.0000` can never read as
+  authoritative.
 
 - **`doctor` checks the agent image against a digest this release pins, offline.** The check previously
   asked GHCR what the floating `:2` tag pointed at *at that moment*: it needed network and

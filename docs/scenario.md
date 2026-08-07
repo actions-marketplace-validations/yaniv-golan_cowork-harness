@@ -114,7 +114,9 @@ Two consequences worth internalising:
 **To check whether a scenario loads, without spending anything:**
 
 ```bash
-cowork-harness record path/to/scenario.yaml --dry-run   # runs the real loader; exit 2 on a schema error
+cowork-harness record path/to/scenario.yaml --dry-run   # runs the real loader; exit 2 on a schema error,
+                                                        # and refuses what the real record would (unsatisfiable
+                                                        # assert pairing, on_unanswered: prompt)
 ```
 
 `--dry-run` writes nothing and needs no token or staged agent to report a schema error, so it is the

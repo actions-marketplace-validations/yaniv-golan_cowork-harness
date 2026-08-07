@@ -621,7 +621,12 @@ genuinely had no such tool. Re-record those.
 
 ```bash
 cowork-harness record scenarios/ --dry-run          # preview + REAL loader check (schema errors surface here), write nothing
+                                                    # ALSO refuses what the real record would: on_unanswered: prompt,
+                                                    # and a statically unsatisfiable assert pairing
+                                                    # (assert-contradiction). Reports EVERY offender, not the first.
+                                                    # Prints the batch cost estimate summed from prior-run history.
 cowork-harness record scenarios/ --dry-run --quiet  # the same check shaped for CI: silent on success, loud on failure
+                                                    # (--quiet mutes the preview, never a refusal)
 cowork-harness record scenarios/ --max-budget-usd 2.50   # refuse up front if the batch's cost history exceeds the cap
 cowork-harness record scenarios/                    # or: record cassettes/ --rerecord-stale
 cowork-harness verify-cassettes cassettes/

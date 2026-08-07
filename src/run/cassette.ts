@@ -16,9 +16,9 @@ import {
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
 } from "../types.js";
-import { executeScenario, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
+import { executeScenario, assertContradiction, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { UsageError } from "../errors.js";
-import { preflightBudget, preflightBatchBudget, batchBudgetTracker } from "./budget.js";
+import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
 
 /** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
  *  AND both real batch paths — a caveat that differs between the preview and the run would be its own bug. */
@@ -2720,14 +2720,41 @@ export async function cmdRecord(args: string[]) {
 
     if (isDir) {
       const disc = discoverScenarios(target);
+      // Scenario-level refusals, per file. A dry run over N scenarios exists to learn about all N in one
+      // pass, so this collects EVERY offender instead of failing at the first — aborting early turns a
+      // 24-scenario preflight into 24 sequential round trips, which is the same cost the refusal exists
+      // to avoid. Both checks are pure functions over the parsed scenario, i.e. free.
+      //
+      // `promptPolicyRejection` has always run in the single-file arm below and never here, so a batch
+      // dry run greened a scenario the real `record` refuses per-scenario (recordScenarioObject). Adding
+      // the contradiction check without it would have left an arbitrary split: batch dry-run enforcing
+      // one scenario-level refusal but not its sibling.
+      const parsedNames: string[] = [];
+      const refusals: { file: string; message: string }[] = [];
+      for (const f of disc.scenarios) {
+        let sc;
+        try {
+          sc = parseScenarioFile(f);
+        } catch {
+          continue; // already classified as `broken` by discoverScenarios
+        }
+        parsedNames.push(sc.name);
+        const why = promptPolicyRejection(sc) ?? assertContradiction(sc);
+        if (why) refusals.push({ file: f, message: why });
+      }
+      // Free by construction (a run-history lookup), so it is reported whether or not a cap was passed.
+      const estimate = estimateBatchCost(parsedNames);
       if (asJson) {
         out(
-          jsonPayloadEnvelope("record", true, {
+          jsonPayloadEnvelope("record", refusals.length === 0 && disc.broken.length === 0, {
             dryRun: true,
             target,
             scenarios: disc.scenarios,
             skipped: disc.skipped,
             broken: disc.broken,
+            refusals,
+            estimatedCostUsd: estimate.known,
+            unpricedScenarios: estimate.unpriced,
             token,
             agent: agentPayload,
           }),
@@ -2735,6 +2762,9 @@ export async function cmdRecord(args: string[]) {
       } else {
         for (const s of disc.skipped) log(`· skipped: ${s}`);
         for (const b of disc.broken) log(`✗ broken: ${b.file}: ${b.error}`);
+        // `--quiet` mutes the readiness PREVIEW only; a refusal is the loud half of "silent on success,
+        // loud on failure" and must survive it, exactly as `broken:` does.
+        for (const r of refusals) log(`✗ refused: ${r.file}: ${r.message}`);
       }
       if (disc.scenarios.length === 0) {
         if (disc.broken.length === 0) {
@@ -2751,26 +2781,20 @@ export async function cmdRecord(args: string[]) {
         for (let i = 0; i < disc.scenarios.length; i++) log(`  [${i + 1}] ${disc.scenarios[i]}`);
         log(tokenLine);
         log(agentLine);
+        log(`  ${batchCostEstimateLine(parsedNames, estimate)}`);
       }
       // The budget gate runs under --dry-run too, and refuses identically. A dry run whose whole job is
       // "tell me what this would do before I spend" must not report clean and then be refused for real —
       // that is a false preview, and it is free to check (history lookup, no spend).
       if (maxBudgetUsd !== undefined) {
-        const names: string[] = [];
-        for (const f of disc.scenarios) {
-          try {
-            names.push(parseScenarioFile(f).name);
-          } catch {
-            /* classified `broken` above */
-          }
-        }
-        preflightBatchBudget("record", names, maxBudgetUsd, asJson);
+        preflightBatchBudget("record", parsedNames, maxBudgetUsd, asJson);
         // Part of the preview: the cap is weaker than it looks above --concurrency 1, and the reader
         // deserves to learn that here rather than after spending.
         if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
       }
-      // Exit 1 when there are broken files (they won't run but the user should know).
-      return process.exit(disc.broken.length > 0 ? 1 : 0);
+      // Exit 1 when there are broken files (they won't run but the user should know) or refused ones
+      // (they parse, but no run could satisfy them — the real `record` would reject each in turn).
+      return process.exit(disc.broken.length > 0 || refusals.length > 0 ? 1 : 0);
     }
 
     // Single scenario dry-run.
@@ -2782,6 +2806,10 @@ export async function cmdRecord(args: string[]) {
     }
     const promptReject = promptPolicyRejection(scenario);
     if (promptReject) return fail("record", "usage", promptReject, undefined, asJson);
+    // Same rule as promptPolicyRejection directly above, and as the budget gate below: a refusal the
+    // real `record` would raise has to raise here too, or this preview is false. Pure and spend-free.
+    const contradiction = assertContradiction(scenario);
+    if (contradiction) return fail("record", "usage", contradiction, undefined, asJson);
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);

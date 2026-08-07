@@ -324,7 +324,10 @@ reworded gate or a `choose:` the run never offered fails here in ~1s instead of 
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
-`cowork-harness record <file.yaml> --dry-run`; `lint` checks the assertion invariants (both above).
+`cowork-harness record <file.yaml> --dry-run` — it runs the real loader AND the same scenario-level
+refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing), so it
+cannot green something a paid run would reject. On a directory it reports every offender and the batch
+cost estimate. `lint` checks the assertion invariants (both above).
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
