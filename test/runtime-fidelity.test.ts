@@ -173,6 +173,16 @@ describe("host-loop sidecar leaves CLAUDE_PLUGIN_ROOT UNSET (matches real host-l
     expect(argv.join(" ")).toContain("CLAUDE_PLUGIN_ROOT=/x");
   });
 
+  it("the sidecar's egress env is wired through hostLoopSidecarEnv, not built inline", () => {
+    // The builder having correct OUTPUT proves nothing if spawnHostLoop doesn't CALL it — which is
+    // exactly how this regressed: the native host/VM split replaced the sidecar's proxy env with a
+    // literal, and bash lost egress entirely for thirteen releases with every test still green.
+    // Source-text guard because spawnHostLoop spawns real processes; same shape as the sentinel guard
+    // below. If you extract the sidecar args, keep this pointed at whatever composes that env.
+    const src = readFileSync(join(SRC, "runtime", "hostloop.ts"), "utf8");
+    expect(src).toContain("env: hostLoopSidecarEnv(opts.egressProxy)");
+  });
+
   it("the old unresolvable sentinel is gone from the host-loop sidecar", () => {
     // Regression guard: re-introducing a `/host/plugins/unmounted` sentinel would leak a bogus path into
     // guest bash again (the very drift from real host-loop this removed).

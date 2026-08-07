@@ -19,6 +19,7 @@ const EXPECTED_CHECKS = [
   "allowlist-enforced",
   "allowlist-permits",
   "loopback-not-proxied",
+  "hostloop-bash-egress",
 ] as const;
 
 const boundarySrc = () => readFileSync(join(REPO_ROOT, "src/boundary.ts"), "utf8");

@@ -149,7 +149,10 @@ child_process.spawn(<resolveHostAgentBinary(baseline)>, [ …§3.1 args, HOST pa
 docker run --rm -i --platform linux/arm64 --network <net>
   [lockdown flags, same as §3.3]
   -w /sessions/<id>
-  -e … (NO agent-env — just CLAUDE_PLUGIN_ROOT=/host/plugins/unmounted, the bash-side self-heal sentinel)
+  -e HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy/NO_PROXY/no_proxy  (the run's egress proxy — `docker
+     exec` inherits container env, so this is bash's egress config at this tier; empty when there is no
+     proxy. NO agent-env, and specifically NO CLAUDE_PLUGIN_ROOT: real host-loop leaves it unset in the
+     guest and the agent self-heals by `find`ing the mount)
   -v <sessionHost>:/sessions/<id>                                    # outputs/uploads/staged plugins
   [-v <sessionHost>/mnt/<p>:/sessions/<id>/mnt/<p>:ro]…              # mode:r NON-folder mounts only
   -v <folder.hostPath>:/sessions/<id>/mnt/<folderMountPath>[:ro]…    # REAL folder paths — never copies

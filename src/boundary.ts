@@ -6,6 +6,7 @@ import type { PlatformBaseline } from "./types.js";
 import { startEgressSidecar } from "./egress/sidecar.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./runtime/agent-image.js";
 import { proxyEnvVars } from "./runtime/argv.js";
+import { hostLoopSidecarEnv } from "./runtime/hostloop.js";
 
 /**
  * Boundary self-test — proves the runtime reproduces Cowork's LIMITATIONS, not
@@ -19,7 +20,7 @@ import { proxyEnvVars } from "./runtime/argv.js";
  * allowlist is a PUBLIC-egress filter: it governs what leaves the sandbox, not a process's own
  * loopback, which the fifth check pins.
  *
- * VERIFIED: all five constraints enforced on Docker (linux/arm64).
+ * VERIFIED: all six constraints enforced on Docker (linux/arm64).
  */
 export interface BoundaryResult {
   check: string;
@@ -166,6 +167,30 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
         expectation: "loopback bypasses the egress proxy (control: proxied without the exemption)",
         pass: exempted && controlProxied,
         detail: `exempt=${exempt} | control(no NO_PROXY)=${control}`.slice(0, 200),
+      });
+    }
+
+    // 6. host-loop's bash sidecar reaches the SAME allowlist, not a dead network.
+    //
+    // At host-loop the agent runs natively and only bash routes into a sidecar container, whose env is
+    // built by hostLoopSidecarEnv — so this probe calls that builder rather than assembling an env by
+    // hand. That is the whole point: when the native host/VM split dropped the proxy from the real path,
+    // every hand-built probe kept passing while bash could reach neither allowlisted nor denied hosts.
+    // A probe that does not consume the runtime's own value cannot see that class of regression.
+    {
+      const hlEnv = hostLoopSidecarEnv(proxy);
+      const allowed = probe(`curl -sS -m 8 -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`, true, hlEnv);
+      const offList = probe(`curl -sS -m 5 -o /dev/null https://example.com && echo REACHED || echo BLOCKED`, true, hlEnv);
+      const aOut = ((allowed.stdout ?? "") + (allowed.stderr ?? "")).trim();
+      const oOut = ((offList.stdout ?? "") + (offList.stderr ?? "")).trim();
+      // Both halves are required. "off-list blocked" alone is satisfied by a sidecar with no egress at
+      // all — which is exactly the bug — so the allowlisted half is what distinguishes enforcement from
+      // a dead network.
+      results.push({
+        check: "hostloop-bash-egress",
+        expectation: "host-loop bash reaches the allowlist through the proxy (not a dead network)",
+        pass: /OK/.test(aOut) && /BLOCKED|403/.test(oOut) && !/REACHED/.test(oOut),
+        detail: `allowlisted=${aOut.slice(0, 80)} | off-list=${oOut.slice(0, 80)}`,
       });
     }
 

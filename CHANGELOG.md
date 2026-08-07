@@ -63,6 +63,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`hostloop` `bash` had no egress at all — a regression dating to v0.21.0.** The VM sidecar that `bash`
+  runs in via `docker exec` was spawned with an empty env on a Docker network with no route off-box, so
+  shell commands could reach **neither allowlisted nor denied hosts**: both failed identically with a DNS
+  error. The allowlist was not enforced there so much as bypassed by being unreachable — while
+  [docs/boundary.md](./docs/boundary.md), [docs/scenario.md](./docs/scenario.md),
+  [docs/session.md](./docs/session.md) and [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) all described
+  the allowlist as enforced at this tier, one of them recommending it for testing egress policy. The
+  native host/VM process split introduced the gap by replacing the sidecar's computed env with a literal
+  and orphaning the `egressProxy` parameter that fed it — the parameter kept being passed in and was
+  simply never read. `bash` at `hostloop` now reaches the same allowlist as `container`, through the same
+  proxy.
+
+  A sixth `boundary-check` probe (`hostloop-bash-egress`) pins it, and it consumes the runtime's own env
+  builder rather than a hand-assembled copy — the distinction that matters, since every hand-built check
+  stayed green throughout the regression. It asserts an allowlisted host is reachable **and** an off-list
+  host refused; the reachable half is load-bearing, because a sidecar with no egress also refuses
+  everything and is otherwise indistinguishable from working enforcement.
+
+
 - **The egress proxy intercepted the sandbox's own loopback traffic.** The spawn env set
   `HTTP_PROXY`/`http_proxy` (and the HTTPS pair) with no `NO_PROXY`, so a proxy-honouring client asking
   for `http://localhost:PORT` had the request diverted to the allowlist proxy — which lives in a

@@ -22,7 +22,7 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
-import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv } from "./argv.js";
+import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
@@ -121,6 +121,30 @@ export function hostLoopPresentFilesRoots(hostOutputsDir: string, plan: LaunchPl
  * access — see docs/boundary.md for the full layered safety posture (opt-in for writable folders, the
  * loud notice, and the runtime tripwire below that catches the gate silently failing to fire).
  */
+/**
+ * The VM sidecar's env — bash's `docker exec` target inherits it, so this IS bash's egress
+ * configuration at this tier.
+ *
+ * Exported so the boundary self-test can probe the SAME value the runtime spawns with. That is not
+ * tidiness: this used to be built inline, a probe asserted against a hand-built env, and when the
+ * native host/VM process split dropped the proxy from the real path the probe kept passing. bash then
+ * had no egress at all for thirteen releases — it could reach neither allowlisted nor denied hosts —
+ * while four docs advertised the allowlist as enforced here. One builder, one consumer set, or the
+ * guard guards nothing.
+ *
+ * Deliberately proxy-only. `CLAUDE_PLUGIN_ROOT` must stay ABSENT: real host-loop leaves it unset in the
+ * guest and the agent self-heals by `find`ing the mount, so a value here would re-leak a host path bash
+ * cannot resolve. Nothing else belongs in this env either.
+ *
+ * No proxy means an empty env, not a default one. Pointing bash at a proxy that isn't there would turn
+ * "no egress" into "every request fails against a bogus host" — a worse failure wearing a stranger
+ * message. (Unreachable in practice: every container-like tier constructs a sidecar before spawning,
+ * and a construction throw aborts the run rather than reaching this call.)
+ */
+export function hostLoopSidecarEnv(egressProxy?: string): Record<string, string> {
+  return egressProxy ? proxyEnvVars(egressProxy) : {};
+}
+
 export function spawnHostLoop(
   _scenario: Scenario,
   baseline: PlatformBaseline,
@@ -309,7 +333,10 @@ export function spawnHostLoop(
     agentHost: agentVmHost,
     agentIn: "/usr/local/bin/claude", // kept bind-mounted for parity/inspection; not run by any harness-spawned process (reachable only by model bash in the hardened sidecar, an accepted patch-only residual)
     image,
-    env: {}, // NO CLAUDE_PLUGIN_ROOT — real host-loop leaves it unset in the VM; the agent self-heals via `find`
+    // bash's egress config — `docker exec` inherits the container's env, so these reach every bash call.
+    // Still NO CLAUDE_PLUGIN_ROOT: real host-loop leaves it unset in the VM and the agent self-heals via
+    // `find`. See hostLoopSidecarEnv for why this must not be built inline.
+    env: hostLoopSidecarEnv(opts.egressProxy),
     name: containerName,
     readOnlyMountPaths: plan.mounts.filter((mt) => mt.mode === "r" && mt.kind !== "folder").map((mt) => mt.mountPath),
     extraBinds: resolveHostLoopBindMounts(plan, sessionRoot),

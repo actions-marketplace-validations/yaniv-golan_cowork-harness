@@ -106,6 +106,7 @@ PASS  direct-egress-denied   — no route to internet without proxy
 PASS  allowlist-enforced     — off-list host refused by proxy
 PASS  allowlist-permits      — allowlisted host reachable via proxy
 PASS  loopback-not-proxied   — loopback bypasses the egress proxy (control: proxied without the exemption)
+PASS  hostloop-bash-egress   — host-loop bash reaches the allowlist through the proxy (not a dead network)
 ```
 
 **The allowlist is a public-egress filter, not a loopback firewall.** It governs what leaves the
@@ -119,6 +120,12 @@ Two consequences worth knowing. Loopback requests never reach the proxy, so they
 `egress_denied` assertion against `localhost` has no evidence to find. And `NO_PROXY` matching is by
 hostname label, so a `*.localhost` subdomain is exempted too (RFC 6761 reserves those to loopback).
 Neither changes reachability: the sandbox sits on an `internal` network with no route off-box.
+
+The sixth probe covers `hostloop` specifically. There, only `bash` routes into a container, and its
+egress env is built by the same function the runtime spawns with — so the probe fails if that sidecar
+ever loses its proxy again. It asserts **both** halves: an allowlisted host must be reachable *and* an
+off-list host refused. The allowlisted half is the load-bearing one — a sidecar with no egress at all
+also refuses everything, which is indistinguishable from enforcement if you only check denials.
 
 Run it in CI before your scenario suite so a Docker/network misconfiguration that *weakens* the sandbox fails loudly instead of silently turning your tests into false passes.
 

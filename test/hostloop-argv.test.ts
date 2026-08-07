@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { dockerRunArgv } from "../src/runtime/argv.js";
 import { resolveHostLoopBindMounts } from "../src/runtime/hostloop-stage.js";
+import { hostLoopSidecarEnv } from "../src/runtime/hostloop.js";
 import type { LaunchPlan, Mount } from "../src/session.js";
 
 function plan(mounts: Mount[]): LaunchPlan {
@@ -66,5 +67,32 @@ describe("hostloop VM sidecar argv", () => {
     // filter for the folder's guest destination specifically
     const folderDestHits = destinations.filter((d) => d === "/sessions/x/mnt/roFolder");
     expect(folderDestHits.length).toBe(1);
+  });
+});
+
+// The hostloop VM sidecar is bash's `docker exec` target. Its egress env is composed by
+// `hostLoopSidecarEnv` — a named export precisely so the boundary probe can assert against the SAME
+// value the runtime spawns with. Asserting on a hand-built env here would test a configuration nothing
+// runs, which is how this regressed unnoticed in the first place.
+describe("hostloop VM sidecar egress env", () => {
+  it("routes bash through the run's egress proxy when one exists", () => {
+    const env = hostLoopSidecarEnv("http://cowork-proxy-abc:8080");
+    // Both cases are load-bearing: curl honours `http_proxy` in LOWER case only for http:// URLs.
+    expect(env.HTTP_PROXY).toBe("http://cowork-proxy-abc:8080");
+    expect(env.http_proxy).toBe("http://cowork-proxy-abc:8080");
+    expect(env.HTTPS_PROXY).toBe("http://cowork-proxy-abc:8080");
+    expect(env.https_proxy).toBe("http://cowork-proxy-abc:8080");
+    // Loopback must not be diverted to a proxy living in a different container.
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
+    expect(env.no_proxy).toBe("localhost,127.0.0.1,::1");
+  });
+
+  it("leaves CLAUDE_PLUGIN_ROOT unset — real host-loop leaves it unset in the guest", () => {
+    // The agent self-heals via `find`; a leaked host path here is the bug 87b4036 removed.
+    expect(hostLoopSidecarEnv("http://p:8080")).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+  });
+
+  it("adds nothing when there is no proxy — a bogus proxy is worse than none", () => {
+    expect(hostLoopSidecarEnv(undefined)).toEqual({});
   });
 });
