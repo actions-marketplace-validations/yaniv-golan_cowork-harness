@@ -78,7 +78,14 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "push_rtag=true"  >> "$GITHUB_OUTPUT"
             echo "push_vtag=false" >> "$GITHUB_OUTPUT"
-            echo "push_floating=${{ inputs.immutable_only }}" >> "$GITHUB_OUTPUT"
+            # NOT a direct copy of the input: immutable_only=true means DO NOT move `:2`. Writing
+            # `push_floating=${{ inputs.immutable_only }}` inverts it, and on 2026-08-07 that moved `:2`
+            # on a run whose whole purpose was to leave it alone. Tested in test/publish-plan.test.ts.
+            if [ "${{ inputs.immutable_only }}" = "true" ]; then
+              echo "push_floating=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "push_floating=true" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "push_rtag=false" >> "$GITHUB_OUTPUT"
             echo "push_vtag=true"  >> "$GITHUB_OUTPUT"
