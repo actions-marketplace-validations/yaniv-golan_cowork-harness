@@ -52,7 +52,15 @@ import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
-import { evaluate, hostMatches, budgetFields, runSemanticJudges, type AssertContext, type SemanticJudge } from "../assert.js";
+import {
+  evaluate,
+  hostMatches,
+  budgetFields,
+  runSemanticJudges,
+  type AssertContext,
+  type SemanticJudge,
+  expandExpectDenied,
+} from "../assert.js";
 import { makeSemanticJudge } from "../decide/semantic-judge.js";
 import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
@@ -1246,13 +1254,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
     }
 
-    for (const host of scenario.expect_denied) {
-      assertions.push({
-        assertion: { egress_denied: host },
-        pass: egress.some((e) => hostMatches(e.host, host) && e.decision === "deny"),
-        message: `expected ${host} to be denied`,
-      });
-    }
+    // Shared with the verify path so the two cannot report differently on the same evidence.
+    assertions.push(...expandExpectDenied(scenario.expect_denied, egress));
 
     // Capability fidelity: on a live sandboxed tier, probe what the runtime OMITS vs the real
     // Cowork rootfs, then detect whether the skill USED an omitted family. A non-empty intersection on an

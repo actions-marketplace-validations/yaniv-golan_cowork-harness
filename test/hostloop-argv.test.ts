@@ -17,7 +17,12 @@ function plan(mounts: Mount[]): LaunchPlan {
   };
 }
 
-describe("hostloop VM sidecar argv", () => {
+describe("dockerRunArgv builder — optional agent bind/argv", () => {
+  // NOTE: this exercises the BUILDER's absent-agentHost branch, not host-loop's real input. The real
+  // host-loop sidecar DOES bind the ELF (read-only, for parity — nothing spawned runs it) and omits only
+  // `agentArgv`. SPEC and a doc comment both claimed otherwise for weeks; the shape that actually ships
+  // is pinned by the "VM sidecar dockerRunArgv snapshot" case in golden.test.ts. Do not read this case
+  // as a description of host-loop.
   it("omits the agent bind and runs a keep-alive command when agentHost/agentArgv are absent", () => {
     const args = dockerRunArgv({
       network: "cowork-net",

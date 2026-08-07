@@ -135,7 +135,7 @@ import {
 } from "./run/matrix.js";
 import { pMapBounded } from "./async-pool.js";
 import { computeVerdict } from "./run/verdict.js";
-import { evaluate, hostMatches, budgetFields, type AssertContext } from "./assert.js";
+import { evaluate, hostMatches, budgetFields, type AssertContext, expandExpectDenied } from "./assert.js";
 import { spawnChannel, fileChannel, streamGates, answerGate, readGate, type DecisionChannel } from "./decide/external-channel.js";
 
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
@@ -4164,14 +4164,10 @@ async function cmdVerifyRun(args: string[]) {
   };
 
   const assertions = evaluate(scenario.assert, ctx);
-  // Reproduce execute.ts's expect_denied → egress_denied expansion (evaluate() does not handle it).
-  for (const host of scenario.expect_denied) {
-    assertions.push({
-      assertion: { egress_denied: host },
-      pass: ctx.egress.some((e) => hostMatches(e.host, host) && e.decision === "deny"),
-      message: `expected ${host} to be denied`,
-    });
-  }
+  // Same helper the live run uses (evaluate() does not handle expect_denied). Passing ctx.egressMissing
+  // is the point of routing through it here: this path CAN tell a missing `egress` field from a run that
+  // made no calls, and previously threw that distinction away.
+  assertions.push(...expandExpectDenied(scenario.expect_denied, ctx.egress, ctx.egressMissing));
 
   // Answer-COVERAGE check — does the scenario's scripted `answers` actually match the gates the
   // run fired? This is invisible to the assert-only path, so a fragile answer (label/question drift) only

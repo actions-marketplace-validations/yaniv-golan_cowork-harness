@@ -510,6 +510,48 @@ export interface AssertContext {
   evidenceErrors?: RunResult["evidenceErrors"];
 }
 
+/**
+ * Expand `expect_denied:` into `egress_denied` assertions. Lives here, exported, because `evaluate()`
+ * does not handle `expect_denied` and BOTH call sites (the live run and the verify path) previously
+ * hand-rolled the same loop — so a fix to one silently missed the other.
+ *
+ * The three outcomes are deliberately distinct, and the third is the reason this exists. "Your host was
+ * not denied" and "the proxy recorded nothing whatsoever" are very different diagnoses: the second means
+ * the evidence channel itself produced nothing, so the assertion had nothing to evaluate rather than
+ * evaluating to false. Collapsing them into one message is how a tier whose shell could reach no host at
+ * all read the same as a tier that correctly denied the host you asked about.
+ *
+ * `egressMissing` is the stronger, *known*-absent signal (an old result.json with no `egress` field);
+ * the empty-array case cannot distinguish "log never written" from "run made no network calls", so it
+ * says only what is true — nothing was recorded.
+ */
+export function expandExpectDenied(
+  hosts: string[],
+  egress: { host: string; decision: string }[],
+  egressMissing?: boolean,
+): RunResult["assertions"] {
+  return hosts.map((host) => {
+    const assertion = { egress_denied: host };
+    if (egressMissing)
+      return {
+        assertion,
+        pass: false,
+        message: `evidence unavailable: egress log absent from result.json — cannot evaluate egress_denied for ${host}`,
+      };
+    if (egress.length === 0)
+      return {
+        assertion,
+        pass: false,
+        message: `expected ${host} to be denied, but no egress decisions were recorded at all — the proxy evaluated nothing, so this is an absent evidence channel rather than an allowed host`,
+      };
+    return {
+      assertion,
+      pass: egress.some((e) => hostMatches(e.host, host) && e.decision === "deny"),
+      message: `expected ${host} to be denied`,
+    };
+  });
+}
+
 export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
   // `allow_delete_in` waives per mount across the whole array; resolve it once here since `check()`
   // cannot see sibling entries.
