@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`doctor` checks the agent image against a digest this release pins, offline.** The check previously
+  asked GHCR what the floating `:2` tag pointed at *at that moment*: it needed network and
+  `docker buildx` (degrading to `unknown` when either was missing), and it could only ever establish that
+  two digests differ — never which one the harness expected, since a floating tag can be repointed in
+  either direction. It now compares against `docker/agent-image.json`, **per variant**, so a
+  `cowork-agent-full:2` user is checked against the full-parity image rather than the base one. The
+  remedy is digest-addressed (`docker pull …@sha256:…`), because pulling `:2` cannot satisfy a pin to an
+  older revision. A locally built image and an unpinned image both stay quiet skips, and a stopped Docker
+  daemon reports `unknown` rather than a confident "built locally".
+
 - **The agent image can be published at an immutable `:2-r<N>` revision tag without moving `:2`.**
   `docker/agent-image.json` carries the image's own revision counter (deliberately not the harness
   version — a version-keyed co-tag encodes something that was never the image's identity, and
