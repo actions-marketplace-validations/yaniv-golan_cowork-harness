@@ -1,7 +1,11 @@
 {
   "revision": 1,
   "variants": {
-    "cowork-agent-base:2": { "digest": null },
-    "cowork-agent-full:2": { "digest": null }
+    "cowork-agent-base:2": {
+      "digest": "sha256:ba8495bdda17ad3f05d67f2942c2baf695676df037a5cc97f7320846af4b3697"
+    },
+    "cowork-agent-full:2": {
+      "digest": "sha256:55e037e777a44b6d783df59ea66531307bc7278660a27a7f1a48a502fde4dbbc"
+    }
   }
 }
