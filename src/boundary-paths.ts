@@ -66,7 +66,10 @@ export function normalizeHost(host: string): string {
  * Validate a single bare-host egress allow entry (or `*` / `*.suffix` wildcard). Extracted from the
  * inline per-pattern checks in `proxy.ts:compile()` so `compile()` and the run-side seed path share
  * ONE policy and cannot fork egress fidelity. Rejects scheme/path/port/whitespace entries (which
- * could never match a bare hostname) and — NEW hardening — empty/whitespace-only entries, which
+ * could never match a bare hostname HERE — the matcher compares bare hosts by construction. Note that
+ * a `host:port` entry is not meaningless everywhere: Cowork's MDM-managed egress key defines a
+ * `:port` grammar with its own enforcement rules. This harness models the 1p path, which has no such
+ * grammar, so rejecting the syntax outright is deliberate rather than an oversight) and — NEW hardening — empty/whitespace-only entries, which
  * `compile()` previously stored silently as an unmatchable exact "".
  *
  * Returns a classification the caller acts on:
@@ -86,7 +89,9 @@ export function validateBareDomain(host: string): BareDomainKind {
   const p = host.toLowerCase();
   if (p === "*") return { kind: "all" };
   // A scheme / path / port / whitespace entry (e.g. `https://api.anthropic.com`, `api:443`) can never
-  // match a bare hostname — reject it loudly rather than store a silent always-deny.
+  // match a bare hostname here — reject it loudly rather than store a silent always-deny. Cowork's
+  // MDM-managed egress key does give `host:port` a meaning; the 1p path this harness models does not,
+  // so the throw stays deliberate. Fail loud rather than silently ignoring the port.
   if (p.includes("://") || p.includes("/") || p.includes(":") || /\s/.test(p))
     throw new Error(
       `invalid egress allow entry "${host}" — use a bare host (api.anthropic.com) or a wildcard (*.claude.ai), not a URL / scheme / path / port`,

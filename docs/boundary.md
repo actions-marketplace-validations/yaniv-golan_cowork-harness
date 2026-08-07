@@ -105,7 +105,20 @@ PASS  host-fs-sealed         — host paths (/Users, /host) invisible
 PASS  direct-egress-denied   — no route to internet without proxy
 PASS  allowlist-enforced     — off-list host refused by proxy
 PASS  allowlist-permits      — allowlisted host reachable via proxy
+PASS  loopback-not-proxied   — loopback bypasses the egress proxy (control: proxied without the exemption)
 ```
+
+**The allowlist is a public-egress filter, not a loopback firewall.** It governs what leaves the
+sandbox; it does not stand between a process and its own `localhost`. The sandbox therefore sets
+`NO_PROXY=localhost,127.0.0.1,::1` alongside the proxy vars, so a skill that starts a local server and
+curls it talks to *its own* server rather than getting a 403 from the proxy container. The fifth probe
+pins this, and carries a positive control: it re-runs the same request without the exemption and
+requires the 403, so the check cannot pass merely because nothing was proxied at all.
+
+Two consequences worth knowing. Loopback requests never reach the proxy, so they log no `deny` row — an
+`egress_denied` assertion against `localhost` has no evidence to find. And `NO_PROXY` matching is by
+hostname label, so a `*.localhost` subdomain is exempted too (RFC 6761 reserves those to loopback).
+Neither changes reachability: the sandbox sits on an `internal` network with no route off-box.
 
 Run it in CI before your scenario suite so a Docker/network misconfiguration that *weakens* the sandbox fails loudly instead of silently turning your tests into false passes.
 

@@ -196,7 +196,8 @@ export function compile(patterns: string[]): (host: string) => boolean {
   //
   // The per-entry policy lives in the shared `validateBareDomain` so this proxy and the
   // run-side `seedApprovedDomains` cannot fork. It rejects scheme/path/port/whitespace entries (which
-  // could never match a bare host — a silent always-deny) AND, as the intended fail-loud hardening,
+  // could never match a bare host in THIS matcher — a silent always-deny; Cowork's MDM-managed egress
+  // key does define a `:port` grammar, but the 1p path modeled here does not) AND, as the intended fail-loud hardening,
   // empty/whitespace-only entries that `compile()` used to store as an unmatchable exact "".
   for (const p0 of patterns) {
     const v = validateBareDomain(p0);

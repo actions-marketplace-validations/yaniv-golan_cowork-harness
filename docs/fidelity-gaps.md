@@ -8,6 +8,30 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ---
 
+## Mid-session skill/plugin re-sync
+
+Cowork re-syncs skills and plugins from the host into the session **while the session is running** —
+Desktop's runtime config carries `skillsSyncIntervalMs` and `pluginsSyncIntervalMs` (20 min) plus a
+`pluginsFullSyncStalenessMs` full-pass threshold (1 h). The skills timer additionally skips while the
+app window is unfocused, so 20 minutes is a ceiling rather than a rate. The harness stages skills and
+plugins once per run and never re-stages them.
+
+**This is deliberate, and it should stay that way.** The reason is not merely that a timer would be
+awkward to emulate: the harness stages from a git-tracked, immutable-per-run source, so "the skill
+changed mid-run" has **no in-harness event to trigger on**. Modelling re-sync would mean inventing a
+mutation the harness has no way to observe, then choosing when to fire it — which is authoring
+behaviour, not reproducing it.
+
+Determinism reinforces the call. A wall-clock re-stage makes the same scenario pass or fail depending
+on how long the model took, which a cassette cannot freeze and `stats` cannot compare across runs. It
+also weakens `skillHash` as a version key: a run whose skills change partway through has no single skill
+set for the hash to name.
+
+**The residual, stated plainly:** a long-running interactive `chat` session diverges from production.
+Edit a skill mid-session in Cowork and the agent eventually picks it up; edit one mid-session here and
+it never will. Restart the run to pick up an edit — which is the workflow the `skill` command already
+assumes.
+
 ## Mid-session folder addition
 
 **Real Cowork behaviour:** In an agent-mode session you can click the paperclip to add a working folder mid-session and the agent immediately has live read/write access to it.

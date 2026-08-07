@@ -63,6 +63,23 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The egress proxy intercepted the sandbox's own loopback traffic.** The spawn env set
+  `HTTP_PROXY`/`http_proxy` (and the HTTPS pair) with no `NO_PROXY`, so a proxy-honouring client asking
+  for `http://localhost:PORT` had the request diverted to the allowlist proxy — which lives in a
+  *different* container, where `localhost` means the proxy itself — and answered `403`. A skill that
+  started a local server and curled it failed against an unrelated process. Cowork's allowlist is a
+  public-egress filter that does not stand between a process and its own loopback, and the harness
+  already encoded that intent at the microvm tier (the guest firewall explicitly accepts `lo` and
+  `127.0.0.0/8`) while the proxy vars defeated it. The spawn env now sets
+  `NO_PROXY`/`no_proxy=localhost,127.0.0.1,::1`, scoped to loopback only. A fifth `boundary-check` probe
+  (`loopback-not-proxied`) pins the behaviour and carries a positive control, so it cannot pass merely
+  because nothing was proxied.
+- **`boundary-check` tested a proxy configuration nothing actually ran.** Its probe passed only the two
+  UPPERCASE proxy vars, and curl honours `http_proxy` in lower case only for `http://` URLs (the
+  CVE-2016-5385 mitigation) — so plain-HTTP probes went unproxied. The probe and the agent spawn now
+  derive their proxy env from one shared definition and cannot diverge.
+
+
 - **A blank `COWORK_AGENT_IMAGE` or `COWORK_CONTAINER_RUNTIME` produced an empty ref instead of the
   default.** Both were resolved with `process.env.X ?? "default"`, which passes `""` straight through, so
   a bare `COWORK_AGENT_IMAGE=` in a `.env` or a shell export made every container invocation fail with an

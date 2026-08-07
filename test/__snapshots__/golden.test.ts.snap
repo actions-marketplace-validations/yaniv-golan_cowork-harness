@@ -126,6 +126,10 @@ exports[`golden — container (VM-loop) > dockerRunArgv snapshot 1`] = `
   "-e",
   "https_proxy=http://egress-proxy:8080",
   "-e",
+  "NO_PROXY=localhost,127.0.0.1,::1",
+  "-e",
+  "no_proxy=localhost,127.0.0.1,::1",
+  "-e",
   "CLAUDE_CODE_HOST_PLATFORM=<host-platform>",
   "-v",
   "/HOST/claude:/usr/local/bin/claude:ro",
@@ -216,8 +220,10 @@ exports[`golden — container (VM-loop) > spawnEnv snapshot 1`] = `
   "HTTPS_PROXY": "http://egress-proxy:8080",
   "HTTP_PROXY": "http://egress-proxy:8080",
   "MCP_CONNECTION_NONBLOCKING": "true",
+  "NO_PROXY": "localhost,127.0.0.1,::1",
   "http_proxy": "http://egress-proxy:8080",
   "https_proxy": "http://egress-proxy:8080",
+  "no_proxy": "localhost,127.0.0.1,::1",
 }
 `;
 
@@ -439,6 +445,10 @@ exports[`golden — host-loop (deltas) > dockerRunArgv snapshot (named for docke
   "http_proxy=http://egress-proxy:8080",
   "-e",
   "https_proxy=http://egress-proxy:8080",
+  "-e",
+  "NO_PROXY=localhost,127.0.0.1,::1",
+  "-e",
+  "no_proxy=localhost,127.0.0.1,::1",
   "-e",
   "CLAUDE_CODE_HOST_PLATFORM=<host-platform>",
   "-v",

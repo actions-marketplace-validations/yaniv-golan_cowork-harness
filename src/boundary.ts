@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { PlatformBaseline } from "./types.js";
 import { startEgressSidecar } from "./egress/sidecar.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./runtime/agent-image.js";
+import { proxyEnvVars } from "./runtime/argv.js";
 
 /**
  * Boundary self-test — proves the runtime reproduces Cowork's LIMITATIONS, not
@@ -14,9 +15,11 @@ import { resolveAgentImage, resolveContainerRuntime } from "./runtime/agent-imag
  * harness-green => Cowork-green on boundary.
  *
  * Mirrors the constraints from app.asar analysis: sealed filesystem (only mounts
- * visible), default-deny egress (gVisor allowlist), cross-boundary via MCP only.
+ * visible), default-deny egress (gVisor allowlist), cross-boundary via MCP only. The egress
+ * allowlist is a PUBLIC-egress filter: it governs what leaves the sandbox, not a process's own
+ * loopback, which the fifth check pins.
  *
- * VERIFIED: all four constraints enforced on Docker (linux/arm64).
+ * VERIFIED: all five constraints enforced on Docker (linux/arm64).
  */
 export interface BoundaryResult {
   check: string;
@@ -57,7 +60,10 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
   // Probes can throw (spawnSync setup errors, etc.); tear the sidecar down in `finally` so an unexpected
   // throw never leaks the proxy container + both Docker networks.
   try {
-    const probe = (shell: string, withProxy = false) =>
+    // `envOverride` lets a probe test a DELIBERATELY different proxy env than the agent gets — used
+    // only by the loopback check's positive control, which must show interception still happens when
+    // the loopback exemption is removed.
+    const probe = (shell: string, withProxy = false, envOverride?: Record<string, string>) =>
       spawnSync(
         runtime,
         [
@@ -67,7 +73,10 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
           "linux/arm64",
           "--network",
           network,
-          ...(withProxy ? ["-e", `HTTPS_PROXY=${proxy}`, "-e", `HTTP_PROXY=${proxy}`] : []),
+          // The agent's OWN proxy env, not a hand-rolled subset. The earlier form passed only the two
+          // UPPERCASE vars, which curl ignores for `http://` URLs — so any plain-HTTP probe silently
+          // went unproxied and could only ever report on a configuration nothing runs.
+          ...(withProxy ? Object.entries(envOverride ?? proxyEnvVars(proxy)).flatMap(([k, v]) => ["-e", `${k}=${v}`]) : []),
           "--entrypoint",
           "sh",
           image,
@@ -128,6 +137,35 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
         expectation: "allowlisted host reachable via proxy",
         pass: /OK/.test(out),
         detail: out.slice(0, 200),
+      });
+    }
+
+    // 5. Loopback is NOT diverted to the egress proxy.
+    //
+    // Cowork's allowlist is a public-egress filter — it does not stand between a process and its own
+    // loopback. Ours must not either, or a skill that starts a local server and curls it gets a 403
+    // from an unrelated container. Probing a CLOSED port needs no listener and still tells us who
+    // refused: the proxy answers 403, while a real loopback attempt gets connection-refused (rc 7,
+    // code 000). Asserting "not 403" rather than merely "rc != 0" matters — a dead proxy would also
+    // produce a non-zero rc, and that is a different fault wearing the same clothes.
+    //
+    // The POSITIVE CONTROL is what makes this check mean anything: it re-runs the same request with the
+    // loopback exemption stripped and requires a 403. Without it, a probe whose proxy env was wrong (or
+    // absent) would sail through green and "prove" the interception bug does not exist.
+    {
+      const loopbackCurl = `curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost:9999/ 2>&1; echo " rc=$?"`;
+      const exempt = ((probe(loopbackCurl, true).stdout ?? "") + "").trim();
+
+      const intercepting = Object.fromEntries(Object.entries(proxyEnvVars(proxy)).filter(([k]) => k !== "NO_PROXY" && k !== "no_proxy"));
+      const control = ((probe(loopbackCurl, true, intercepting).stdout ?? "") + "").trim();
+
+      const exempted = !/403/.test(exempt) && !/ rc=0$/.test(exempt);
+      const controlProxied = /403/.test(control);
+      results.push({
+        check: "loopback-not-proxied",
+        expectation: "loopback bypasses the egress proxy (control: proxied without the exemption)",
+        pass: exempted && controlProxied,
+        detail: `exempt=${exempt} | control(no NO_PROXY)=${control}`.slice(0, 200),
       });
     }
 

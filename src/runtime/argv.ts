@@ -133,6 +133,48 @@ export function thinkingArgs(extendedThinking: boolean | undefined, debugOverrid
  *  thinking is NOT delivered here — real Cowork sets no `MAX_THINKING_TOKENS` env; the SDK maps its
  *  `maxThinkingTokens` option straight to the `--max-thinking-tokens` / `--thinking disabled` CLI flag
  *  (see `thinkingArgs`), so the flag is the sole channel. */
+/**
+ * The proxy env every sandboxed process gets. ONE definition so the agent spawn and the boundary
+ * self-test cannot fork — the same reason `validateBareDomain` is shared between the proxy and the
+ * run-side seed path. A probe that tested a different env than the agent receives would be worse than
+ * no probe: it would report on a configuration nothing actually runs.
+ *
+ * BOTH CASES ARE LOAD-BEARING, and not symmetrically. curl honours `http_proxy` in **lower case only**
+ * for `http://` URLs — the httpoxy (CVE-2016-5385) mitigation, since a CGI `Proxy:` header lands in
+ * `HTTP_PROXY`. Measured on the pinned image's curl 7.81.0: uppercase-only leaves a plain-HTTP request
+ * UNPROXIED. Dropping the lowercase pair would silently stop proxying plain HTTP; dropping the
+ * uppercase pair would break clients that read only that. Keep all four.
+ *
+ * `NO_PROXY` exempts loopback so the proxy never intercepts it. Two independent reasons:
+ *   - The harness otherwise contradicts itself — the microvm firewall explicitly ACCEPTs loopback
+ *     (`-o lo`, `-d 127.0.0.0/8` in lima.ts) but a proxy-honouring client never emits a loopback packet
+ *     for those rules to accept, because these vars divert it to the gateway first.
+ *   - At container tier the proxy lives in a DIFFERENT container, where `localhost` means the proxy
+ *     itself — so a skill that starts a local server and curls it fails against an unrelated process.
+ * Cowork describes its own allowlist as a "public-egress filter, not a sandbox" in which "IP literals
+ * and localhost always resolve regardless of this list", which corroborates but does not prove the 1p
+ * case (that text documents the 3p managed key; real enforcement is in-VM, not in the asar).
+ *
+ * Scope is loopback ONLY, deliberately narrower than Cowork's "IP literals" wording: the sandbox sits on
+ * an `internal` network with no route off-box, so exempting private ranges buys no reachability while
+ * widening the bypass surface.
+ *
+ * Residual, by design: a bypassed request never reaches the proxy, so it logs no `deny` row. An
+ * `egress_denied` assertion against `localhost` (or a `*.localhost` subdomain, which both curl and
+ * python-requests match here — RFC 6761 reserves those to loopback anyway) has no evidence to find.
+ * Reachability is unchanged either way.
+ */
+export function proxyEnvVars(proxyHost: string): Record<string, string> {
+  return {
+    HTTP_PROXY: proxyHost,
+    HTTPS_PROXY: proxyHost,
+    http_proxy: proxyHost,
+    https_proxy: proxyHost,
+    NO_PROXY: "localhost,127.0.0.1,::1",
+    no_proxy: "localhost,127.0.0.1,::1",
+  };
+}
+
 export function spawnEnv(
   baseline: PlatformBaseline,
   opts: { configGuest: string; proxyHost: string; extra?: Record<string, string> },
@@ -141,10 +183,7 @@ export function spawnEnv(
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configGuest,
     HOME: "/tmp",
-    HTTP_PROXY: opts.proxyHost,
-    HTTPS_PROXY: opts.proxyHost,
-    http_proxy: opts.proxyHost,
-    https_proxy: opts.proxyHost,
+    ...proxyEnvVars(opts.proxyHost),
     // Binary-verified (asar @12472288): production sets this on the container spawn env too. The agent
     // validates it against win32|darwin|linux (ELF `YPt()`) — derivable headlessly from `process.platform`,
     // unlike the account-identity/OTEL vars below which need live Desktop state we don't have.
