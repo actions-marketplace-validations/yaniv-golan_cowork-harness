@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.21.1] — 2026-08-08
+
 ### Fixed
 
 - **The agent-image pin silently skipped the full-parity variant.** `doctor` picked the local registry
@@ -19,6 +21,17 @@ All notable changes to this project are documented here. The format is based on
   in-progress runs for any ref; `require-ci-success` requires `conclusion == success` for the SHA it
   checks, and `cancelled` is not it. Merging two PRs minutes apart left the earlier merge commit
   unpublishable. Cancellation now applies to pull-request refs only.
+
+### Changed
+
+- **The freshness check's "works offline" property is now a guard, not a claim.** It was argued from the
+  absence of a registry call, and an absence cannot fail when someone reintroduces one. A test now asserts
+  the path contains exactly one spawn — the local `image inspect` — and no registry command. Comments are
+  stripped before the check, so the guard cannot be satisfied by deleting its own rationale.
+- **`publish-image.yml` gains a `dry_run` input** (maintainer-facing): it runs the CI gate and the
+  immutable-tag collision guard, then stops before building or pushing. The guard's *refusal* path was
+  otherwise untestable without risking a repointed `:2-r<N>`, which is the one thing a digest pin cannot
+  survive.
 
 ## [1.21.0] — 2026-08-08
 
