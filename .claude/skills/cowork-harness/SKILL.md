@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 1.20.0
-  tracks-harness: cowork-harness 1.20.0 (baseline desktop-1.26832.0)
+  version: 1.21.0
+  tracks-harness: cowork-harness 1.21.0 (baseline desktop-1.26832.0)
 ---
 
 # cowork-harness
@@ -22,7 +22,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.20.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.21.0` (baseline
 > `desktop-1.26832.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -39,7 +39,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.20.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.20.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.20.0"`. **Pin `@>=1.20.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 1.21.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@>=1.21.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@>=1.21.0"`. **Pin `@>=1.21.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -82,6 +82,9 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
   surface; see `references/critique.md`.
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in **Part III — Debug**).
+  **"Interactive" splits two ways — don't take the wrong branch.** Want to answer gates yourself *and*
+  still get an asserted, `assert:`-checked run? That is `--decider-dir` (*Choose an answer path* below),
+  **not** `chat`. Reach for `chat` only when you are exploring by hand and do NOT want a verdict.
 
 > **"repo-only" in this skill means "not bundled with the installed SKILL"** — not "unavailable". An
 > **npm** install ships `docs/`, `README.md` and `SPEC.md` in the tarball, so try
@@ -155,12 +158,71 @@ Default to **deterministic**: scripted `answers:` + `on_unanswered: fail`. Anyth
 live model into answering flags the run `nonDeterministic` — keep those out of deterministic
 regressions.
 
-| Path | How | Deterministic? |
+<!-- answer-channels:begin -->
+**Pick by asking one question about your situation**, not by scanning a table — the channels are not
+interchangeable and the wrong one either masks a gate or can't run at all:
+
+```
+Will this run be re-executed UNATTENDED? (CI, a committed cassette, --repeat, --matrix)
+│
+├─ YES ──► scripted `answers:` / `--answer` / `--answer-policy` + `on_unanswered: fail`
+│          The ONLY reproducible channel. Non-negotiable for CI and committed cassettes.
+│          Labels reworded every run? STAY HERE: pin a stable leading SUBSTRING
+│          (uniqueness-guarded, fails loud) or a positional `choose`. Both keep determinism.
+│
+└─ NO — a discovery / validation run. Who holds the context to answer?
+   │
+   ├─ a model, steered by one line of intent
+   │        ──► `--decider-llm --intent "<…>"`          [skill · record]
+   │            NOT on `run` — there the spelling is the scenario-YAML `on_unanswered: llm`.
+   │            Can false-green an oracle-less semantic gate.
+   │
+   ├─ deterministic logic you can write down
+   │        ──► `--decider-cmd '<helper>'`               [skill · run]
+   │            Determinism is your helper's, not the harness's. NOT on `record`.
+   │
+   ├─ YOU, the driving agent, holding the task context
+   │        ──► `--decider-dir <FRESH, EMPTY dir>`       [skill · run · record]
+   │            + `cowork-harness gates <dir> --follow`  (arm a Monitor here)
+   │            + `cowork-harness answer <dir> --gate N --choose "<label>"`
+   │            Its ONE unique property: it needs no advance knowledge of the option SET.
+   │            (Label *text* drift alone does not need this — substring anchors handle that.)
+   │
+   └─ a human at a keyboard, and you are NOT producing a test
+            ──► `cowork-harness chat`   (TTY; no pass/fail verdict — see below)
+```
+
+| Channel | Deterministic? | Don't use it when |
 |---|---|---|
-| Scripted | `answers:` rules + `on_unanswered: fail` | ✅ (the CI/agent default) |
-| LLM decider | `on_unanswered: llm` (YAML) **or** `--decider-llm` (CLI) | ❌ flags nonDeterministic |
-| Spawned helper | `--decider-cmd '<helper>'` | depends on helper |
-| In-band (driving agent) | `--decider-dir <dir>` (+ a Monitor) | depends |
+| Scripted | ✅ the CI/agent default | you cannot know the option set in advance |
+| `--decider-llm` / `on_unanswered: llm` | ❌ nonDeterministic | the gate has no oracle a model could judge |
+| `--decider-cmd` | delegated to your helper | the logic needs task context code doesn't have |
+| `--decider-dir` | ❌ nonDeterministic | nobody is present to drive it — it BLOCKS per gate |
+| `on_unanswered: first` | ❌ nonDeterministic | the answer matters — it *masks* the gate |
+
+**Cost of `--decider-dir`, stated plainly:** flags the run `nonDeterministic`; needs a live driver + a
+Monitor, so it is **unusable unattended**; blocks at each gate, strictly serial; needs a fresh empty dir
+per run (a dirty one is refused); rejected with `--repeat`, `--on-unanswered`, `--decider-cmd`, and with
+`--matrix --concurrency > 1`; and a cassette recorded this way carries a **re-record cost** — regenerating
+it needs the driver present again.
+
+**Rehearse it in ~2s before wiring it into a real run** — `cowork-harness decide --decider-dir <dir>` fires
+one sample gate through the same channel, then blocks (10-min backstop) until you answer it with the two
+commands above. It is the cheapest way to see the protocol work. Full recipe, including the multiSelect
+wire shape and the `gates --follow` Monitor loop:
+[`docs/decider-dir.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/decider-dir.md)
+(repo-only — an npm install ships it at `node_modules/cowork-harness/docs/decider-dir.md`). <!-- npm-only-ok -->
+
+**It is a FEEDER for the scripted default, not a rival.** `record --decider-dir` is a first-class way to
+*produce* a cassette: the non-reproducibility is spent once at authoring time and the cassette replays
+deterministically forever. The loop is **discover → transcribe → script** — answer live, then paste the
+run's echoed `--answer "<q>=<choice>"` footer lines into the scenario's `answers:` so re-records go back to
+being unattended. Skip the transcribe step only for one-off/exploratory runs.
+<!-- answer-channels:end -->
+
+**Never hand-write the `req-N.json`/`resp-N.json` files.** `gates` and `answer` wrap the protocol — the
+atomic temp+rename, the `{id, answers}` envelope, the multiSelect array shape. Hand-rolling a Monitor over
+the raw files is the single most common mistake on this channel.
 
 Exact accepted values (teach precisely): `--on-unanswered` takes `fail|prompt|first` on `skill`,
 only `fail|first` on `run`. **`llm` is NOT an `--on-unanswered` value** — the bare flag
@@ -181,6 +243,12 @@ is the more re-record-robust choice — accept the `nonDeterministic` flag rathe
 anchor. (When label *order* is stable but the text drifts, a positional `choose` is the middle option — the
 linter flags positional `choose` as order-dependent, so use it deliberately.) The caution stands: `first`
 *masks* an unanswered gate, so don't use it for a gate you actually need answered a specific way.
+
+**Drifting label TEXT and an unknowable option SET are different problems — don't reach past the cheap
+fix.** Text that rewords while the choices stay the same is a *scripted* problem with a deterministic
+answer: a uniqueness-guarded leading substring, or a positional `choose`. Only when you cannot know what
+the options will *be* — they're generated per input document, so no anchor can be written in advance — does
+the answer move to a live channel (`--decider-dir` if you're driving, `--decider-llm` if nobody is).
 
 #### External deciders and the "first" shorthand
 

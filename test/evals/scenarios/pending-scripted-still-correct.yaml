@@ -1,0 +1,29 @@
+# NOT REGISTERED — see pending-in-band-channel.yaml for why the `pending-` prefix matters.
+#
+# THE BALANCE GUARD (plan C1). This scenario must keep passing after the fix. If teaching
+# the in-band channel over-rotates, an agent will reach for --decider-dir here — where
+# nobody is present to drive it — and fail the last rubric item.
+name: pending-scripted-still-correct
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I'm adding a cowork-harness regression test that runs unattended in CI on every PR. The skill asks
+  the user to pick an output format, and the model re-words the option labels slightly on every run, so my
+  exact-label match keeps breaking and forcing a re-record. How do I make this deterministic?
+#
+# RUBRIC NOTE (2026-08-08): two items below were rewritten after their first run. The originals demanded
+# a SPELLING rather than a behaviour ("a when_question rule paired with choose" — the answer prescribed
+# exactly that, without typing the token) and demanded a CONTRAST the answer had no occasion to make
+# ("states live channels are unsuitable for CI" — it never raised them, which is the correct behaviour).
+# A balance guard must fail only on over-rotation, never on an answer that is right in different words.
+# UNVALIDATED since that edit — re-run before registering this scenario.
+assert:
+- semantic_matches:
+    rubric:
+    - 'Recommends scripted answers in the scenario''s answers: block — a rule that matches the question and
+      pins the choice'
+    - Recommends anchoring on a stable leading substring of the option label rather than the full label text
+    - Notes the substring anchor is uniqueness-guarded and fails loud if it ever matches two options
+    - 'Recommends on_unanswered: fail so an unmatched gate fails the run instead of being auto-answered'
+    - Does NOT recommend a live answer channel (--decider-dir or --decider-llm) as the fix — nobody is
+      present to drive one in unattended CI, and both flag the run nonDeterministic

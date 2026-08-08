@@ -6,6 +6,68 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-08-08
+
+### Upgrade notes
+
+- **`decide --decider-dir <dir>` BLOCKS until you answer the gate — every other `decide` path returns in
+  ~2 s.** That wait is the feature (it is a live rehearsal of the in-band rendezvous, using the same
+  channel a real run uses), but it means a script or test that invokes this path without answering will
+  sit on the 10-minute `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS` backstop. Answer it with
+  `cowork-harness answer <dir> --gate 1 --choose "<label>"`, or point the flag at a **dirty** directory
+  when you only want to exercise the fresh-dir refusal (that returns immediately, exit 2).
+
+- **`Skill.run(decider_cmd=...)` starts working in this release.** It previously exited 2 every time (see
+  *Fixed*), so any Python caller that "handled" that failure — a try/except, a skip, a fallback path —
+  will now take the success branch for the first time. Nothing to change; just don't be surprised when a
+  previously dead code path starts executing.
+
+### Added
+
+- **`decide --decider-dir <dir>` — the in-band answer channel is now rehearsable in ~2 s, with no run.**
+  `decide` exists to fire one sample question through your configured decider before you pay for a run,
+  and it was the one channel it refused. It now drives the same `fileChannel` + `ExternalDecider` a real
+  run uses, so the fresh-empty-dir refusal, the wire shape and the atomic temp+rename are the production
+  ones rather than a mock: it writes a real `req-1.json`, prints the two commands that answer it, and
+  blocks (10-minute backstop) until you reply with `gates`/`answer`. It is the only `decide` path that
+  waits — that is the rehearsal. Rejected alongside `--decider-cmd`, `--decider-llm` and
+  `--answer`/`--answer-policy`, matching the run lanes.
+
+- **`Skill.run(decider_dir=...)` in the Python API.** The in-band channel previously had no Python
+  surface at all, which made "this API only supports scripted answers and a spawned helper" simply true
+  from inside it. Mutually exclusive with `decider_cmd`, raised as a `ValueError` locally rather than as
+  an opaque exit 2 from the subprocess.
+
+### Fixed
+
+- **`Skill.run(decider_cmd=...)` was a guaranteed usage error and always had been.** The Python lane
+  emitted `--on-unanswered <policy>` unconditionally, and the CLI rejects a terminal *channel* alongside
+  the *policy* (the channel IS the terminal, so the policy could only ever be inert) — so every
+  `run(decider_cmd=...)` exited 2 before doing any work. The policy is now emitted only when no channel
+  is configured. Found while adding `decider_dir` beside it; nothing caught it because nothing asserted
+  on the constructed argv.
+
+### Changed
+
+- **The unanswered-gate error now names every answer channel, not two of them.** With
+  `on_unanswered: fail`, the hint offered a scripted answer and `on_unanswered: llm` — so the one surface
+  read at the moment of being stuck taught a two-channel model. Measured against the shipped skill, agents
+  asked how to answer a gate whose option set cannot be known in advance either hand-rolled the
+  `req-N.json`/`resp-N.json` files that `gates`/`answer` exist to replace, or reached for `chat`, which
+  produces no pass/fail verdict. The hint now lists all channels once (after the per-question block, never
+  per question), names the `gates`/`answer` subcommands explicitly, and carries per-command qualifiers —
+  which are derived by executing each (command × flag) pair against the real parser in CI, not
+  hand-maintained, because that matrix is asymmetric in ways that are easy to get wrong (`record` takes no
+  `--decider-cmd`; `run` takes no `--decider-llm`).
+
+- **The skill's *Choose an answer path* section is now a decision tree keyed on "will this run be
+  re-executed unattended?"** — a question an agent can answer about its own situation — replacing a flat
+  table whose determinism column read "depends". It carries each channel's cost, the
+  discover → transcribe → script loop that makes `--decider-dir` a feeder for the scripted default rather
+  than a rival, and an explicit split of the two problems that were being conflated: drifting label *text*
+  (a scripted problem, solved by a uniqueness-guarded substring anchor) versus an unknowable option *set*
+  (the only thing that requires a live channel).
+
 ## [1.20.0] — 2026-08-07
 
 ### Upgrade notes

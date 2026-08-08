@@ -281,14 +281,36 @@ export class FailDecider implements Decider {
           `    on \`skill\`:              --answer "${rx}=<choice>"`
         );
       });
-      // A scripted answer is the primary fix (deterministic, reproducible); the tip below is a secondary
-      // escape valve for what scripting can't solve — gate wording that drifts run-to-run, where a regex
-      // chases a moving target. Deliberately says "in the scenario YAML": `--on-unanswered llm` is REJECTED
-      // on the CLI (kept in the --decider-* family instead), so a bare mention would point at a spelling
-      // that fails. Appended into `lines` (not tacked onto message alone) so it reaches both `.message` and
-      // `.hint` — the CLI prints `.hint`, not `.message`, on this path.
-      const tip =
-        "(if the gate's wording varies run-to-run, `on_unanswered: llm` in the scenario YAML answers it dynamically — non-deterministic, one model call per gate)";
+      // A scripted answer is the primary fix (deterministic, reproducible) and stays first, above.
+      //
+      // WHY THIS BLOCK IS LONGER THAN A TIP. An agent that hits this error treats it as the authoritative
+      // list of what exists — it is the one surface reached at the moment of need, by readers who never
+      // open a doc. It previously named ONLY the LLM decider, and measurably taught a two-channel model:
+      // asked how to answer a gate whose option set can't be known in advance, agents either hand-rolled
+      // the in-band req/resp files (the thing `gates`/`answer` exist to replace) or reached for `chat`,
+      // which produces no asserted run. Naming every channel here, once, is the fix.
+      //
+      // EMITTED ONCE, after the per-question block — never per question. The per-question lines already
+      // repeat into both `.message` and `.hint` (see below); making this per-question too would bury the
+      // actionable part under N copies.
+      //
+      // COMMAND-NEUTRAL BY CONSTRUCTION, same as the per-question lines above: `RunContext` carries no
+      // command, so each line states where it works. That matrix is NOT copied from prose — it was
+      // derived by executing every (command × flag) pair against the real parser. It is asymmetric in
+      // ways that are easy to get wrong: `record` takes no `--decider-cmd`, and `run` takes no
+      // `--decider-llm` at all (there the spelling is the scenario-YAML `on_unanswered: llm`; the bare
+      // `--on-unanswered llm` is rejected everywhere). Re-derive before editing.
+      //
+      // `chat` is deliberately ABSENT: it answers gates at a TTY but produces no pass/fail verdict, so
+      // offering it here would answer "how do I get past this gate" with something that abandons the test.
+      const tip = [
+        "other channels (each flags the run non-deterministic — the scripted rules above are the deterministic path):",
+        "  • YOU answer it live, in-band:  --decider-dir <fresh, EMPTY dir>   [skill · run · record]",
+        "      then `cowork-harness gates <dir> --follow` to see each gate, and",
+        '      `cowork-harness answer <dir> --gate N --choose "<label>"` to reply (do NOT hand-write the files)',
+        "  • a model answers it:           `on_unanswered: llm` in the scenario YAML, or --decider-llm   [skill · record]",
+        "  • your own helper answers it:   --decider-cmd '<helper>'   [skill · run]",
+      ].join("\n");
       const body = `${lines.join("\n")}\n${tip}`;
       throw new UnansweredError(`unscripted AskUserQuestion (on_unanswered=fail):\n${body}`, body);
     }

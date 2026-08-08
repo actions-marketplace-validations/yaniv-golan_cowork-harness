@@ -92,7 +92,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@>=1.20.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@>=1.21.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -102,7 +102,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=1.20.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@>=1.21.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -127,7 +127,7 @@ claude plugin marketplace add yaniv-golan/cowork-harness
 claude plugin install cowork-harness@cowork-harness
 ```
 
-The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.20.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 22). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
+The skill **self-bootstraps the CLI**: if `cowork-harness` isn't on your PATH it falls back to `npx "cowork-harness@>=1.21.0"` (a version floor that fails loud rather than silently fetching a too-old CLI; Node ≥ 22). Tiers above `protocol` still need Docker/Lima and a Claude Desktop agent binary — see the prerequisites below.
 
 It also follows the open [Agent Skills](https://agentskills.io) spec, so it installs cross-editor (Cursor, Codex, OpenCode, …) via [`npx skills`](https://github.com/vercel-labs/skills) (Vercel Labs' CLI implementation of that spec):
 
@@ -149,7 +149,7 @@ A global install is enough for CI `lint`, reading the teaching skill, and replay
 To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
-above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=1.20.0"` — see
+above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=1.21.0"` — see
 [above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
 
 ### Prerequisites for anything above `protocol` fidelity
@@ -299,6 +299,11 @@ cowork-harness skill ~/my-plugin "..." --dry-run                          # reso
 cowork-harness skill ~/my-plugin "..." --output-format json                      # machine-readable result on stdout
 cowork-harness skill ~/my-plugin "..." --on-unanswered fail               # never fabricate an answer (CI/agents)
 cowork-harness skill ~/my-plugin "..." --decider-cmd 'node answer.js'     # answer LIVE stochastic questions via a helper
+cowork-harness skill ~/my-plugin "..." --decider-dir "$(mktemp -d)"       # …or answer them YOURSELF, in-band, while the run is live
+#   then, from a second terminal / a Monitor:
+#   cowork-harness gates <dir> --follow                       # stream each pending gate as JSON
+#   cowork-harness answer <dir> --gate 1 --choose "<label>"   # reply (never hand-write resp-N.json)
+#   cowork-harness decide --decider-dir "$(mktemp -d)"        # rehearse that channel in ~2s, no run
 cowork-harness skill ~/my-plugin 'review this deck' --upload deck.pdf      # attach a file → mnt/uploads (deck-review etc.)
 cowork-harness skill ~/my-plugin "..." --session-id s1                     # pin a session…
 cowork-harness skill ~/my-plugin '<next turn>' --session-id s1 --resume    # …then resume it (gated/checkpoint skills)
@@ -436,7 +441,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `analyze-skill <SKILL.md \| skill-dir/ \| glob>…` | Token-free ADVISORY scan: flags a `/sessions/...` path handed to a file tool or used as a dispatch/sub-agent output path — that path class is DENIED on host-loop. Accepts multiple positionals (files, dirs, or a simple `*`/`**` glob), walked recursively across a plugin's `SKILL.md`/`agents/`/`references/`/`commands/`. Findings print but exit 0 by default; `--strict` (the CI-recommended invocation) fails on any unsuppressed finding. Three per-file ignore markers (`ignore-next-line`, `ignore-start`/`ignore-end`, file-wide `ignore`) and a `--output-format json` payload are supported. **It also flags interactive-artifact write-backs lost under Cowork**: it statically analyzes `.html`/`.js`/`.ts`/`.py` sources under the target for a relative `fetch`/XHR/`sendBeacon`/`<form method=post>` write-back that silently fails when the artifact is served from Cowork's own origin (`artifact-write-back-lost` gates under `--strict`; `artifact-write-back-suspect` is advisory; a candidate that can't be parsed is a could-not-verify exit `3`). `--runtime` adds an optional headless-DOM confirmation (needs `jsdom`) that *observes* the lost write-back. Full reference — ignore-marker syntax, directory-walk rules, JSON shape, and the artifact detector: [docs/subagents.md](./docs/subagents.md#static-path-fidelity-check-analyze-skill) | catching the exact "skill hands `/sessions/...` to a file tool" defect — or an artifact whose Submit silently fails under Cowork — statically, before paying for a live run to discover it |
 | `probe-dispatch <skill-dir> "<prompt>"` | Cheap single-dispatch mechanics probe: a THIN wrapper over `skill` (fidelity `container`/`microvm`/`hostloop`, default `hostloop`) that scopes a prompt to trigger ONE `Task` dispatch, then prints just that dispatch's `{resolvedAgentType, pathDenials, delivered}` — no new data model, a pure projection of the same `RunResult` `skill` already produces; `--expect-write <suffix>` narrows `delivered`; "one dispatch" is prompt-scoped, not enforced (`--output-format json` for machine consumption); also inherits the common decider/answer flags — `--decider-cmd`, `--decider-dir`, `--on-unanswered`, `--ablate-skill` | "did THIS dispatch resolve to the type I expect, avoid a path denial, and actually deliver its write?" without hand-writing a scenario or reading `trace --view dispatches` |
 | `assertions --list` | List the available scenario assertions (generated from the schema) | "what can I assert?" without grepping the source |
-| `decide` | Validate a decider against a sample question in ~2 s (no run) | sanity-check a `--decider-*` / `--answer` wiring before a long run |
+| `decide` | Validate a decider against a sample question in ~2 s (no run) — including `--decider-dir`, which fires a real gate and blocks until you answer it with `gates`/`answer` | sanity-check a `--decider-*` / `--answer` wiring before a long run, or rehearse the in-band protocol once |
 | `gates` / `answer` | Stream / answer in-band gates for `--decider-dir` | a **driving agent** answers live questions via a Monitor |
 | `status <run-id \| run-dir> [--follow]` \| `status --latest-for <scenario>` | Check whether a background run is alive (state/elapsed/tool counts) by reading `status.json` — no `ps aux` needed (unreliable across sandbox/PID-namespace boundaries). Pointing it at a run-dir **root** (no `status.json` of its own) resolves to the newest session under it (scanned up to two levels deep) instead of failing with "no status.json". `--follow` streams one line per change until done/error; staleness detection catches a `SIGKILL`'d process. `--latest-for <scenario-name-or-slug>` resolves and prints the NEWEST run dir for a scenario by actual run time (its `.origin`/`result.json` timestamps) — NOT `ls -td`'s directory mtime, which can return a stale prior-session dir. The text summary goes to **stderr** (stdout stays empty); `--output-format json` and `--follow` write to stdout, so poll with `--follow` rather than a shell loop over stdout | a **driving agent** (or script) checking on a run it launched in the background, or locating the run it just kept |
 | `stats [<scenario>]` | Queryable summary over every indexed `run`/`skill`/`record` invocation — run count, pass rate, cost/duration/token/turn p50/p95, `total=` group spend (the only figure that prices a `critique` whole), last-green timestamp; `--skill-hash`/`--label`/`--group-by` compare skill generations — or, via `--group-by fidelity`, the tier a run actually executed at — instead of averaging across them; an aggregate spanning more than one generation or tier says so rather than averaging silently. `--runs` lists the individual runs behind each summary (filters and `--reindex` below). See [docs/stats.md](./docs/stats.md) | "is this scenario flaky/expensive over time?" without hand-aggregating `result.json` files |
@@ -717,7 +722,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=1.20.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](./action.yml) for the full input/output reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=1.21.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](./action.yml) for the full input/output reference.
 
 The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **nine-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `image-recipe`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 

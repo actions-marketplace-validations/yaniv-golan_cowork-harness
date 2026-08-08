@@ -1,0 +1,28 @@
+# NOT REGISTERED — the `pending-` prefix keeps this out of eval-gate's glob
+# (`/^eval-\d.*\.yaml$/`, scripts/eval-gate.ts:386). Registering it without a full
+# --rebaseline would make it a candidate-only scenario and hard-fail the gate.
+# Rename to `eval-19-…` and rebaseline+recalibrate when that is funded.
+#
+# Tests the IN-BAND branch: the option set cannot be known in advance and the driving
+# agent holds the context, so `--decider-dir` + `gates`/`answer` is the correct channel.
+name: pending-in-band-channel
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: I'm an AI agent driving cowork-harness to test a colleague's skill. Partway through the run the
+  skill asks the user a question, but I can't predict what options it will offer — they're generated from
+  the input document, so the option set is different on every run. I need to pick based on my own judgement
+  of what we're testing, and my choice changes what the run writes, so I have to assert on it afterwards.
+  Letting a model guess isn't good enough here — I'm the one holding the task context. How do I answer that
+  gate?
+assert:
+- semantic_matches:
+    rubric:
+    - Recommends the in-band decider channel, the --decider-dir <dir> flag, as the way to answer the gate
+    - Names the `gates` subcommand (e.g. `cowork-harness gates <dir> --follow`) for streaming pending gates
+    - Names the `answer` subcommand (e.g. `cowork-harness answer <dir> --gate N --choose <label>`) for writing
+      the reply
+    - States that a fresh, empty directory is required per run
+    - States that the run is flagged nonDeterministic
+    - Does not present scripted answers as the primary solution, since the option set cannot be known in
+      advance

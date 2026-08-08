@@ -26,6 +26,12 @@ The harness and the driver rendezvous through files in `<dir>`:
 
 You **do not** hand-write those files. Two CLI subcommands wrap the protocol:
 
+> **See it work first, for free.** `cowork-harness decide --decider-dir "$(mktemp -d)"` fires ONE sample
+> gate through this exact channel — the same `fileChannel` a real run uses, so the fresh-dir refusal and
+> the wire shape are the production ones — then blocks until you answer it with the two subcommands below.
+> No agent, no tokens, ~2s of setup. This is the cheapest way to learn the loop before wiring it into a
+> paid run, and it exists because hand-rolling a Monitor over the raw files is the most common mistake here.
+
 - **`cowork-harness gates <dir> [--follow]`** — stream pending gates. Emits one clean single-line JSON
   per new gate (`{seq, ...decision_request}`) and a terminal `{"done":true}` when the run finishes.
   With `--follow` it watches until done; without it, one pass and exit. The harness owns the watcher,

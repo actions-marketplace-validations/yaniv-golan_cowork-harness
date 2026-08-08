@@ -121,11 +121,17 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     expect(r.json?.error?.message).toMatch(/conflicts with --decider-cmd/);
   });
 
-  it("decide rejects --decider-dir loudly (not silently ignored), exit 2", () => {
-    const r = run(["decide", "--decider-dir", "/tmp/x", "--output-format", "json"]);
+  it("decide --decider-dir surfaces a dirty dir as a json error envelope, exit 2", () => {
+    // `decide` used to REJECT --decider-dir outright; it now rehearses the in-band channel for real.
+    // Use a DIRTY dir deliberately: it exercises the production fresh-dir guard and returns immediately.
+    // A fresh dir would (correctly) block on the rendezvous until answered — see decide-in-band.test.ts
+    // for the round trip, and never invoke this path unanswered in a test.
+    const dir = mkdtempSync(join(tmpdir(), "cli-json-decide-"));
+    writeFileSync(join(dir, "req-1.json"), "{}\n");
+    const r = run(["decide", "--decider-dir", dir, "--output-format", "json"]);
     expect(r.code).toBe(2);
-    expect(r.json?.error?.category).toBe("usage");
-    expect(r.json?.error?.message).toMatch(/does not support --decider-dir/);
+    expect(r.json?.error?.category).toBe("runtime");
+    expect(r.json?.error?.message).toMatch(/use a fresh, empty directory per run/);
   });
 
   it.skipIf(process.platform !== "darwin")("vm with an invalid subcommand exits non-zero (not 0)", () => {

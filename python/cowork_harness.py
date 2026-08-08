@@ -258,17 +258,32 @@ class Skill:
         session_id: Optional[str] = None,   # pin a stable session (for resume)
         resume: bool = False,               # continue a prior session_id (gated/checkpoint skills)
         decider_cmd: Optional[str] = None,  # answer LIVE questions via a spawned helper (stochastic gates)
+        decider_dir: Optional[str] = None,  # …or IN-BAND: the harness writes each gate to <dir> and blocks;
+                                            # you answer with `cowork-harness answer <dir> --gate N --choose …`
+                                            # (stream them with `cowork-harness gates <dir> --follow`).
+                                            # Must be a FRESH, EMPTY dir per run; flags the run non-deterministic.
         prompt_file: Optional[str] = None,  # pass the prompt verbatim from a file (vs inline)
         check: bool = False,                # raise on a failed/enveloped-error run instead of returning it
     ) -> Result:
+        # One terminal channel, not two — mirrors the CLI's own refusal so the error arrives here with a
+        # useful message instead of as an opaque exit 2 from the subprocess.
+        if decider_cmd and decider_dir:
+            raise ValueError("decider_cmd and decider_dir are mutually exclusive (one terminal channel)")
         args = ["skill", self._folder]
         if prompt_file:
             args += ["--prompt-file", prompt_file]
         elif prompt is not None:
             args.append(prompt)
         args += ["--fidelity", fidelity]
-        # Every channel keeps stdout free, so --decider-cmd composes with --output-format json like everything else.
-        args += ["--output-format", "json", "--on-unanswered", on_unanswered]
+        # Every channel keeps stdout free, so --decider-cmd/--decider-dir compose with --output-format json
+        # like everything else.
+        args += ["--output-format", "json"]
+        # A terminal CHANNEL and the --on-unanswered POLICY are mutually exclusive on the CLI (the channel
+        # IS the terminal, so the policy could only ever be inert) — passing both is a usage error, exit 2.
+        # This is why `decider_cmd` never actually worked from Python: the unconditional --on-unanswered
+        # that used to live on this line made every `run(decider_cmd=...)` a guaranteed usage error.
+        if not (decider_cmd or decider_dir):
+            args += ["--on-unanswered", on_unanswered]
         for q, choice in (answers or {}).items():
             args += ["--answer", f"{q}={choice}"]
         for u in _as_list(upload):
@@ -281,6 +296,8 @@ class Skill:
             args.append("--resume")
         if decider_cmd:
             args += ["--decider-cmd", decider_cmd]
+        if decider_dir:
+            args += ["--decider-dir", decider_dir]
         return self._runner._invoke(args, check=check)
 
     def conversation(

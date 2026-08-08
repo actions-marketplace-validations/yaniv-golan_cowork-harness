@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 1.20.0` (baseline `desktop-1.26832.0`).
+Self-contained reference. Tracks `cowork-harness 1.21.0` (baseline `desktop-1.26832.0`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -72,7 +72,13 @@ regressions.
 | **Scripted** | `answers:` rules (regex→choice / tool→decision) + `on_unanswered: fail` | ✅ — the CI/agent default |
 | **LLM decider** | `on_unanswered: llm` (YAML) **or** `--decider-llm` (CLI) | ❌ flags `nonDeterministic` |
 | **Spawned helper** | `--decider-cmd '<helper>'` | depends on the helper |
-| **In-band (driving agent)** | `--decider-dir <dir>` (+ a Monitor that writes responses) | depends |
+| **In-band (driving agent)** | `--decider-dir <FRESH, EMPTY dir>` + `gates`/`answer` (arm a Monitor on the dir) | ❌ flags `nonDeterministic` |
+
+Pick with the decision tree in SKILL.md's *Choose an answer path* — the discriminator is **"will this run
+be re-executed unattended?"**, not "which row looks closest". `--decider-dir`'s one unique property is that
+it needs no advance knowledge of the option **set**; drifting label *text* alone is still a scripted
+problem (substring anchor / positional `choose`). Rehearse the channel in ~2s with
+`cowork-harness decide --decider-dir <dir>` before wiring it into a paid run.
 
 Scripted `answers:` and a terminal (`--decider-llm` / `--decider-cmd` / `--decider-dir` / `on_unanswered`) compose as a normal Chain — scripted rules resolve matched gates, the terminal answers whatever's left. What's mutually exclusive is picking **two terminals** at once — the CLI rejects every such pairing: two channels (`--decider-dir` with `--decider-cmd`), a model terminal with a channel or a policy (`--decider-llm` with either), and a channel with a policy (`--decider-dir`/`--decider-cmd` with `--on-unanswered`). A channel or the LLM decider *is* the terminal, so an accompanying `--on-unanswered` could only ever be inert — the chain never reaches the policy terminal. The in-band path's Monitor drives two
 subcommands: `gates <dir>` (stream the pending questions) and `answer <dir> --gate N …` (reply to one).

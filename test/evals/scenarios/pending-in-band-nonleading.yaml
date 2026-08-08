@@ -1,0 +1,29 @@
+# NOT REGISTERED — `pending-` prefix keeps this out of eval-gate's glob (scripts/eval-gate.ts:386).
+#
+# The NON-LEADING twin of pending-in-band-channel.yaml. The rubric is IDENTICAL by design —
+# only the prompt changes, so the comparison has exactly one variable.
+#
+# The leading version handed the agent the discriminator ("I'm the one holding the task
+# context", "letting a model guess isn't good enough") and it picked --decider-dir. This
+# version states only the observable FACTS of the situation — options differ every run,
+# the work is attended rather than CI, the choice affects what's being checked — and asks
+# an open question. It also enters through the real-world door: the unanswered-gate error.
+name: pending-in-band-nonleading
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: cowork-harness keeps failing my run with an unanswered question error. The skill asks the user to
+  pick which section to extract, and the options are built from whatever PDF I pass in, so they're never
+  the same twice. This isn't in CI — I'm running it myself from the terminal while I iterate, and which
+  option gets picked changes the output I'm checking. What are my options for getting past this gate?
+assert:
+- semantic_matches:
+    rubric:
+    - Recommends the in-band decider channel, the --decider-dir <dir> flag, as the way to answer the gate
+    - Names the `gates` subcommand (e.g. `cowork-harness gates <dir> --follow`) for streaming pending gates
+    - Names the `answer` subcommand (e.g. `cowork-harness answer <dir> --gate N --choose <label>`) for writing
+      the reply
+    - States that a fresh, empty directory is required per run
+    - States that the run is flagged nonDeterministic
+    - Does not present scripted answers as the primary solution, since the option set cannot be known in
+      advance
