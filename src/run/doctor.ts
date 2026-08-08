@@ -56,6 +56,26 @@ export type ImageFreshness =
  *  `localDigest` is null for a locally-built image (empty RepoDigests); `pin` is null when this build
  *  publishes no digest for that image. I/O failures stay in the caller and surface as `unknown` — a user
  *  whose Docker daemon is down must never be told their image was "built locally". */
+/** Pick the registry digest for THIS image out of `docker image inspect`'s RepoDigests.
+ *
+ *  Docker records a RepoDigest per repository the image is known by, and the set is not predictable: a
+ *  pulled-then-retagged image may carry `ghcr.io/owner/name@sha256:…`, or only the bare `name@sha256:…`,
+ *  or both. Matching the ghcr-qualified form alone silently missed the bare form — `cowork-agent-full:2`
+ *  carries only the short name on a real machine — so the image was reported as a local build and the pin
+ *  check quietly did nothing for every full-parity user. A skipped check reads exactly like a passing one.
+ *
+ *  The ghcr-qualified digest wins when both are present and disagree (a machine can hold the same name
+ *  from two registries; the published one is the one we pin against). Matching is on the exact repository
+ *  name up to `@`, so `name-extra@…` never satisfies `name`. */
+export function registryDigestFrom(repoDigests: string[], ghcrRepo: string, localImage: string): string | null {
+  const bareName = localImage.split(":")[0];
+  const digestFor = (repo: string): string | null => {
+    const hit = repoDigests.find((d) => typeof d === "string" && d.slice(0, d.indexOf("@")) === repo);
+    return hit ? hit.slice(hit.indexOf("@") + 1) : null;
+  };
+  return digestFor(ghcrRepo) ?? digestFor(bareName);
+}
+
 export function freshnessFor(local: string, ghcrRef: string | null, localDigest: string | null, pin: string | null): ImageFreshness {
   if (!ghcrRef) return { state: "unknown", detail: `${local} is a custom image — no published counterpart to compare` };
   if (!localDigest) return { state: "local", detail: `${local} was built locally (no registry digest to compare)` };
@@ -264,8 +284,11 @@ export const realProbe: DoctorProbe = {
     try {
       const digests: unknown = JSON.parse((li.stdout || "").trim() || "[]");
       if (Array.isArray(digests)) {
-        const m = digests.find((d): d is string => typeof d === "string" && d.startsWith(repo + "@"));
-        if (m) localDigest = m.split("@")[1];
+        localDigest = registryDigestFrom(
+          digests.filter((d): d is string => typeof d === "string"),
+          repo,
+          local,
+        );
       }
     } catch {
       /* fall through → treated as a local build */

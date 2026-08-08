@@ -65,14 +65,16 @@ When you query runs by SHA, use the **full 40-char SHA** (`git rev-parse HEAD`) 
 release run. Running `npm run preflight -- --for-tag` right before the tag push mechanically catches
 this (it asserts `HEAD == origin/main` and that a push-event `ci.yml` run succeeded for `HEAD`).
 
-> **A merge-commit run can be CANCELLED, not just red.** `ci.yml` sets
-> `concurrency: cancel-in-progress: true` on `ci-${{ github.ref }}`, so merging a second PR while the
-> first merge's `main` run is still going kills the earlier run. Observed 2026-08-06: merging #104 then
-> #105 two minutes apart left `c2f2688` with `conclusion: cancelled` and only `75b3b6c` green. The publish
-> gate requires `conclusion == success` for the *tagged* SHA, so tagging that earlier commit would poll
-> ~30 min and then fail. Tagging `main` HEAD after the last merge (Phase 3 above) avoids this by
-> construction — this is a second, independent reason for that rule. Note `ci.yml` grew an arm64 image
-> build in `ee0b21f`, which widens the window.
+> **A merge-commit run could be CANCELLED, not just red — fixed in 1.21.1, and the rule still stands.**
+> `ci.yml` used to set `concurrency: cancel-in-progress: true` for every ref, so merging a second PR while
+> the first merge's `main` run was still going killed the earlier run. Observed 2026-08-06: merging #104
+> then #105 two minutes apart left `c2f2688` with `conclusion: cancelled` and only `75b3b6c` green. The
+> publish gate requires `conclusion == success` for the *tagged* SHA, so tagging that earlier commit would
+> poll ~30 min and then fail. As of 1.21.1 cancellation is scoped to pull-request refs
+> (`cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`), so a `main` run now always runs to
+> completion; `test/workflow-structure.test.ts` keeps it that way. Tagging `main` HEAD after the last merge
+> (Phase 3 above) remains correct regardless — it avoids the whole class by construction. Note `ci.yml`
+> grew an arm64 image build in `ee0b21f`, which widens the window a `main` run occupies.
 
 ## The `main` ruleset, and the one drift it can hide
 

@@ -114,3 +114,15 @@ describe("every workflow", () => {
     }
   });
 });
+
+describe("ci.yml concurrency", () => {
+  it("never cancels an in-progress run on main", () => {
+    // A cancelled `main` run makes that commit unpublishable: `require-ci-success` requires
+    // `conclusion == success` for the SHA it checks, and `cancelled` is not it. PR runs stay
+    // cancellable — that is where the saving is, and no gate consults them.
+    const doc = workflows().find((w) => w.file === "ci.yml")!.doc as { concurrency?: { "cancel-in-progress"?: unknown } };
+    const flag = doc.concurrency?.["cancel-in-progress"];
+    expect(String(flag)).not.toBe("true");
+    expect(String(flag)).toContain("refs/heads/main");
+  });
+});

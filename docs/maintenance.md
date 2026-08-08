@@ -262,6 +262,11 @@ To publish a new revision:
 4. Move `:2` only when you intend consumers to get the new image — and, once a harness pin exists, in
    the same release that ships the updated pin, so the tag, the revision, and the pin agree.
 
+To rehearse without publishing, dispatch with `dry_run` checked: it runs the CI gate and the collision
+guard and then stops before building or pushing anything. That is how the guard's **refusal** path gets
+exercised — dispatch a revision that already exists and confirm the run fails — without risking the one
+thing a digest pin cannot survive, a repointed `:2-r<N>`.
+
 `workflow_dispatch` resolves the workflow file from the **default branch**, so a change to
 `publish-image.yml` must be on `main` before it can be dispatched.
 
