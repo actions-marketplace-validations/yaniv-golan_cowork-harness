@@ -267,8 +267,10 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── Decider testing ────────────────────────────────────────────────────────────
   decide                       fire a sample question through your configured decider (~2s, no run)
-      (--decider-cmd '<helper>' | --decider-llm [--intent …] | --answer "rx=c" | --answer-policy <yaml>)
+      (--decider-cmd '<helper>' | --decider-dir <dir> | --decider-llm [--intent …] | --answer "rx=c" | --answer-policy <yaml>)
       [--question "<text>"] [--option <label>]…   override the sample question
+      --decider-dir rehearses the IN-BAND channel: writes a real gate to <dir> and BLOCKS until you
+      answer it with 'gates'/'answer' above (the one path here that waits — that is the rehearsal)
 
 ── Platform admin ─────────────────────────────────────────────────────────────
   sync [--diff] [--allow-empty|--force]  derive/refresh a platform baseline from the live Desktop install (macOS only)
@@ -560,7 +562,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       --metric narrows the TEXT line to one view; --output-format json always returns every field regardless (same convention as --quiet/--verbose — machine output stays full, only the human render narrows).\n" +
     "       `run`/`skill` invocations are indexed automatically at every result.json write (live + partial); `record`'s live execution is indexed too, tagged command:\"record\"; replay results are never indexed (they're re-checks, not new evidence).",
   decide:
-    'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
+    'usage: decide [--question <q>] [--option <o>]... [--decider-cmd <cmd> | --decider-dir <dir> | --decider-llm [--intent <s>] [--decider-model <id>]] [--answer "<q>=<label>"]... [--answer-policy <p>] [--output-format json]',
   gates:
     "usage: gates <dir> [--follow] [--output-format text|json]   (stream pending in-band gates as JSON lines; pair with --decider-dir)",
   answer:
@@ -3255,6 +3257,7 @@ async function cmdDecide(args: string[]) {
   let question = "Confirm the detected stage before proceeding?";
   const options: string[] = [];
   let deciderCmd: string | undefined;
+  let deciderDir: string | undefined;
   let policy: string | undefined;
   let deciderLlm = false;
   let intent: string | undefined;
@@ -3290,21 +3293,12 @@ async function cmdDecide(args: string[]) {
     // own value) so it doesn't fall through to the unknown-flag guard below and exit 2 like an outlier.
     else if (a === "--output-format=json" || a === "--output-format=text") {
       /* recognized; parsed by isJsonOutput/ensureOutputFormat */
-    }
-    // --decider-dir is rejected explicitly below with a redirect message; consume its value here so the
-    // value isn't flagged as a stray positional before that guard fires.
-    // check that the next token exists and doesn't look like a flag before consuming it.
-    else if (a === "--decider-dir") {
-      const v = args[i + 1];
-      if (v === undefined || v.startsWith("-"))
-        fail(
-          "decide",
-          "usage",
-          `--decider-dir: missing value (got ${v === undefined ? "nothing" : `flag-looking "${v}"`})`,
-          undefined,
-          json,
-        );
-      i++;
+    } else if (a === "--decider-dir") {
+      deciderDir = flagValue("decide", args, i++, a, json);
+      // The rendezvous dir is never a flag — reject a flag-looking value so `--decider-dir --question`
+      // doesn't silently swallow the next flag as the directory. Mirrors --decider-cmd above.
+      if (deciderDir.startsWith("-"))
+        fail("decide", "usage", `--decider-dir: missing value (got flag-looking "${deciderDir}")`, undefined, json);
     } else if (a === "--quiet" || a === "-q" || a === "--verbose") {
       /* accepted but currently a no-op in decide — wired for flag consistency */
     }
@@ -3316,16 +3310,6 @@ async function cmdDecide(args: string[]) {
     // decide takes NO positionals (the sample question comes from --question, not a positional).
     else fail("decide", "usage", `decide takes no positional arguments (got: ${a})`, undefined, json);
   }
-  // `decide` does not implement the file-rendezvous channel — reject `--decider-dir` loudly
-  // instead of silently ignoring a first-class runtime path.
-  if (args.includes("--decider-dir"))
-    fail(
-      "decide",
-      "usage",
-      "decide does not support --decider-dir (the file-rendezvous channel); validate that path by running a scenario with --decider-dir. Use --decider-cmd '<helper>' to check a spawned helper here.",
-      undefined,
-      json,
-    );
   // --intent only feeds the LLM decider; check this before the no-decider guard so the error is
   // specific ("--intent requires --decider-llm") rather than the generic "no decider configured".
   if (intent !== undefined && !deciderLlm)
@@ -3341,11 +3325,11 @@ async function cmdDecide(args: string[]) {
   // pre-flight — exit 2 (usage error) when no decider is configured at all. Previously this
   // fell through to ScriptedDecider([]).decide() → ABSTAIN → exit 1 "no rule matched", which implies
   // the user wrote a rule that failed to match rather than that they forgot to configure anything.
-  if (!deciderLlm && !deciderCmd && rules.length === 0 && !policy)
+  if (!deciderLlm && !deciderCmd && !deciderDir && rules.length === 0 && !policy)
     fail(
       "decide",
       "usage",
-      "no decider configured — pass --decider-cmd '<helper>', --decider-llm, --answer \"<rx>=<label>\", or --answer-policy <yaml>.",
+      "no decider configured — pass --decider-cmd '<helper>', --decider-dir <dir>, --decider-llm, --answer \"<rx>=<label>\", or --answer-policy <yaml>.",
       undefined,
       json,
     );
@@ -3353,6 +3337,21 @@ async function cmdDecide(args: string[]) {
   // helper would never be exercised. Mirrors cmdSkill/resolveExternal's conflict guards.
   if (deciderLlm && deciderCmd)
     fail("decide", "usage", "--decider-llm conflicts with --decider-cmd (one terminal decider).", undefined, json);
+  // `--decider-dir` is a terminal CHANNEL, exactly like `--decider-cmd`. Every pairing below is
+  // rejected on the run lanes too (takeCommonFlags / resolveExternal) — keep `decide` in step, or
+  // rehearsing a channel here would accept a combination the real run refuses.
+  if (deciderDir && deciderCmd)
+    fail("decide", "usage", "--decider-dir conflicts with --decider-cmd (one terminal channel).", undefined, json);
+  if (deciderDir && deciderLlm)
+    fail("decide", "usage", "--decider-dir conflicts with --decider-llm (one terminal decider).", undefined, json);
+  if (deciderDir && (rules.length || policy))
+    fail(
+      "decide",
+      "usage",
+      "--decider-dir conflicts with --answer/--answer-policy (one terminal decider — the scripted rules would never be used).",
+      undefined,
+      json,
+    );
   // --decider-llm is a terminal decider; combining it with the scripted --answer/--answer-policy
   // rules is contradictory (the LLM branch wins, the rules are never exercised). Reject the conflict the
   // same way --decider-llm + --decider-cmd is rejected above.
@@ -3392,6 +3391,27 @@ async function cmdDecide(args: string[]) {
         else log(`✓ helper answered: "${question}" → "${answer}"`);
       } finally {
         channel.close();
+      }
+    } else if (deciderDir) {
+      // The in-band file rendezvous — the SAME ExternalDecider as --decider-cmd, only the transport
+      // differs. `fileChannel` carries the fresh-empty-dir refusal and the 10-min backstop itself, so
+      // rehearsing here exercises the real guards, not a mock of them.
+      //
+      // Unlike every other `decide` path this one BLOCKS until you answer — that is the point: it is a
+      // live rehearsal of the protocol. Print the two commands that answer it, because the whole reason
+      // this path exists is that agents find `--decider-dir` and then hand-roll the req/resp files
+      // instead of using `gates`/`answer`.
+      const channel = fileChannel(deciderDir);
+      log(`[in-band] gate written to ${deciderDir} — blocking until you answer it. In another terminal:`);
+      log(`  cowork-harness gates ${deciderDir} --follow`);
+      log(`  cowork-harness answer ${deciderDir} --gate 1 --choose "${opts[0]}"`);
+      try {
+        const d = await new ExternalDecider(channel).decide(req, ctx);
+        const answer = (d as { response: { answers?: Record<string, string> } }).response.answers?.[question];
+        if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, answer, by: "in-band" }));
+        else log(`✓ in-band decider answered: "${question}" → "${answer}"  (would flag the run non-deterministic)`);
+      } finally {
+        channel.close?.();
       }
     } else {
       const d = await new ScriptedDecider(rules).decide(req, ctx);
