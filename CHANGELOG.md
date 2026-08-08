@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-08-08
+
+### Upgrade notes
+
+- **`decide --decider-dir <dir>` BLOCKS until you answer the gate — every other `decide` path returns in
+  ~2 s.** That wait is the feature (it is a live rehearsal of the in-band rendezvous, using the same
+  channel a real run uses), but it means a script or test that invokes this path without answering will
+  sit on the 10-minute `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS` backstop. Answer it with
+  `cowork-harness answer <dir> --gate 1 --choose "<label>"`, or point the flag at a **dirty** directory
+  when you only want to exercise the fresh-dir refusal (that returns immediately, exit 2).
+
+- **`Skill.run(decider_cmd=...)` starts working in this release.** It previously exited 2 every time (see
+  *Fixed*), so any Python caller that "handled" that failure — a try/except, a skip, a fallback path —
+  will now take the success branch for the first time. Nothing to change; just don't be surprised when a
+  previously dead code path starts executing.
+
 ### Added
 
 - **`decide --decider-dir <dir>` — the in-band answer channel is now rehearsable in ~2 s, with no run.**
