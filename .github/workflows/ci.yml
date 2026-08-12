@@ -314,7 +314,10 @@ jobs:
           # Pulling the tag meant CI certified whatever was published last while `doctor` certified the
           # pin — so a green CI said nothing about the pinned image, and vice versa. Reading the pin
           # here makes CI, doctor, and the README's consumer instructions all validate the same bytes.
-          DIGEST=$(jq -r '.variants["cowork-agent-base:2"].digest' docker/agent-image.json)
+          # Read the pin with node, not jq: this job already runs setup-node + `npm ci`, so node is
+          # guaranteed here, while jq would be the first bare use in this workflow and an assumption
+          # about the runner image on a step that has never executed in CI.
+          DIGEST=$(node -p 'require("./docker/agent-image.json").variants["cowork-agent-base:2"].digest')
           IMG="ghcr.io/${{ github.repository_owner }}/cowork-agent-base@${DIGEST}"
           if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
             echo "::error::docker/agent-image.json has no digest for cowork-agent-base:2 — the pin is the contract; fix it rather than falling back to the mutable tag."
