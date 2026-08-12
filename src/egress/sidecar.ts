@@ -43,8 +43,11 @@ export interface EgressSidecar {
 // this whenever a change must actually reach existing installs (a decision-log format change was the
 // original such case; the base-image move to node:22-slim is another). :3 = the node:22-slim base;
 // :4 = the explicit `host:'0.0.0.0'` bind (the proxy now defaults to loopback, so the sidecar — which
-// the agent container reaches ACROSS the docker network — must ask for a non-loopback bind by name).
-const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:4";
+// the agent container reaches ACROSS the docker network — must ask for a non-loopback bind by name);
+// :5 = CONNECT answers 502 + logs a structured `upstream_error` when the upstream fails before the
+// tunnel is established (it used to destroy the socket silently, leaving an intermittent with no
+// artifact — see the error handler in proxy.ts).
+const PROXY_IMAGE = process.env.COWORK_PROXY_IMAGE ?? "cowork-egress-proxy:5";
 
 // A process-level cleanup registry so a Ctrl-C (SIGINT/SIGTERM) mid-run reaps in-flight egress resources
 // instead of orphaning them (the per-run `finally` paths don't run when the process is killed by a signal).

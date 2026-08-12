@@ -130,8 +130,19 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
     }
 
     // 4. Allowlisted egress via the proxy works (so the agent can reach inference).
+    //
+    // The two ALLOWLISTED probes (this one and check 6) retry; the off-list ones deliberately do not.
+    // A single-shot curl through the proxy is exposed to ordinary network transients — a DNS hiccup or
+    // TCP reset on the upstream connect fails the probe while the sandbox is behaving correctly. That
+    // was observed once in eight runs. Retrying is legitimate HERE because the assertion is
+    // reachability, and reachability is what a retry establishes.
+    //
+    // The off-list probes must NEVER retry: they assert a 403 DENY, and a retry loop around a policy
+    // decision could turn a real enforcement failure into a pass on a later attempt. Enforcement is
+    // also DNS-independent (the deny path answers before any upstream connect), so it has no transient
+    // to absorb in the first place.
     {
-      const r = probe(`curl -sS -m 8 -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`, true);
+      const r = probe(`curl -sS -m 8 --retry 2 --retry-all-errors -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`, true);
       const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
       results.push({
         check: "allowlist-permits",
@@ -179,7 +190,11 @@ export function runBoundaryChecks(baseline: PlatformBaseline, session?: Boundary
     // A probe that does not consume the runtime's own value cannot see that class of regression.
     {
       const hlEnv = hostLoopSidecarEnv(proxy);
-      const allowed = probe(`curl -sS -m 8 -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`, true, hlEnv);
+      const allowed = probe(
+        `curl -sS -m 8 --retry 2 --retry-all-errors -o /dev/null https://api.anthropic.com && echo OK || echo FAIL`,
+        true,
+        hlEnv,
+      );
       const offList = probe(`curl -sS -m 5 -o /dev/null https://example.com && echo REACHED || echo BLOCKED`, true, hlEnv);
       const aOut = ((allowed.stdout ?? "") + (allowed.stderr ?? "")).trim();
       const oOut = ((offList.stdout ?? "") + (offList.stderr ?? "")).trim();
