@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Platform baseline for Claude Desktop 1.28929.0 (bundled agent 2.1.227).** The rendered first-party
+  spawn contract is unchanged — `spawn.tools` stays 20 entries, `allowedTools` 19, the egress allowlist 15
+  domains, and the Cowork system prompt is byte-identical to the previous baseline. The VM rootfs image is
+  unchanged, so no provisioning re-capture. The staged agent ELF matches the official release manifest's
+  `linux-arm64` checksum.
+- **Spawn-contract guards for Desktop's new conditional `Artifact` tool.** 1.28929.0 can splice an
+  `Artifact` tool into the session tool list, selected by a server-delivered session flag rather than a
+  feature gate — so it is invisible to gate diffing and can change without a Desktop release. It is off
+  for a default first-party session, so the pinned tool list is unaffected. `sync` now admits the
+  conditional spread only while it still resolves to that predicate, validating the whole condition
+  expression (not just the shape of the call it contains) and requiring the host-loop exclusion to
+  survive. The accompanying spawn env var is allowlisted rather than pinned, and a companion check
+  asserts it stays gated on the same predicate as the tool — so making either unconditional, or re-keying
+  one of them, fails the sync loudly instead of being absorbed.
+- **Two new drift sentinels** in the synced baseline's `provenance.gates`: the skill-argument collection
+  guidance flag, and the auto-mode permission rubric flag (dark today).
+
+### Changed
+
+- **The tools-list tail guard now pins the whole tail.** It previously anchored only on the first spread
+  after `ToolSearch`, leaving everything past it unguarded — which defeated the guard's own purpose, since
+  a tool appended there was invisible to both it and the head check. The tail is now pinned through its
+  closing bracket, with the trailing conditional tool's name and its condition both resolved rather than
+  shape-matched.
+
+### Documentation
+
+- **`docs/fidelity-gaps.md` gains four sections**: Cowork's two mutually exclusive artifact mechanisms
+  (neither modeled, and the selecting flag is not observable locally); the process-global HIPAA
+  restriction latch; the dark auto-mode permission rubric; and skill argument collection, where
+  production splits between `AskUserQuestion` and an elicitation form while the harness only ever reaches
+  the former. The `save_skill` section records that the tool is now additionally rubric-governed.
+
 ## [1.21.1] — 2026-08-08
 
 ### Fixed

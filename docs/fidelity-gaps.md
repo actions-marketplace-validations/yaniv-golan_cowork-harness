@@ -70,6 +70,52 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 
 ---
 
+## Artifacts — two mechanisms, neither modeled
+
+**Real Cowork behaviour:** Cowork has two mutually exclusive artifact mechanisms, and a given session
+runs exactly one of them. The legacy mechanism bind-mounts one host directory per artifact into the
+VM. The newer mechanism ("frame artifacts") instead gives the agent an `Artifact` tool in its tool
+list — no per-artifact mount at all. Which one a session gets is decided by a server-delivered session
+flag, `frameArtifactsEnabled`, that arrives with the rest of the session config alongside flags like
+`memoryEnabled`/`skillsEnabled` — it is not a feature gate readable on the machine, so neither the
+harness nor the user can observe its value locally. The flag is off by default today, so production
+currently takes the legacy bind-mount path.
+
+The bind-mount only happens in the **VM-loop** spawn path — host-loop never mounts artifact
+directories, though the same host paths still appear in host-loop's read-only path allowlist as
+readable-path entries, not mounts. When the `Artifact` tool is present, it sits in the session's tool
+list but outside the pre-approved allowed-tools list, so it must go through the same `can_use_tool`
+permission flow as `AskUserQuestion`.
+
+**Harness behaviour:** neither mechanism is modeled. The harness's mount kinds are connected folders,
+projects, and outputs only — there is no artifact-directory mount, and no `Artifact` tool at any tier.
+
+**The residual, stated plainly:** on the VM tiers, production currently mounts artifact directories
+and the harness mounts none; host-loop is unaffected, since production doesn't mount there either.
+This is a deliberate non-modeling decision, not an oversight: the mount branch is the one Anthropic is
+retiring, and the harness has no way to observe the server flag that selects between the two
+mechanisms. If the flag flips, the mount difference disappears on its own and the gap becomes the
+missing `Artifact` tool instead. Revisit trigger: a real session showing `Artifact` in its tool list.
+
+---
+
+## HIPAA restriction is a process-global latch
+
+**Real Cowork behaviour:** when an account or org is HIPAA-restricted, Cowork latches that state at
+the module level in the Desktop process — once set, it stays set for the life of the process, across
+every session the process handles, not just the one that triggered it. While latched, it disables
+memory sync and the frame-artifacts feature described above.
+
+**Harness behaviour:** HIPAA-restricted deployments are not modeled at all — there is no equivalent
+latch, and no way to simulate one.
+
+**Why it's worth documenting:** a real Desktop process can legitimately show a different tool list or
+feature set than the baseline describes, with no observable feature-gate change to explain it — the
+org's HIPAA status flips a process-global latch that nothing else surfaces. Useful to know before
+chasing a phantom drift between a live probe and the pinned baseline.
+
+---
+
 ## `--raw` mode bypasses the egress sandbox
 
 **Real Cowork behaviour:** All outbound network traffic from the agent is filtered through the configured egress allowlist.
@@ -531,6 +577,74 @@ host-side is not visible to the in-VM agent. See [plugin-root.md](./plugin-root.
 
 ---
 
+## Auto-mode permission rubric is not modeled
+
+**Real Cowork behaviour:** Desktop 1.28929.0 embeds a client-side permission rubric that classifies
+Cowork tool calls into named risk categories. Several of its rules require that the *user* — not the
+agent — be the one who named the action, covering things like granting folder access, granting
+file-delete permission, saving a skill, and creating or deleting scheduled tasks. It also carries
+explicit carve-outs: reading connected folders or uploads and writing derived content to the outputs
+directory is not treated as data exfiltration. The rubric applies only to auto-mode, only for
+non-chat sessions, and only outside host-loop. Its feature gate is off by default, so it is dark for a
+standard account today.
+
+**Harness behaviour:** not modeled. A scenario's scripted permission answers can express "the user
+allowed this but the rubric refused it" only by scripting the refusal directly — there is no mechanism
+that decides a denial on its own the way the rubric would.
+
+**The residual, stated plainly:** currently dark, and out of the harness's modeled scope in any case —
+the harness models chat sessions, and the rubric explicitly excludes them. Recorded because if the
+gate turns on, it becomes a second, host-side judgement layer sitting over every tool call in
+auto-mode, one a scenario cannot currently reproduce. A scenario can already *express* a denial by
+scripting one; it cannot *decide* one the way the rubric would.
+
+---
+
+## Skill argument collection — the elicitation form branch is not reachable here
+
+**Real Cowork behaviour:** when a skill is invoked, Cowork appends guidance to the invocation telling the
+model to collect any missing arguments through the `visualize` server's elicitation module —
+`mcp__visualize__read_me` to load the form patterns, then `mcp__visualize__show_widget` to render a form
+with pills, free text, dates and a file dropzone — and to reserve `AskUserQuestion` for one-off
+clarifications mid-task. The user's answers then arrive as **bullet points in the next user message**,
+not as a tool result. The guidance is live for standard accounts (`286376943`, on/force).
+
+**It is guidance, not enforcement, and production splits roughly evenly.** Measured across a corpus of
+real Cowork session transcripts that all received this guidance: about half of the turns that collected
+arguments used the elicitation form, and about half used `AskUserQuestion` — with a few sessions using
+both. Neither channel is dead, and which one a given turn takes is not deterministic.
+
+**What the harness does:** it never registers the `visualize` tools. The spawned MCP surface is
+`mcp__workspace__bash`, `mcp__workspace__web_fetch`, `mcp__cowork__present_files` and the
+skills/plugins discovery servers — no `read_me`, no `show_widget`. The elicitation module therefore does
+not exist inside a run, and the model falls back to `AskUserQuestion` every time.
+
+**The residual, stated plainly:** a harness run deterministically pins the `AskUserQuestion` branch. That
+is good for reproducibility — the same scenario collects arguments the same way every time, which is what
+makes scripted answers and cassettes work at all — but it means **the elicitation form branch of your
+skill is never exercised here.** If your skill renders a form in production, the harness is testing the
+other path. Scripted answers (`answers:`, `--answer`) and the deciders keep working exactly as
+documented; they are unaffected by this gap, because the competing channel is simply absent.
+
+A related sharp edge, for anyone driving MCP elicitation from their own server: the harness models an
+`elicit` request kind, but scenario answers do **not** cover it. `answers:` / `--answer` and
+`--decider-llm` both abstain on an elicit request; `--on-unanswered first` auto-declines it and
+`--on-unanswered fail` treats it as terminal. Only an external decider — `--decider-cmd` or
+`--decider-dir` — can accept, decline or cancel one.
+
+| Gate kind | `answers:` / `--answer` | `--decider-llm` | `--decider-cmd` / `--decider-dir` | `--on-unanswered first` |
+|---|---|---|---|---|
+| `AskUserQuestion` | yes | yes | yes | picks the first option |
+| tool permission (`when_tool`) | yes | yes | yes | — |
+| `elicit` | **abstains** | **abstains** | yes (accept / decline / cancel) | **auto-declines** |
+
+**Status: open gap, intended to be closed.** The plan is to keep today's behaviour as the default (so no
+scenario changes and no migration), add an opt-in that registers a stub `visualize` server to make the
+form branch reachable *deterministically*, route form submissions through the existing answer machinery
+rather than a second one, and extend scenario answers to cover `elicit` so the table above stops having a
+hole. Deliberately mirroring production's coin-flip is **not** the goal: reproducibility is the point of
+the harness, so the aim is to let a scenario choose which branch to exercise.
+
 ## Skill authoring — `save_skill` and `propose_skills` are not modeled
 
 **Real Cowork behaviour:** a cowork session on a standard account declares
@@ -560,6 +674,16 @@ that session. That sentence is emitted only when the skill catalog is non-empty.
 standard account. It is render-only — it shows the user an approval card and writes nothing — and the
 prose that prefers it over `save_skill` is scoped to Cowork's screen-recording ("watch record") flow,
 which has no harness analog.
+
+Two further signals mark `save_skill` as a live, first-class surface rather than a dormant declaration.
+Desktop's client-side permission rubric devotes a named rule to skill persistence — it treats a saved
+skill as standing instruction text for every future session, and holds that an agent's unanswered *offer*
+to save is not user consent (that rubric is dark and auto-mode-only; see *Auto-mode permission rubric is
+not modeled*). And the tool's enablement is not a function of `canSaveSkill` alone: it composes with the
+frame-artifacts session flag into a combined capability. Neither affects the harness's position — the
+tool is declared at no tier — but both raise the cost of the gap. A skill whose flow ends in "save this
+for next time" cannot be exercised here at all, and that ending sits behind more production machinery
+than the tool declaration alone suggests.
 
 **Harness behaviour:** neither tool is declared, at any tier. Both gates are pinned in the synced
 baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) as drift sentinels, so

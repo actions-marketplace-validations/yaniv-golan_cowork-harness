@@ -759,9 +759,14 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   const STIER =
     "const FKa=31999,FKb=6e4;const FKc=FKb,FKd=9e5;function FKe(){var z;return((z=q())==null?void 0:z.mcpToolTimeoutMs)??FKc}" +
     'const FKtt=["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"];' +
+    // The tools[] TAIL mirrors the live shape (Desktop >=1.28929.0): the sessionType SendUserMessage
+    // spread followed by the project-session-only conditional tool, then the closing bracket. S8 pins the
+    // whole tail and RESOLVES both the alias ("Projects") and its condition (toolModeProjectUuid), so the
+    // fixture must carry a resolvable alias hop and the destructure that names the condition.
+    'var FKproj="Projects";toolModeProjectUuid:FKm,' +
     'sessionPath:`/sessions/${sid}/mnt/.claude`,settingSources:["user"],permissionMode:S?"default":(I==null?void 0:I.permissionMode)??"default",' +
     'maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0},effortCfg:{level:z.effort,fallback:"medium"},' +
-    'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType===FKu?[]:[]],' +
+    'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType==="agent"?["SendUserMessage"]:[],...FKm?[FKproj]:[]],' +
     'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"],' +
     'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
     "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:jXe(V.env,pf)},FnA(V.env)," +
@@ -819,15 +824,144 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     "function f4(){var e;return((e=go())==null?void 0:e.mcpToolTimeoutMs)??vae}" +
     "function Ua(r,e,t){return r??e??!t?o.DEFAULT_MAX_THINKING_TOKENS:0}" +
     'var uae=["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"];' +
-    "var o={TASK_TOOL_NAMES:uae,DEFAULT_MAX_THINKING_TOKENS:x7e,getMcpToolTimeout:f4};" +
+    'var wProj="Projects";toolModeProjectUuid:FKm,' +
+    "var o={TASK_TOOL_NAMES:uae,DEFAULT_MAX_THINKING_TOKENS:x7e,getMcpToolTimeout:f4,PROJECTS_TOOL:wProj};" +
     'sessionPath:`/sessions/${sid}/mnt/.claude`,settingSources:["user"],permissionMode:S?"default":(I==null?void 0:I.permissionMode)??"default",' +
     'maxThinkingTokens:Ua(r.extendedThinkingEnabled??!mOt())},effortCfg:{level:z.effort,fallback:"medium"},' +
-    'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType===FKu?[]:[]],' +
+    // Same live tail as STIER, but the alias reaches "Projects" through the export-alias hop
+    // (o.PROJECTS_TOOL → wProj) — proving S8's alias resolution follows the same hop S7 does.
+    'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType==="agent"?["SendUserMessage"]:[],...FKm?[o.PROJECTS_TOOL]:[]],' +
     'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"],' +
     'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
     "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:o.appendCoworkTelemetryHeaders(V.env??{},ie.app.getVersion())},o.dropEmptyAuthEnvSentinels(V.env)," +
     'sysP:{type:"preset",preset:"claude_code",append:ap},appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vm:i})';
   const fixture1201860 = () => `HEADER;${W3};${W2};${W1_1201860}${STIER_1201860};${MODELCFG}TAIL`;
+
+  // ── A5/1.28929.0: the conditional `Artifact` spread (frame artifacts) ────────────────────────────
+  // The live shape: a scope-local boolean `zde` gates BOTH the tools[] spread and the spawn-env key, and
+  // resolves through an attended-turn wrapper (zFo) to the frame-artifacts predicate (zPo). The rendered
+  // 1p tools[] is unchanged (the server flag is off by default), so spawn.tools stays 20 entries and the
+  // env key is ALLOWLISTED, not pinned — it must never appear in the derived env.
+  const ARTIFACT_DEF =
+    "let zde=(N?g?.builtTools===void 0?zFo(i,{isBridgeSession:b,isDispatchChild:x,isHostLoop:v}):N.frameArtifactsTurnEnabled??!1:!1)&&!zA.r();" +
+    "N&&(N.frameArtifactsTurnEnabled=zde);" +
+    "function zPo(e,t){return e.frameArtifactsEnabled===!0&&e.sessionType===void 0&&e.scheduledTaskId===void 0&&!t.isBridgeSession&&!t.isDispatchChild&&!t.isHostLoop&&!zA.r()}" +
+    "function zFo(e,t){return zPo(e,t)&&e._isUnattended!==!0}";
+  const STIER_1289290 =
+    ARTIFACT_DEF + STIER.replace('"AskUserQuestion","ToolSearch"', '"AskUserQuestion",...zde?["Artifact"]:[],"ToolSearch"');
+  // W1 gains the frame-artifacts env key, gated on the SAME `zde` as the tools spread (what S6d asserts).
+  const W1_1289290 = W1.replace(
+    'CLAUDE_CODE_ENABLE_TASKS:"true"}',
+    '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},CLAUDE_CODE_ENABLE_TASKS:"true"}',
+  );
+  const fixture1289290 = () => `HEADER;${W3};${W2};${W1_1289290}${STIER_1289290};${MODELCFG}TAIL`;
+
+  it("1.28929.0 build shape: the conditional Artifact spread + frame-artifacts env key stay clean and unpinned", () => {
+    expect(checkSpawnContractFacts(fixture1289290())).toEqual([]);
+    const { env, flags } = deriveSpawnEnv(fixture1289290(), greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    // The allowlisted key must NOT enter the pinned env — a default 1p session never receives it.
+    expect(env).toEqual(EXPECTED_GREEN);
+    expect(env).not.toHaveProperty("CLAUDE_CODE_COWORK_FRAME_ARTIFACTS");
+  });
+
+  // Mutation matrix. Every row is a way the Artifact gate / tools tail could WIDEN; each must fail loud.
+  // A guard that cannot fail is worthless, so each row asserts the SPECIFIC check that catches it — an
+  // earlier draft of S6c passed R1/R2/R3/M7/M8 silently while looking correct.
+  const ARTIFACT_MUT: ReadonlyArray<readonly [string, () => string, string]> = [
+    // Unconditional Artifact — adjacency breaks, S6 itself catches it.
+    ["M1 unconditional Artifact literal", () => fixture1289290().replace('...zde?["Artifact"]:[],', '"Artifact",'), "S6 tools head"],
+    // Condition severed from the predicate entirely.
+    [
+      "M2 condition severed (=!0)",
+      () => fixture1289290().replace(ARTIFACT_DEF, "let zde=!0;" + ARTIFACT_DEF.split(";").slice(1).join(";")),
+      "S6c Artifact gate",
+    ],
+    // The exact widening that would let Artifact reach the host-loop tier.
+    ["M3 predicate drops !isHostLoop", () => fixture1289290().replace("&&!t.isHostLoop&&", "&&"), "S6c Artifact gate"],
+    // Definition hoisted out of the spawn window ⇒ must fail CLOSED, not open.
+    [
+      "M4 definition outside the window",
+      () =>
+        fixture1289290()
+          .replace(ARTIFACT_DEF, "")
+          .replace("HEADER;", `HEADER;${ARTIFACT_DEF}${"/*pad*/".repeat(1200)}`),
+      "S6c Artifact gate",
+    ],
+    // Attended-turn wrapper neutered — Artifact becomes unconditional for every non-HIPAA session.
+    [
+      "M7 attended wrapper neutered",
+      () => fixture1289290().replace("function zFo(e,t){return zPo(e,t)&&e._isUnattended!==!0}", "function zFo(e,t){return!0}"),
+      "S6c Artifact gate",
+    ],
+    // Condition rewired to a different, always-true helper while the real predicate stays intact.
+    [
+      "M8 condition rewired to another helper",
+      () => fixture1289290().replace("?zFo(i,", "?zZz(i,").replace("function zPo", "function zZz(e,t){return!0}function zPo"),
+      "S6c Artifact gate",
+    ],
+    // Whole-expression widenings: each keeps the right call but makes the result unconditional.
+    ["R1 trailing ||!0 appended", () => fixture1289290().replace("&&!zA.r();N&&", "&&!zA.r()||!0;N&&"), "S6c Artifact gate"],
+    [
+      "R2 cached arm flipped to ??!0:!0",
+      () => fixture1289290().replace("N.frameArtifactsTurnEnabled??!1:!1", "N.frameArtifactsTurnEnabled??!0:!0"),
+      "S6c Artifact gate",
+    ],
+    ["R3 HIPAA conjunct replaced by a literal", () => fixture1289290().replace("&&!zA.r();N&&", "&&!0;N&&"), "S6c Artifact gate"],
+    // The env key must stay conditional AND on the same predicate as the tool.
+    [
+      "M9 env key unconditional",
+      () => fixture1289290().replace('...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},', 'CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1",'),
+      "S6d frame-artifacts env key",
+    ],
+    [
+      "M10 env key re-keyed onto another id",
+      () => fixture1289290().replace("...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS", "...zq&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS"),
+      "S6d frame-artifacts env key",
+    ],
+    // The reverse direction: tool spread gone but the key kept ⇒ the allowlist would admit it unchecked.
+    ["M16 tool spread dropped, env key kept", () => fixture1289290().replace('...zde?["Artifact"]:[],', ""), "S6d frame-artifacts env key"],
+    // Tools TAIL — pre-existing blind spot that the widened S8 closes.
+    [
+      "M12 tool appended after the Projects spread",
+      () => fixture1289290().replace("...FKm?[FKproj]:[]]", '...FKm?[FKproj]:[],"NewTool"]'),
+      "S8 tools tail-guard",
+    ],
+    [
+      "M13a Projects alias swapped to another tool",
+      () => fixture1289290().replace('var FKproj="Projects"', 'var FKproj="SomethingElse"'),
+      "S8 tools tail-guard",
+    ],
+    [
+      "M13b tail spread condition widened",
+      () => fixture1289290().replace("...FKm?[FKproj]:[]]", "...FKother?[FKproj]:[]]"),
+      "S8 tools tail-guard",
+    ],
+  ];
+  it.each(ARTIFACT_MUT)("mutation %s fails loud (%#)", (_label, mutate, expected) => {
+    const flags = checkSpawnContractFacts(mutate());
+    expect(flags.join("\n")).toContain(expected);
+  });
+
+  // M5: the ALLOWLIST entry is the only thing admitting CLAUDE_CODE_COWORK_FRAME_ARTIFACTS into the spawn
+  // env without a pin. Rename the key and deriveSpawnEnv must still hard-fail on an unknown constructed
+  // key — otherwise a future allowlist mistake (or a Desktop rename) would be absorbed silently, which is
+  // the entire drift class the explicit key set exists to kill.
+  it("M5: a renamed frame-artifacts env key is still an unknown-key HARD FAIL (the allowlist admits one exact name)", () => {
+    const renamed = fixture1289290().replace("CLAUDE_CODE_COWORK_FRAME_ARTIFACTS", "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS_X");
+    const { flags } = deriveSpawnEnv(renamed, greenGates());
+    const hard = flags.filter((f) => !f.startsWith("NOTE:"));
+    expect(hard.join("\n")).toContain("CLAUDE_CODE_COWORK_FRAME_ARTIFACTS_X");
+    // …and the real name must NOT be what's flagged (proving the allowlist entry is doing its job).
+    expect(deriveSpawnEnv(fixture1289290(), greenGates()).flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+  });
+
+  // Back-compat: an asar with NO Artifact spread and NO env key stays clean — every committed baseline's
+  // bundle predates 1.28929.0, so S6c/S6d must be inert there rather than newly failing.
+  it("pre-1.28929.0 shape (no Artifact spread, no env key) stays clean", () => {
+    expect(checkSpawnContractFacts(fixture())).toEqual([]);
+    expect(checkSpawnContractFacts(fixture1201860())).toEqual([]);
+  });
 
   // 1. Green path — the fixture resolves to the exact expected pin map; the S-tier returns [].
   it("green path: derives the full pin map (gates off except 714014285/1936081873) and no HARD-FAIL flags", () => {

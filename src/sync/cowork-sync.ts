@@ -148,6 +148,22 @@ export const PINNED_GATES: Record<string, string> = {
   // would come from). The value below is the subsystem's own log tag, deliberately kebab-case so it does
   // not read as a verified camelCase flag name. Replace it if the real name ever surfaces in an fcache.
   "4074604942": "1p-direct-mcp",
+  // Skill-invocation ARGUMENT-COLLECTION guidance (Desktop >=1.26832.0; on/force for a standard account).
+  // When on, the skill-invocation text steers the model to collect missing arguments through the
+  // visualize server's elicitation form instead of AskUserQuestion. It is GUIDANCE, not enforcement:
+  // measured across real sessions that all received it, production splits roughly evenly between the two
+  // channels. The harness never registers the visualize tools, so a run always takes the AskUserQuestion
+  // branch — see the "Skill argument collection" section in docs/fidelity-gaps.md. Pinned so an
+  // on->off flip (which would make the harness's single branch fully faithful again) is a visible diff.
+  // NAME CAVEAT: the call site passes the bare id and the flag name appears nowhere in the asar, so the
+  // value below is a kebab-case descriptor, deliberately NOT shaped like a verified camelCase flag name.
+  "286376943": "skill-arg-elicitation",
+  // AUTO-MODE permission rubric (Desktop >=1.28929.0), off/defaultValue for a standard account. Merged
+  // into the auto-mode ruleset only for non-chat, non-host-loop sessions, so it is dark AND outside the
+  // chat sessions the harness models. Pinned as a dormant sentinel: if it turns on it becomes a second,
+  // host-side judgement layer over tool calls that a scenario's scripted allow cannot represent.
+  // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
+  "3424551112": "automode-permission-rubric",
 };
 
 /**
@@ -1449,6 +1465,14 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: "user-settings-conditional (default absent)",
   CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "user-settings-conditional (default absent)",
   CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: "server-pushed per-account map (default absent)",
+  // Conditional on the SERVER-delivered session flag `frameArtifactsEnabled` (a session-config field
+  // alongside memoryEnabled/skillsEnabled — NOT a GrowthBook gate, so it has no fcache id and cannot be
+  // pinned in provenance.gates). Off for a default first-party session, so the key is absent from the
+  // spawn env the baseline describes; pinning it would bake in a value real sessions never receive.
+  // S6d asserts the key stays gated on the SAME predicate as the Artifact tool spread, so this
+  // allowlist entry cannot silently start admitting an unconditional or re-keyed construction.
+  CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
+    "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
   // Doubly conditional: the 3p branch AND `telemetry.disableNonessential`. Its two construction sites
   // sit inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK/DISABLE_TELEMETRY
@@ -1926,8 +1950,19 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // S6b below resolves it and REQUIRES it empty — if a future build populates it, S6b fails loud (a real
   // spawn tool set to model), never silently absorbed. Capture groups: s6[1]=optional design-tools spread
   // id (undefined on older asars), s6[2]=TASK_TOOL_NAMES spread id.
+  // A5 (Desktop 1.28929.0): a conditional `...<cond>?["Artifact"]:[]` spread may now sit between
+  // "AskUserQuestion" and "ToolSearch" — the "frame artifacts" feature. It renders EMPTY on a default
+  // first-party session (the condition requires the server-delivered session flag frameArtifactsEnabled,
+  // which is off by default), so the hand-pinned spawn.tools stays 20 entries. Admit it OPTIONALLY (older
+  // asars lack it); S6c below walks the condition's definition and REQUIRES it to still be the
+  // frame-artifacts predicate — a widened or unconditional Artifact fails loud, never silently absorbed.
+  // The condition capture is deliberately narrow (bare local identifier, no dots): the live construct is
+  // a scope-local boolean, and S6c's resolution assumes that. A dotted/complex condition simply fails the
+  // optional group, breaks head↔tail adjacency, and trips S6 for reclassification — the safe direction.
+  // Capture groups: s6[1]=optional design-tools spread id, s6[2]=TASK_TOOL_NAMES spread id,
+  // s6[3]=optional Artifact spread condition id (undefined on older asars).
   const s6 = bundle.match(
-    /tools:\["Task",(?:\.\.\.([\w.$]+),)?"Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.([\w.$]+),"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"/,
+    /tools:\["Task",(?:\.\.\.([\w.$]+),)?"Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",\.\.\.([\w.$]+),"WebSearch","Skill","REPL","JavaScript","AskUserQuestion",(?:\.\.\.([\w$]+)\?\["Artifact"\]:\[\],)?"ToolSearch"/,
   );
   if (!s6) miss("S6 tools head", "the tools[] head list moved");
   else {
@@ -1953,8 +1988,130 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     if (!ref) miss("S7 Task-tools spread", "the TASK_TOOL_NAMES export alias could not be resolved");
     else if (!new RegExp(`(?<![\\w$])${ref.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=${taskArray}`).test(ref.chunk))
       miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
+
+    // S6c (Desktop 1.28929.0): the Artifact spread's condition must STILL be the frame-artifacts
+    // predicate. Walk the real chain `cond -> attended-wrapper -> predicate`, capturing each callee
+    // rather than hard-coding minified names; only the PROPERTY names are stable and only they are
+    // anchored on.
+    //
+    // Neither existing helper applies here. `resolveNamespaceRef` no-ops on an undotted ref (it returns
+    // the site chunk + the ref verbatim), and `resolveConst`'s `[^,;)]{1,40}` value budget resolves a
+    // DIFFERENT `de=` binding in this chunk (the chunk-namespace require near its top), not the local.
+    // Hence the windowed, scope-local definition lookup below.
+    //
+    // The condition is matched as a WHOLE expression, anchored at both ends. Fragment matching is not
+    // enough and was the defect in an earlier draft of this check: appending `||!0`, flipping the cached
+    // arm from `??!1:!1` to `??!0:!0`, or replacing the trailing HIPAA conjunct with a literal all make
+    // Artifact unconditional while still containing the right function call. Each of those is a
+    // mutation-tested failure now.
+    //
+    // IF THIS EVER FIRES AND THE TOOL HAS TO BE MODELED: `Artifact` is in tools[] but deliberately NOT in
+    // allowedTools (S9 pins that head at 19 entries) — it is tools-only, exactly like AskUserQuestion, so
+    // it is NOT pre-approved and every call transits can_use_tool. Model it as a GATED tool; treating it
+    // as allowed would false-green a permission prompt production raises. It is also VM-loop-only
+    // (`!isHostLoop` below), so the host-loop tier is correct by construction and must not gain it.
+    const artifactCond = s6[3];
+    if (artifactCond !== undefined) {
+      const escC = artifactCond.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const at = toolsSite.indexOf(s6[0]);
+      // Definition sits ~900 chars before the tools literal in the same function; 8000 is ~9x headroom
+      // and fails CLOSED (miss) if a future build hoists it out, while still excluding same-named locals
+      // in other function scopes.
+      const win = toolsSite.slice(Math.max(0, at - 8000), at);
+      const def = win.match(new RegExp(`(?:\\b(?:const|let|var)\\s+|[,;({])${escC}=([^;]*);`));
+      if (!def)
+        miss(
+          "S6c Artifact gate",
+          "the Artifact spread condition's definition is not in the spawn window — classify it, never absorb an unconditional Artifact",
+        );
+      else {
+        // Whole-expression shape: (<sess> ? <built>?.builtTools===void 0 ? <F>(<args>) :
+        //   <sess>.frameArtifactsTurnEnabled ?? !1 : !1) && !<hipaa>.r()
+        const whole = def[1].match(
+          /^\(([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+)\(([^)]*)\):\1\.frameArtifactsTurnEnabled\?\?!1:!1\)&&![\w$]+\.r\(\)$/,
+        );
+        if (!whole)
+          miss(
+            "S6c Artifact gate",
+            "the Artifact condition is no longer exactly the frame-artifacts expression (cached-arm/HIPAA/trailing-term change) — reclassify before admitting the spread",
+          );
+        else if (!/isHostLoop:/.test(whole[3]))
+          miss(
+            "S6c Artifact gate",
+            "the frame-artifacts predicate is no longer passed isHostLoop — Artifact could reach the host-loop tier",
+          );
+        else {
+          // Attended-turn wrapper: function F(e,t){return P(e,t)&&e._isUnattended!==!0}
+          const wrap = toolsSite.match(
+            new RegExp(`function ${whole[2]}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`),
+          );
+          if (!wrap) miss("S6c Artifact gate", "the attended-turn wrapper body changed — _isUnattended may no longer restrict Artifact");
+          else if (
+            !new RegExp(
+              `function ${wrap[3]}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&!\\2\\.isHostLoop&&`,
+            ).test(toolsSite)
+          )
+            miss(
+              "S6c Artifact gate",
+              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isHostLoop before admitting the spread",
+            );
+        }
+      }
+    }
+
+    // S6d: the frame-artifacts spawn-env key is ALLOWLISTED (deliberately absent from the pinned baseline
+    // because a default session never receives it), and allowlisting is unconditional by construction —
+    // resolveInto returns on the allowlist hit regardless of the surrounding construct. So without this
+    // check, Desktop making the key unconditional would surface only as a non-blocking spawnEnvSpreadCount
+    // row, and re-keying it onto a different variable would surface nothing at all.
+    //
+    // The assertion is an EQUIVALENCE: the Artifact tool spread and the env-key spread must both be
+    // present or both absent, and when present must share ONE condition identifier. Searched in the spawn
+    // chunk (the identifier is scope-local), never the joined bundle.
+    const envKeySpread = new RegExp(`\\.\\.\\.([\\w$]+)&&\\{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"\\}`).exec(toolsSite);
+    if (artifactCond !== undefined && !envKeySpread)
+      miss(
+        "S6d frame-artifacts env key",
+        "the Artifact tool spread is present but CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is no longer constructed from it",
+      );
+    else if (artifactCond === undefined && envKeySpread)
+      miss(
+        "S6d frame-artifacts env key",
+        "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is constructed without the Artifact tool spread — the allowlist entry would admit it unchecked",
+      );
+    else if (artifactCond !== undefined && envKeySpread && envKeySpread[1] !== artifactCond)
+      miss(
+        "S6d frame-artifacts env key",
+        "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it",
+      );
   }
-  if (!has(/"ToolSearch",\.\.\.\w+\.sessionType===/)) miss("S8 tools tail-guard", "a tool appended after ToolSearch would evade S6");
+  // S8 (widened, Desktop 1.28929.0): pin the WHOLE tools[] tail through its closing bracket, not just the
+  // first spread after "ToolSearch". The old anchor stopped at `...X.sessionType===`, so anything appended
+  // after the SendUserMessage spread was invisible to both S6 and S8 — defeating S8's own stated purpose.
+  // The tail already carries a second conditional spread (`...<cond>?[<alias>]:[]`, a project-session-only
+  // tool) which was pre-existing and therefore not a sync blocker, but was covered by no anchor at all.
+  // Both ends are RESOLVED, not shape-matched: swapping the alias to a different tool, or widening the
+  // condition to another identifier, must fail — a bare shape match admits both silently.
+  {
+    const s8 = bundle.match(
+      /"ToolSearch",\.\.\.([\w$]+)\.sessionType==="agent"\?\["SendUserMessage"\]:\[\],\.\.\.([\w$]+)\?\[([\w$.]+)\]:\[\]\],allowedTools:\["Task"/,
+    );
+    if (!s8) miss("S8 tools tail-guard", "the tools[] tail moved — a tool appended after ToolSearch would evade S6");
+    else {
+      const tailSite = siteOf(s8[0]);
+      // The trailing spread's alias must still resolve to the project-session tool name.
+      const aliasRef = resolveNamespaceRef(s8[3], tailSite, files);
+      if (!aliasRef) miss("S8 tools tail-guard", "the trailing tool-spread alias could not be resolved");
+      else if (!new RegExp(`(?<![\\w$])${aliasRef.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}="Projects"`).test(aliasRef.chunk))
+        miss("S8 tools tail-guard", "the trailing conditional tool is no longer Projects — a new spawn tool to classify");
+      // …and its condition must still be the project-session discriminator, not a widened/always-true one.
+      else if (!new RegExp(`toolModeProjectUuid:${s8[2].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w$])`).test(tailSite))
+        miss(
+          "S8 tools tail-guard",
+          "the trailing tool spread is no longer gated on toolModeProjectUuid — it may now render unconditionally",
+        );
+    }
+  }
   // A3: same member-expression spread widening as S6.
   if (
     !has(
