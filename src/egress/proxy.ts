@@ -131,7 +131,11 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     // Log `allow` only once the upstream socket actually connects, not merely because the
     // host passed the allowlist — otherwise `egress_allowed` false-passes when the connect fails
     // and nothing reached the host. The deny path above is unchanged.
+    // `established` gates the error path below: once the 200 is written the socket is a raw tunnel, so
+    // writing an HTTP status into it would corrupt the stream the client is already reading.
+    let established = false;
     const upstream = net.connect(port, host, () => {
+      established = true;
       log(normalizedHost, "allow", { port });
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       upstream.write(head);
@@ -142,7 +146,29 @@ export function startEgressProxy(opts: ProxyOptions): EgressProxy {
     });
     // covers client close during the connect handshake (before the callback fires); destroy is idempotent
     clientSocket.on("close", () => upstream.destroy());
-    upstream.on("error", () => clientSocket.destroy());
+    // An upstream failure BEFORE the tunnel is established (DNS EAI_AGAIN/ENOTFOUND, TCP reset,
+    // unreachable) used to destroy the client socket with no response and no record anywhere. The client
+    // saw the proxy accept CONNECT and then vanish — curl reports the undiagnosable
+    // `(56) Proxy CONNECT aborted` — and `docker logs` was empty, so an intermittent left no artifact to
+    // investigate. That asymmetry was accidental: the plain-HTTP path a few lines above already answers
+    // 502 on the same class of failure. Answer 502 here too, and emit a structured stderr line so the
+    // event is recoverable from container logs.
+    //
+    // Deliberately NOT an egress-log row. `allow` is written only after a successful connect so a failed
+    // request cannot false-pass `egress_allowed`, and this is a failure; `deny` would be a lie (the host
+    // is allowlisted — nothing was blocked). The stderr line is the diagnostic channel, the egress log
+    // stays a policy-decision record.
+    upstream.on("error", (err: NodeJS.ErrnoException) => {
+      if (!established) {
+        try {
+          if (clientSocket.writable) clientSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        } catch {
+          // the client may already be gone; the destroy below is the only guaranteed cleanup
+        }
+        console.error(JSON.stringify({ type: "upstream_error", host: normalizedHost, port, code: err?.code ?? err?.message ?? "unknown" }));
+      }
+      clientSocket.destroy();
+    });
   });
 
   // Last-resort guards so a single bad socket can never take the proxy down.

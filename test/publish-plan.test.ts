@@ -56,12 +56,33 @@ describe("publish-image.yml publish plan", () => {
     expect(p.push_rtag).toBe("true");
   });
 
-  it("a release tag push keeps its legacy shape and never publishes an r-tag", () => {
-    // Tag pushes must be untouched by the revision scheme: floating `:2` + the `:2-<version>` co-tag.
+  it("a release tag push publishes the version co-tag but does NOT move the floating :2", () => {
+    // The second regression of this exact class. The first was an inverted boolean on the dispatch
+    // path; this one was a deliberate `push_floating=true` on the tag path, which meant every release
+    // silently moved `:2` off the digest pinned in docker/agent-image.json. Nothing re-recorded the
+    // pin, so tag and pin diverged permanently — and `doctor` (checks the pin) disagreed with CI
+    // (pulls the tag) about which image was correct.
+    //
+    // `:2` is a curated pointer: moved only by a deliberate dispatch, in the release that also ships
+    // the updated pin (docs/maintenance.md). Tagging a release must not be a side channel for it.
     const p = runPlan("push", "");
-    expect(p.push_floating).toBe("true");
+    expect(p.push_floating).toBe("false"); // the regression: this read "true"
     expect(p.push_vtag).toBe("true");
     expect(p.push_rtag).toBe("false");
+  });
+
+  it("moving :2 requires an explicit dispatch — no event can move it implicitly", () => {
+    // The property that matters, asserted across every reachable (event, input) combination rather
+    // than per-case: the ONLY way `:2` moves is a workflow_dispatch that explicitly opts out of
+    // immutable_only. If a future edit reintroduces a floating push on any other path, this fails
+    // even if someone also "fixed" the case above to match the new behaviour.
+    const combos: [string, string][] = [
+      ["push", ""],
+      ["workflow_dispatch", "true"],
+      ["workflow_dispatch", "false"],
+    ];
+    const movers = combos.filter(([e, i]) => runPlan(e, i).push_floating === "true");
+    expect(movers).toEqual([["workflow_dispatch", "false"]]);
   });
 
   it("reads the revision from docker/agent-image.json, not from an input", () => {

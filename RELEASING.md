@@ -163,6 +163,15 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       a reader makes when you don't say. This category was added after `lane:` (1.14.0) cleared every
       machine-enumerable guard — schema, `lint`'s valid-key list, the surface snapshot — and still shipped
       with no floor documented anywhere, which cost a consumer a wrong conclusion and a wasted test cycle.
+- [ ] **Agent image: is `docker/agent-image.json` still the image you want consumers on?** Tagging a
+      release publishes a `:2-<version>` co-tag but deliberately does **not** move the floating `:2` —
+      `:2` is a curated pointer, moved only by an explicit `workflow_dispatch` with `immutable_only`
+      unchecked, in the same release that ships the updated pin (see `docs/maintenance.md`). So the
+      default answer here is "yes, unchanged, nothing to do". Act only if you actually intend consumers
+      to get a new image: bump `revision`, dispatch with `immutable_only` to publish `:2-r<N>`,
+      transcribe the `PINNABLE` digests into `docker/agent-image.json`, and move `:2` in this release.
+      Note the recipe is not the whole story — `Dockerfile.agent` installs unpinned apt/pip/npm
+      packages, so an unchanged Dockerfile still yields different bytes on every rebuild.
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
