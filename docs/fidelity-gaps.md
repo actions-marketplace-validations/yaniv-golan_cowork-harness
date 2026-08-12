@@ -88,7 +88,9 @@ list but outside the pre-approved allowed-tools list, so it must go through the 
 permission flow as `AskUserQuestion`.
 
 **Harness behaviour:** neither mechanism is modeled. The harness's mount kinds are connected folders,
-projects, and outputs only — there is no artifact-directory mount, and no `Artifact` tool at any tier.
+projects, uploads, and the three plugin kinds (local, remote, marketplace) — there is no
+artifact-directory mount, and no `Artifact` tool at any tier. (`outputs` is not a mount at all; it is a
+synthetic root the run tree always carries.)
 
 **The residual, stated plainly:** on the VM tiers, production currently mounts artifact directories
 and the harness mounts none; host-loop is unaffected, since production doesn't mount there either.
@@ -96,6 +98,12 @@ This is a deliberate non-modeling decision, not an oversight: the mount branch i
 retiring, and the harness has no way to observe the server flag that selects between the two
 mechanisms. If the flag flips, the mount difference disappears on its own and the gap becomes the
 missing `Artifact` tool instead. Revisit trigger: a real session showing `Artifact` in its tool list.
+
+The two mechanisms are mutually exclusive but not exhaustive — there is a third state. The tool
+additionally requires an **attended** turn, while the mount suppression does not check that, so a
+session with the flag on whose turn is unattended (a scheduled or otherwise non-interactive run) gets
+**neither** the artifact mounts nor the `Artifact` tool. Reading "one or the other" as a guarantee that
+some artifact mechanism is always present would be wrong.
 
 ---
 

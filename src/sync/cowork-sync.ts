@@ -164,6 +164,19 @@ export const PINNED_GATES: Record<string, string> = {
   // host-side judgement layer over tool calls that a scenario's scripted allow cannot represent.
   // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
   "3424551112": "automode-permission-rubric",
+  // Selects which of Cowork's two mutually exclusive artifact mechanisms a session gets. force/on for a
+  // standard account, so production currently bind-mounts one host directory per artifact into the VM
+  // (host-loop never mounts them — see docs/fidelity-gaps.md). The harness models neither mechanism, and
+  // that "currently mounts" fact is the premise of the whole gap write-up — pinned so it stops resting on
+  // a live fcache read that the baseline does not record and `check:versions` cannot see. Name VERIFIED
+  // (not a descriptor): the asar maps it positionally in a `Promise.all` destructure whose result object
+  // is `{…, coworkArtifacts: <the 2940196192 result>, …}`.
+  "2940196192": "coworkArtifacts",
+  // The Chrome/CIC permission handler's session flag — force/on, and NOT the auto-mode rubric gate
+  // (that is 3424551112, above). Pinned alongside it so the pair cannot be confused again: an earlier
+  // pass attributed the rubric to this id purely because the rubric arrays sit near its call site.
+  // Name VERIFIED: the spawn code assigns this gate's result to `session.cicCanUseToolEnabled`.
+  "2051942385": "cicCanUseToolEnabled",
 };
 
 /**

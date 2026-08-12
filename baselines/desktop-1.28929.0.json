@@ -446,6 +446,11 @@
         },
         "note": "coworkWebFetchViaApi=true coworkWebFetchPrompt=true workspaceBashWaitLonger=true sessionsBridgePollBlockMs=30 — web_fetch is host/API-routed (POST /api/organizations/<org>/cowork/web_fetch), NOT container egress; gated by a separate web-fetch hostname allowlist + URL provenance."
       },
+      "cicCanUseToolEnabled:2051942385": {
+        "on": true,
+        "source": "force",
+        "value": true
+      },
       "cliPlugin:2307090146": {
         "on": false,
         "source": "defaultValue",
@@ -466,6 +471,11 @@
         "on": true,
         "source": "defaultValue",
         "value": "## Sensitive personal information\n\nDo not save the following to memory unless the user explicitly asks you to remember it:\n\n- Protected attributes: race, ethnicity, national origin, religion, age, sex, sexual orientation, gender identity, immigration status, disability, serious illness, union membership\n- Government identifiers: Social Security numbers, driver's license numbers, passport numbers, government ID numbers\n- Financial account details: credit card numbers, bank account numbers\n- Health information: medical conditions, diagnoses, lab results, mental health details, therapy or counseling\n- Home or personal mailing addresses (work addresses are fine)\n- Account passwords, secret tokens, or secret keys\n\nIf any of the above appears in conversation context, complete the task but do not persist it to a memory file. If the user explicitly says \"remember my address is X\", saving it is acceptable — they've given consent."
+      },
+      "coworkArtifacts:2940196192": {
+        "on": true,
+        "source": "force",
+        "value": true
       },
       "canSaveSkill:3246569822": {
         "on": true,
@@ -558,9 +568,9 @@
     ],
     "spawnEnvSpreadCount": 31,
     "fcache": {
-      "content16": "8ae36e12f8857433",
-      "embeddedTimestamp": 1786530845855,
-      "featureCount": 250
+      "content16": "341351c3593dc6d8",
+      "embeddedTimestamp": 1786562513613,
+      "featureCount": 253
     }
   },
   "requireFullVmSandbox": null
