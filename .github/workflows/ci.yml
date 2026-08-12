@@ -291,24 +291,40 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
-      - name: Agent base image — pull the published GHCR image the Action pins, else build
-        # Packaged-Action consumers PULL this image; our CI otherwise only ever `docker build`s it, so a
-        # bad publish is invisible until a consumer hits it. Pull the pinned image and retag it to the
-        # local tag the probes use, so the boundary-check below runs against the ACTUAL published image
-        # — exercising the consumer path. Falls back to a local build when the image is unavailable (a
-        # fork without package read, or before the first publish).
+      - name: Agent base image — pull the digest docker/agent-image.json pins, else build
+        # Our CI otherwise only ever `docker build`s this image, so a bad publish is invisible until
+        # someone pulls it. Pull the PINNED digest and retag it to the local tag the probes use, so
+        # boundary-check runs against the same bytes `doctor` validates and the README tells consumers
+        # to pull. Falls back to a local build when the image is unavailable (a fork without package
+        # read, or before the first publish).
         #
-        # NOTE: the pull path is exercised here and HARD-FAILS on the canonical repo — a bad publish
-        # breaks this gate instead of silently rebuilding. Forks (no package read / pre-publish) keep
-        # the local-build fallback with a warning. Written but not yet verified headless: the image
-        # name / arch / GHCR read permission for the CI token still need a real green run to confirm.
+        # The earlier wording here said "the image the Action pins" and pulled the floating `:2` tag.
+        # Both were wrong: `action.yml` pulls no image at all, and `:2` is not what anything pins —
+        # so CI was certifying the last-published build while doctor certified the pin, and neither
+        # said anything about the other.
+        #
+        # NOTE: the pull path HARD-FAILS on the canonical repo — a bad publish, or a pin naming a
+        # digest that was never pushed, breaks this gate instead of silently rebuilding. Forks (no
+        # package read / pre-publish) keep the local-build fallback with a warning. Written but not yet
+        # verified headless: the image name / arch / GHCR read permission for the CI token still need a
+        # real green run to confirm.
         run: |
-          IMG="ghcr.io/${{ github.repository_owner }}/cowork-agent-base:2"
+          # Pull by the DIGEST recorded in docker/agent-image.json, not by the floating `:2` tag.
+          #
+          # Pulling the tag meant CI certified whatever was published last while `doctor` certified the
+          # pin — so a green CI said nothing about the pinned image, and vice versa. Reading the pin
+          # here makes CI, doctor, and the README's consumer instructions all validate the same bytes.
+          DIGEST=$(jq -r '.variants["cowork-agent-base:2"].digest' docker/agent-image.json)
+          IMG="ghcr.io/${{ github.repository_owner }}/cowork-agent-base@${DIGEST}"
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
+            echo "::error::docker/agent-image.json has no digest for cowork-agent-base:2 — the pin is the contract; fix it rather than falling back to the mutable tag."
+            exit 1
+          fi
           if docker pull --platform linux/arm64 "$IMG"; then
             docker tag "$IMG" cowork-agent-base:2
-            echo "pulled and retagged $IMG → cowork-agent-base:2 (Action-pinned image exercised)"
+            echo "pulled and retagged $IMG → cowork-agent-base:2 (the PINNED image is what gets tested)"
           elif [ "$GITHUB_REPOSITORY" = "yaniv-golan/cowork-harness" ]; then
-            echo "::error::GHCR pull of $IMG failed on the canonical repo — a bad publish must fail this gate, not silently rebuild."
+            echo "::error::GHCR pull of $IMG failed on the canonical repo — a bad publish, or a pin pointing at a digest that was never pushed, must fail this gate rather than silently rebuild."
             exit 1
           else
             echo "::warning::GHCR pull of $IMG failed (fork/pre-publish) — building locally as a fallback."

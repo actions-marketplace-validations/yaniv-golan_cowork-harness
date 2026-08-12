@@ -95,9 +95,22 @@ jobs:
               echo "push_floating=true" >> "$GITHUB_OUTPUT"
             fi
           else
+            # Release-tag push: build and publish the `:2-<version>` co-tag, but do NOT repoint the
+            # floating `:2`.
+            #
+            # This used to set push_floating=true, which meant every release tag silently moved `:2`
+            # away from the digest recorded in docker/agent-image.json. Nothing re-recorded the pin
+            # (it is hand-transcribed from a PINNABLE line that tag-push builds never even emit), so
+            # the pin and the tag diverged permanently after the first release — and `doctor`, which
+            # checks the pin, disagreed with CI, which pulls the tag.
+            #
+            # docs/maintenance.md already states the intended contract: move `:2` "in the same release
+            # that ships the updated pin, so the tag, the revision, and the pin agree". `:2` is a
+            # curated pointer, moved deliberately by a workflow_dispatch with immutable_only unchecked
+            # — not a side effect of tagging a release.
             echo "push_rtag=false" >> "$GITHUB_OUTPUT"
             echo "push_vtag=true"  >> "$GITHUB_OUTPUT"
-            echo "push_floating=true" >> "$GITHUB_OUTPUT"
+            echo "push_floating=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Refuse to repoint an existing immutable revision tag
