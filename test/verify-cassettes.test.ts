@@ -301,6 +301,23 @@ describe("scanCassette — whole-surface privacy scan", () => {
     expect(findings.some((f) => f.cls === "email" && /metadata:scenario\.session/.test(f.where))).toBe(true);
   });
 
+  it("a private-registry agent image ref in environment is scanned and flagged", () => {
+    // `environment` was never scanned at ALL before this field existed, and `ref` is a verbatim
+    // COWORK_AGENT_IMAGE value — so an internal registry host would be committed into a public fixture
+    // with `grep`-clean transcript text, the same shape as the inventory leak this repo already had.
+    const c = {
+      scenario: scenario([{ result: "success" }]),
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+      environment: {
+        location: "local",
+        tier: "container",
+        agentImage: { ref: "registry.acme-internal.com/cowork:2", configId: "sha256:" + "a".repeat(64) },
+      },
+    } as unknown as Cassette;
+    const findings = scanCassette(c, []);
+    expect(findings.some((f) => /metadata:environment\.agentImage\.ref/.test(f.where))).toBe(true);
+  });
+
   it("a clean synthetic cassette → no findings", () => {
     const c = {
       scenario: scenario([{ result: "success" }], "run the cap table for Acme"),

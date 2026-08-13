@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { replayCassette, buildEnvironmentProvenance, computeStaleness } from "../src/run/cassette.js";
+import { replayCassette, buildEnvironmentProvenance, computeStaleness, imageProvenanceMismatch } from "../src/run/cassette.js";
 import { readFileSync } from "node:fs";
 
 /** A minimal cassette structure for testing. */
@@ -105,7 +105,9 @@ describe("buildEnvironmentProvenance — recording provenance (pure, offline-tes
     expect(buildEnvironmentProvenance("container", "elf").harnessVersion).toBe(declared);
   });
   it("always marks the recording local, and passes tier/format through", () => {
-    expect(buildEnvironmentProvenance("hostloop", "macho")).toEqual({
+    // toStrictEqual, not toEqual: toEqual ignores keys whose value is `undefined`, so an unconditional
+    // `agentImage: undefined` would slip in unnoticed and this assertion would stop pinning the key set.
+    expect(buildEnvironmentProvenance("hostloop", "macho")).toStrictEqual({
       location: "local",
       tier: "hostloop",
       agentBinaryFormat: "macho",
@@ -116,6 +118,80 @@ describe("buildEnvironmentProvenance — recording provenance (pure, offline-tes
     const e = buildEnvironmentProvenance(undefined, undefined);
     expect(e.location).toBe("local");
     expect(e.harnessVersion).toBe(declared);
+  });
+
+  it("omits agentImage entirely when none was resolved (non-container tiers)", () => {
+    // Not `agentImage: undefined` — the key must be absent, or every protocol-tier cassette grows a
+    // meaningless null field and the schema's "absence is meaningful" contract stops being true.
+    expect("agentImage" in buildEnvironmentProvenance("protocol", "elf")).toBe(false);
+  });
+
+  it("records the ref plus whichever identities exist", () => {
+    const e = buildEnvironmentProvenance("container", "elf", {
+      ref: "cowork-agent-base:2",
+      configId: "sha256:" + "a".repeat(64),
+      registryDigest: "sha256:" + "b".repeat(64),
+    });
+    expect(e.agentImage?.ref).toBe("cowork-agent-base:2");
+    expect(e.agentImage?.registryDigest).toBe("sha256:" + "b".repeat(64));
+  });
+
+  it("records a locally built image by config id alone", () => {
+    // A local build has empty RepoDigests; recording only the ref would make it indistinguishable from
+    // a pulled one, which is exactly the drift Task 6 has to be able to see.
+    const e = buildEnvironmentProvenance("container", "elf", {
+      ref: "cowork-agent-base:2",
+      configId: "sha256:" + "c".repeat(64),
+    });
+    expect(e.agentImage?.registryDigest).toBeUndefined();
+    expect(e.agentImage?.configId).toBe("sha256:" + "c".repeat(64));
+  });
+});
+
+describe("imageProvenanceMismatch — did this replay use the rootfs the recording used?", () => {
+  const A = "sha256:" + "a".repeat(64);
+  const B = "sha256:" + "b".repeat(64);
+
+  it("prefers registryDigest — the only cross-machine-comparable identity", () => {
+    // Machine A recorded a pulled image; machine B pulled the SAME digest but its local config id
+    // differs by construction. Comparing configId first would warn on every cross-machine replay —
+    // i.e. on the exact case this field exists to serve.
+    expect(
+      imageProvenanceMismatch({ ref: "x:2", configId: A, registryDigest: A }, { ref: "x:2", configId: B, registryDigest: A }),
+    ).toBeNull();
+  });
+
+  it("warns when registry digests differ even if the config ids happen to match", () => {
+    expect(
+      imageProvenanceMismatch({ ref: "x:2", configId: A, registryDigest: A }, { ref: "x:2", configId: A, registryDigest: B }),
+    ).toContain("recorded against");
+  });
+
+  it("warns when a pulled recording is replayed against a local build", () => {
+    // registryDigest on one side only IS drift — a local rebuild replaced a pulled image — and it is
+    // invisible to any same-field comparison.
+    expect(imageProvenanceMismatch({ ref: "x:2", registryDigest: A }, { ref: "x:2", configId: B })).toContain("locally built");
+  });
+
+  it("is null when the recording predates the field", () => {
+    expect(imageProvenanceMismatch(undefined, { ref: "x:2", configId: A })).toBeNull();
+  });
+
+  it("is null when the current image cannot be identified at all", () => {
+    // Daemon down / image absent: there is nothing trustworthy to compare, and warning on every such
+    // replay would train the reader to ignore the message.
+    expect(imageProvenanceMismatch({ ref: "x:2", registryDigest: A }, { ref: "x:2" })).toBeNull();
+  });
+
+  it("does not warn merely because the ref changed", () => {
+    // Same content under a different tag is not drift; a ref comparison would false-positive on every
+    // COWORK_AGENT_IMAGE retag.
+    expect(imageProvenanceMismatch({ ref: "x:2", registryDigest: A }, { ref: "y:dev", registryDigest: A })).toBeNull();
+  });
+
+  it("falls back to configId only when neither side has a registry digest", () => {
+    expect(imageProvenanceMismatch({ ref: "x:2", configId: A }, { ref: "x:2", configId: A })).toBeNull();
+    expect(imageProvenanceMismatch({ ref: "x:2", configId: A }, { ref: "x:2", configId: B })).toContain("recorded against");
   });
 });
 

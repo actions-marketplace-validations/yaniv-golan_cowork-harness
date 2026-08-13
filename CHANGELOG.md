@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Cassettes now record the rootfs image they were recorded against**, closing the last gap in the
+  agent-image provenance work. The image decides `missingCapabilityUse`, which `computeVerdict` fails
+  on, so the rootfs is verdict-affecting — yet no cassette field named it, and a recording silently
+  inherited whatever image happened to be on the machine. `environment.agentImage` now carries the
+  resolved `ref` plus whichever identities exist: `configId` (the local config id, present for built
+  **and** pulled images but not comparable across machines) and `registryDigest` (the registry manifest
+  digest, pulled images only, and the only identity comparable across machines).
+
+  The field is stamped only for the tiers whose capabilities actually come from that image —
+  `container` and `hostloop`. `microvm` probes the Lima guest instead, so it records nothing rather
+  than naming an image that had no bearing on the run. Additive: no `cassetteVersion` bump, absent on
+  cassettes recorded before the field existed, and never backfilled — the absence is meaningful.
+
+  `ref` is a verbatim `COWORK_AGENT_IMAGE` value, so a private registry ref (`registry.acme.corp/…`)
+  would otherwise be committed into a public fixture with `grep`-clean transcript text. It is scanned
+  by `verify-cassettes` and rewritten by redaction like every other user-controlled string; the digests
+  are content hashes and are deliberately left intact.
+
+- **`replay` warns when the rootfs image differs from the recording.** It compares `registryDigest`
+  first — the only identity stable across machines, which is the case the field exists to serve — and
+  falls back to the local config id only when neither side has a registry digest. A recording made
+  against a pulled image and replayed against a local rebuild is reported as drift rather than passing
+  silently. Advisory only: a legitimately re-pulled image is the common case, so this names the
+  difference instead of failing the replay.
+
+  The current image is inspected at most once per `replay` invocation, and only when a cassette
+  actually recorded one — so replay stays usable with no container runtime present, and the
+  `verify-cassettes` privacy scan never shells out.
+
 ## [1.22.0] — 2026-08-12
 
 ### Added

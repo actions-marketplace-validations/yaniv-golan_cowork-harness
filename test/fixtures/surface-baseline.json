@@ -86,6 +86,19 @@
       ".environment.agentBinaryFormat": {
         "type": "string"
       },
+      ".environment.agentImage": {
+        "type": "object"
+      },
+      ".environment.agentImage.configId": {
+        "type": "string"
+      },
+      ".environment.agentImage.ref": {
+        "type": "string",
+        "required": true
+      },
+      ".environment.agentImage.registryDigest": {
+        "type": "string"
+      },
       ".environment.harnessVersion": {
         "type": "string"
       },
@@ -354,6 +367,19 @@
         "type": "object"
       },
       ".environment.agentBinaryFormat": {
+        "type": "string"
+      },
+      ".environment.agentImage": {
+        "type": "object"
+      },
+      ".environment.agentImage.configId": {
+        "type": "string"
+      },
+      ".environment.agentImage.ref": {
+        "type": "string",
+        "required": true
+      },
+      ".environment.agentImage.registryDigest": {
         "type": "string"
       },
       ".environment.harnessVersion": {
