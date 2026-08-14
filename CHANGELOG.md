@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-08-14
+
 ### Added
 
 - **Platform baseline for Claude Desktop 1.30096.1 (bundled agent ELF `2.1.229`).** The agent ELF's
