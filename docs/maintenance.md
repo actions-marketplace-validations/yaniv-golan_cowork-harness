@@ -94,7 +94,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.227   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.229   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"
@@ -242,7 +242,7 @@ shapes with different promises:
 
 | Tag | Promise | Moved by |
 |---|---|---|
-| `:2` | floating — whatever the newest publish produced | release tag pushes (and a manual run with `immutable_only` unchecked) |
+| `:2` | floating — a **curated** pointer, moved deliberately so it can agree with the recorded pin | a manual run with `immutable_only` **unchecked**. Explicitly *not* a release tag push |
 | `:2-r<N>` | **immutable** — never repointed once published | a manual run, once per `revision` bump |
 | `:2-<version>` | legacy co-tag, keyed to the harness version that shipped it | release tag pushes |
 

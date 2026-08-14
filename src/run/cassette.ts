@@ -52,6 +52,8 @@ import {
   type DecisionRequest,
 } from "../agent/session.js";
 import { HOSTLOOP_PATH_GATE_ID } from "../runtime/hostloop.js";
+import { resolveAgentImageProvenance, type AgentImageProvenance } from "../runtime/image-capabilities.js";
+import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
@@ -122,8 +124,45 @@ export function recordErrorText(e: unknown): string {
 export function buildEnvironmentProvenance(
   tier: string | undefined,
   agentBinaryFormat: string | undefined,
-): { location: "local"; tier?: string; agentBinaryFormat?: string; harnessVersion: string } {
-  return { location: "local", tier, agentBinaryFormat, harnessVersion: pkgVersion() };
+  agentImage?: AgentImageProvenance,
+): {
+  location: "local";
+  tier?: string;
+  agentBinaryFormat?: string;
+  harnessVersion: string;
+  agentImage?: AgentImageProvenance;
+} {
+  // Spread rather than `agentImage,`: a non-container tier ran no image, and an explicit
+  // `agentImage: undefined` would both dirty every protocol cassette and break the schema's
+  // "absence is meaningful" contract, which readers rely on to tell "no image" from "field predates
+  // this harness". Pinned by a `"agentImage" in …` assertion, not a toEqual.
+  return { location: "local", tier, agentBinaryFormat, harnessVersion: pkgVersion(), ...(agentImage ? { agentImage } : {}) };
+}
+
+/** Compare a cassette's recorded image identity against the one about to be replayed. Returns a warning
+ *  string, or null when there is nothing trustworthy to compare.
+ *
+ *  Compares `registryDigest` FIRST because it is the only identity stable across machines, which is the
+ *  whole motivating case (record on A, replay on B). `configId` is a fallback used only when NEITHER
+ *  side has a registry digest: two local builds of the same recipe differ by construction, so a
+ *  configId-first comparison would warn on every cross-machine replay. That fallback is deliberately
+ *  conservative — a local rebuild genuinely may not match the recording.
+ *
+ *  Advisory only, never a replay failure: a legitimately re-pulled image is the common case, and a hard
+ *  failure would make the field a liability rather than information. */
+export function imageProvenanceMismatch(recorded: AgentImageProvenance | undefined, current: AgentImageProvenance): string | null {
+  if (!recorded) return null; // recorded before the field existed — absence is meaningful, not drift
+  const note = (what: string) =>
+    `[image] this cassette was recorded against ${recorded.ref} (${what}) but the current ${current.ref} differs — ` +
+    `capability probes, and any verdict depending on missingCapabilityUse, may differ from the recording.`;
+
+  if (recorded.registryDigest && current.registryDigest)
+    return recorded.registryDigest === current.registryDigest ? null : note(recorded.registryDigest.slice(0, 19) + "…");
+  // Pulled on one side, locally built on the other: that IS drift, and no same-field comparison sees it.
+  if (recorded.registryDigest && current.configId) return note("a pulled image; the current one is locally built");
+  if (recorded.configId && current.configId)
+    return recorded.configId === current.configId ? null : note(recorded.configId.slice(0, 19) + "…");
+  return null; // current image unidentifiable (daemon down) — nothing to compare
 }
 
 /** Write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
@@ -258,7 +297,13 @@ export interface Cassette {
   // declared tool surface) can shift recorded behavior at an UNCHANGED baseline, which no staleness class
   // keys off. Additive, looseObject → no CASSETTE_VERSION bump. Readers that don't know it ignore it, and
   // its ABSENCE positively means "recorded before 1.11.0" (never backfill it).
-  environment?: { location: "local" | "cloud"; tier?: string; agentBinaryFormat?: string; harnessVersion?: string };
+  environment?: {
+    location: "local" | "cloud";
+    tier?: string;
+    agentBinaryFormat?: string;
+    harnessVersion?: string;
+    agentImage?: AgentImageProvenance;
+  };
 }
 
 /** Current cassette format version. Readers tolerate a FUTURE version (warn) but REFUSE anything below
@@ -1106,6 +1151,13 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
   findings.push(...scanText(cassette.scenario.name ?? "", "metadata:scenario.name", allow, FULL));
   findings.push(...scanText(cassette.scenario.session ?? "", "metadata:scenario.session", allow, FULL));
   if (cassette.scenarioSource) findings.push(...scanText(cassette.scenarioSource, "metadata:scenarioSource", allow, FULL));
+  // `environment.agentImage.ref` is a VERBATIM COWORK_AGENT_IMAGE value, so a private-registry ref
+  // (`ghcr.io/acme-internal/agent:2`, `registry.customer.corp/cowork:2`) is committed straight into a
+  // public fixture. `environment` had never been scanned at all — the same shape as the inventory leak
+  // this repo already shipped: a name field is invisible to a net aimed at transcript text.
+  // The digests are content hashes, not user-controlled, so only `ref` is scanned.
+  if (cassette.environment?.agentImage?.ref)
+    findings.push(...scanText(cassette.environment.agentImage.ref, "metadata:environment.agentImage.ref", allow, FULL));
   return findings;
 }
 
@@ -1887,6 +1939,16 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
           fileSigs: cassette.fingerprint.fileSigs?.map(([p, h]) => [redactText(p, policy), h] as [string, string]),
         }
       : undefined,
+    // Mirror of the scan above: `ref` is user-controlled, so a policy that rewrites a private registry
+    // host must rewrite it here too, or `scanCassette` keeps finding what `redactCassette` cannot fix.
+    // The digests are content hashes with no PII and are deliberately left intact — rewriting them would
+    // destroy the only identity Task 6's comparison can use.
+    environment: cassette.environment?.agentImage
+      ? {
+          ...cassette.environment,
+          agentImage: { ...cassette.environment.agentImage, ref: redactText(cassette.environment.agentImage.ref, policy) },
+        }
+      : cassette.environment,
   };
 }
 
@@ -3400,7 +3462,18 @@ async function recordScenarioObject(
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
     folderPrefixMap: buildRecordTimeFolderPrefixMap(scenario, recordRoots),
     // Recording environment provenance — see buildEnvironmentProvenance (pure, offline-testable).
-    environment: buildEnvironmentProvenance(result.effectiveFidelity, agentBinaryFormat),
+    // The image is stamped ONLY for the tiers whose capabilities actually come from it: execute.ts
+    // routes `container`/`hostloop` to `probeImageOmitted` (the agent image) and `microvm` to
+    // `probeMicrovmOmitted` (the Lima guest), so those two are exactly the tiers where the image
+    // decides missingCapabilityUse and therefore the verdict. Stamping it elsewhere would record an
+    // image that had no bearing on the run. Keep this predicate in step with that one.
+    environment: buildEnvironmentProvenance(
+      result.effectiveFidelity,
+      agentBinaryFormat,
+      result.effectiveFidelity === "container" || result.effectiveFidelity === "hostloop"
+        ? resolveAgentImageProvenance(resolveContainerRuntime(), resolveAgentImage())
+        : undefined,
+    ),
   };
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
@@ -4129,6 +4202,15 @@ export async function cmdReplay(args: string[]) {
   }
   const results: RunResult[] = [];
   let worst = 0;
+  // Rootfs-drift check, resolved AT MOST ONCE per `replay` invocation and ONLY if some cassette actually
+  // recorded an image. Deliberately hooked here and not inside `replayCassette`: that function is also
+  // driven per-cassette by `verify-cassettes` batches and twice per record by the redaction self-check,
+  // so an inspect there would shell out during a privacy scan. Cassettes with no recorded image (protocol
+  // and microvm tiers, and everything recorded before the field existed) never reach the spawn at all,
+  // which is what keeps the token-free replay gates working with no container runtime present.
+  let currentImage: AgentImageProvenance | undefined;
+  const currentImageOnce = (): AgentImageProvenance =>
+    (currentImage ??= resolveAgentImageProvenance(resolveContainerRuntime(), resolveAgentImage()));
   // WS-C: collect staleness notes across the batch instead of printing the same constant string once per
   // cassette. Keyed by the note's `kind:` prefix; the tail after the prefix is identical per kind, so one
   // exemplar + a count is strictly more informative than N repetitions.
@@ -4278,6 +4360,14 @@ export async function cmdReplay(args: string[]) {
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
       worst = Math.max(worst, 2);
       continue;
+    }
+    // Advisory rootfs-drift note. The image decides missingCapabilityUse, which computeVerdict fails on,
+    // so replaying against a different rootfs than the recording can move the verdict with nothing in the
+    // cassette having changed. Never fails the replay — a legitimately re-pulled image is the common case.
+    const recordedImage = rc.cassette.environment?.agentImage;
+    if (recordedImage) {
+      const drift = imageProvenanceMismatch(recordedImage, currentImageOnce());
+      if (drift) warn(`::warning:: [replay] ${f}: ${drift}\n`);
     }
     // the replay lane evaluates assertions + result only; one verdict source for footer AND exit.
     if (!json) renderFooter(result, plan, { renderer, lane: "replay" });

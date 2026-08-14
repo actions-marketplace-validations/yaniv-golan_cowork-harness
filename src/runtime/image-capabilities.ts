@@ -187,6 +187,54 @@ function imageIdentity(runtime: string, image: string): ImageIdentity {
   return { key: image, cacheable: false };
 }
 
+/** The identity of the rootfs image a run used, for the cassette's provenance block.
+ *
+ *  TWO IDENTITIES, deliberately both recorded, because neither alone is sufficient:
+ *  - `configId` exists for BUILT and PULLED images but is NOT comparable across machines (build
+ *    metadata differs), so it cannot answer "did this replay use the same image as the recording?"
+ *  - `registryDigest` exists ONLY for a pulled image but IS comparable across machines, which is the
+ *    motivating case (record on A, replay on B).
+ *  Conflating them is the most likely way to make this feature silently inert — see
+ *  `imageProvenanceMismatch` in cassette.ts, which compares `registryDigest` first for that reason. */
+export interface AgentImageProvenance {
+  /** The ref the harness ran, exactly as resolved (may be a `COWORK_AGENT_IMAGE` override). */
+  ref: string;
+  /** Content-addressed LOCAL config id — built and pulled images alike, NOT cross-machine comparable. */
+  configId?: string;
+  /** Registry manifest digest — pulled images only; the only cross-machine-comparable identity. */
+  registryDigest?: string;
+}
+
+/** Best-effort image provenance for the cassette. Never throws and never blocks: an unreachable daemon
+ *  yields `{ ref }` alone, which is honest ("we ran this ref, we could not identify it") rather than a
+ *  fabricated identity that a later comparison would trust. */
+export function resolveAgentImageProvenance(runtime: string, image: string): AgentImageProvenance {
+  const out: AgentImageProvenance = { ref: image };
+  const r = spawnSync(runtime, ["image", "inspect", "-f", "{{.Id}}\t{{json .RepoDigests}}", image], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  if (r.error || r.status !== 0 || typeof r.stdout !== "string") return out;
+  const [id, digestsJson] = r.stdout.trim().split("\t");
+  // podman prints a BARE 64-hex id with no `sha256:` prefix; requiring the prefix would make this
+  // silently absent under a supported runtime. `imageIdentity` above is prefix-agnostic for the same
+  // reason — do not regress that.
+  if (id) {
+    const bare = id.startsWith("sha256:") ? id.slice(7) : id;
+    if (/^[0-9a-f]{64}$/.test(bare)) out.configId = `sha256:${bare}`;
+  }
+  try {
+    const digests: unknown = JSON.parse(digestsJson ?? "[]");
+    if (Array.isArray(digests)) {
+      const m = digests.find((d): d is string => typeof d === "string" && d.includes("@sha256:"));
+      if (m) out.registryDigest = m.split("@")[1];
+    }
+  } catch {
+    /* no parseable registry digest → treat as locally built; ref + configId still identify it */
+  }
+  return out;
+}
+
 /** Interpreters whose first script-file argument we follow into the workspace for a deeper signature scan. */
 const SCRIPT_INTERPRETERS = /(?:^|[;&|]|\s)(?:python3?|node|ruby|bash|sh)\s+/;
 /** A single shell segment split boundary. */

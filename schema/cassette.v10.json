@@ -287,6 +287,24 @@
         "harnessVersion": {
           "type": "string",
           "description": "Version of the cowork-harness CLI that RECORDED this cassette. Additive (no cassetteVersion bump); absent on cassettes recorded before 1.11.0, and that absence is meaningful \u2014 never backfilled."
+        },
+        "agentImage": {
+          "type": "object",
+          "description": "Identity of the rootfs image resolving under the run's image ref AT CASSETTE-WRITE TIME. Stamped only for tiers whose capabilities come from the agent image (container, hostloop); microvm probes the Lima guest instead, so the field is absent there. `ref` is the resolved image ref (a verbatim COWORK_AGENT_IMAGE value, so it is scanned and redactable); `configId` is the content-addressed local config id (present for built AND pulled images, NOT comparable across machines); `registryDigest` is the registry manifest digest (pulled images only, and the only cross-machine-comparable identity). Because this is a re-inspection at write time rather than the identity captured during the run, a rebuild or a changed COWORK_AGENT_IMAGE between run and record would record a different image than the one that ran. Additive \u2014 no cassetteVersion bump; absent on cassettes recorded before this field existed, and that absence is meaningful \u2014 never backfilled.",
+          "required": ["ref"],
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "configId": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "registryDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
         }
       }
     }

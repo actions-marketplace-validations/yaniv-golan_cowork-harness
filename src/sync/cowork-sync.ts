@@ -164,6 +164,19 @@ export const PINNED_GATES: Record<string, string> = {
   // host-side judgement layer over tool calls that a scenario's scripted allow cannot represent.
   // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
   "3424551112": "automode-permission-rubric",
+  // Selects which of Cowork's two mutually exclusive artifact mechanisms a session gets. force/on for a
+  // standard account, so production currently bind-mounts one host directory per artifact into the VM
+  // (host-loop never mounts them — see docs/fidelity-gaps.md). The harness models neither mechanism, and
+  // that "currently mounts" fact is the premise of the whole gap write-up — pinned so it stops resting on
+  // a live fcache read that the baseline does not record and `check:versions` cannot see. Name VERIFIED
+  // (not a descriptor): the asar maps it positionally in a `Promise.all` destructure whose result object
+  // is `{…, coworkArtifacts: <the 2940196192 result>, …}`.
+  "2940196192": "coworkArtifacts",
+  // The Chrome/CIC permission handler's session flag — force/on, and NOT the auto-mode rubric gate
+  // (that is 3424551112, above). Pinned alongside it so the pair cannot be confused again: an earlier
+  // pass attributed the rubric to this id purely because the rubric arrays sit near its call site.
+  // Name VERIFIED: the spawn code assigns this gate's result to `session.cicCanUseToolEnabled`.
+  "2051942385": "cicCanUseToolEnabled",
 };
 
 /**
@@ -642,6 +655,121 @@ export function resolveNamespaceRef(ref: string, siteChunk: string, files?: Map<
   return local ? { chunk: siteChunk, local } : null;
 }
 
+/** Return the `{...}` body that follows `header` in `text`, brace-balanced, or null.
+ *
+ *  Exists because a WINDOWED match ("is the literal within N chars of the function header") is a guard
+ *  that cannot fail: around the real HIPAA reader, `coworkHipaaRestricted` occurs 8x within +/-600 chars
+ *  and several of those neighbours are themselves exported, so a window admits pointing the trailing
+ *  conjunct at the raw gate reader (restriction removed) while still "matching". Scanning the actual
+ *  body is what makes the assertion mean what it says.
+ *
+ *  Deliberately brace-only: the bodies this is used on are minified single-statement readers with no
+ *  string/regex literal containing an unbalanced brace. It is NOT a general JS scanner. */
+export function braceBodyOf(text: string, header: string): string | null {
+  const at = text.indexOf(header);
+  if (at < 0) return null;
+  const open = text.indexOf("{", at + header.length - 1);
+  if (open < 0) return null;
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return text.slice(open + 1, i);
+    }
+  }
+  return null;
+}
+
+/** The canUseTool install, decomposed: the saved-original identifier and the chain's TOP-LEVEL operands.
+ *
+ *  Why a scanner and not a regex. The previous anchor was
+ *  `canUseTool=async\(…\)=>X\(…\)\?\?Y\(…\)\?\?Z\(` — a PREFIX match with no terminator, so it accepted
+ *  any chain that merely STARTED with three calls. Executed against Desktop 1.30096.1's real four-link
+ *  chain it passed when the `await` was removed and failed only because of the `await`; i.e. the block
+ *  that surfaced this release was luck, and a synchronous inserted link would have been absorbed silently.
+ *
+ *  Splitting on top-level `??` is not regex-expressible here: the assignment ends at a paren that must be
+ *  balanced, and `??` genuinely occurs inside a template interpolation in the real chain's own log line
+ *  (`…reason: ${r??`none`}`) — normalizeBundleQuotes deliberately passes interpolated templates through
+ *  unchanged, so that `??` reaches this code.
+ *
+ *  Handles nesting of ()[]{} , '' , "" and backtick templates including `${}` recursion. It does NOT
+ *  track regex literals: the chain body is a sequence of calls, and a body that ever contains one would
+ *  mis-split into operands that fail the assertions below — loudly, never silently. */
+export function extractCanUseToolChain(text: string): { orig: string; operands: string[] } | null {
+  // `\1` binds the guard to the SAVED ORIGINAL: `let K=e.canUseTool;K&&(e.canUseTool=async(…)=>`.
+  // Without the backreference, `let K=e.canUseTool;zz&&(…)` reads as guarded while being unconditional.
+  const m = text.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>/);
+  if (!m || m.index === undefined) return null;
+  const start = m.index + m[0].length;
+
+  let depth = 1; // we are inside the `(` opened by `\1&&(`
+  const ops: string[] = [];
+  let opStart = start;
+  let i = start;
+  const pushOp = (end: number) => ops.push(text.slice(opStart, end).trim());
+
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const q = c;
+      i++;
+      while (i < text.length && text[i] !== q) i += text[i] === "\\" ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (c === "`") {
+      // Template: skip to the unescaped closing backtick, recursing through `${ … }` in code mode.
+      i++;
+      let tdepth = 0;
+      while (i < text.length) {
+        if (text[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (tdepth === 0 && text[i] === "`") break;
+        if (text[i] === "$" && text[i + 1] === "{") {
+          tdepth++;
+          i += 2;
+          continue;
+        }
+        if (tdepth > 0 && text[i] === "}") {
+          tdepth--;
+          i++;
+          continue;
+        }
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) {
+        pushOp(i);
+        return { orig: m[1], operands: ops };
+      } // the `&&(` closed: chain done
+      i++;
+      continue;
+    }
+    if (depth === 1 && c === "?" && text[i + 1] === "?") {
+      pushOp(i);
+      i += 2;
+      opStart = i;
+      continue;
+    }
+    i++;
+  }
+  return null; // unbalanced — fail loud rather than guess
+}
+
 /** Extract domains + fingerprint + spawn.env + model-effort-config from the asar main bundle without
  *  keeping it unpacked. */
 function extractFromAsar(
@@ -1027,16 +1155,83 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     "the sessionType===SESSION_TYPE_CHAT comparison is gone",
   );
   inHook(/=[\w$]+\?\[\.\.\.[\w$]+,\.\.\.[\w$]+\]:\[/, "root topology ternary", "the chat/task st root-assembly ternary is gone");
-  inHook(
-    /(?:const|let|var) [\w$]+=[\w$]+\.canUseTool;[\w$]+&&\([\w$]+\.canUseTool=async\(/,
-    "conditional canUseTool install",
-    "the Se&&(e.canUseTool=…) conditional install is gone",
-  );
-  inHook(
-    /canUseTool=async\([^)]*\)=>[\w$]+\([^)]*\)\?\?[\w$]+\([^)]*\)\?\?[\w$]+\(/,
-    "canUseTool ?? chain",
-    "the xe ?? Qt ?? original ordering is gone",
-  );
+  // B17 (Desktop 1.30096.1): the chain gained a FOURTH, awaited link — an auto-memory ALLOW carve-out
+  // that rewrites updatedInput and sits BEFORE the outside-roots deny. The old two anchors here were a
+  // bare shape test and a PREFIX match; see extractCanUseToolChain for why that combination could absorb
+  // an inserted synchronous link in silence. Everything below asserts the chain END-TO-END.
+  const chain = extractCanUseToolChain(consuming);
+  if (!chain) {
+    miss(
+      "conditional canUseTool install",
+      "the `let O=e.canUseTool;O&&(e.canUseTool=async…)` install (guarded by the SAVED original) is gone",
+    );
+  } else {
+    const { orig, operands } = chain;
+    const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
+    const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
+
+    // (1) TERMINAL: must be exactly a call to the saved original, nothing wrapping it. Anchored `$` so
+    //     `(K(e,t,n)??{behavior:"allow"})` — a blanket allow on fall-through — cannot pass as "calls it".
+    const last = operands[operands.length - 1];
+    if (!new RegExp(`^(?:await\\s+)?${orig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\([^)]*\\)$`).test(last))
+      miss(
+        "canUseTool chain terminal",
+        `the chain no longer ends in a bare call to the saved original (${orig}) — fall-through may be rewritten`,
+      );
+
+    // (2) LINK COUNT: tolerate the 3-link (<=1.28929.0) and 4-link (1.30096.1) shapes so an older install
+    //     still syncs; a FIFTH link is a new decision point that must be classified, never absorbed.
+    if (operands.length < 3 || operands.length > 4)
+      miss(
+        "canUseTool chain shape",
+        `the chain has ${operands.length} links (expected 3 or 4) — a new link changes permission semantics and must be classified`,
+      );
+
+    // (3) AWAIT ON ASYNC. The single highest-value rule here. An async callee returns a Promise, which is
+    //     never nullish, so an un-awaited link short-circuits `??` and silently disables EVERY later link
+    //     INCLUDING the original callback. Executed: `Ke()??Xe()??qe()??K()` with Xe async resolves to
+    //     undefined instead of qe's deny. Dropping one `await` is therefore a full permission bypass.
+    for (const op of operands) {
+      const fn = calleeOf(op);
+      if (!fn) continue;
+      if (new RegExp(`async function ${fn}\\(`).test(consuming) && !/^await\s/.test(op))
+        miss(
+          "canUseTool chain await",
+          `link \`${fn}\` is an async function but is not awaited — its Promise is never nullish, so every later link (and the original callback) is bypassed`,
+        );
+    }
+
+    // (4) ORDERING: the /sessions VM-path deny must precede any link that can return an allow. Production
+    //     put the auto-memory ALLOW ahead of the outside-roots deny deliberately; moving it ahead of the
+    //     VM-path deny instead would let a VM path through. Nothing else here would notice a reorder.
+    const idxOf = (pred: (b: string) => boolean) =>
+      operands.findIndex((op) => {
+        const fn = calleeOf(op);
+        const b = fn ? bodyOf(fn) : null;
+        return !!b && pred(b);
+      });
+    const vmDenyAt = idxOf((b) => /is a VM path/.test(b));
+    const allowAt = idxOf((b) => /behavior:"allow"/.test(b));
+    if (vmDenyAt < 0)
+      miss(
+        "canUseTool chain vm-deny",
+        "no link in the chain resolves to the /sessions VM-path deny — it may have been dropped from the chain",
+      );
+    else if (allowAt >= 0 && allowAt < vmDenyAt)
+      miss(
+        "canUseTool chain order",
+        "a link that can return {behavior:'allow'} precedes the /sessions VM-path deny — a VM path could be allowed",
+      );
+
+    // (5) Every non-terminal callee must RESOLVE to a definition in this chunk. A link swapped for an
+    //     unresolvable one keeps the count and the terminal intact, so without this D5 passes.
+    for (const op of operands.slice(0, -1)) {
+      const fn = calleeOf(op);
+      if (!fn)
+        miss("canUseTool chain operand", `a chain link is not a plain call (\`${op.slice(0, 40)}\`) — classify it before admitting it`);
+      else if (!bodyOf(fn)) miss("canUseTool chain operand", `chain link \`${fn}\` has no resolvable definition in the hook chunk`);
+    }
+  }
 
   // qt-before-containment ORDER + removed-exemption ABSENCE: inside the hook body slice, the category
   // guard's function must be referenced BEFORE any containment-helper call, and NO containment call may
@@ -1055,8 +1250,39 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     const qtCallAt = hookSlice.indexOf(`${qtDef[1]}(`);
     if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
     else {
-      const containAt = hookSlice.search(/\.isPathContainedInFolders\(|isContained\(/);
-      if (containAt >= 0 && containAt < qtCallAt)
+      // B18: this searched for `.isPathContainedInFolders(` / `isContained(`. Counted across BOTH the
+      // 1.28929.0 and 1.30096.1 asars, those tokens occur ZERO times — production's containment helper is
+      // a MANGLED namespace member (`t.Po(`). So `containAt` was permanently -1, the `>= 0` guard never
+      // entered, and this early-allow detector had never fired and could not fire. It stayed green only
+      // because the fixture hard-coded a readable name that exists in no real asar.
+      //
+      // Identify the helper by SHAPE instead of by name: resolve each `<ns>.<member>(` called in the hook
+      // slice and keep the ones whose definition is a realpath+relative containment test. Name-independent,
+      // so it survives the per-build minifier rotation that made the old anchor unfalsifiable.
+      const isContainmentBody = (b: string) => /realpath/i.test(b) && /relative\(/.test(b) && /"\.\."|`\.\.`|\.\./.test(b);
+      const resolveRef = (ref: string) => {
+        const r = resolveNamespaceRef(ref, consuming, files);
+        if (r) return r;
+        const prop = ref.slice(ref.lastIndexOf(".") + 1);
+        const local = defining ? exportLocalOf(defining, prop) : null;
+        return local && defining ? { chunk: defining, local } : null;
+      };
+      let containAt = -1;
+      for (const m of hookSlice.matchAll(/(?<![\w$])([\w$]+\.[\w$]+)\(/g)) {
+        const r = resolveRef(m[1]);
+        if (!r) continue;
+        const b = braceBodyOf(r.chunk, `async function ${r.local}(`) ?? braceBodyOf(r.chunk, `function ${r.local}(`);
+        if (b && isContainmentBody(b)) {
+          containAt = m.index!;
+          break;
+        }
+      }
+      if (containAt < 0)
+        miss(
+          "containment helper",
+          "no call in the hook body resolves to a realpath/relative containment helper — the early-allow ordering check would silently skip (this is how it failed open before)",
+        );
+      else if (containAt < qtCallAt)
         miss("qt-before-containment order", "a containment call precedes the category guard — an early-allow/blanket-exemption shape");
     }
   }
@@ -2027,8 +2253,14 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
       else {
         // Whole-expression shape: (<sess> ? <built>?.builtTools===void 0 ? <F>(<args>) :
         //   <sess>.frameArtifactsTurnEnabled ?? !1 : !1) && !<hipaa>.r()
+        // B17 (Desktop 1.30096.1): the trailing conjunct's MEMBER NAME was hard-coded as `\.r\(\)`. Only
+        // the namespace was wildcarded, so the pure minifier rename `A.r()` -> `t.hu()` hard-blocked a
+        // predicate that is byte-for-byte equivalent (verified conjunct-by-conjunct). Minified member
+        // names rotate every build exactly like literals do — capture the callee and RESOLVE it instead.
+        // The expression stays anchored `^...$`: that is what makes R1 (`||!0` appended) and R3 (conjunct
+        // replaced by a literal) fire, and both must keep firing after this change.
         const whole = def[1].match(
-          /^\(([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+)\(([^)]*)\):\1\.frameArtifactsTurnEnabled\?\?!1:!1\)&&![\w$]+\.r\(\)$/,
+          /^\(([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+)\(([^)]*)\):\1\.frameArtifactsTurnEnabled\?\?!1:!1\)&&!([\w$]+(?:\.[\w$]+)?)\(\)$/,
         );
         if (!whole)
           miss(
@@ -2055,6 +2287,41 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
               "S6c Artifact gate",
               "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isHostLoop before admitting the spread",
             );
+          // S6e (B17): the trailing conjunct must still be the HIPAA-restriction reader. Resolving it is
+          // what the old hard-coded `.r()` only pretended to do — that regex accepted ANY single-letter
+          // member, so re-pointing the conjunct at a different export would have passed silently.
+          //
+          // TWO hops, because the reader does not itself name the gate:
+          //     function GL(){return WL()==="restricted"}                 <- hop 1 (the resolved local)
+          //     function WL(){...RL("coworkHipaaRestricted")?...}         <- hop 2 (names the gate)
+          // Hop 1 pins the ==="restricted" COMPARISON, which no proximity check can do; hop 2 reads a
+          // brace-scanned body, never a window (see braceBodyOf for why a window cannot fail).
+          // Resolution failure is a MISS, never a skip: failing open here is exactly how a guard that
+          // cannot fail gets shipped.
+          const hipaa = resolveNamespaceRef(whole[4], toolsSite, files);
+          if (!hipaa)
+            miss(
+              "S6c Artifact gate",
+              `the trailing HIPAA conjunct (${whole[4]}) could not be resolved to its definition — classify it before admitting the spread`,
+            );
+          else {
+            const h1 = hipaa.chunk.match(
+              new RegExp(`function ${hipaa.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\(\\)\\{return ([\\w$]+)\\(\\)==="restricted"\\}`),
+            );
+            if (!h1)
+              miss(
+                "S6c Artifact gate",
+                'the trailing conjunct no longer resolves to a `<f>()==="restricted"` reader — Artifact may no longer be HIPAA-restricted',
+              );
+            else {
+              const body = braceBodyOf(hipaa.chunk, `function ${h1[1]}(`);
+              if (!body || !body.includes("coworkHipaaRestricted"))
+                miss(
+                  "S6c Artifact gate",
+                  "the restriction reader no longer consults coworkHipaaRestricted — the HIPAA conjunct may be inert",
+                );
+            }
+          }
         }
       }
     }
