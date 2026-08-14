@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`check:versions` now guards DESIGN.md's live-verification scope note (invariant 11).** That note is
+  the repo's disclosure of how much of the *current* baseline has actually been verified live, and every
+  figure in it is derivable from `baselines/desktop-*.json` — yet it sat in unguarded prose and had
+  drifted twice, the baseline list having been extended without recounting. Understating how much is
+  unverified is the doc error least worth shipping, so it is now checked: the listed baselines must run
+  contiguously from wherever the list starts through the newest baseline, both counts must match the list
+  and the real `agentVersion` transitions, and the named agent must be the newest baseline's. The list's
+  *start* is deliberately not derived — the note omits baselines covered by the live pass itself, and
+  encoding that rule would only relocate the drift. A missing or unrecognisable note is an error, never a
+  skip.
+
 ### Fixed
 
 - **Baseline `desktop-1.30096.1` (Claude Desktop 1.30096.1, agent 2.1.229).** `sync` refused to write it

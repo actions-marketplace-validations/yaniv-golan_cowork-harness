@@ -41,6 +41,12 @@
 //       with the floor and skillBaseline invariants above already enforce. This prose was previously
 //       an UNGUARDED version surface: nothing stopped it drifting independently of the machine-checked
 //       tracks-harness/floor metadata line right above it.
+//   11. DESIGN.md's "Scope of that claim" note — the disclosure of how much of the CURRENT baseline is
+//       actually live-verified — agrees with baselines/desktop-*.json: the baseline list runs
+//       contiguously from where it starts through the newest baseline, the two counts match the list and
+//       the real agentVersion transitions, and the named agent is the max baseline's. Like 9 this claims
+//       the PRESENT ("N baselines have shipped since"), so the dated-note exemption does not cover it.
+//       It had already drifted twice unnoticed — see `checkDesignScopeNote`.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -56,6 +62,130 @@ function cmp(a: string, b: string): number {
   const pb = b.split(".").map(Number);
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
   return 0;
+}
+
+/** Invariant 11 — DESIGN.md's "Scope of that claim" note, verified against the baselines.
+ *
+ *  That note is the repo's honest disclosure of how much of the CURRENT baseline is actually
+ *  live-verified, and every figure in it is machine-derivable from baselines/desktop-*.json. It sits
+ *  outside invariant 9 (which pins only the present-tense current-state sentence) and outside
+ *  invariant 7's dated-note exemption, because unlike a dated note it makes a claim about the PRESENT
+ *  — "N baselines have shipped since [the last live pass]" — which goes stale on its own every release.
+ *
+ *  It has silently drifted twice: the list was extended without recounting, leaving "four of which
+ *  moved the agent ELF" when six of the nine listed had. UNDERSTATING how much is unverified is the one
+ *  doc error worth failing a release over, so it is checked rather than trusted.
+ *
+ *  The list's START is deliberately NOT derived: the note omits baselines covered by the live pass
+ *  itself, and encoding that rule here would just relocate the drift. Instead the list must be
+ *  CONTIGUOUS from wherever it starts through the newest baseline — which is what actually catches a
+ *  newly-shipped baseline being left out.
+ *
+ *  Pure (no disk access) so every branch can be mutation-tested; `checkVersions` supplies the real
+ *  inputs. Any unparseable/missing note is an ERROR, never a skip — a guard that silently no-ops when
+ *  the prose is reworded is the failure mode this whole invariant exists to prevent. */
+export function checkDesignScopeNote(opts: {
+  design: string;
+  baselineVersions: string[];
+  agentOf: (v: string) => string | undefined;
+  maxBaseline?: string;
+  maxAgentVersion?: string;
+}): string[] {
+  const { design, baselineVersions, agentOf, maxBaseline, maxAgentVersion } = opts;
+  const errors: string[] = [];
+  const ANCHOR = "**Scope of that claim, stated plainly.**";
+  const scopeAt = design.indexOf(ANCHOR);
+  if (scopeAt < 0) {
+    errors.push(`DESIGN.md has no "${ANCHOR}" note to verify (invariant 11)`);
+    return errors;
+  }
+  const nl = design.indexOf("\n", scopeAt);
+  const para = design.slice(scopeAt, nl < 0 ? undefined : nl);
+  const m = para.match(
+    /\*{0,2}([A-Za-z-]+|\d+)\*{0,2} baselines have shipped since \(([^)]*)\),\s*\*{0,2}([A-Za-z-]+|\d+)\*{0,2} of which moved the agent ELF[^*]*\*\*(\d+\.\d+\.\d+)\*\*/,
+  );
+  if (!m) {
+    errors.push(
+      'DESIGN.md "Scope of that claim" note no longer matches "<N> baselines have shipped since (<list>), <M> of which moved the agent ELF … **<agent>**" — reword it back, or update invariant 11 deliberately',
+    );
+    return errors;
+  }
+  const WORDS: Record<string, number> = {
+    zero: 0,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+    twenty: 20,
+    "twenty-one": 21,
+    "twenty-two": 22,
+    "twenty-three": 23,
+    "twenty-four": 24,
+    "twenty-five": 25,
+  };
+  const num = (s: string): number | undefined => (/^\d+$/.test(s) ? Number(s) : WORDS[s.toLowerCase()]);
+  const listed = [...m[2].matchAll(/`(\d+\.\d+\.\d+)`/g)].map((x) => x[1]);
+  const claimedCount = num(m[1]);
+  const claimedMoves = num(m[3]);
+  const claimedAgent = m[4];
+  const sorted = [...baselineVersions].sort(cmp);
+
+  if (maxAgentVersion && claimedAgent !== maxAgentVersion)
+    errors.push(`DESIGN.md scope note's "most recently to ${claimedAgent}" != max baseline's agentVersion "${maxAgentVersion}"`);
+
+  const unknown = listed.filter((v) => !baselineVersions.includes(v));
+  if (unknown.length) {
+    errors.push(`DESIGN.md scope note lists baseline(s) with no baselines/desktop-*.json: ${unknown.join(", ")}`);
+    return errors;
+  }
+  if (listed.length === 0) {
+    errors.push("DESIGN.md scope note lists no baselines");
+    return errors;
+  }
+
+  const startIdx = sorted.indexOf(listed[0]);
+  const expected = sorted.slice(startIdx);
+  if (listed.join(",") !== expected.join(","))
+    errors.push(
+      `DESIGN.md scope note baseline list is stale or out of order — expected every baseline from ${listed[0]} through ${maxBaseline ?? sorted[sorted.length - 1]}: ${expected.join(", ")} (found: ${listed.join(", ")})`,
+    );
+
+  if (claimedCount === undefined) errors.push(`DESIGN.md scope note count "${m[1]}" is not a number this check understands`);
+  else if (claimedCount !== listed.length) errors.push(`DESIGN.md scope note says ${claimedCount} baselines but lists ${listed.length}`);
+
+  // ELF moves across the listed range, seeded from the baseline immediately BEFORE the first listed one
+  // — its agent version is the "before" state the first listed entry is compared against.
+  if (startIdx <= 0) {
+    errors.push(`DESIGN.md scope note starts at ${listed[0]}, which has no preceding baseline to compare agent versions against`);
+    return errors;
+  }
+  let prev = agentOf(sorted[startIdx - 1]);
+  let moves = 0;
+  for (const v of listed) {
+    const a = agentOf(v);
+    if (a !== prev) moves++;
+    prev = a;
+  }
+  if (claimedMoves === undefined) errors.push(`DESIGN.md scope note ELF-move count "${m[3]}" is not a number this check understands`);
+  else if (claimedMoves !== moves)
+    errors.push(`DESIGN.md scope note says ${claimedMoves} of those baselines moved the agent ELF; the baselines say ${moves}`);
+
+  return errors;
 }
 
 export function checkVersions(): { ok: boolean; errors: string[]; values: Record<string, string | undefined> } {
@@ -258,6 +388,31 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       );
     }
   }
+
+  // 11. DESIGN.md's "Scope of that claim" note is the repo's honest disclosure of how much of the
+  //     CURRENT baseline is actually live-verified, and every figure in it is machine-derivable from
+  //     baselines/desktop-*.json. It is deliberately outside invariant 9 (which pins only the
+  //     present-tense current-state sentence) and outside invariant 7's dated-note exemption, because
+  //     unlike a dated note this paragraph makes a claim about the PRESENT: "N baselines have shipped
+  //     since [the last live pass]". That claim goes stale on its own every release.
+  //
+  //     It has silently drifted twice: the list was extended without recounting, leaving "four of which
+  //     moved the agent ELF" when six of the nine listed had. Understating how much is unverified is the
+  //     one doc error worth failing a release over, so it is checked rather than trusted.
+  //
+  //     The list's START is NOT derived — the paragraph deliberately omits baselines covered by the live
+  //     pass itself, and encoding that rule here would just move the drift. Instead the list must be
+  //     CONTIGUOUS from wherever it starts through the newest baseline, which is what actually catches a
+  //     release being left out.
+  errors.push(
+    ...checkDesignScopeNote({
+      design,
+      baselineVersions,
+      maxBaseline,
+      maxAgentVersion,
+      agentOf: (v) => json(`baselines/desktop-${v}.json`).agentVersion as string | undefined,
+    }),
+  );
 
   return {
     ok: errors.length === 0,
