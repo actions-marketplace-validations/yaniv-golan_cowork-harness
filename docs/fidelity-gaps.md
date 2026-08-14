@@ -105,6 +105,37 @@ session with the flag on whose turn is unattended (a scheduled or otherwise non-
 **neither** the artifact mounts nor the `Artifact` tool. Reading "one or the other" as a guarantee that
 some artifact mechanism is always present would be wrong.
 
+### The session flag also reaches into the agent, and unattended artifact actions hard-refuse
+
+Two further properties widen this gap beyond "a tool is missing".
+
+**The flag is not only a Desktop concern.** It decides what Desktop puts in the spawned tool list, and
+the agent binary separately reads the corresponding spawn environment key itself, using it to select its
+own artifact publish surface and a read-only artifact mode. So the flag governs agent behaviour
+directly, not just the tool inventory — and its value travels with the session config, so neither the
+harness nor the user can observe it locally.
+
+**An unattended session gets a hard refusal rather than a prompt.** The agent carries a consent floor
+for artifact actions: publishing, replying to a comment, resolving a comment thread, and writing to an
+artifact's database each refuse outright when the session has no answerable approval surface, with the
+refusal explicitly telling the model not to retry in that session. There is a fail-closed case too — if
+the permission check cannot confirm an approval surface exists, the action is denied rather than
+allowed. Listing one's own artifacts is carved out as read-only and stays permitted.
+
+**Why this is documented rather than modeled**, beyond the flag being unobservable: artifact operations
+are **server-backed**. The agent takes an artifacts API base URL and an API token, and the endpoints
+involved are not in the sandbox's egress allowlist. Supplying the spawn flag and adding the tool would
+therefore not reproduce production behaviour — it would offer a tool that resolves against a service the
+sandbox cannot reach and holds no credential for. Reproducing the *refusal* path alone, without the
+corresponding success path, would match neither of the states a real session can be in.
+
+**What this means for a skill under test.** No artifact action is reachable here at all: the harness
+serves no artifact tools and does not spawn the `Artifact` tool at any tier, so a skill cannot attempt a
+publish, a comment, or a database write. This is an absent capability rather than a behavioural
+difference — there is no action whose outcome differs. The practical consequence is that a skill relying
+on artifacts cannot be exercised in this harness, and a green run says nothing about how it would behave
+in a real unattended Cowork session, where these actions now refuse rather than prompt.
+
 ---
 
 ## HIPAA restriction is a process-global latch
