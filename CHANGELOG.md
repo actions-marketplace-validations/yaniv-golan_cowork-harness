@@ -22,6 +22,15 @@ All notable changes to this project are documented here. The format is based on
   baselines covered by the live pass itself, and encoding that rule would only relocate the drift. A
   missing or unrecognisable note is an error, never a skip.
 
+- **The `hostloop` uploads-are-`Read`-able live case no longer fails on the model's choice of exploration
+  tool.** It asserted that neither native nor workspace bash ran at all, as a proxy for "the agent needed a
+  workaround" — so a run where the agent listed the uploads directory with `ls` went red, while the next
+  run, which used `Glob` instead, went green. In both the upload was `Read` directly at the advertised
+  path and no outputs-delete fired, so the regression the case guards was absent either way. It now reads
+  the recorded bash commands and fails only when one **names the uploaded file**, which is what reading or
+  copying it as a workaround requires and what listing its directory cannot do. Verified against both
+  recorded runs plus `cat`/`cp` mutations: the false red is gone and the workaround chain still trips it.
+
 - **A full live end-to-end pass now covers baseline `desktop-1.30096.1` / agent 2.1.229**, across all
   three tiers (`protocol`, `container`, `hostloop`), superseding the `desktop-1.20186.0` pin. DESIGN.md's
   claim and its scope note are re-stamped accordingly, including the caveats: two `live-outputs-delete`

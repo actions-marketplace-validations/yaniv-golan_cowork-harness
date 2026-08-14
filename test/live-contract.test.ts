@@ -442,8 +442,37 @@ describe.skipIf(!PROBE_CAN)("live: hostloop uploads are Read-able at the adverti
     // The full result carries the tool + scan evidence.
     const full = JSON.parse(readFileSync(join(res.outDir, "turns", "1", "result.json"), "utf8"));
     expect(full.toolCounts?.Read ?? 0, "the Read tool never ran").toBeGreaterThan(0);
-    expect(full.toolCounts?.Bash ?? 0, "native bash ran — the workaround path").toBe(0);
-    expect(full.toolCounts?.["mcp__workspace__bash"] ?? 0, "workspace bash ran — the workaround path").toBe(0);
+
+    // The workaround this guards against is bash READING OR COPYING THE UPLOAD — not bash existing.
+    // Counting bash calls conflated those and made the verdict depend on which exploration tool the model
+    // happened to pick: an observed failing run used `ls -la <uploads dir>` (red) and the very next run
+    // used Glob (green), with the upload Read directly and NO outputs-delete in either. Same behaviour,
+    // opposite result. So inspect what bash actually DID: a workaround must name the uploaded file, while
+    // listing its directory cannot. Read/Glob are unrestricted — the assertions that matter are that the
+    // file was Read at the advertised path and that the outputs-delete chain never fired.
+    const bashCommands: string[] = [];
+    for (const line of readFileSync(join(res.outDir, "events.jsonl"), "utf8").split("\n").filter(Boolean)) {
+      let ev: any;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const blocks = ev?.message?.content ?? ev?.content ?? [];
+      if (!Array.isArray(blocks)) continue;
+      for (const b of blocks) {
+        if (b?.type === "tool_use" && (b.name === "Bash" || b.name === "mcp__workspace__bash")) {
+          bashCommands.push(String(b.input?.command ?? ""));
+        }
+      }
+    }
+    const UPLOAD_BASENAME = "upload-probe.txt";
+    const touchesUpload = bashCommands.filter((c) => c.includes(UPLOAD_BASENAME));
+    expect(
+      touchesUpload,
+      `bash touched the uploaded file — the workaround path is back (the upload must be reachable with Read alone). Commands: ${JSON.stringify(touchesUpload)}`,
+    ).toEqual([]);
+
     expect(full.scan?.outputsDeletes ?? [], "outputs-delete fired — the workaround chain is back").toEqual([]);
     expect(r.status).toBe(0);
   }, 620_000);
