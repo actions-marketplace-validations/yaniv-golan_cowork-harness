@@ -3,34 +3,47 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
 
 /**
  * Live matrix tests (E3's own "optional live e2e", plus a regression pin for the Fable/Opus-found
  * "one cell's unanswered gate must not crash the whole matrix" bug; a live test for that specific bug
  * was originally deferred, then built here on request).
  *
- * `fidelity: protocol` (L0) needs NO Docker/staged agent — just the host `claude` CLI + a live token — so
- * gating is token-only, unlike test/live-contract.test.ts (which needs Docker + the staged binary too).
- * Both committed baselines this file matrices over (desktop-1.17377.2, desktop-1.18286.0) resolve to the
- * SAME staged agent version (2.1.197 — confirmed via each baseline's own agentBinary.stagedPath), so this
- * doesn't need two different staged binaries to exercise a genuine 2-value baseline axis.
+ * `fidelity: protocol` (L0) needs NO Docker and NO staged agent — `spawnProtocol` spawns the HOST `claude`
+ * from PATH (src/runtime/protocol.ts) and never calls `resolveAgentBinary`. So the gate probes the host
+ * CLI + a live token, unlike test/live-contract.test.ts (which does need Docker + the staged binary).
+ *
+ * The baselines this file matrices over are axis VALUES, not binaries to run: at protocol fidelity they
+ * select config, and nothing resolves a staged ELF for them.
+ *
+ * GATE HISTORY — read before "simplifying" this back. The gate used to require
+ * `resolveAgentBinary(loadBaseline("desktop-1.18286.0"))` to exist, on the since-obsoleted reasoning that
+ * both matrixed baselines pin the same staged agent (2.1.197) so only one binary would be needed. That
+ * binary requirement was never real for this tier, and Desktop PRUNES old staged agents on update — so
+ * once the machine moved past 2.1.197 the whole suite `skipIf`-ed itself out on every developer machine
+ * and in CI, silently, for many releases. It was found only by auditing which suites a live run had
+ * actually executed. Gate on what the tier genuinely uses, never on an incidental artifact.
  *
  * Run locally: CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.cowork-harness-token) vitest run --config vitest.config.live.ts live-matrix
  */
 
 const CLI = resolve("dist/cli.js");
 const cliOk = existsSync(CLI);
-let binOk = false;
-try {
-  binOk = existsSync(resolveAgentBinary(loadBaseline("desktop-1.18286.0")));
-} catch {
-  binOk = false;
-}
+// The real dependency: the host `claude` this tier spawns. `--version` (not `command -v`) so a present
+// but unrunnable CLI fails the gate rather than producing a confusing mid-test spawn error.
+const hostClaudeOk = spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
 const TOKEN =
   process.env.CLAUDE_CODE_OAUTH_TOKEN ||
   (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
-const CAN = cliOk && binOk && !!TOKEN;
+const CAN = cliOk && hostClaudeOk && !!TOKEN;
+
+// A silent skip is this lane's characteristic failure — vitest.config.live.ts's own header warns a green
+// run there can carry ZERO coverage, and this suite spent many releases proving it. Say so on stderr.
+if (!CAN)
+  process.stderr.write(
+    `::warning:: live-matrix SKIPPED — dist/cli.js:${cliOk} host-claude:${hostClaudeOk} token:${!!TOKEN}. ` +
+      `This suite is the ONLY protocol-tier live coverage; a green live lane without it verifies container/hostloop only.\n`,
+  );
 
 function run(args: string[], cwd: string) {
   const r = spawnSync("node", [CLI, ...args], {
