@@ -42,11 +42,14 @@
 //       an UNGUARDED version surface: nothing stopped it drifting independently of the machine-checked
 //       tracks-harness/floor metadata line right above it.
 //   11. DESIGN.md's "Scope of that claim" note — the disclosure of how much of the CURRENT baseline is
-//       actually live-verified — agrees with baselines/desktop-*.json: the baseline list runs
-//       contiguously from where it starts through the newest baseline, the two counts match the list and
-//       the real agentVersion transitions, and the named agent is the max baseline's. Like 9 this claims
-//       the PRESENT ("N baselines have shipped since"), so the dated-note exemption does not cover it.
-//       It had already drifted twice unnoticed — see `checkDesignScopeNote`.
+//       actually live-verified — agrees with baselines/desktop-*.json. Two forms, selected by whether the
+//       note's live-pass baseline IS the newest: NO-GAP (must say so explicitly and carry no stale
+//       enumeration) and GAP (must enumerate — list contiguous through the newest baseline, both counts
+//       matching the list and the real agentVersion transitions). Either way the named agent must be the
+//       max baseline's. Like 9 this claims the PRESENT, so the dated-note exemption does not cover it;
+//       and because shipping a baseline flips NO-GAP into GAP, a new release forces the note to be
+//       rewritten instead of silently overstating coverage. It had drifted twice unnoticed before this
+//       existed — see `checkDesignScopeNote`.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -76,8 +79,16 @@ function cmp(a: string, b: string): number {
  *  moved the agent ELF" when six of the nine listed had. UNDERSTATING how much is unverified is the one
  *  doc error worth failing a release over, so it is checked rather than trusted.
  *
- *  The list's START is deliberately NOT derived: the note omits baselines covered by the live pass
- *  itself, and encoding that rule here would just relocate the drift. Instead the list must be
+ *  TWO FORMS, selected by whether the note's live-pass baseline IS the newest committed one:
+ *    NO-GAP — nothing to enumerate, so the note must SAY so and must not carry a stale list.
+ *    GAP    — the pass lags, so the note must enumerate what is unverified.
+ *  The fork is what keeps a no-gap claim honest: a no-gap note is true only until the next baseline
+ *  ships, and at that moment `passBaseline !== max` flips this into the GAP branch, which demands an
+ *  enumeration the note does not have. Shipping a baseline therefore FORCES a rewrite rather than
+ *  letting a once-true sentence quietly overstate coverage.
+ *
+ *  In the GAP form the list's START is deliberately NOT derived: the note omits baselines covered by the
+ *  live pass itself, and encoding that rule here would just relocate the drift. Instead the list must be
  *  CONTIGUOUS from wherever it starts through the newest baseline — which is what actually catches a
  *  newly-shipped baseline being left out.
  *
@@ -101,12 +112,47 @@ export function checkDesignScopeNote(opts: {
   }
   const nl = design.indexOf("\n", scopeAt);
   const para = design.slice(scopeAt, nl < 0 ? undefined : nl);
+
+  // Which baseline the live pass was actually run against — `<date> / desktop-X.Y.Z`. Everything else
+  // keys off this, so an unreadable one is fatal rather than a partial check.
+  const passM = para.match(/`[^`]*\/\s*desktop-(\d+\.\d+\.\d+)`/);
+  if (!passM) {
+    errors.push('DESIGN.md scope note has no "`<date> / desktop-X.Y.Z`" live-pass baseline to key off');
+    return errors;
+  }
+  const passBaseline = passM[1];
+  if (!baselineVersions.includes(passBaseline)) {
+    errors.push(`DESIGN.md scope note names live-pass baseline ${passBaseline}, which has no baselines/desktop-*.json`);
+    return errors;
+  }
+  const agentM = para.match(/against agent \*\*(\d+\.\d+\.\d+)\*\*/) ?? para.match(/most recently to \*\*(\d+\.\d+\.\d+)\*\*/);
+  if (maxAgentVersion && agentM && agentM[1] !== maxAgentVersion)
+    errors.push(`DESIGN.md scope note's agent "${agentM[1]}" != max baseline's agentVersion "${maxAgentVersion}"`);
+  else if (!agentM) errors.push("DESIGN.md scope note names no agent version");
+
+  // NO-GAP form. When the live pass IS the newest baseline there is nothing to enumerate, so the note
+  // must say so explicitly rather than carry a stale list. The moment a new baseline ships, passBaseline
+  // stops being max and this falls through to the gap form below — which then DEMANDS the list. That is
+  // the behaviour that makes shipping a baseline force this note to be updated.
+  if (maxBaseline && passBaseline === maxBaseline) {
+    if (!/no baselines have shipped since/i.test(para))
+      errors.push(
+        `DESIGN.md scope note's live pass (${passBaseline}) is the newest baseline, so it must state "no baselines have shipped since"`,
+      );
+    if (/baselines have shipped since \(/.test(para))
+      errors.push(
+        `DESIGN.md scope note still carries a "shipped since (<list>)" enumeration although the live pass is the newest baseline`,
+      );
+    return errors;
+  }
+
+  // GAP form — the live pass lags the newest baseline, so the note must enumerate what is unverified.
   const m = para.match(
     /\*{0,2}([A-Za-z-]+|\d+)\*{0,2} baselines have shipped since \(([^)]*)\),\s*\*{0,2}([A-Za-z-]+|\d+)\*{0,2} of which moved the agent ELF[^*]*\*\*(\d+\.\d+\.\d+)\*\*/,
   );
   if (!m) {
     errors.push(
-      'DESIGN.md "Scope of that claim" note no longer matches "<N> baselines have shipped since (<list>), <M> of which moved the agent ELF … **<agent>**" — reword it back, or update invariant 11 deliberately',
+      `DESIGN.md scope note's live pass (${passBaseline}) lags the newest baseline (${maxBaseline}), so it must read "<N> baselines have shipped since (<list>), <M> of which moved the agent ELF … **<agent>**" — reword it back, or update invariant 11 deliberately`,
     );
     return errors;
   }
@@ -142,11 +188,8 @@ export function checkDesignScopeNote(opts: {
   const listed = [...m[2].matchAll(/`(\d+\.\d+\.\d+)`/g)].map((x) => x[1]);
   const claimedCount = num(m[1]);
   const claimedMoves = num(m[3]);
-  const claimedAgent = m[4];
   const sorted = [...baselineVersions].sort(cmp);
-
-  if (maxAgentVersion && claimedAgent !== maxAgentVersion)
-    errors.push(`DESIGN.md scope note's "most recently to ${claimedAgent}" != max baseline's agentVersion "${maxAgentVersion}"`);
+  // (the agent version named by this form is already checked above, shared with the no-gap form)
 
   const unknown = listed.filter((v) => !baselineVersions.includes(v));
   if (unknown.length) {

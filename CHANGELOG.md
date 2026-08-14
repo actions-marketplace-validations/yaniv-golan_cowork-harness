@@ -12,12 +12,21 @@ All notable changes to this project are documented here. The format is based on
   the repo's disclosure of how much of the *current* baseline has actually been verified live, and every
   figure in it is derivable from `baselines/desktop-*.json` — yet it sat in unguarded prose and had
   drifted twice, the baseline list having been extended without recounting. Understating how much is
-  unverified is the doc error least worth shipping, so it is now checked: the listed baselines must run
-  contiguously from wherever the list starts through the newest baseline, both counts must match the list
-  and the real `agentVersion` transitions, and the named agent must be the newest baseline's. The list's
-  *start* is deliberately not derived — the note omits baselines covered by the live pass itself, and
-  encoding that rule would only relocate the drift. A missing or unrecognisable note is an error, never a
-  skip.
+  unverified is the doc error least worth shipping, so it is now checked. Two forms, selected by whether
+  the note's live-pass baseline is the newest one: with a gap, the listed baselines must run contiguously
+  from wherever the list starts through the newest baseline, and both counts must match the list and the
+  real `agentVersion` transitions; with no gap, the note must say so explicitly and carry no stale
+  enumeration. Either way the named agent must be the newest baseline's. Because shipping a baseline
+  flips the no-gap form into the gap form, a new release now forces the note to be rewritten rather than
+  silently overstating coverage. The list's *start* is deliberately not derived — the note omits
+  baselines covered by the live pass itself, and encoding that rule would only relocate the drift. A
+  missing or unrecognisable note is an error, never a skip.
+
+- **A full live end-to-end pass now covers baseline `desktop-1.30096.1` / agent 2.1.229**, across all
+  three tiers (`protocol`, `container`, `hostloop`), superseding the `desktop-1.20186.0` pin. DESIGN.md's
+  claim and its scope note are re-stamped accordingly, including the caveats: two `live-outputs-delete`
+  cases skipped as model-behaviour misses, and the tiers were covered across two invocations because the
+  `protocol` suite was repaired mid-pass.
 
 ### Fixed
 
