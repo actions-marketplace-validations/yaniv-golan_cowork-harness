@@ -842,11 +842,24 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   // resolves through an attended-turn wrapper (zFo) to the frame-artifacts predicate (zPo). The rendered
   // 1p tools[] is unchanged (the server flag is off by default), so spawn.tools stays 20 entries and the
   // env key is ALLOWLISTED, not pinned — it must never appear in the derived env.
+  // B17: the HIPAA reader is now RESOLVED (S6e), not name-matched, so the fixture has to carry a real
+  // resolvable definition — two hops, exactly as production emits them:
+  //   Object.defineProperty(exports,"r",…get(){return GL})   <- what exportLocalOf resolves `zA.r` to
+  //   function GL(){return WL()==="restricted"}              <- hop 1: pins the comparison
+  //   function WL(){…"coworkHipaaRestricted"…}               <- hop 2: names the gate
+  // The defineProperty form is used deliberately: exportLocalOf tries it FIRST, whereas its last-resort
+  // `r[:=]<ident>` shape would match almost any `r=<ident>` in a single-string fixture and resolve to
+  // garbage while still looking green.
+  const HIPAA_DEF =
+    'Object.defineProperty(exports,"r",{enumerable:!0,get:function(){return zGL}});' +
+    'function zGL(){return zWL()==="restricted"}' +
+    'function zWL(){return zRL("coworkHipaaRestricted")?"restricted":"unrestricted"}';
   const ARTIFACT_DEF =
     "let zde=(N?g?.builtTools===void 0?zFo(i,{isBridgeSession:b,isDispatchChild:x,isHostLoop:v}):N.frameArtifactsTurnEnabled??!1:!1)&&!zA.r();" +
     "N&&(N.frameArtifactsTurnEnabled=zde);" +
     "function zPo(e,t){return e.frameArtifactsEnabled===!0&&e.sessionType===void 0&&e.scheduledTaskId===void 0&&!t.isBridgeSession&&!t.isDispatchChild&&!t.isHostLoop&&!zA.r()}" +
-    "function zFo(e,t){return zPo(e,t)&&e._isUnattended!==!0}";
+    "function zFo(e,t){return zPo(e,t)&&e._isUnattended!==!0}" +
+    HIPAA_DEF;
   const STIER_1289290 =
     ARTIFACT_DEF + STIER.replace('"AskUserQuestion","ToolSearch"', '"AskUserQuestion",...zde?["Artifact"]:[],"ToolSearch"');
   // W1 gains the frame-artifacts env key, gated on the SAME `zde` as the tools spread (what S6d asserts).
@@ -908,6 +921,40 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       "S6c Artifact gate",
     ],
     ["R3 HIPAA conjunct replaced by a literal", () => fixture1289290().replace("&&!zA.r();N&&", "&&!0;N&&"), "S6c Artifact gate"],
+    // B17/S6e. The old check hard-coded the member name (`\.r\(\)`), so it accepted ANY single-letter
+    // member — re-pointing the conjunct at a different export passed silently. These three are the
+    // reason the resolution has to be two hops against a BRACE-SCANNED body rather than a window:
+    // around the real reader, `coworkHipaaRestricted` occurs 8x within +/-600 chars and several of the
+    // neighbours are exported, so a windowed implementation passes R4/R5 while HIPAA is gone.
+    [
+      "R4 conjunct re-pointed at a sibling export (windowed check would pass)",
+      () =>
+        fixture1289290()
+          .replace("&&!zA.r();N&&", "&&!zA.q();N&&")
+          .replace(HIPAA_DEF, HIPAA_DEF + 'Object.defineProperty(exports,"q",{enumerable:!0,get:function(){return zRL}});'),
+      "S6c Artifact gate",
+    ],
+    [
+      "R5 reader stops consulting coworkHipaaRestricted",
+      () => fixture1289290().replace('function zWL(){return zRL("coworkHipaaRestricted")?', 'function zWL(){return zRL("somethingElse")?'),
+      "S6c Artifact gate",
+    ],
+    [
+      "R6 the HIPAA export is deleted entirely → resolution FAILS CLOSED (never a silent skip)",
+      () => fixture1289290().replace('Object.defineProperty(exports,"r",{enumerable:!0,get:function(){return zGL}});', ""),
+      "S6c Artifact gate",
+    ],
+    // R7 IS THE STRENGTHENING PROOF. R4/R5/R6 all change the member NAME or delete the export, which the
+    // OLD hard-coded `\.r\(\)` also rejected (for the wrong reason — any rename tripped it, which is the
+    // false positive B17 fixes). R7 keeps the call spelled `zA.r()` and only re-points what `r` EXPORTS,
+    // at the raw gate reader — no restriction check at all. The old regex saw `.r()` and passed; the
+    // resolution sees a local that is not a `<f>()==="restricted"` reader and fires. Asserted directly
+    // against the old pattern in the dedicated test below.
+    [
+      "R7 `.r()` kept but re-pointed at a non-restriction reader (OLD check passed this)",
+      () => fixture1289290().replace("get:function(){return zGL}", "get:function(){return zRL}"),
+      "S6c Artifact gate",
+    ],
     // The env key must stay conditional AND on the same predicate as the tool.
     [
       "M9 env key unconditional",
@@ -954,6 +1001,48 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(hard.join("\n")).toContain("CLAUDE_CODE_COWORK_FRAME_ARTIFACTS_X");
     // …and the real name must NOT be what's flagged (proving the allowlist entry is doing its job).
     expect(deriveSpawnEnv(fixture1289290(), greenGates()).flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+  });
+
+  // Proof that S6e is a STRENGTHENING and not merely a reshuffle. A guard change that only relaxes is
+  // worth nothing; this pins the exact input the old pattern admitted and the new one rejects, so a
+  // future "simplification" back to a hard-coded member name fails here rather than in production.
+  it("S6e strengthening: the OLD hard-coded `.r()` pattern accepted a re-pointed HIPAA export; the resolution does not", () => {
+    const OLD_TRAILING = /\)&&![\w$]+\.r\(\)$/; // the 1.28929.0 pattern's trailing conjunct, verbatim
+    const repointed = fixture1289290().replace("get:function(){return zGL}", "get:function(){return zRL}");
+    // The mutated condition still ENDS in `&&!zA.r()`, so the old pattern is satisfied…
+    const cond = repointed.match(/let zde=(\(N\?.*?)\;N&&/)![1];
+    expect(OLD_TRAILING.test(cond)).toBe(true);
+    // …while the export now resolves to a reader that never checks the restriction. New check fires.
+    expect(checkSpawnContractFacts(repointed).join("\n")).toContain("S6c Artifact gate");
+  });
+
+  // B17 (Desktop 1.30096.1): the SAME predicate with the HIPAA reader renamed `zA.r()` -> `zt.hu()`.
+  // Semantically identical (verified conjunct-by-conjunct against both asars); it hard-blocked `sync`
+  // only because the old regex hard-coded the member name. This fixture is the regression test for that
+  // false positive — if it ever goes red again, the member name has been re-hardcoded somewhere.
+  const fixture1300961 = () =>
+    fixture1289290()
+      .replace(/&&!zA\.r\(\)/g, "&&!zt.hu()")
+      .replace('Object.defineProperty(exports,"r",{', 'Object.defineProperty(exports,"hu",{');
+  it("1.30096.1 build shape: the HIPAA reader renamed (A.r -> t.hu) stays CLEAN — member names rotate per build", () => {
+    expect(checkSpawnContractFacts(fixture1300961())).toEqual([]);
+  });
+
+  // The fixtures above run in single-text mode, where resolveNamespaceRef falls back to searching the one
+  // string — so they never exercise the `NS=require("./chunk-X.js")` hop that production actually depends
+  // on (the reader lives in a DIFFERENT chunk from the spawn site). This one splits them across two files
+  // so the cross-chunk resolution is really tested; without it that hop is asserted, not covered.
+  it("1.30096.1 cross-chunk: the HIPAA reader resolves through the require() hop into another chunk", () => {
+    const spawnChunk = fixture1300961().replace(HIPAA_DEF, "") + ';var zt=require("./index.chunk-HIPAA.js");';
+    const files = new Map([
+      ["index.chunk-spawn.js", spawnChunk],
+      ["index.chunk-HIPAA.js", HIPAA_DEF.replace('exports,"r"', 'exports,"hu"')],
+    ]);
+    expect(checkSpawnContractFacts([...files.values()].join(""), files)).toEqual([]);
+    // …and the hop must FAIL CLOSED when the target chunk no longer exports it.
+    const broken = new Map(files);
+    broken.set("index.chunk-HIPAA.js", HIPAA_DEF.replace('exports,"r"', 'exports,"somethingElse"'));
+    expect(checkSpawnContractFacts([...broken.values()].join(""), broken).join("\n")).toContain("S6c Artifact gate");
   });
 
   // Back-compat: an asar with NO Artifact spread and NO env key stays clean — every committed baseline's
@@ -1665,7 +1754,12 @@ function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string)
     // resolveFilePath lives in the SHARED/defining chunk — its two hard-block strings are here, NOT in
     // the hostloop consumer (which only carries the caller-side "could not be safely resolved").
     `function JKe(p){throw new Error("Refusing to resolve non-regular file")||new Error("Failed to resolve path")}` +
-    `export{g5e as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,p5e as HOST_LOOP_EXCLUDED_BUILTIN_TOOLS,Jse as REQUEST_COWORK_DIRECTORY,Bse as SESSION_TYPE_CHAT,Nce as isPathContainedInFolders,JKe as resolveFilePath};`;
+    // B18: a REAL containment helper, exported under a MANGLED name. The old fixture exported it as the
+    // readable `isPathContainedInFolders` and called it by that name — a token that appears ZERO times in
+    // any real asar — which is precisely what kept the dead early-allow check looking green. The sentinel
+    // now identifies this helper by SHAPE (realpath + relative + ".."), so the fixture must have one.
+    `function Nce(e,t){for(const r of t){const p=realpath(r);const i=relative(p,e);if(!i.startsWith(".."))return!0}return!1}` +
+    `export{g5e as HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,p5e as HOST_LOOP_EXCLUDED_BUILTIN_TOOLS,Jse as REQUEST_COWORK_DIRECTORY,Bse as SESSION_TYPE_CHAT,Nce as Po,JKe as resolveFilePath};`;
   let consuming =
     `const Yt=["Write","Edit","MultiEdit"];` +
     `function qt(e){return "read-only in this session — it is a hardlink to the user's original file" && "(spooled tool results)" && "(plugin, skill, or knowledge content)"}` +
@@ -1677,8 +1771,13 @@ function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string)
     `try{}catch(err){return "could not be safely resolved"}` +
     `if(qt(g))return qt(g);` +
     `const lt=[...st,...T(),...ie||ct?[]:(ne==null?void 0:ne())??[]];getMidSessionReadOnlyPaths;spooledProjectsReadOnlyRoots;` +
-    `if(!t.isPathContainedInFolders(cand,lt))return ct?"is outside this session's scratch directory, so \${e}":"is outside this session's connected folders, so \${e}"}]}],` +
-    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>xe(g,S)??Qt(g,S,k.decisionReason,n)??Se(g,S,k));`;
+    `if(!t.Po(cand,lt))return ct?"is outside this session's scratch directory, so \${e}":"is outside this session's connected folders, so \${e}"}]}],` +
+    // The chain links must actually EXIST — the old fixture referenced `Qt` without defining it, so every
+    // per-link assertion had nothing to resolve. `Xt` is the 1.30096.1 auto-memory carve-out: `async`, and
+    // the only link that can return an allow, which is what the await-on-async and ordering rules pin.
+    `function Qt(e,o,r,n){return r===Zt?{behavior:"deny",message:"outside"}:{behavior:"deny",message:"protected"}}` +
+    `async function Xt(e,o,r,i,a){if(i===null||r!==Zt)return;if(!await t.Po(o.file_path,[i]))return;return{behavior:"allow",updatedInput:o}}` +
+    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??Se(g,S,k));`;
   if (mut.defining) defining = mut.defining(defining);
   if (mut.consuming) consuming = mut.consuming(consuming);
   return new Map([
@@ -1699,6 +1798,102 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
     const f = pathHookFiles({ consuming: (s) => s.replace("connected folders, so", "attached folders, so") });
     expect(checkPathHookFacts(f).some((x) => /connected folders/.test(x))).toBe(true);
   });
+  // B17/B18 mutation matrix. The old chain anchor was a PREFIX match, so an inserted SYNCHRONOUS link
+  // passed silently; and the early-allow ordering check searched for a token absent from every real asar,
+  // so it had never fired. Each row below is a way the permission chain could widen. Every one must be
+  // loud — a guard that cannot fail is worth nothing, which is exactly what these two were.
+  const CHAIN_MUT: ReadonlyArray<readonly [string, (s: string) => string, string]> = [
+    // THE headline regression: an async link that is not awaited returns a Promise, which is never
+    // nullish, so `??` short-circuits and EVERY later link — both denies and the original callback — is
+    // skipped. One deleted keyword is a total permission bypass, and the old anchor allowed it.
+    ["D1 await dropped from the async link", (s) => s.replace("??await Xt(", "??Xt("), "canUseTool chain await"],
+    // Count preserved, meaning changed: an operand that is not a plain call can hide a blanket allow.
+    [
+      "D2 `||` blanket-allow inside a parenthesised operand",
+      (s) => s.replace("await Xt(g,S,k.decisionReason,j,f)", "(Ye(g,S)||await Xt(g,S,k.decisionReason,j,f))"),
+      "canUseTool chain operand",
+    ],
+    [
+      "D3 ternary blanket-allow operand",
+      (s) => s.replace("await Xt(g,S,k.decisionReason,j,f)", '(k.decisionReason?await Xt(g,S,k.decisionReason,j,f):{behavior:"allow"})'),
+      "canUseTool chain operand",
+    ],
+    // Ordering — the ASAR analysis' own stated risk. Nothing else in this file would notice a reorder.
+    [
+      "D4 allow link moved ahead of the /sessions VM-path deny",
+      (s) => s.replace("xe(g,S)??await Xt(g,S,k.decisionReason,j,f)", "await Xt(g,S,k.decisionReason,j,f)??xe(g,S)"),
+      "canUseTool chain order",
+    ],
+    [
+      "D5 link swapped for an unresolvable one (count preserved)",
+      (s) => s.replace("await Xt(g,S,k.decisionReason,j,f)", "await Zq(g,S,k.decisionReason,j,f)"),
+      "canUseTool chain operand",
+    ],
+    [
+      "D6 terminal wrapped so fall-through becomes an allow",
+      (s) => s.replace("??Se(g,S,k))", '??(Se(g,S,k)??{behavior:"allow"}))'),
+      "canUseTool chain terminal",
+    ],
+    // The install guard: `\1` binds the `&&` to the SAVED ORIGINAL, so a renamed guard is unconditional.
+    [
+      "D7 install guard re-pointed at another identifier",
+      (s) => s.replace("const Se=e.canUseTool;Se&&(", "const Se=e.canUseTool;zz&&("),
+      "conditional canUseTool install",
+    ],
+    [
+      "D8 a FIFTH link inserted (synchronous — the old prefix anchor absorbed this)",
+      (s) => s.replace("??Se(g,S,k))", "??Nw(g,S)??Se(g,S,k))"),
+      "canUseTool chain shape",
+    ],
+    // B18: the early-allow shape the ordering check exists to catch, now that it can actually fire.
+    [
+      "D9 containment call hoisted ahead of the category guard",
+      (s) => s.replace("if(qt(g))return qt(g);", "if(!t.Po(cand,lt))return;if(qt(g))return qt(g);"),
+      "qt-before-containment order",
+    ],
+    // Must replace EVERY call: the auto-memory link runs its own containment check inside the same slice,
+    // so mutating only the hook-body call leaves the helper resolvable — correctly producing no flag.
+    [
+      "D10 containment helper no longer resolvable anywhere in the hook",
+      (s) => s.split("t.Po(").join("t.Unresolvable("),
+      "containment helper",
+    ],
+  ];
+  it.each(CHAIN_MUT)("chain mutation %s fails loud (%#)", (_label, mutate, expected) => {
+    const flags = checkPathHookFacts(pathHookFiles({ consuming: mutate }));
+    expect(flags.join("\n")).toContain(expected);
+  });
+
+  // Proof the chain rebuild is a STRENGTHENING. The old anchor was a prefix match, so it accepted an
+  // inserted synchronous link AND an un-awaited async link — the two mutations that matter most. Pinning
+  // that here means a future "simplification" back to a single regex fails in CI, not in production.
+  it("B17 strengthening: the OLD prefix anchor accepted D1/D8; the rebuilt chain check rejects both", () => {
+    const OLD = /canUseTool=async\([^)]*\)=>[\w$]+\([^)]*\)\?\?[\w$]+\([^)]*\)\?\?[\w$]+\(/;
+    // D8 is expressed against the THREE-link chain that actually shipped through 1.28929.0: that is the
+    // build on which a silently-inserted synchronous link was reachable. (On the 4-link chain the old
+    // anchor already fails on the `await`, so mutating it would prove nothing.)
+    const dropAwait = (s: string) => s.replace("??await Xt(", "??Xt(");
+    const threeLink = (s: string) => s.replace("xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??", "xe(g,S)??");
+    for (const [label, mutate] of [
+      ["D1 await dropped", dropAwait],
+      ["D8 synchronous link inserted into the 3-link chain", (s: string) => threeLink(s).replace("??Se(g,S,k))", "??Nw(g,S)??Se(g,S,k))")],
+    ] as const) {
+      const files = pathHookFiles({ consuming: mutate });
+      const consuming = [...files.values()][1];
+      expect(OLD.test(consuming), `${label}: the old anchor should have accepted this`).toBe(true);
+      expect(checkPathHookFacts(files).length, `${label}: the new check must reject it`).toBeGreaterThan(0);
+    }
+  });
+
+  // Back-compat: the 3-link shape shipped through Desktop 1.28929.0. A maintainer on an older install
+  // (rollback, staged update, second machine) must still sync, so the chain check must accept 3 links.
+  it("back-compat: the pre-1.30096.1 three-link chain stays clean", () => {
+    const three = pathHookFiles({
+      consuming: (s) => s.replace("xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??", "xe(g,S)??"),
+    });
+    expect(checkPathHookFacts(three)).toEqual([]);
+  });
+
   it("MUTATION: canUseTool wrapper made unconditional (Se&& dropped) → flags", () => {
     const f = pathHookFiles({ consuming: (s) => s.replace("Se&&(e.canUseTool", "(e.canUseTool") });
     expect(checkPathHookFacts(f).length).toBeGreaterThan(0);
@@ -1817,7 +2012,24 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
   const joined = (f: Map<string, string>) => [...f.values()].join("");
   // Mutate the chunk that DEFINES a fact, keeping the reference site intact, so the assertion is
   // exercised through the same cross-chunk resolution path production uses.
+  // Mutates the FIRST occurrence in the FIRST matching chunk — which silently stops being a mutation the
+  // moment the needle also matches somewhere harmless. That is not hypothetical: Desktop 1.30096.1
+  // re-chunked the bundle 347 -> 107 files, co-locating the S14a `for(let x of[…])` helper with an
+  // unrelated array containing the same three names, so the mutation began landing on the decoy while the
+  // guarded construct stayed intact — and the test failed with no indication of why.
+  //
+  // So an ambiguous needle now THROWS instead of quietly mutating the wrong site. `null` still means
+  // "not found" (a different failure the callers already assert on). All three current needles were
+  // counted in both builds and are unique; this keeps the next co-location loud rather than mysterious.
   const mutateDefining = (f: Map<string, string>, needle: string, replacement: string): Map<string, string> | null => {
+    let total = 0;
+    for (const v of f.values()) total += v.split(needle).length - 1;
+    if (total > 1) {
+      throw new Error(
+        `mutateDefining: needle occurs ${total}x across the bundle — it would mutate only the first and may miss the guarded site. ` +
+          `Make it specific to the construct under test. Needle: ${needle.slice(0, 80)}`,
+      );
+    }
     const out = new Map(f);
     for (const [k, v] of f) {
       if (v.includes(needle)) {
@@ -1847,7 +2059,10 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
   it("MUTATION: the empty-ANTHROPIC_* delete helper removed → S14a flags (the let-widening did not blunt it)", () => {
     const f = realFiles();
     if (!f) return;
-    const m = mutateDefining(f, '"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"', '"SOMETHING_ELSE"');
+    // Needle scoped to the `of[…]` head so it targets the delete helper S14a actually guards. The bare
+    // triple is NOT unique — an unrelated array carries the same three names, and since 1.30096.1 both
+    // live in one chunk, so the bare needle mutated the decoy and this test failed while S14a was fine.
+    const m = mutateDefining(f, 'of["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"]', 'of["SOMETHING_ELSE"]');
     expect(m).not.toBeNull();
     expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
   });
@@ -1873,7 +2088,12 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     if (!f) return;
     const gates = decodeFcacheGates();
     if (!gates) return;
-    const m = mutateDefining(f, "mcpToolTimeoutMs??18e4", "mcpToolTimeoutMs??7e4");
+    // `mcpToolTimeoutMs??18e4` is NOT unique — it reads twice in the same chunk, once in the plain
+    // default reader (`<f>()?.mcpToolTimeoutMs??18e4`) and once in the per-tool override reader
+    // (`t?.mcpToolTimeoutOverridesMs?.[e]??t?.mcpToolTimeoutMs??18e4`), in BOTH 1.28929.0 and 1.30096.1.
+    // The `()?.` prefix selects the default reader (the one the derived value follows) without depending
+    // on the minified accessor name. Pre-existing ambiguity, surfaced by mutateDefining's uniqueness check.
+    const m = mutateDefining(f, "()?.mcpToolTimeoutMs??18e4", "()?.mcpToolTimeoutMs??7e4");
     expect(m).not.toBeNull();
     const { env } = deriveSpawnEnv(joined(m!), gates, m!);
     // Proves the literal is genuinely RESOLVED, not hardcoded or waved through by the shape check.

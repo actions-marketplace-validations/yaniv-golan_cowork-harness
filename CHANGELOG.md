@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Baseline `desktop-1.30096.1` (Claude Desktop 1.30096.1, agent 2.1.229).** `sync` refused to write it
+  until two `sync`-side sentinels were corrected — one blocking on a false positive, one that had been
+  failing open.
+
+- **The host-loop `canUseTool` chain sentinel could be widened silently.** Desktop 1.30096.1 inserts a
+  fourth link into the chain — an allow carve-out that rewrites the tool's input and runs ahead of the
+  existing deny. The sentinel was a prefix match with no terminator, so it accepted any chain that merely
+  *started* with the expected calls: an inserted **synchronous** link would have passed unnoticed, and
+  the block that surfaced this release only happened because the new link is `await`ed.
+
+  The check now decomposes the chain with a real scanner (the assignment must be brace/paren-balanced,
+  and `??` legitimately occurs inside a template interpolation in the chain's own log line) and asserts
+  it end to end: the terminal operand must be a bare call to the saved original, every operand whose
+  callee is an `async function` must be awaited, no link that can return an allow may precede the
+  VM-path deny, and each link must resolve to a definition. The await rule is the load-bearing one — an
+  un-awaited async link returns a Promise, which is never nullish, so `??` short-circuits and every later
+  link *including the original callback* is skipped. Three and four link chains are both accepted so an
+  older Desktop still syncs; a fifth is reported for classification.
+
+- **The early-allow ordering check had never fired.** It searched for a containment helper by two
+  readable names, neither of which occurs in any shipped asar — production mangles the call — so the
+  guard was permanently inert and its test passed only because the fixture hard-coded a token that does
+  not exist in the product. The helper is now identified by shape and resolved through the export map.
+
+- **S6c no longer hard-blocks on a minifier rename.** It pinned the HIPAA-restriction call by its
+  minified *member name*, so the rename `A.r()` → `t.hu()` failed a predicate that is otherwise
+  byte-for-byte identical. The callee is now resolved through the chunk's export map and verified two
+  hops to the reader that consults the restriction, with resolution failure treated as a miss.
+
 ### Added
 
 - **Cassettes now record the rootfs image they were recorded against**, closing the last gap in the
