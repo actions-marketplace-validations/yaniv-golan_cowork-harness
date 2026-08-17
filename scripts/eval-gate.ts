@@ -531,9 +531,11 @@ async function capture(reps: number, dotenv: string | undefined, ablate: boolean
   }
   // Observe which models actually produced these runs — recorded as baseline provenance and checked by the
   // gate's same-model guard (a run must be model-homogeneous for the guard to mean anything).
-  // Only REAL live model ids count. Placeholder markers wrapped in angle brackets (e.g. `<synthetic>`, the
-  // model field of a cassette/replay rep that used NO live model) are not answerers — including them would
-  // pollute the set and, via single()'s sort, spuriously flip the provenance and refuse a valid gate.
+  // Only REAL live model ids count. `RunResult.models` is verbatim from the agent, and the agent stamps the
+  // literal `<synthetic>` on assistant messages it fabricates LOCALLY (no API call, zero-filled usage) — so
+  // a perfectly ordinary LIVE rep can carry it alongside the real id. It is not an answerer: including it
+  // would pollute the set and, via singleModel()'s size check, refuse an otherwise-valid gate. Match the
+  // angle-bracket PREFIX, not the one spelling — `<synthetic>` is the marker seen so far, not the contract.
   const isLiveModel = (m: unknown): m is string => typeof m === "string" && !m.startsWith("<");
   const judge = new Set<string>();
   const answerer = new Set<string>();

@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`result.json`'s `models` array is documented as agent-verbatim, and `<synthetic>` is named.** A
+  consumer hit `<synthetic>` in `models` and could find it nowhere — because it is not a harness string:
+  the agent stamps that literal on assistant messages it fabricates locally (no API call, zero-filled
+  `usage`), and the harness records model ids verbatim. Every surface that describes `models` said or
+  implied each entry is a real model id — `schema/run-result.json` carried no `description` at all, while
+  `docs/session.md` and `docs/debugging.md` told you to read the array back as run provenance, which two
+  runs of the *same* pinned model can differ on purely by whether a synthesized turn occurred. All four
+  now state the rule (drop `<…>`-wrapped entries — the angle-bracket prefix is the marker, not the one
+  spelling), and `docs/gotchas.md` gains a symptom-keyed entry for the literal token someone greps for.
+  The maintainer-only eval gate has filtered this since it was bitten live, but its comment mis-attributed
+  the value to "a cassette/replay rep that used NO live model" — an ordinary live rep can carry it —
+  and referenced a `single()` sort that F20 replaced; both corrected.
+
 - **Documented what the harness is *for*, not only that it is faithful.** The README leads with the
   record as well as the contract, and a new **"Why not just `claude -p` or the Agent SDK?"** section
   states the five things that are structurally hard to get otherwise — the staged Cowork agent in cowork

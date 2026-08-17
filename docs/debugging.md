@@ -122,8 +122,10 @@ the reason to read the *record* rather than the answer. (`critique` is built on 
   invoking anything. Assert it with `skill_triggered` on the `run` lane; on an open-ended `skill` run
   there are no assertions, so this field **is** the signal. Also worth checking before you compare
   anything across runs: **`models`** (which model actually served the run — with no `model:` pinned,
-  that's whatever the staged binary defaults to) and **`ablated`** (`true` = the skill was deliberately
-  removed; never read an ablated run as a real one).
+  that's whatever the staged binary defaults to; **ignore any `<…>`-wrapped entry such as `<synthetic>`,
+  which is the agent's marker for a turn it fabricated locally, not a model** — see
+  [gotchas.md](./gotchas.md#operational-tools-when-youre-stuck)) and **`ablated`** (`true` = the skill was
+  deliberately removed; never read an ablated run as a real one).
 - **`replay --explain`** — the flagship tool for exactly this hunt: after the footer, it prints the
   evidence trail behind every **passing** assert (which `computer://` link resolved, which file matched,
   which value satisfied a bound), so you can tell a real green from a vacuous one at a glance instead of

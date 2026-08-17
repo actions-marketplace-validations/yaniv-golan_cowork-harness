@@ -1162,6 +1162,15 @@ export interface RunResult {
   // distinct model ids seen across assistant_text/tool_use/thinking events, in first-seen order.
   // Absent only when replayErrorResult (no run ever happened). Populated for buildPartialResult too,
   // when the salvaged run had at least one assistant message.
+  //
+  // VERBATIM from the agent, NOT validated as a live model id. The agent stamps the literal
+  // `<synthetic>` — its own constant, present in both the native and the VM binary — on assistant
+  // messages it fabricates LOCALLY: no API call, zero-filled `usage`. So `["claude-sonnet-5",
+  // "<synthetic>"]` is a normal array, and two runs of the SAME pinned model can differ here purely by
+  // whether a synthesized turn occurred. Any consumer reading this as run provenance must drop
+  // `<…>`-wrapped entries — match the angle-bracket prefix, not the one spelling (scripts/eval-gate.ts
+  // learned this the hard way: an unfiltered `<synthetic>` flipped its observed answerer and refused a
+  // valid gate).
   models?: string[];
   // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
   // silently dropped; see `thinkingElided` below for the dropped count). An author reads the

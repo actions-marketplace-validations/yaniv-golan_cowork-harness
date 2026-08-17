@@ -495,6 +495,7 @@
     },
     "models": {
       "type": "array",
+      "description": "distinct model ids seen across the run's assistant messages, in first-seen order \u2014 verbatim from the agent, NOT validated as live model ids. The agent stamps the literal '<synthetic>' on assistant messages it fabricates locally (no API call, zero-filled usage), so an angle-bracket-wrapped entry is a marker, not a model, and two runs of the same pinned model can differ here purely by whether a synthesized turn occurred. Drop '<\u2026>'-wrapped entries before reading this array as run provenance.",
       "items": {
         "type": "string"
       }

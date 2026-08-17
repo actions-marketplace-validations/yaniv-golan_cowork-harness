@@ -35,6 +35,12 @@
 - **A trace/tool-output path shows a VM path instead of a real one?** A run's `mounts.json` records the
   mount → host-path mapping that `trace --translate-paths` reads to print host paths for a `hostloop`
   run — see [run-status.md](./run-status.md#mountsjson--a-runs-vm-path-resolution-context).
+- **`result.json`'s `models` contains `<synthetic>` (or another `<…>` value)?** Not a model, and not a
+  harness string: the agent stamps `<synthetic>` on assistant messages it fabricates **locally** — no API
+  call, zero-filled `usage` — and the harness records model ids verbatim. It is normal alongside a real id
+  (`["claude-sonnet-5", "<synthetic>"]`) and is not a sign the run used a stub or a fixture. Drop every
+  `<…>`-wrapped entry before reading the array as run provenance; comparing two runs without doing so can
+  show a "model change" that is only a difference in whether a synthesized turn occurred.
 - **An old run dir predates the per-turn `turns/<N>/` layout?** `cowork-harness migrate-run-dir`
   converts it in place (dry run by default; pass `--write` to apply) — see
   [debugging.md](./debugging.md#old-run-dirs-pre-turns-layout).
