@@ -397,6 +397,19 @@ refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiabl
 cannot green something a paid run would reject. On a directory it reports every offender and the batch
 cost estimate. `lint` checks the assertion invariants (both above).
 
+**Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
+Without `--out`, `record` writes `cassettes/<scenario-name-slug>.cassette.json` (gitignored by
+default); pass `--out <path>` to put it somewhere tracked, e.g. `examples/replays/<name>.cassette.json`.
+That choice is permanent: the cassette rewrites `scenario.session`, `fingerprint.skillSources` and
+`scenarioSource` **relative to its own directory** at record time, so moving the file later — a
+different `--out`, a `git mv`, a copy into another repo — leaves those unresolvable and
+`verify-cassettes` reports `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you
+re-record at the new location. Related: recording at a **host-inheriting** tier
+(`protocol`/`hostloop`/`cowork`→hostloop) into a repo-visible path is refused outright (gotcha 25).
+The clean answer there is `fidelity: container` (sealed, `HOME=/tmp`, nothing to leak) — **not**
+redirecting `--out` outside the repo and moving the file in afterwards, which trades a loud refusal
+for a permanently unverifiable cassette.
+
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
 (and `verify-run`) read the gates + offered option labels out of that run's `events.jsonl` for free. Iterate
@@ -547,6 +560,39 @@ Recognize these before "fixing" a non-bug:
 The full 17-code signal table (severity + per-signal opt-out) is in
 [`references/scenario-schema.md`](./references/scenario-schema.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
+
+### Measure — before/after, with/without (`--repeat`, `--ablate-skill`)
+
+A single green proves the run passed **once**. Two questions need more than that, and both have a
+discipline that is cheap to follow and expensive to skip.
+
+**"Did it pass, or pass once?"** → `--repeat N` (2-100, on `skill` AND `run`) samples the same
+skill+prompt N times and prints a variance rollup instead of a single verdict. `--min-pass-rate` sets
+the batch threshold, `--stop-on-diverge` stops the moment flakiness is proven, `--max-budget-usd` caps
+spend.
+
+**"Does the skill actually help?"** → `--ablate-skill` runs the prompt with every skill/plugin
+discovery source removed, so the agent answers from its own priors. **It is ONE arm, not a paired
+experiment**: this invocation is the control. Run the same prompt a second time *without* the flag for
+the treatment arm and compare them yourself. Composed with `--repeat 5` it produces **5 ablated runs
+and 0 treatment runs** — N samples of the control, which is the intended reading and is not an A/B.
+Every ablated run is stamped `ablated: true` in `result.json`; a run that isn't stamped is a real run.
+What the harness gives you here is the run execution and the control arm — designing the comparison
+(scrubbing giveaways, shuffling, judging blind, unblinding only after grading) is still yours.
+
+**Measurement hygiene — four things that silently invalidate a batch:**
+
+1. **Pin the model.** With no `model:` in the session (or `--model` on the `skill` lane) the run uses
+   whatever the staged agent binary defaults to — not a harness constant, and it can move under a
+   baseline bump. Read `result.json`'s `models` back before believing any cross-run comparison.
+2. **Commit the skill first.** `fingerprint.skillHash` is content-exact, so an edit mid-batch silently
+   splits your dataset into two generations — and a hash whose source was never committed identifies a
+   generation that is unrecoverable. `stats --group-by skill-hash` separates them after the fact;
+   nothing recovers the source.
+3. **Check which arm you actually ran** before analysing anything: `ablated` and
+   `context.availableSkills` in each `result.json`.
+4. **Read `skillsInvoked`.** A rep where the skill never triggered is a measurement of the model, not
+   of your skill — discard or re-run it.
 
 ### Checking whether a background run is alive
 
@@ -969,6 +1015,26 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     risk). `verify-cassettes --allow-host-inventory <regex>` is unrelated: a per-finding suppressor for the
     scanner's `host-inventory` class on an already-committed cassette. Passing one where the other command
     wants it fails as an unrecognized flag — they don't interchange. Depth: `references/ci-recipe.md`.
+
+26. **A `skill`-lane `PASS` does not mean the skill ran, or that the run was the one you wanted.** *Why:*
+    an open-ended `skill` run has no `assert:` block, so its verdict reports only that **no guard fired**
+    (no error, stall, host-path leak, `outputs/` delete, permissive auto-allow or capability gap). On
+    `run` the same word additionally means *your assertions held*; on `skill --repeat N`, `PASS — N/N`
+    means N runs cleared the guards — it says nothing about which model served them, whether the skill
+    was invoked, or whether they were the ablated arm. *Fix:* read the three fields the record already
+    carries before drawing any conclusion — `skillsInvoked` / `skillActivity` (was it invoked at all),
+    `models` (which model), `ablated` + `context.availableSkills` (which arm). An answer that reads
+    exactly like skill output is not evidence: the skill's own source is mounted where the model can
+    read it — in production too — so on a self-referential prompt it may read `SKILL.md` and answer
+    directly, with `skillActivity` empty.
+
+27. **`allow_stall: true` is a scenario assertion, so the `skill` lane cannot use it.** *Why:* the
+    `stalled` guard fires when a run's final message ends in `?` with no productive tool call after the
+    last gate — which includes a complete answer that closes by *offering* a follow-up ("want me to run
+    this through a structured pass?"). The documented opt-out lives in an `assert:` block, and an
+    open-ended `skill` run has none, so the failure message names a remedy that lane can't perform.
+    *Fix:* on `skill`, read the final message before believing `stalled`, or move the check to a
+    `run` scenario where `allow_stall: true` is authorable.
 
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the

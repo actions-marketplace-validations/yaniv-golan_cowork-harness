@@ -241,8 +241,17 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 
 `~` expands to your home directory. **Relative paths resolve from the session file's own directory** — so a scenario + its session + the files they reference form a self-contained, relocatable bundle that `run` resolves the same way from any working directory. (A scenario's `session:` likewise resolves relative to the *scenario* file.) Absolute paths and `~` are used as-is. Paths passed as CLI args instead — `skill --upload/--folder` — resolve from your current working directory, since you typed them in your shell.
 
+> **A recorded cassette is not part of that bundle, and is not relocatable.** A cassette rewrites the
+> same references relative to **its own** directory at record time (`scenario.session`,
+> `fingerprint.skillSources`, `scenarioSource`). Move it afterwards — a different `--out`, a `git mv`,
+> a copy into another repo — and those paths fail to resolve from the new location, leaving
+> `verify-cassettes` unable to verify skill staleness: it reports `unverifiable-skill`
+> ("can't verify ⇒ not green"). Decide where a
+> cassette lives *before* you record it. See [cassette.md → Where a cassette lives](./cassette.md#where-a-cassette-lives-and-why-it-cant-move-afterwards).
+
 ## Tips
 
 - Keep **one session per realistic setup** (e.g. `sessions/sales.yaml`, `sessions/clinical.yaml`) and point many scenarios at each.
 - To reproduce a *specific* real Cowork setup, pin `plugins.config_dir` to a copy of that `~/.claude` instead of letting the harness build a clean one.
-- Omit `model` in committed sessions if you want CI to track the agent default; pin it when a test depends on a specific model's behavior.
+- **Pin `model` for anything you will compare.** Omitting it emits no `--model` flag at all, so the run uses whatever the *staged agent binary* defaults to — not a harness constant, and a value that can move under a baseline bump with nothing in your session changing. That is fine when you deliberately want CI to track the agent default. It is never fine for a measurement: a `--repeat` batch, a before/after across a fix, or a with/without comparison must pin the model or its arms aren't comparable. Either way, read `result.json`'s `models` back before believing a cross-run result — it records what actually served the run.
+  On the ad-hoc `skill` lane there is no session file, so `--model <id>` (or `COWORK_HARNESS_MODEL`) is the *only* way to pin it; without one you get the binary default there too.

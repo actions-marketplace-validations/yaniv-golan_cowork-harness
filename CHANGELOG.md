@@ -6,6 +6,70 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Documented what the harness is *for*, not only that it is faithful.** The README leads with the
+  record as well as the contract, and a new **"Why not just `claude -p` or the Agent SDK?"** section
+  states the five things that are structurally hard to get otherwise — the staged Cowork agent in cowork
+  mode, a test of the **real** router (the agent binary does discovery, so `skill_triggered` checks a
+  `description` edit rather than your own dispatcher), real plugin loading (a failed load surfaces as a
+  missing skill in `context.availableSkills`), **derived** run evidence a raw `stream-json` stream does
+  not carry (`skillActivity`, `skillsInvoked`, `subagents[].referencesRead`, `ablated`, …), and the
+  reproduced *limitations* — plus token-free replay and scripted gate answers. Mirrored in `llms.txt`.
+  `docs/README.md`'s "I want to…" table grows from 5 rows to 11, covering the questions the harness
+  uniquely answers (did the skill actually run · did a description edit break triggering · did it pass or
+  pass once · does the skill beat no skill · testing a skill that asks questions · proving no egress).
+
+- **`--ablate-skill` is documented as ONE arm.** The flag runs a single invocation with the skill
+  removed — the control arm of a with/without comparison, not both arms; composed with `--repeat N` it
+  produces N *ablated* runs and zero treatment runs. Now stated on `skill` and `run` in the README, in
+  `docs/scenario.md`, in the companion skill (a new **Measure** section in Part II), and in the skill's
+  Recipe 5, which described the experiment in prose without naming the flag. The scope is stated with
+  it: the harness supplies the runs and the control arm; designing the comparison (scrubbing, shuffling,
+  blind judging, unblinding) is the caller's.
+
+- **A `skill`-lane `PASS` is explained.** With no `assert:` block it reports that no *guard* fired — not
+  that the skill was invoked, nor which model or arm produced the run. New gotcha in the companion skill
+  and a note in the README, both pointing at `skillsInvoked` / `skillActivity` / `models` / `ablated`.
+
+- **"Confirm the skill was invoked" is now the first entry in the false-green hunt** (`docs/debugging.md`),
+  alongside the failure family it belongs to: an answer that describes work the run never did. The skill's
+  own source is mounted where the model can read it — in production too — so an answer that reads like
+  skill output is not evidence of invocation.
+
+- **Model pinning is documented as a measurement requirement.** Omitting `model:` emits no `--model` flag
+  at all, so the run uses whatever the *staged agent binary* defaults to — fine for tracking the agent
+  default, never fine for a `--repeat` batch or a before/after. `docs/session.md` and the skill's schema
+  reference say so, and note that the ad-hoc `skill` lane has no session file, so `--model` is the only
+  control there.
+
+- **A recorded cassette is documented as NOT relocatable.** It rewrites `scenario.session`,
+  `fingerprint.skillSources` and `scenarioSource` relative to its **own** directory at record time, so a
+  later move (a different `--out`, a `git mv`, a copy) leaves them unresolvable and `verify-cassettes`
+  reports `unverifiable-skill` (exit 3). New section in `docs/cassette.md`, with caveats added next to the
+  "relocatable bundle" promise in `docs/session.md` and the skill's schema reference, and next to the
+  host-inventory record refusal — where `fidelity: container`, not an out-of-repo `--out`, is the answer.
+
+- **Assertion families now state their ceiling, not just their members.** The gate keys match question
+  **text**, counts and delivery — no key asserts a gate's **option set or order** (the options are
+  recorded at `decisions[].questions[].options[]`); `no_unexpected_files` is an allowlist over *newly
+  created* files and is not a stand-in for "file X must not exist"; `skill_tool_used` counts
+  **sub-agent** calls inside the window and matches tool **names** only, so it can say neither which
+  agent called nor with what path. `allow_stall` is marked scenario-only — an open-ended `skill` run has
+  no `assert:` block and therefore no way to suppress a `stalled` verdict.
+
+- **`lint` messages corrected and de-noised.** The unknown-assertion-key warning said the harness "would
+  ignore it, so it silently does nothing"; `run`/`skill`/`record` in fact **reject** the scenario at load,
+  and the message now says so and names the negative-form keys people reach for. The two unconditional
+  INFO advisories (`manifest-needs-snapshot`, `gate-needs-controlout`) are reworded from imperative
+  "re-record…" to "no action needed if your cassette is current", and `positional-choose-order` now notes
+  that unstable option order is also what the *user* sees, not only a re-record flake.
+
+- **`verdict.failures[]` documented as the machine-readable failure breakdown** (`references/ci-recipe.md`):
+  entries carrying an `assertion` key are your failed assertions; entries without one are guard signals,
+  infra errors, or — under `replay --assert-from`/`--reassert` — skill-source drift. Both land on exit 1,
+  so the exit code cannot separate them and the envelope can.
+
 ## [1.23.0] — 2026-08-14
 
 ### Added

@@ -460,9 +460,13 @@ def lint_doc(doc, path, raw_lines):
             Finding(
                 "WARN",
                 "unknown-assert-key",
-                f"unknown assertion key `{k}` — not in the assertion catalog (the harness would "
-                "ignore it, so it silently does nothing).",
-                "Use a real assertion key — see references/scenario-schema.md for the full catalog.",
+                f"unknown assertion key `{k}` — not in the assertion catalog. `run`/`skill`/`record` "
+                "REJECT the scenario at load (zod `unrecognized_keys`), so this is a hard failure "
+                "waiting to happen, not a silently-ignored line.",
+                "Use a real assertion key — `cowork-harness assertions --list` is the authoritative "
+                "catalog (references/scenario-schema.md documents the same set). Check for a near-miss "
+                "first: the negative forms are `tool_not_called`, `no_skill_triggered`, "
+                "`subagent_tool_absent`, `transcript_not_contains`.",
                 path,
             )
         )
@@ -841,8 +845,10 @@ def lint_doc(doc, path, raw_lines):
                 f"assertion(s) {manifest_present} evaluate on replay only when the cassette carries an "
                 "`artifacts` manifest (`record` snapshots one). A manifest-less cassette skips them "
                 "(with a loud warning).",
-                "If the cassette carries no `artifacts` manifest (recorded by an older harness), re-record "
-                "so these assertions evaluate against the captured artifacts; a current cassette already has one.",
+                "No action needed if you have a current cassette — `record` has snapshotted a manifest "
+                "since 0.24. This is advisory only (the linter never reads your cassettes, so it cannot "
+                "tell); re-record only if yours predates that. `lint --min-severity WARN` silences the "
+                "whole INFO class in CI.",
                 path,
             )
         )
@@ -865,7 +871,10 @@ def lint_doc(doc, path, raw_lines):
                 "drift but NOT to option re-ordering: the gate's option order can vary run-to-run, so the "
                 "index can land on a different option (a silent re-record flake).",
                 'If the gate\'s option order is stable, pin by exact label (choose: "<label>"); use a '
-                "positional index only when labels drift but order holds.",
+                "positional index only when labels drift but order holds. Worth a second look for a "
+                "different reason: unstable option order is also what the USER sees — a reordered gate "
+                "puts a different choice in the default slot. No assertion covers option order today; "
+                "read decisions[].questions[].options[] in result.json when what was SHOWN matters.",
                 path,
             )
         )
@@ -879,7 +888,10 @@ def lint_doc(doc, path, raw_lines):
                 "gate-needs-controlout",
                 f"gate assertion(s) {gate_present} only evaluate on replay when the cassette has "
                 "controlOut (full-fidelity). An old cassette excludes them (with a loud warning).",
-                "Re-record with a current harness so the cassette carries controlOut.",
+                "No action needed if you have a current cassette — one recorded by a current harness "
+                "carries controlOut. This is advisory only (the linter never reads your cassettes, so it "
+                "cannot tell); re-record only if yours is old. `lint --min-severity WARN` silences the "
+                "whole INFO class in CI.",
                 path,
             )
         )

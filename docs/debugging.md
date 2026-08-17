@@ -104,6 +104,26 @@ The harness can no-op a check in ways that still produce a green run: skip an as
 flagged with a loud `::warning::`, not silent), auto-answer a gate, observe an empty egress allowlist.
 A green run is not automatically a correct run.
 
+There is a second, larger family the checks below exist for, and it has nothing to do with the harness:
+**the agent's answer describes work the run never did.** A skill that never triggered still produces a
+confident answer. A "ran seven parallel passes" claim still reads well with `subagents: []`. A
+reference file the skill says it consulted is not in `subagents[].referencesRead`. None of that is
+visible in the transcript — the output is exactly what a correct run would have produced — and it is
+the reason to read the *record* rather than the answer. (`critique` is built on the same observation:
+[agent self-reports confabulate routinely](./critique.md).)
+
+- **Did the skill actually run?** The first thing to check, and the cheapest. `result.json`'s
+  **`skillsInvoked`** lists what the agent invoked via the `Skill` tool; **`skillActivity`** shows the
+  per-invocation window (which tools fired inside it, sub-agent calls included); **`context.availableSkills`**
+  is what was *offered*, read off each staged skill's `SKILL.md` frontmatter — so `offered but never
+  invoked` is a fact you can read directly rather than infer. An answer that "looks like skill output"
+  is not evidence: the skill's own source is mounted where the model can read it (it is in production
+  too), so on a self-referential prompt the model may read `SKILL.md` and answer from it without ever
+  invoking anything. Assert it with `skill_triggered` on the `run` lane; on an open-ended `skill` run
+  there are no assertions, so this field **is** the signal. Also worth checking before you compare
+  anything across runs: **`models`** (which model actually served the run — with no `model:` pinned,
+  that's whatever the staged binary defaults to) and **`ablated`** (`true` = the skill was deliberately
+  removed; never read an ablated run as a real one).
 - **`replay --explain`** — the flagship tool for exactly this hunt: after the footer, it prints the
   evidence trail behind every **passing** assert (which `computer://` link resolved, which file matched,
   which value satisfied a bound), so you can tell a real green from a vacuous one at a glance instead of

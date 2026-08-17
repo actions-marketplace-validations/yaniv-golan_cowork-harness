@@ -2,6 +2,15 @@
 
 The agent the harness runs **is** `claude-code` — the same binary Claude Desktop stages at `claude-code-vm/<ver>/claude` and launches in cowork mode via `CLAUDE_CODE_IS_COWORK=1` (the `--cowork` flag exists only in the staged in-VM binary; the harness uses the env var). So it discovers extensions from the same roots. The harness's job is to *populate those roots* the way Cowork does, while giving you override knobs for tests. The roots below were verified against the staged agent binary.
 
+> **Why this matters for testing, not just for setup.** Because the *binary* does the discovering, a
+> triggering test is a test of the real router: the agent sees your `description` alongside every other
+> staged skill and decides. That is what `skill_triggered` / `no_skill_triggered` actually check, and
+> it is the guard worth running on every `description` edit. If you drive the agent loop yourself
+> instead (the Agent SDK), you supply the skill directly — so you are exercising your own dispatcher,
+> and a description that would never have been picked in production still passes. Same reason a broken
+> plugin manifest shows up here the way it will for a user: the plugin doesn't load, and the skill is
+> simply absent from `context.availableSkills`.
+
 > **Most common case:** to mount one local skill for a test you have two equivalent options — put
 > `skills.local: ["./skills/my-skill"]` in your session (stages a bare skill folder into the config dir),
 > **or** wrap the skill in a local plugin folder and list it under `plugins.local_plugins` (what every bundled

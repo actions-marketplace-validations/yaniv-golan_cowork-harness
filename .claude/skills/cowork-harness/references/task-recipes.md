@@ -176,9 +176,16 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    from `RunResult.assertions[].semanticClaims`. Do **not** chase single-run all-pass — set `min_pass` to
    the reliably-hit core for a green verdict, and treat the per-claim rates as the real signal. (N=1
    routinely mislabels a stable 0/3 as "intermittent" and vice-versa.)
-5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed (or
-   inspect a not-invoked rep). If the answer still scores high, that claim is answerable from priors and
-   tests the model, not your skill — strengthen it (a skill-specific fact) or drop it.
+5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed and
+   compare. `--ablate-skill` is the flag for it: it empties every skill/plugin discovery source for
+   **that one invocation**, so the agent answers from its own priors, and stamps the result
+   `ablated: true`. It is the **control arm only** — run the same prompt again *without* the flag for
+   the treatment arm; `--ablate-skill --repeat 5` gives you 5 control runs and 0 treatment runs, not an
+   A/B. (Inspecting an organically not-invoked rep works too, but is not a substitute: that rep may
+   differ for other reasons.) If the answer still scores high without the skill, that claim is
+   answerable from priors and tests the model, not your skill — strengthen it (a skill-specific fact) or
+   drop it. Everything past "run both arms" — scrubbing giveaways, shuffling, judging blind, unblinding
+   after grading — is yours to build; the harness supplies the runs and the control.
 6. **Gate a change on the profile diff.** Capture the per-claim profile before your edit (the baseline),
    make the edit, re-capture, and compare per claim: a claim that DROPPED (e.g. 3/3 → 0/3) is a regression
    your edit caused; a claim already at 0/3 (a known gap) cannot regress. That turns "did my SKILL.md
@@ -229,7 +236,14 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    - `cowork-harness inspect <run-dir>` → what the run produced, plus the run's `label` and `skillHash`.
    - In-run alternative: dispatch a checker **sub-agent** (maker/checker) whose result folds into the
      verdict.
-2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
+2. **Commit the skill before a measurement batch, and pin the model.** Two cheap disciplines that are
+   unrecoverable if skipped. `skillHash` is content-exact, so an edit mid-batch silently splits the
+   dataset into two generations — `stats --group-by skill-hash` separates them afterwards, but a hash
+   whose source was never committed names a generation that is unrecoverable, which makes the
+   comparison uninterpretable rather than merely noisy. And with no `model:` in the session (or
+   `--model` on the `skill` lane) each run uses whatever the staged agent binary defaults to, so a
+   before/after can silently straddle two models; read `result.json`'s `models` back to confirm.
+3. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
    content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but only on ≥ 1.5.0; earlier CLIs emit
    no `skillHash` on the `skill` lane at all, so verify the field is present before pairing on it** (a run that mounts nothing

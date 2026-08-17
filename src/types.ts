@@ -451,7 +451,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
+      "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment). SCOPE: the window's tool counts INCLUDE calls made by any sub-agent dispatched during it, so this key cannot distinguish a main-agent call from a sub-agent one (use subagent_tool_used for a sub-agent-only claim), and it matches tool NAMES only — never the path/arguments a tool was called with",
     ),
   all_tasks_completed: z
     .literal(true)

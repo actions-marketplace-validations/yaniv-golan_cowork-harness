@@ -209,6 +209,26 @@ under `cassettes/`, which is **gitignored** — this repo's own committed exampl
 `examples/replays/` instead. Pass `--out examples/replays/<name>.cassette.json` (or your own tracked
 path) if the cassette should be committed.
 
+### Where a cassette lives, and why it can't move afterwards
+
+**Choose the path before you record.** A cassette stores its references — `scenario.session`,
+`fingerprint.skillSources`, `scenarioSource` — **relative to its own directory**, computed at record
+time. That keeps a committed fixture free of absolute host paths, and it means the file is *not*
+relocatable: move it to another directory and those paths stop resolving, so `verify-cassettes` can no
+longer recompute the skill hash and reports
+
+```
+[unverifiable] skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)
+```
+
+which is exit `3`, permanently, until you re-record at the new location. This applies to any move — a
+`git mv` during a repo reorganisation, a copy into another project, or recording to one `--out` and
+committing to a different path — not just to the hostloop case below.
+
+(The session-shape check degrades more gently: it falls back to a name lookup and downgrades a
+mismatch to a non-failing note, precisely because a relocated cassette can't be trusted to match by
+path. The skill-hash check has no such fallback.)
+
 On that default path, `record` refuses to overwrite an existing cassette that belongs to a **different**
 scenario name (their names slugify to the same default path — a silent-clobber guard, not a general
 "don't overwrite" check; a routine same-scenario re-record is unaffected). `--force` narrowly opts out of
@@ -852,6 +872,11 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   anyway; it is distinct from `verify-cassettes`' `--allow-host-inventory <regex>` above (a per-finding
   suppressor, not a record-time consent) and is appropriate only when the session has no personal MCP
   servers or plugins.
+  **The right way out is usually `fidelity: container`**, which is sealed (`HOME=/tmp`) and has nothing
+  to leak. Redirecting the *output* elsewhere is not equivalent: a cassette recorded outside the repo
+  and moved in afterwards is [permanently unverifiable for staleness](#where-a-cassette-lives-and-why-it-cant-move-afterwards),
+  so you would trade a loud refusal for a silent one. Record where the file will live, at a tier whose
+  recording you're willing to publish.
   **Tier-gated on purpose:** at `container` the agent is sealed (`HOME=/tmp`), so a foreign server name there
   can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
   it would fail a legitimate fixture.

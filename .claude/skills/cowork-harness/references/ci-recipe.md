@@ -335,6 +335,22 @@ scenario = `result === "success" && assertions.every(pass)`. Exit code is non-ze
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
 
+**Telling *why* a run failed, without scraping stderr.** Each result carries a `verdict` whose
+`failures[]` is the one place every failure reason is enumerated, in one shape (the same object lands
+in `result.json` and in the stdout envelope, by construction). Each entry is
+`{assertion?: "<key>", message}`, and the presence of `assertion` is the discriminator:
+
+- **has `assertion`** — one of *your* `assert:` items failed, named by its key (`file_exists`,
+  `semantic_matches`, …).
+- **no `assertion`** — the run failed for a reason you didn't author: a guard signal (`stalled`,
+  `permissive_auto_allow`, `missing_capability`, a host-path leak, an `outputs/` delete), an infra or
+  transport error, an unanswered gate, or — on `replay --assert-from`/`--reassert` — **skill-source
+  drift**, which that mode escalates to a hard failure on purpose (frozen events must not green an
+  edited assert against a skill whose current source produces something else). The `message` names which.
+
+So "did my assertions pass?" and "is the cassette stale?" are separable from the envelope alone. Do
+not infer either from the exit code: both land on exit 1.
+
 **For the commands in this recipe, stdout carries the machine envelope and nothing else.** Without
 `--output-format json`, `run` / `record` / `replay` / `verify-cassettes` / `status` write their whole
 human rendering — warnings, verdict, `status`'s summary line — to **stderr**, and stdout stays empty.
