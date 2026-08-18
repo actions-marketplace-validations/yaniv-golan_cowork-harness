@@ -105,6 +105,28 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`critique`'s cost guidance stated one ratio unconditionally, and it inverts for the skills people
+  most want to critique.** `--help` and `docs/critique.md` said the two evaluator passes dominate spend
+  at ~3/4 of an end-to-end total. That holds for a trivial probe. Measured on a real document-analysis
+  run: **task turn ~61%, evaluator ~30%** — because evaluator cost is roughly fixed (bounded by the
+  evidence package) while the graded task turn is unbounded. The harm was the advice that followed:
+  swap `--evaluator-model` on a fleet sweep, trading the injection-resistance property that is verified
+  **for the default evaluator only** for a saving a third the advertised size. Both surfaces now name
+  both regimes and point at the per-run split, and the report's `cost:` line prints the evaluator's
+  **share of the total** alongside the four-way breakdown — so a run corrects the guidance itself rather
+  than waiting for the next reader of the docs. When the task turn dominates, the levers named are
+  `--model`, `--timeout` and probe scope.
+
+- **`critique --out report.json` warns when the extension and `--output-format` disagree.**
+  `--output-format` defaults to `text` and `--out` writes whatever it says, so the flag most likely to
+  be scripted against had its format decided by a different flag with a non-obvious default: a
+  downstream `json.load()` failed with `Expecting value: line 1 column 1`, which reads as a corrupt or
+  missing report rather than a format mismatch. The warning fires at **argument-parse time**, before the
+  four workloads spawn — the reported cost of this was a paid run discovered to be unparseable after the
+  fact. Deliberately a warning and not extension inference: a filename is not proof of intent, and
+  silently changing what an existing `--out foo.json` writes would break a script that already parses
+  the text.
+
 - **`record` warns BEFORE the run when a cassette would not be portable.** A cassette stores its
   `scenario.session` and `scenarioSource` relative to its own directory, so if reaching them means
   climbing out of the project tree, the stored relatives resolve only from that one filesystem layout —

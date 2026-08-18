@@ -22,7 +22,7 @@ import { renderKnownLimitations } from "./limitations.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
@@ -147,10 +147,14 @@ Repeating a flag: --upload/--folder/--plugin/--marketplace/--enable/--answer acc
 COST AND PREREQUISITES — read before running:
   * Each critique is FOUR model workloads: two graded runs (task + reflection) at the chosen tier and two
     evaluator passes over an evidence package of up to ${MAX_PACKAGE_BYTES / 1024}KB.
-  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier — and the two
-    evaluator passes DOMINATE spend (~3/4 of a measured e2e total). For a batch: calibrate with run 1's
-    costUsd (gate on costUsd.complete), then consider a cheaper --evaluator-model for the sweep — noting
-    the armor's injection-resistance is verified for the DEFAULT evaluator only.
+  * The evaluator defaults to ${DEFAULT_EVALUATOR_MODEL} — the most expensive tier. WHICH workload
+    dominates depends on the skill: evaluator cost is roughly FIXED (bounded by the evidence package),
+    while the graded task turn is UNBOUNDED. On a trivial probe the two evaluator passes are ~3/4 of the
+    total; on a real document-analysis run the ratio INVERTS (measured: task turn ~61%, evaluator ~30%).
+    Read the per-run split off the cost line / costUsd rather than assuming either — a cheaper
+    --evaluator-model buys you at most the evaluator's share, and it voids the armor's
+    injection-resistance verification, which covers the DEFAULT evaluator only. When the task turn
+    dominates, the levers are --model, --timeout and probe scope.
   * container needs Docker/Lima; hostloop needs Docker (the bash/web_fetch sidecar) PLUS the staged native
     agent binary, and writes to the real host FS (a writable --folder requires --allow-host-writes). Both
     tiers need CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY as a CI fallback) in the env or .env — the
@@ -396,6 +400,24 @@ function parseArgs(
   }
   if (outputFormat !== "json" && outputFormat !== "text")
     throw new Error(`--output-format must be "text" or "json" (got "${outputFormat}")`);
+  // `--out foo.json` writes whatever `--output-format` says, and that defaults to TEXT — so a scripted
+  // `json.load()` fails with "Expecting value: line 1 column 1", which reads as a corrupt or missing
+  // report rather than a format mismatch. Warn HERE, at parse time, rather than inferring the format
+  // from the filename: a name is not proof of intent, and silently changing what an existing
+  // `--out foo.json` writes would break a script that already parses the text. Parse time is also the
+  // point that matters — the reported cost of this footgun was a four-workload run discovered to be
+  // unparseable AFTER it was paid for; a warning here fires before the spawn.
+  if (out !== undefined) {
+    const ext = extname(out).toLowerCase();
+    const wanted = ext === ".json" ? "json" : ext === ".txt" || ext === ".md" ? "text" : undefined;
+    if (wanted !== undefined && wanted !== outputFormat) {
+      warn(
+        `::warning:: [critique] --out ${out} looks like ${wanted}, but --output-format is "${outputFormat}"` +
+          `${seen.has("--output-format") ? "" : " (the default)"} — the file will contain ${outputFormat}. ` +
+          `Pass --output-format ${wanted} if that is not what you meant.\n`,
+      );
+    }
+  }
   // Fail fast with critique's OWN clear error (mirroring cli.ts's global --dotenv existence check,
   // ~line 627) rather than letting an absent file surface later as a generic instrument-failure
   // diagnostic from the child `skill` invocation's own (differently-worded) rejection.
@@ -1035,10 +1057,21 @@ export function buildTextReport(state: ReportState): string {
   const cost = state.costUsd;
   if (cost) {
     const part = (v: number | undefined) => (v === undefined ? "unpriced" : `$${v.toFixed(4)}`);
+    // The evaluator SHARE, not just the four parts. Which workload dominates is skill-dependent
+    // (evaluator cost is bounded by the evidence package; the task turn is not), and guidance that
+    // states one ratio unconditionally misdirects the optimization — so let each run say its own.
+    // Only when both passes are priced AND the total is non-zero: a share computed from a partial
+    // total would understate it, which is the same misdirection in the other direction.
+    const evalUsd =
+      cost.evaluatorPass1Usd !== undefined && cost.evaluatorPass2Usd !== undefined
+        ? cost.evaluatorPass1Usd + cost.evaluatorPass2Usd
+        : undefined;
+    const share =
+      evalUsd !== undefined && cost.complete && cost.totalUsd > 0 ? ` = ${Math.round((evalUsd / cost.totalUsd) * 100)}% of total` : "";
     out.push(
       `  cost: $${cost.totalUsd.toFixed(4)}${cost.complete ? "" : " (INCOMPLETE — one or more workloads unpriced)"} — ` +
         `task ${part(cost.taskTurnUsd)}, reflection ${part(cost.reflectionTurnUsd)}, ` +
-        `evaluator ${part(cost.evaluatorPass1Usd)} + ${part(cost.evaluatorPass2Usd)}`,
+        `evaluator ${part(cost.evaluatorPass1Usd)} + ${part(cost.evaluatorPass2Usd)}${share}`,
     );
   }
   out.push(`  task run result: ${taskResult ?? "unknown (envelope unavailable)"}`);

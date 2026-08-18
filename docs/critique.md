@@ -110,7 +110,7 @@ ignored.
 |---|---|
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
-| `--out <path>` | **also** write the selected-format report to this file (stdout unchanged) |
+| `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
 | `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ its `agents/<name>.md`) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop\|cowork` | container (default) or hostloop; `cowork` resolves via the baseline's loop gate to one of those two and pins BOTH turns to it. `microvm`/`protocol` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
@@ -173,10 +173,16 @@ It does **not** record their contents — see Known limitations.
   evaluator passes.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
-- **The evaluator passes dominate spend** — on a measured end-to-end (trivial probe, default evaluator)
-  the two evaluator passes were ~3/4 of the total. For a wide batch: calibrate with run 1's `costUsd`
-  (gate on `costUsd.complete` — `false` means the total undercounts), then consider a cheaper
-  `--evaluator-model` for the sweep. Caveat: the armor's injection-resistance is verified for the
+- **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
+  cost is roughly **fixed** (bounded by the evidence package: corpus + transcript caps); the graded task
+  turn is **unbounded**. On a trivial probe the two evaluator passes are ~3/4 of the total; on a real
+  document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
+  report's `cost:` line prints the four-way split and the evaluator's share of the total, and `costUsd`
+  carries the same numbers — use those. A cheaper `--evaluator-model` can only ever buy you the
+  evaluator's share, so when the task turn dominates the levers are `--model`, `--timeout` and probe
+  scope instead. For a wide batch: calibrate with run 1's `costUsd`
+  (gate on `costUsd.complete` — `false` means the total undercounts), then decide. Caveat: the armor's
+  injection-resistance is verified for the
   shipped **default** evaluator model only — changing it voids that specific verification (matters when
   critiquing skills you did not write).
 - **Trending spend across critiques: use the run index, not the reports.** Each critique appends a
