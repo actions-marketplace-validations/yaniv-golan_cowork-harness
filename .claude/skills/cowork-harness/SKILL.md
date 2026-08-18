@@ -400,9 +400,9 @@ cost estimate. `lint` checks the assertion invariants (both above).
 **Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
 Without `--out`, `record` writes `cassettes/<scenario-name-slug>.cassette.json` (gitignored by
 default); pass `--out <path>` to put it somewhere tracked, e.g. `examples/replays/<name>.cassette.json`.
-That choice is permanent: the cassette rewrites `scenario.session`, `fingerprint.skillSources` and
-`scenarioSource` **relative to its own directory** at record time, so moving the file later — a
-different `--out`, a `git mv`, a copy into another repo — leaves those unresolvable and
+That choice is permanent: the cassette rewrites `scenario.session` and `scenarioSource` **relative to
+its own directory** at record time, so moving the file later — a different `--out`, a `git mv`, a copy
+into another repo — leaves those unresolvable and
 `verify-cassettes` reports `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you
 re-record at the new location. Related: recording at a **host-inheriting** tier
 (`protocol`/`hostloop`/`cowork`→hostloop) into a repo-visible path is refused outright (gotcha 25).

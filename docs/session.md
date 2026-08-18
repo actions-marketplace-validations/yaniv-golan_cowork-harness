@@ -241,9 +241,9 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 
 `~` expands to your home directory. **Relative paths resolve from the session file's own directory** — so a scenario + its session + the files they reference form a self-contained, relocatable bundle that `run` resolves the same way from any working directory. (A scenario's `session:` likewise resolves relative to the *scenario* file.) Absolute paths and `~` are used as-is. Paths passed as CLI args instead — `skill --upload/--folder` — resolve from your current working directory, since you typed them in your shell.
 
-> **A recorded cassette is not part of that bundle, and is not relocatable.** A cassette rewrites the
-> same references relative to **its own** directory at record time (`scenario.session`,
-> `fingerprint.skillSources`, `scenarioSource`). Move it afterwards — a different `--out`, a `git mv`,
+> **A recorded cassette is not part of that bundle, and is not relocatable.** A cassette rewrites its
+> own references relative to **its own** directory at record time (`scenario.session` and
+> `scenarioSource`). Move it afterwards — a different `--out`, a `git mv`,
 > a copy into another repo — and those paths fail to resolve from the new location, leaving
 > `verify-cassettes` unable to verify skill staleness: it reports `unverifiable-skill`
 > ("can't verify ⇒ not green"). Decide where a

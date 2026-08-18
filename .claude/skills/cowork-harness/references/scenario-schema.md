@@ -103,9 +103,9 @@ allow_host_writes: true             # OPTIONAL — required to run `hostloop` fi
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
 form a relocatable bundle. `~` expands to home.
 
-> **A recorded cassette is NOT part of that bundle and is NOT relocatable.** It rewrites the same
-> references relative to **its own** directory at record time (`scenario.session`,
-> `fingerprint.skillSources`, `scenarioSource`), so moving it afterwards — a different `--out`, a
+> **A recorded cassette is NOT part of that bundle and is NOT relocatable.** It rewrites its own
+> references relative to **its own** directory at record time (`scenario.session` and
+> `scenarioSource`), so moving it afterwards — a different `--out`, a
 > `git mv`, a copy into another repo — leaves them unresolvable and `verify-cassettes` reports
 > `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location.
 > Decide where a cassette will live *before* you record it.

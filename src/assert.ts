@@ -38,6 +38,24 @@ function resolveContainedManifestPath(workRoot: string, p: string): string | nul
   return abs;
 }
 
+/** The assertion keys that can ONLY be evaluated at `fidelity: hostloop` — on any other tier each one
+ *  FAILS "cannot verify" rather than being skipped (see `hostloopOnly` in `check()`), because
+ *  `/sessions/...` is a valid path there and no path hook exists, so a skip could green a wrong-tier
+ *  scenario.
+ *
+ *  Exported because one caller outside the evaluator has to reason about the set: the host-inventory
+ *  record refusal (`src/run/cassette.ts`) recommends re-recording at `container`, which is advice a
+ *  scenario asserting any of these CANNOT take. A hand-copied list there would rot exactly the way the
+ *  `--out`-outside-the-repo advice it replaces did. `test/hostloop-only-keys.test.ts` pins this array
+ *  against the `hostloopOnly("…")` call sites by scanning this file's source. */
+export const HOSTLOOP_ONLY_KEYS: (keyof Assertion)[] = [
+  "no_vm_path_file_op",
+  "vm_path_denied",
+  "path_denied",
+  "no_path_denied",
+  "subagent_dispatch_healthy",
+];
+
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
  *  shared UsageInfo/CostInfo types), so this is one function, not four copies. Each field's own
@@ -2144,6 +2162,10 @@ function check(
   // path (no path hook exists there), so excluding the key could green a wrong-tier scenario — it must
   // FAIL "cannot verify" instead.
   const VM_PATH = isVmSessionsPath;
+  // Every key gated below is listed in HOSTLOOP_ONLY_KEYS (top of this file) — the exported set exists
+  // so a caller OUTSIDE the evaluator can reason about "which scenarios cannot be re-recorded at
+  // container fidelity" without hand-copying the list. test/hostloop-only-keys.test.ts pins the two
+  // together by scanning the `hostloopOnly("…")` call sites in this file.
   const hostloopOnly = (key: string): KeyResult | null =>
     ctx.effectiveFidelity !== "hostloop"
       ? fail(

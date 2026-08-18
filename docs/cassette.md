@@ -211,11 +211,11 @@ path) if the cassette should be committed.
 
 ### Where a cassette lives, and why it can't move afterwards
 
-**Choose the path before you record.** A cassette stores its references — `scenario.session`,
-`fingerprint.skillSources`, `scenarioSource` — **relative to its own directory**, computed at record
-time. That keeps a committed fixture free of absolute host paths, and it means the file is *not*
-relocatable: move it to another directory and those paths stop resolving, so `verify-cassettes` can no
-longer recompute the skill hash and reports
+**Choose the path before you record.** A cassette stores its references — `scenario.session` and
+`scenarioSource` — **relative to its own directory**, computed at record time. That keeps a committed
+fixture free of absolute host paths, and it means the file is *not* relocatable: move it to another
+directory and those paths stop resolving, so `verify-cassettes` cannot recompute the skill hash and
+reports
 
 ```
 [unverifiable] skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)
@@ -224,6 +224,13 @@ longer recompute the skill hash and reports
 which is exit `3`, permanently, until you re-record at the new location. This applies to any move — a
 `git mv` during a repo reorganisation, a copy into another project, or recording to one `--out` and
 committing to a different path — not just to the hostloop case below.
+
+> **Why the skill hash is what breaks.** The chain is one hop: the cassette resolves its relative
+> `scenario.session` against its own directory, and the skill dirs come from **that session file**.
+> `fingerprint.skillSources` is stored relative to the *session-file* directory and is diagnostics-only
+> — nothing resolves against it, so it is not the thing that breaks. Miss the session file and there are
+> no dirs to hash, which is exactly the `unverifiable-skill` finding above.
+
 
 (The session-shape check degrades more gently: it falls back to a name lookup and downgrades a
 mismatch to a non-failing note, precisely because a relocated cassette can't be trusted to match by

@@ -8,6 +8,34 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The host-inventory record refusal no longer recommends an out-of-repo `--out`, and its remedy is
+  branch-aware.** Two consumers hit the same trap: the refusal told them to `--out` a path outside the
+  repo, and taking that advice bakes a cassette whose `scenario.session` / `scenarioSource` — stored
+  relative to its own directory — can never resolve again, so `verify-cassettes` reports it
+  `unverifiable` for staleness (can't verify ⇒ not green, exit 3) and only a re-record recovers. It cost
+  paid runs to discover, and the skill's own guidance had already started contradicting the message.
+  That branch is gone; the message now names it as explicitly NOT a fix, with the consequence spelled
+  out. The remedy it *does* offer is now scenario-dependent: `fidelity: container` normally, but a
+  scenario asserting a hostloop-only key (`no_vm_path_file_op`, `vm_path_denied`, `path_denied`,
+  `no_path_denied`, `subagent_dispatch_healthy`) cannot run at container at all, so it is pointed at
+  `--allow-host-inventory-fixture` after auditing the session instead. The key set is read from the
+  evaluator's own gate sites (`HOSTLOOP_ONLY_KEYS`, newly exported from `src/assert.ts`) rather than
+  restated — `test/hostloop-only-keys.test.ts` scans the `hostloopOnly("…")` call sites and fails if the
+  two drift, in either direction.
+
+### Fixed
+
+- **Five published sentences described `fingerprint.skillSources` as cassette-relative. It is not.** The
+  "a cassette is not relocatable" guidance added earlier in this release listed `scenario.session`,
+  `fingerprint.skillSources` and `scenarioSource` as all being rewritten relative to the cassette's own
+  directory. Only the first and third are. `skillSources` is stored relative to the **session-file**
+  directory and is diagnostics-only — nothing resolves against it. The real break chain is one hop
+  (cassette dir → relative `session:` → that file's declared skill dirs), which is why a moved cassette
+  loses the skill hash. Corrected in `SKILL.md`, `references/scenario-schema.md`, `docs/session.md`,
+  `docs/cassette.md` and this file's own earlier entry; `docs/cassette.md` gains a note stating the chain
+  positively, since knowing which reference actually breaks is what tells you whether a move is
+  recoverable.
+
 - **`result.json`'s `models` array is documented as agent-verbatim, and `<synthetic>` is named.** A
   consumer hit `<synthetic>` in `models` and could find it nowhere — because it is not a harness string:
   the agent stamps that literal on assistant messages it fabricates locally (no API call, zero-filled
@@ -56,8 +84,8 @@ All notable changes to this project are documented here. The format is based on
   reference say so, and note that the ad-hoc `skill` lane has no session file, so `--model` is the only
   control there.
 
-- **A recorded cassette is documented as NOT relocatable.** It rewrites `scenario.session`,
-  `fingerprint.skillSources` and `scenarioSource` relative to its **own** directory at record time, so a
+- **A recorded cassette is documented as NOT relocatable.** It rewrites `scenario.session` and
+  `scenarioSource` relative to its **own** directory at record time, so a
   later move (a different `--out`, a `git mv`, a copy) leaves them unresolvable and `verify-cassettes`
   reports `unverifiable-skill` (exit 3). New section in `docs/cassette.md`, with caveats added next to the
   "relocatable bundle" promise in `docs/session.md` and the skill's schema reference, and next to the

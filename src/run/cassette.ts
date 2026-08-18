@@ -64,7 +64,7 @@ import { isVmSessionsPath } from "../vm-paths.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate, budgetFields, type AssertContext } from "../assert.js";
+import { evaluate, budgetFields, HOSTLOOP_ONLY_KEYS, type AssertContext } from "../assert.js";
 import {
   planMutationsWithStats,
   summarizeMutationPlan,
@@ -2345,13 +2345,33 @@ export function hostInventoryPreflight(
         `Verify with 'verify-cassettes' before committing — it fails on a host-inventory finding.\n`,
     };
   }
+  // The FIX line is branch-aware, and deliberately no longer offers "--out a path outside the repo".
+  // Two defects that advice caused, both reported by consumers:
+  //  1. It trades a loud refusal for a SILENT worse state. A cassette's `session`/`scenarioSource` are
+  //     stored relative to its own dir, so one written outside the tree can never resolve its skill dirs
+  //     again — `verify-cassettes` reports `unverifiable-skill` ("can't verify ⇒ not green", exit 3) and
+  //     only a re-record fixes it. Two paid runs were spent discovering that.
+  //  2. "Record at container" is not universally available: a scenario asserting a HOSTLOOP_ONLY_KEYS key
+  //     fails "cannot verify" on every other tier, so that branch would send exactly those authors in a
+  //     circle. Read the set from assert.ts rather than restating it here — a hand list is how the
+  //     previous advice rotted.
+  const blocked = HOSTLOOP_ONLY_KEYS.filter((k) => (scenario.assert ?? []).some((a) => a[k] !== undefined));
+  const fix = blocked.length
+    ? `  Fix: this scenario asserts ${blocked.join(", ")}, which only evaluate at hostloop — 'container' is not ` +
+      `available to it. Audit the session (personal MCP servers, plugins, account metadata) and re-run with ` +
+      `--allow-host-inventory-fixture once you're satisfied the recording carries none.\n`
+    : `  Fix: record at 'container' fidelity (sealed, HOME=/tmp) — it inherits nothing from this machine, so the ` +
+      `cassette stays committable AND verifiable.\n`;
   return {
     kind: "refuse",
     message:
       `refusing to record into a repo-visible path at ${tier} — ${why}, and committing that publishes it.\n` +
       `  path: ${plannedCassettePath}\n` +
-      `  Fix: record at 'container' fidelity (sealed, HOME=/tmp), or --out a path outside the repo ` +
-      `(the default 'cassettes/' dir is gitignored).\n` +
+      fix +
+      `  NOT a fix: redirecting --out outside the repo. The cassette stores its session/scenario references ` +
+      `relative to its own directory, so one written outside the tree can never resolve them again — ` +
+      `verify-cassettes reports it 'unverifiable' for staleness (can't verify ⇒ not green) and only a ` +
+      `re-record recovers.\n` +
       `  Override with --allow-host-inventory-fixture if this session has no personal MCP servers or plugins.`,
   };
 }
