@@ -398,15 +398,17 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. `uploads/**`) whose workRoot-relative path matches has an unchanged content hash after the run (the in-place-mutation detector — the counterpart to `no_unexpected_files`, which only watches for *new* files); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise pass vacuously, verifying nothing); needs the pre-run content-hash manifest (harness ≥0.24 recordings) — same capture caveats as `no_unexpected_files` |
 | `self_heal_ran: <bool>` | a `/sessions/<id>/mnt` plugin script was (not) invoked — the plugin-root self-heal path |
 
-> ⚠️ **What the file family cannot express: "this specific file must NOT exist."** `file_exists` is
-> positive-only, and `no_unexpected_files` is an *allowlist over newly created files* — a different
-> claim. Inverting it to stand in for absence has two traps worth knowing before you try: it is
-> **new-files-only**, so a file that existed before the run is invisible to it no matter how tight the
-> allowlist; and it needs a pre-run manifest, so a `--resume` run fails it as evidence-unavailable.
-> Until a direct key exists, assert the *content-level* consequence instead (the report that wasn't
-> written has no `artifact_json` to match, and the step that didn't run called no tool —
-> `tool_not_called`), rather than building an allowlist you then have to widen for every incidental
-> lock- or temp-file the run happens to create.
+> ⚠️ **"This specific file must NOT exist" is `file_absent`, and it is LIVE-only.** Do not reach for
+> `no_unexpected_files` — that is an *allowlist over newly created files*, a different claim with two
+> traps: it is **new-files-only**, so a file that existed before the run is invisible to it however
+> tight the allowlist, and it needs a pre-run manifest, so a `--resume` run fails it
+> evidence-unavailable. `file_absent` has neither precondition. It does not run on `replay`: proving
+> absence needs an exhaustive, healthy walk, and a cassette records no walk health — "not in the
+> manifest" and "the walk never saw it" are indistinguishable there, so the key would pass while
+> proving nothing. It also fails **evidence-unavailable** on `lane: remote` and on a pre-run origin of
+> `remote-unavailable`, where the filesystem is not locally observable.
+| `file_absent: <path>` | the named path does **not** exist under the work root after the run — the direct negative-existence check (see the note above for why `no_unexpected_files` is not a substitute). **LIVE/verify-run only**, skipped-loud on replay; fails evidence-unavailable on `lane: remote` and on `preRunOrigin: remote-unavailable`. An escaping symlink FAILS rather than reading as absent |
+| `artifact_text: {artifact, contains?, not_contains?, matches?, not_matches?}` | assert over a delivered artifact's **text body** — the companion to `artifact_json` for non-JSON deliverables, and the way to prove an internal path or filename did **not** leak into a file a user receives (a fix applied to `report.md` alone looks complete while `report.json` still carries it). `artifact` is a literal path, not a glob — one entry per delivered surface. At least one matcher is required. Manifest-class, like `artifact_json`: a body captured body-less (uploaded input, read-only folder input, **over the 64 KiB body cap** — raise `--max-artifact-bytes`) or recorded as a symlink fails **evidence-unavailable**, and for the negative matchers so does a body that is not lossless UTF-8, since a binary body read as text would "pass" against bytes it never saw |
 | `no_lost_write_back: true` | fails if the run authored an interactive HTML artifact (or a `.py`/`.js` generator of one) whose **relative** Submit/POST write-back is lost under Cowork (served from Cowork's own origin → the write-back resolves non-ok and a "Saved!" is silently false). Runs the shipped **static Tier A** analyzer (`analyze-artifact`, no jsdom, deterministic) over the files the run authored (diffed against the pre-run manifest). A lost write-back on an **added** agent-authored source (`outputs/` or the scratchpad) **fails**; the same on a **pre-existing** file the skill merely modified on a read-write connected mount is **advisory** (not the skill's to own); `-suspect` findings are surfaced but pass. **Only `true` is valid** (omit to skip). **Live lane only** (needs the authored-file capture) — skipped-loud on replay; `verify-run` recomputes the authored set from the kept work dir. Runs on every live sandbox tier including **microvm** (its outputs are snapshotted from the VM into the run dir). Could-not-verify (fail-closed) on a `--resume` scratchpad walk or a candidate that couldn't be analyzed — never a silent clean |
 | `tool_called: <glob>` | a tool the agent ran matched this glob (`*`/`?`, exact when literal, anchored, case-sensitive); `mcp__workspace__*` = any workspace tool. Glob, not regex — an empty glob, or one containing a regex/brace-expansion metacharacter (`.*`, `.+`, `\|`, `()`, `[]`, `+`, `^`, `$`, `{}`, `\d`/`\w`/`\s`/`\b`), is now **rejected at scenario/cassette load** (a hard schema error) rather than silently matched-against-nothing |
 | `tool_not_called: <glob>` | no tool the agent ran matched this glob (`mcp__*` = no MCP tool ran) — same load-time reject on an empty or regex-like glob as `tool_called` |
@@ -674,7 +676,7 @@ which require the cassette to carry `controlOut` (full-fidelity replay). When
 When `controlOut` is absent (old cassette), a **loud warning** fires and these keys are **excluded**
 from evaluation (not vacuously passed). Re-record with a current harness to enable them.
 
-**Filesystem assertions** (`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
+**Filesystem assertions** (`file_exists`, `artifact_text`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`,
 `computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified`)
 run on `replay` **when the cassette carries an artifact manifest** — `record` snapshots `outputs/` + connected
 folders (paths + hashes + small JSON bodies) into the cassette, and `replay` materializes that snapshot to
@@ -703,7 +705,7 @@ covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`s
 edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt
 identity keyed on `appVersion` alone cannot see it.
 
-**Egress + other filesystem** assertions (`no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`,
+**Egress + other filesystem** assertions (`file_absent`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`,
 `transcript_no_host_path`, `egress_*`/`expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
 `semantic_matches`, `no_lost_write_back`) are still **skipped** on `replay` — they only run on a live `run`/`record`
 (token + Docker).

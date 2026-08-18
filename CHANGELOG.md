@@ -8,6 +8,45 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`file_absent` and `artifact_text` — the two file-family gaps a consumer report named.**
+
+  `file_absent: <path>` is the direct negative-existence check. The workaround until now was inverting
+  `no_unexpected_files`, which is a different claim with two traps: it is **new-files-only**, so a file
+  that existed before the run is invisible to it however tight the allowlist, and it needs a pre-run
+  manifest — the consumer paid for a re-record just to allowlist an incidental `.lock` file.
+  **LIVE/verify-run only**, deliberately: proving absence needs an exhaustive, healthy walk, and
+  `buildManifest` collects through the health-*discarding* `collectArtifactPaths`, so on replay a
+  containment-skipped or unreadable subtree is indistinguishable from an empty one and the key would
+  pass while proving nothing. It also fails evidence-unavailable on `lane: remote` and on
+  `preRunOrigin: remote-unavailable` — where the filesystem is not locally observable, a missing
+  snapshot is not evidence of absence. It does **not** inherit `local-unreadable`: that flag describes
+  an incomplete pre-run *baseline*, which says nothing about whether one named path is on the post-run
+  tree.
+
+  `artifact_text: {artifact, contains?, not_contains?, matches?, not_matches?}` asserts over a
+  delivered artifact's text body — `artifact_json`'s companion for non-JSON deliverables, and the way
+  to prove an internal filename did not leak into a file a user receives. A consumer shipped exactly
+  that to a founder: an internal reference name appeared 13 times in the delivered `report.json` and 0
+  times in `report.md`, so the fix looked complete. `artifact` is a literal path, not a glob — one
+  entry per delivered surface; a glob would be an exhaustive claim over the manifest's file set, which
+  is `file_absent`'s class and unprovable there for the same reason.
+
+  Both are fail-closed on missing evidence, and one of those paths was a latent bug in the key they
+  share a code path with: **`artifact_json` never checked `ctx.linkPaths`.** A manifest entry recorded
+  as a symlink travels a different channel from `truncated` and materializes as a real 0-byte file;
+  `artifact_json` survives it only because `JSON.parse("")` throws. A text matcher would have read the
+  placeholder and reported "does not contain" as a pass, so the guard now lives in the shared block for
+  every body-reading key. For the negative matchers, a body that is not lossless UTF-8 also fails
+  evidence-unavailable rather than "passing" against replacement characters. And the record-time
+  over-cap refusal that keeps `artifact_json` honest across lanes now covers `artifact_text` too — a
+  deliverable big enough to be worth scanning for a leak is exactly the one that clears the 64 KiB body
+  cap.
+
+  Supporting change: `isLosslessUtf8` moved to the leaf module `src/run/artifacts.ts` (re-exported from
+  `cassette.ts`) so `assert.ts` can use it without closing an import cycle, and
+  `ALL_CLASSIFICATION_KEYS` now spreads `MANIFEST_KEYS` instead of hand-listing it — that literal was
+  the one place a new manifest key threw at first replay for want of a second edit.
+
 - **`question_options` — assert the option SET and ORDER a gate offered the user.** The gate family could
   assert *that* a question was asked (`question_asked`, text only), how many, and whether the answer was
   delivered — nothing could assert what the person was actually SHOWN. A consumer hit the consequence:

@@ -427,7 +427,7 @@ passed — and a loud warning fires (see §Backward compatibility). The hook and
 the `events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
 could vacuously pass `no_hook_blocked`/`no_path_denied` even if a custom hook or gated ask genuinely blocked.
 
-`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
+`file_exists`, `artifact_text`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
 `no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
 when the cassette carries an artifacts manifest (`no_unexpected_files` also requires `preRunPaths`,
 recorded since 0.24 on every live sandbox tier including microvm; `input_unmodified` requires `preRunHashes`,
@@ -493,6 +493,8 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 
+`file_absent` (proving a path is ABSENT needs an exhaustive, healthy walk; the manifest records no walk
+health, so "not captured" and "not there" are indistinguishable — it would pass while proving nothing),
 `no_delete_in_outputs`, `no_delete_in_mounts` (both need the live post-run bash scan; a cassette freezes no
 commands to re-scan), `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout

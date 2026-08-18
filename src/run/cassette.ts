@@ -37,6 +37,10 @@ const CONCURRENCY_BUDGET_CAVEAT = (n: number) =>
   `::warning:: --max-budget-usd with --concurrency ${n}: the running-total stop is DISABLED (with ${n} runs in flight the total is only known after an overshoot is already paid for). ` +
   `The cap is a pre-flight estimate only here. Use --concurrency 1 for a running total.\n`;
 import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
+// Re-exported (not re-defined): moved to the leaf module so assert.ts can use it without closing an
+// assert → cassette import cycle. Existing importers keep their path.
+export { isLosslessUtf8 } from "./artifacts.js";
+import { isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
@@ -460,12 +464,6 @@ function containedPath(root: string, rel: string): string {
   if (abs !== rootResolved && !abs.startsWith(rootResolved + sep))
     throw new Error(`artifact path "${rel}" escapes the work root — refusing (path traversal)`);
   return abs;
-}
-
-/** a buffer round-trips losslessly through UTF-8 only if re-encoding the decoded string reproduces
- *  the exact bytes. Binary content (and lone surrogates / invalid sequences) fail this — store them base64. */
-function isLosslessUtf8(buf: Buffer): boolean {
-  return Buffer.from(buf.toString("utf8"), "utf8").equals(buf);
 }
 
 /** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
@@ -2533,9 +2531,13 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
-    const aj = a.artifact_json;
-    if (!aj?.artifact) continue;
-    if (truncatedAbs.has(resolve(workRoot, aj.artifact)) && !hits.includes(aj.artifact)) hits.push(aj.artifact);
+    // EVERY body-reading key, not just artifact_json: artifact_text has the identical green-record/
+    // red-replay shape (it passes against the on-disk file at record and finds no body on replay), and
+    // a deliverable big enough to be worth scanning for a leak is exactly the one that clears the cap.
+    for (const target of [a.artifact_json?.artifact, a.artifact_text?.artifact]) {
+      if (!target) continue;
+      if (truncatedAbs.has(resolve(workRoot, target)) && !hits.includes(target)) hits.push(target);
+    }
   }
   return hits;
 }
@@ -3542,7 +3544,7 @@ async function recordScenarioObject(
     if (truncatedAsserted.length) {
       const cap = opts.maxArtifactBytes ?? defaultBodyCap();
       const msg =
-        `artifact_json asserts artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
+        `assert targets artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
         `this passes at record (on-disk) but FAILS replay (no body). Raise --max-artifact-bytes / ` +
         `COWORK_HARNESS_MAX_ARTIFACT_BYTES, or assert a smaller artifact.`;
       if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
@@ -5325,6 +5327,7 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
  *  "not checkable, skipped" treatment as the other manifest keys. */
 export const MANIFEST_KEYS: (keyof Assertion)[] = [
   "file_exists",
+  "artifact_text",
   "user_visible_artifact",
   "artifact_json",
   "computer_links_resolve",
@@ -5339,6 +5342,12 @@ export const MANIFEST_KEYS: (keyof Assertion)[] = [
  *  NOT include `expect_denied`, which is a scenario field (not an Assertion key) — see
  *  `warnUncheckableOnDiskKeys`. */
 export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
+  // LIVE-ONLY, and NOT a MANIFEST key despite reading the filesystem: proving a path is ABSENT needs an
+  // exhaustive, healthy walk, and `buildManifest` collects through the health-DISCARDING
+  // `collectArtifactPaths` (artifacts.ts). A containment-skipped or unreadable subtree is therefore
+  // indistinguishable from an empty one on replay, so "not in the manifest" would pass while proving
+  // nothing. Positive keys survive that (absent ⇒ "file not found" ⇒ fail-closed); this one would not.
+  "file_absent",
   "egress_denied",
   "egress_allowed",
   "no_delete_in_outputs",
@@ -5644,13 +5653,9 @@ export async function replayCassette(
     const ALL_CLASSIFICATION_KEYS = new Set<keyof Assertion>([
       ...alwaysContentKeys,
       ...questionGateKeys,
-      "file_exists",
-      "user_visible_artifact",
-      "artifact_json",
-      "computer_links_resolve",
-      "computer_links_resolve_if_present",
-      "no_unexpected_files",
-      "input_unmodified",
+      // Spread, not hand-listed: the manifest bucket was the one enumerated by NAME here, so adding a
+      // manifest key elsewhere threw at the first replay until someone remembered this literal too.
+      ...MANIFEST_KEYS,
       ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence

@@ -2599,6 +2599,32 @@
       ".assert[].artifact_json.path": {
         "type": "string"
       },
+      ".assert[].artifact_text": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].artifact_text.artifact": {
+        "type": "string",
+        "required": true
+      },
+      ".assert[].artifact_text.contains": {
+        "type": "array"
+      },
+      ".assert[].artifact_text.contains[]": {
+        "type": "string"
+      },
+      ".assert[].artifact_text.matches": {
+        "type": "string"
+      },
+      ".assert[].artifact_text.not_contains": {
+        "type": "array"
+      },
+      ".assert[].artifact_text.not_contains[]": {
+        "type": "string"
+      },
+      ".assert[].artifact_text.not_matches": {
+        "type": "string"
+      },
       ".assert[].compaction_occurred": {
         "type": "boolean",
         "const": true
@@ -2621,6 +2647,9 @@
         "type": "string"
       },
       ".assert[].egress_denied": {
+        "type": "string"
+      },
+      ".assert[].file_absent": {
         "type": "string"
       },
       ".assert[].file_exists": {

@@ -538,6 +538,28 @@ export const Assertion = z.strictObject({
     .describe(
       "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), except a --resume run (no fresh manifest ⇒ fails loud)",
     ),
+  file_absent: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+    ),
+  artifact_text: z
+    .object({
+      artifact: z
+        .string()
+        .min(1)
+        .describe("relative path to an artifact under the work root (e.g. outputs/report.json) — a literal path, not a glob"),
+      contains: z.array(z.string().min(1)).min(1).optional().describe("every listed substring appears in the body"),
+      not_contains: z.array(z.string().min(1)).min(1).optional().describe("no listed substring appears in the body"),
+      matches: z.string().min(1).optional().describe("the body matches this regex"),
+      not_matches: z.string().min(1).optional().describe("the body does not match this regex"),
+    })
+    .optional()
+    .describe(
+      "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw",
+    ),
   input_unmodified: z
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
     .optional()

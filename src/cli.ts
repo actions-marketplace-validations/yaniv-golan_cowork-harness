@@ -4046,6 +4046,11 @@ async function cmdVerifyRun(args: string[]) {
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
   const FS_KEYS: (keyof Assertion)[] = [
     "file_exists",
+    // Both read the run's real tree: artifact_text scans a body, file_absent proves a path is not there.
+    // file_absent is the one that MUST be here — with no work dir, existsSync returns false for every
+    // path and it would pass vacuously, the same false-green no_unexpected_files is listed for.
+    "artifact_text",
+    "file_absent",
     "user_visible_artifact",
     "artifact_json",
     "no_unexpected_files",
@@ -4060,7 +4065,7 @@ async function cmdVerifyRun(args: string[]) {
       "verify-run",
       "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files/input_unmodified/no_lost_write_back) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+        `(file_exists/file_absent/artifact_json/artifact_text/user_visible_artifact/no_unexpected_files/input_unmodified/no_lost_write_back) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -4437,6 +4442,8 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
  *  cannot be matched structurally. A new file-ish key must be added here or the family test reds. */
 const FILE_FAMILY = new Set([
   "file_exists",
+  "file_absent",
+  "artifact_text",
   "user_visible_artifact",
   "artifact_json",
   "no_unexpected_files",

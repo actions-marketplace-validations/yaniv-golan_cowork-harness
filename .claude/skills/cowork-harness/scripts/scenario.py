@@ -129,6 +129,7 @@ GATE_KEYS = {
 # either a live filesystem or the cassette's artifacts manifest — see cassette.ts's manifestKeys comment.
 MANIFEST_KEYS = {
     "file_exists",
+    "artifact_text",
     "user_visible_artifact",
     "artifact_json",
     "computer_links_resolve",
@@ -138,6 +139,7 @@ MANIFEST_KEYS = {
 }
 # live-only: ALWAYS skipped on replay, with a loud warning (no filesystem, no network on the token-free lane)
 LIVE_ONLY_KEYS = {
+    "file_absent",
     "egress_denied",
     "egress_allowed",
     "no_delete_in_outputs",
@@ -896,6 +898,25 @@ def lint_doc(doc, path, raw_lines):
                 "carries controlOut. This is advisory only (the linter never reads your cassettes, so it "
                 "cannot tell); re-record only if yours is old. `lint --min-severity WARN` silences the "
                 "whole INFO class in CI.",
+                path,
+            )
+        )
+
+    # E: `file_exists: X` and `file_absent: X` on the SAME path cannot both hold. Checked here rather
+    # than in the TS contradiction groups because those match on key PRESENCE across the array and
+    # cannot compare values; the linter already has the parsed YAML, so the value comparison is free.
+    exists_paths = {v for v in _assert_values(items, "file_exists") if isinstance(v, str)}
+    absent_paths = {v for v in _assert_values(items, "file_absent") if isinstance(v, str)}
+    both = sorted(exists_paths & absent_paths)
+    if both:
+        findings.append(
+            Finding(
+                "ERROR",
+                "file-absent-contradiction",
+                f"assert requires {both} to both exist (`file_exists`) and not exist (`file_absent`) — "
+                "no run can satisfy that, so this would spend a run to fail.",
+                "Drop whichever half the scenario does not mean. If you meant 'this file must be replaced', "
+                "assert the new content with `artifact_text`/`artifact_json` instead.",
                 path,
             )
         )

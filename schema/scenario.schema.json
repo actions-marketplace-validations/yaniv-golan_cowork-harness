@@ -505,6 +505,54 @@
               "minLength": 1
             }
           },
+          "file_absent": {
+            "description": "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact_text": {
+            "description": "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw",
+            "type": "object",
+            "properties": {
+              "artifact": {
+                "type": "string",
+                "minLength": 1,
+                "description": "relative path to an artifact under the work root (e.g. outputs/report.json) — a literal path, not a glob"
+              },
+              "contains": {
+                "description": "every listed substring appears in the body",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "not_contains": {
+                "description": "no listed substring appears in the body",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "matches": {
+                "description": "the body matches this regex",
+                "type": "string",
+                "minLength": 1
+              },
+              "not_matches": {
+                "description": "the body does not match this regex",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "artifact"
+            ],
+            "additionalProperties": false
+          },
           "input_unmodified": {
             "description": "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
             "anyOf": [
