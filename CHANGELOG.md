@@ -46,6 +46,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`record` warns BEFORE the run when a cassette would not be portable.** A cassette stores its
+  `scenario.session` and `scenarioSource` relative to its own directory, so if reaching them means
+  climbing out of the project tree, the stored relatives resolve only from that one filesystem layout —
+  the file is uncommittable, and `verify-cassettes` reports it permanently `unverifiable` for staleness.
+  Two consumers discovered that *after* paying for the run. The new preflight fires at the same
+  pre-spend point as the host-inventory guard, and in `record --dry-run`, so the rehearsal is free.
+
+  It tests **climb-out**, in both directions: the cassette written outside the tree (the reported
+  `--out /tmp/…` case) and a `session:` that lives outside it (an absolute or `~` path) — the mirror
+  image, equally unresolvable, and invisible to a check that only looks at where the cassette lands.
+  `~` is expanded first: `parseScenarioFile` deliberately leaves a `~/…` session untouched, and a raw
+  `~/x` reads as *relative*, so an unexpanded check resolves it under the cwd and calls it in-tree.
+  The reference root is the scenario source's git top-level, falling back to the **cwd** — not the
+  session file's directory, since `sessions/` and `cassettes/` are conventionally siblings and that
+  anchor would warn on every default record. Paths are canonicalized as far as they exist, because
+  `git rev-parse --show-toplevel` always returns a real path and `/var` vs `/private/var` would
+  otherwise warn on every macOS record. A warning, not a refusal: an out-of-tree throwaway cassette is
+  legitimate — the defect was that nothing said so while the author could still act.
+
 - **The host-inventory record refusal no longer recommends an out-of-repo `--out`, and its remedy is
   branch-aware.** Two consumers hit the same trap: the refusal told them to `--out` a path outside the
   repo, and taking that advice bakes a cassette whose `scenario.session` / `scenarioSource` — stored

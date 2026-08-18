@@ -1,6 +1,17 @@
 import { z } from "zod";
-import { warn, writeAllSync } from "../io.js";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
+import { warn, writeAllSync, tildeify } from "../io.js";
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+  mkdtempSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -27,7 +38,7 @@ const CONCURRENCY_BUDGET_CAVEAT = (n: number) =>
   `The cap is a pre-flight estimate only here. Use --concurrency 1 for a running total.\n`;
 import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths, agentEnvOverrides, type SessionConfig } from "../session.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -2321,6 +2332,112 @@ function isRepoVisiblePath(p: string): boolean {
   return ignored.status !== 0;
 }
 
+/** Resolve symlinks as far as the path EXISTS, keeping the not-yet-created tail. Needed because the
+ *  containment test below compares against `git rev-parse --show-toplevel`, which always returns a
+ *  REAL path: on macOS a perfectly in-tree `/var/folders/...` cassette would otherwise read as outside a
+ *  `/private/var/folders/...` root and warn on every record. The planned cassette itself never exists
+ *  yet, so resolving only the existing ancestor is the whole trick. */
+function realish(p: string): string {
+  let dir = resolve(p);
+  const tail: string[] = [];
+  while (!existsSync(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return resolve(p); // walked off the root — nothing to canonicalize
+    tail.unshift(dir.slice(up.length + 1));
+    dir = up;
+  }
+  try {
+    return join(realpathSync(dir), ...tail);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** Is `p` at or under `root`? Pure lexical containment on already-resolved absolute paths. */
+function insideRoot(root: string, p: string): boolean {
+  const rel = relative(root, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** The tree a cassette and its references must share for the cassette to be portable: the git top-level
+ *  containing `anchor`, else the cwd. Cwd — NOT the session file's own directory: the conventional layout
+ *  puts `sessions/` and `cassettes/` as SIBLINGS, so anchoring on the session dir would warn on every
+ *  default record in a non-git tree, and a warning that fires on the happy path is one nobody reads. */
+function portabilityRoot(anchor: string | undefined): string {
+  if (anchor) {
+    let dir = dirname(resolve(anchor));
+    while (!existsSync(dir)) {
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+    if (existsSync(dir)) {
+      const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+      if (top.status === 0 && top.stdout.trim()) return resolve(top.stdout.trim());
+    }
+  }
+  return realish(process.cwd());
+}
+
+/**
+ * Warn — BEFORE the paid run — when the cassette's stored references would have to climb out of the
+ * project tree to reach their targets.
+ *
+ * What this is NOT: a check that the written cassette can resolve its own references. That check is
+ * VACUOUS by construction — `resolve(dir, relative(dir, X)) === X`, so it always passes on the recording
+ * machine and would never fire. The condition that actually predicts the failure is CLIMB-OUT: a
+ * reference stored as `../../Users/you/...` resolves fine here and nowhere else, so the cassette is
+ * uncommittable and unverifiable the moment it leaves this filesystem layout.
+ *
+ * Both directions matter, and only checking one is how the first draft of this missed half the defect:
+ *   - cassette OUTSIDE the tree, session inside — the reported case (`--out /tmp/...`);
+ *   - cassette inside, session OUTSIDE — an absolute or `~` session path, equally unresolvable.
+ * Both reduce to the same test: the cassette dir and every stored reference must sit under one root.
+ *
+ * `~` MUST be expanded first. `parseScenarioFile` resolves a file-relative `session:` to absolute but
+ * deliberately leaves `~/...` alone (see `isFileRelative`), and a raw `~/x` looks RELATIVE to
+ * `path.relative`, which would resolve it under the cwd and silently conclude it is in-tree.
+ *
+ * A warning, not a refusal: recording outside the tree is legitimate for a throwaway cassette. The point
+ * is that today nothing says so at any point where the author can still act.
+ */
+export function cassettePortabilityPreflight(
+  scenario: Scenario,
+  plannedCassettePath: string,
+  scenarioSourceFile?: string,
+): { kind: "ok" } | { kind: "warn"; message: string } {
+  const refs: { name: string; path: string }[] = [];
+  // `(inline)` is stored as the literal sentinel, never as a path — nothing to resolve, nothing to break.
+  if (scenario.session !== "(inline)") refs.push({ name: "session", path: realish(expandUserPath(scenario.session)) });
+  if (scenarioSourceFile) refs.push({ name: "scenarioSource", path: realish(scenarioSourceFile) });
+  if (refs.length === 0) return { kind: "ok" };
+
+  const cassetteDir = realish(dirname(resolve(plannedCassettePath)));
+  const root = portabilityRoot(scenarioSourceFile ?? refs[0].path);
+  const cassetteOut = !insideRoot(root, cassetteDir);
+  const strays = refs.filter((r) => !insideRoot(root, r.path));
+  if (!cassetteOut && strays.length === 0) return { kind: "ok" };
+
+  const which = cassetteOut
+    ? `the cassette would be written outside ${tildeify(root)}`
+    : `${strays.map((r) => `\`${r.name}\` (${tildeify(r.path)})`).join(" and ")} ${strays.length > 1 ? "live" : "lives"} outside ${tildeify(root)}`;
+  return {
+    kind: "warn",
+    message:
+      `::warning:: [record] this cassette will not be portable — ${which}, so its stored references are ` +
+      `written as paths that climb out of the tree and resolve only from this exact layout.
+` +
+      `  cassette: ${tildeify(cassetteDir)}
+` +
+      `  Consequence: verify-cassettes cannot resolve the skill dirs from it and reports 'unverifiable' ` +
+      `for staleness (can't verify ⇒ not green, exit 3). Only a re-record at the final location fixes it.
+` +
+      `  Fix: record into the same tree as the scenario and its session, and decide that path BEFORE ` +
+      `spending the run — a cassette cannot be moved afterwards.
+`,
+  };
+}
+
 /**
  * Decide whether a record may write a host-inheriting transcript to this path.
  *
@@ -2920,6 +3037,11 @@ export async function cmdRecord(args: string[]) {
       log(tokenLine);
       log(agentLine);
     }
+    // Part of the preview for the same reason the budget gate is: a rehearsal whose whole job is "tell me
+    // what this would do before I spend" must surface the thing that cannot be undone afterwards. `target`
+    // IS the scenario source here, so the reference root resolves exactly as it will on the real record.
+    const dryPort = cassettePortabilityPreflight(scenario, cassettePath, target);
+    if (dryPort.kind === "warn") warn(dryPort.message);
     // See the dir branch above: the budget gate is part of the preview, not skipped by it.
     if (maxBudgetUsd !== undefined) preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
     return process.exit(0);
@@ -3279,6 +3401,10 @@ async function recordScenarioObject(
     const verdict = hostInventoryPreflight(scenario, plannedCassettePath, opts.allowHostInventoryFixture === true);
     if (verdict.kind === "refuse") return fail("record", "usage", verdict.message, undefined, isJsonOutput(process.argv)) as never;
     if (verdict.kind === "warn") warn(verdict.message);
+    // Portability — also pre-spend, and for the same reason: after the run the tokens are gone and the
+    // only remedy is to spend them again at the right path.
+    const port = cassettePortabilityPreflight(scenario, plannedCassettePath, opts.scenarioSourceFile);
+    if (port.kind === "warn") warn(port.message);
   }
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
