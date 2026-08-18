@@ -87,10 +87,10 @@ readable-path entries, not mounts. When the `Artifact` tool is present, it sits 
 list but outside the pre-approved allowed-tools list, so it must go through the same `can_use_tool`
 permission flow as `AskUserQuestion`.
 
-**Desktop 1.32352.0 removed the host-loop exclusion.** The frame-artifacts predicate dropped its
-`!isHostLoop` conjunct — at the call site and in the predicate body — so a host-loop session with the
-server flag on now gets the `Artifact` tool too. An earlier version of this section said host-loop was
-unaffected; that is no longer true, and the tool is no longer VM-loop-only.
+**The tool is not VM-loop-only.** The frame-artifacts predicate tests the session flag, the session
+type, the scheduled-task id, bridge and dispatch-child status and the HIPAA restriction — it does *not*
+test the loop tier. So a **host-loop** session with the server flag on gets the `Artifact` tool as well,
+even though host-loop never receives artifact *mounts*.
 
 The same release added a **host-loop-only approval-integrity guard** in front of the permission chain,
 and it is a shape nothing here models. Before any other check runs it denies an `Artifact` publish whose
@@ -108,8 +108,8 @@ artifact-directory mount, and no `Artifact` tool at any tier. (`outputs` is not 
 synthetic root the run tree always carries.)
 
 **The residual, stated plainly:** on the VM tiers, production currently mounts artifact directories
-and the harness mounts none; host-loop still sees no artifact *mounts*, since production doesn't mount
-there either — but as of 1.32352.0 it can see the *tool*, which it previously could not.
+and the harness mounts none; on host-loop there are no artifact *mounts* to differ over, but the `tool`
+is reachable there and the harness serves it at no tier.
 This is a deliberate non-modeling decision, not an oversight: the mount branch is the one Anthropic is
 retiring, and the harness has no way to observe the server flag that selects between the two
 mechanisms. If the flag flips, the mount difference disappears on its own and the gap becomes the
@@ -640,23 +640,20 @@ agent — be the one who named the action, covering things like granting folder 
 file-delete permission, saving a skill, and creating or deleting scheduled tasks. It also carries
 explicit carve-outs: reading connected folders or uploads and writing derived content to the outputs
 directory is not treated as data exfiltration. The rubric applies only to auto-mode, only for
-non-chat sessions, and only outside host-loop. **Its feature gate is now ON** (`force`, as of Desktop
-1.32352.0) — it was off by default when this section was first written, and the note below about "if the
-gate turns on" is therefore no longer hypothetical.
+non-chat sessions, and only outside host-loop. **Its feature gate is ON** (`force`), so the rubric is
+live for the sessions that qualify.
 
 **Harness behaviour:** not modeled. A scenario's scripted permission answers can express "the user
 allowed this but the rubric refused it" only by scripting the refusal directly — there is no mechanism
 that decides a denial on its own the way the rubric would.
 
-**The residual, stated plainly.** An earlier version of this section said the harness is spared because
-"the harness models chat sessions, and the rubric explicitly excludes them". That reasoning was wrong on
-both halves, and it matters because it understated the gap. Production's `isChatSession` test requires an
-*explicit* `sessionType === "chat"`; the session this harness models carries no `sessionType` at all (the
-baseline's `CLAUDE_CODE_TAGS: "lam_session_type:chat"` is a `??` default, and the frame-artifacts
-predicate the harness models requires `sessionType === undefined`), so that term would not exclude it.
+**The residual, stated plainly.** It is tempting to read the rubric's `!isChatSession` term as the reason
+this cannot reach the harness. It is not: production's test requires an *explicit* `sessionType === "chat"`,
+and the session this harness models carries no `sessionType` at all — the baseline's
+`CLAUDE_CODE_TAGS: "lam_session_type:chat"` is a `??` default, and the frame-artifacts predicate the
+harness models requires `sessionType === undefined` — so that term does not exclude it.
 
-What actually spares the harness is simpler and stronger: **it never constructs `settings.autoMode` on
-any tier.** The spawn passes `--permission-mode` and `--setting-sources`, never an autoMode payload, and
+What does is simpler and stronger: **the harness never constructs `settings.autoMode` on any tier.** The spawn passes `--permission-mode` and `--setting-sources`, never an autoMode payload, and
 the rubric-merging code is Desktop-side and never runs here. The rubric is *structurally unreachable*,
 not excluded by session type.
 
