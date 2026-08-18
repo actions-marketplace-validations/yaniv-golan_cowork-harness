@@ -810,72 +810,145 @@ export function braceBodyOf(text: string, header: string): string | null {
  *  Handles nesting of ()[]{} , '' , "" and backtick templates including `${}` recursion. It does NOT
  *  track regex literals: the chain body is a sequence of calls, and a body that ever contains one would
  *  mis-split into operands that fail the assertions below — loudly, never silently. */
-export function extractCanUseToolChain(text: string): { orig: string; operands: string[] } | null {
+/** Index just past a string/template literal starting at `i`, or -1 if `i` does not open one. */
+function skipLiteralAt(text: string, i: number): number {
+  const c = text[i];
+  if (c === "'" || c === '"') {
+    let j = i + 1;
+    while (j < text.length && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
+    return j + 1;
+  }
+  if (c !== "`") return -1;
+  let j = i + 1;
+  let tdepth = 0;
+  while (j < text.length) {
+    if (text[j] === "\\") {
+      j += 2;
+      continue;
+    }
+    if (tdepth === 0 && text[j] === "`") break;
+    if (text[j] === "$" && text[j + 1] === "{") {
+      tdepth++;
+      j += 2;
+      continue;
+    }
+    if (tdepth > 0 && text[j] === "}") tdepth--;
+    j++;
+  }
+  return j + 1;
+}
+
+/** Index of the `}` closing the block that opens at `open`, or -1 if unbalanced. */
+function matchBrace(text: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Split a `a??b??c` expression on its TOP-LEVEL `??` operators. */
+function splitNullish(expr: string): string[] {
+  const ops: string[] = [];
+  let depth = 0;
+  let mark = 0;
+  let i = 0;
+  while (i < expr.length) {
+    const lit = skipLiteralAt(expr, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = expr[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (depth === 0 && c === "?" && expr[i + 1] === "?") {
+      ops.push(expr.slice(mark, i).trim());
+      i += 2;
+      mark = i;
+      continue;
+    }
+    i++;
+  }
+  ops.push(expr.slice(mark).trim());
+  return ops;
+}
+
+/** The `??`-chain expression bound to a local inside a block body, or null. */
+function nullishChainInBlock(block: string): string | null {
+  const decl = /(?:const|let|var) [\w$]+=/g;
+  for (const m of block.matchAll(decl)) {
+    const from = m.index! + m[0].length;
+    let depth = 0;
+    let i = from;
+    while (i < block.length) {
+      const lit = skipLiteralAt(block, i);
+      if (lit >= 0) {
+        i = lit;
+        continue;
+      }
+      const c = block[i];
+      if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") depth--;
+      else if (depth === 0 && c === ";") break;
+      i++;
+    }
+    const expr = block.slice(from, i);
+    if (splitNullish(expr).length > 1) return expr;
+  }
+  return null;
+}
+
+/** Extract the installed `canUseTool` chain.
+ *
+ *  D6 (Desktop 1.32352.0): the arrow gained a BLOCK body — the `??` chain is now one statement inside it,
+ *  wrapped by a pre-pass that can deny before any link and a post-pass that can overturn the chain's
+ *  ALLOW. The previous scanner split on `??` at the paren depth of `\1&&(`, so a block body came back as
+ *  ONE operand ("the chain has 1 links"). Both shapes are handled; `block` is non-null only for the block
+ *  form, and the caller MUST assert the wrapper facts on it — teaching the extractor the shape without
+ *  that would silence three flags and leave two new decision points invisible. */
+export function extractCanUseToolChain(text: string): { orig: string; operands: string[]; block: string | null } | null {
   // `\1` binds the guard to the SAVED ORIGINAL: `let K=e.canUseTool;K&&(e.canUseTool=async(…)=>`.
   // Without the backreference, `let K=e.canUseTool;zz&&(…)` reads as guarded while being unconditional.
   const m = text.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>/);
   if (!m || m.index === undefined) return null;
   const start = m.index + m[0].length;
 
-  let depth = 1; // we are inside the `(` opened by `\1&&(`
-  const ops: string[] = [];
-  let opStart = start;
-  let i = start;
-  const pushOp = (end: number) => ops.push(text.slice(opStart, end).trim());
+  if (text[start] === "{") {
+    const close = matchBrace(text, start);
+    if (close < 0) return null; // unbalanced — fail loud rather than guess
+    const block = text.slice(start + 1, close);
+    const expr = nullishChainInBlock(block);
+    if (!expr) return null;
+    return { orig: m[1], operands: splitNullish(expr), block };
+  }
 
+  // Expression body: the chain runs to the `)` that closes `\1&&(`.
+  let depth = 1;
+  let i = start;
   while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
     const c = text[i];
-    if (c === "'" || c === '"') {
-      const q = c;
-      i++;
-      while (i < text.length && text[i] !== q) i += text[i] === "\\" ? 2 : 1;
-      i++;
-      continue;
-    }
-    if (c === "`") {
-      // Template: skip to the unescaped closing backtick, recursing through `${ … }` in code mode.
-      i++;
-      let tdepth = 0;
-      while (i < text.length) {
-        if (text[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (tdepth === 0 && text[i] === "`") break;
-        if (text[i] === "$" && text[i + 1] === "{") {
-          tdepth++;
-          i += 2;
-          continue;
-        }
-        if (tdepth > 0 && text[i] === "}") {
-          tdepth--;
-          i++;
-          continue;
-        }
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{") {
-      depth++;
-      i++;
-      continue;
-    }
-    if (c === ")" || c === "]" || c === "}") {
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
       depth--;
-      if (depth === 0) {
-        pushOp(i);
-        return { orig: m[1], operands: ops };
-      } // the `&&(` closed: chain done
-      i++;
-      continue;
-    }
-    if (depth === 1 && c === "?" && text[i + 1] === "?") {
-      pushOp(i);
-      i += 2;
-      opStart = i;
-      continue;
+      if (depth === 0) return { orig: m[1], operands: splitNullish(text.slice(start, i)), block: null };
     }
     i++;
   }
@@ -1164,20 +1237,49 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // B8 (Desktop 1.25927.0): the arrow export form `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se` puts `(`
   // after the colon, which the old `[:=][\w$]` tail rejected — the chunk DOES still export the name.
   const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS(?::\(\)=>|[:=])[\w$]/;
-  const defining = [...files.values()].find((c) => definesExport.test(c));
+  const GATED_ARRAY = /\["Read","Write","Edit","Glob","Grep"\]/;
+  // The install site's shape is name-independent and is the ONE anchor that survived 1.32352.0; it is
+  // declared here (not below) because the defining-chunk fallback resolves through it.
+  const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
+  // D5 (Desktop 1.32352.0): exported CONSTANT names mangle too — `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS`
+  // became `Cg` while the array it names stayed byte-identical, so the name lookup reported the whole
+  // machinery "gone". Try the readable name first (older asars + the fixtures bind it), then fall back to
+  // the chunk the install site's spread actually RESOLVES to — and only accept that chunk if the spread
+  // is still the gated 5-set, so a mis-resolution fails rather than silently re-pointing the sentinel.
+  let defining = [...files.values()].find((c) => definesExport.test(c));
+  if (!defining) {
+    const site = [...files.values()].find((c) => installRe.test(c));
+    const spreadId = site?.match(installRe)?.[1];
+    const ref = site && spreadId ? resolveNamespaceRef(spreadId, site, files) : null;
+    if (ref && new RegExp(`(?<![\\w$])${esc(ref.local)}=${GATED_ARRAY.source}`).test(ref.chunk)) defining = ref.chunk;
+  }
   if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
   else {
+    /** True when `local` is bound to SOME export of this chunk, under any of the emitted shapes. */
+    const isExportedLocal = (chunk: string, local: string) =>
+      new RegExp(`defineProperty\\(exports,"[\\w$]+",\\{[^}]*?return ${esc(local)}\\}`).test(chunk) ||
+      new RegExp(`(?<![\\w$])[\\w$]+:\\(\\)=>${esc(local)}(?![\\w$])`).test(chunk) ||
+      new RegExp(`(?<![\\w$])${esc(local)}\\s+as\\s+[\\w$]+`).test(chunk);
+
     const hop = (exportName: string, arrayRe: RegExp, label: string) => {
       // Resolve the LOCAL bound to this export across every export shape, then require
       // `<local>=<exact array>`. Binding to the export (not a free array search) is what makes a decoy
       // array fail.
       const local = exportLocalOf(defining, exportName);
-      if (!local) {
-        miss(label, `could not resolve the local bound to the ${exportName} export`);
+      if (local) {
+        if (!new RegExp(`(?<![\\w$])${esc(local)}=${arrayRe.source}`).test(defining))
+          miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
         return;
       }
-      if (!new RegExp(`(?<![\\w$])${esc(local)}=${arrayRe.source}`).test(defining))
-        miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
+      // D5: the export NAME is mangled. Bind by CONTENT instead — the exact array must still be present
+      // AND still be exported. Requiring the export is what keeps a same-shaped decoy array from passing.
+      const byContent = defining.match(new RegExp(`(?<![\\w$])([\\w$]+)=${arrayRe.source}`));
+      if (!byContent) {
+        miss(label, `neither the ${exportName} export nor its exact array literal is present in the defining chunk`);
+        return;
+      }
+      if (!isExportedLocal(defining, byContent[1]))
+        miss(label, `the ${exportName} array is present (${byContent[1]}) but is no longer exported — it may be dead`);
     };
     hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
     // "PowerShell" joined the set at Desktop 1.24012.9 (was the 5-element list through 1.24012.1). It is a
@@ -1186,9 +1288,13 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     // to hostloop's `disallowed` set (see the note in src/runtime/hostloop.ts). Pinned exactly so a future
     // set change still fires here rather than silently widening what production excludes.
     hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
-    if (!/REQUEST_COWORK_DIRECTORY/.test(defining) || !/"request_cowork_directory"/.test(defining))
-      miss("REQUEST_COWORK_DIRECTORY", "the export or its literal is gone");
-    if (!/SESSION_TYPE_CHAT/.test(defining) || !/"chat"/.test(defining)) miss("SESSION_TYPE_CHAT", "the export or its literal is gone");
+    // D5: both export NAMES are 0 in Desktop 1.32352.0 while the constants they name are unchanged, so
+    // anchor on the VALUES. `"chat"` alone is far too common to assert on — require it bound to a
+    // constant, which is what the session-type comparison actually reads.
+    if (!/"request_cowork_directory"/.test(defining))
+      miss("REQUEST_COWORK_DIRECTORY", "the request_cowork_directory tool-name literal is gone from the defining chunk");
+    if (!/(?<![\w$])[\w$]+="chat"/.test(defining))
+      miss("SESSION_TYPE_CHAT", "no constant in the defining chunk is bound to the chat session-type literal");
   }
 
   // --- consuming chunk: located by the install site (namespace-property connectivity) ---
@@ -1197,7 +1303,6 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // the shape — a namespace spread joined with "MultiEdit" — then RESOLVE the spread and require it to be
   // the gated 5-set. That is strictly stronger than the old name match: a rename now passes only if the
   // thing actually installed is still the same array.
-  const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
   const consuming = [...files.values()].find((c) => installRe.test(c));
   if (!consuming) {
     miss("install site", 'no chunk contains [...NS.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|")');
@@ -1248,7 +1353,10 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // The keys are bound to a local (real: `pe=["file_path","path"]`, used as `pe.map(…)`) rather than
   // inlined, so anchor the map/find/typeof-string SHAPE (both proven by the separate path-key anchor).
   inHook(
-    /\.map\([\w$]+=>[\w$]+\[[\w$]+\]\)\.find\([\w$]+=>typeof [\w$]+=="string"\)/,
+    // D4 (Desktop 1.32352.0): the codegen now PARENTHESISES arrow bodies —
+    // `.map((e=>n[e])).find((e=>typeof e=="string"))`. Same expression, newer output target; admit both
+    // forms exactly as B14 does for the optional-call shape.
+    /\.map\(\(?[\w$]+=>[\w$]+\[[\w$]+\]\)?\)\.find\(\(?[\w$]+=>typeof [\w$]+=="string"\)?\)/,
     "first-match extraction",
     "the .map().find() extraction shape is gone",
   );
@@ -1281,7 +1389,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       "the `let O=e.canUseTool;O&&(e.canUseTool=async…)` install (guarded by the SAVED original) is gone",
     );
   } else {
-    const { orig, operands } = chain;
+    const { orig, operands, block } = chain;
     const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
     const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
 
@@ -1293,6 +1401,43 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
         "canUseTool chain terminal",
         `the chain no longer ends in a bare call to the saved original (${orig}) — fall-through may be rewritten`,
       );
+
+    // (0) WRAPPER (Desktop 1.32352.0, block form only). The chain is no longer the whole decision: a
+    //     pre-pass runs FIRST and can deny outright, and a post-pass can turn the chain's ALLOW into a
+    //     DENY. Accepting the block shape without pinning both would silence three flags and leave two
+    //     new decision points unmodelled — the exact way B16/B18 failed open.
+    if (block !== null) {
+      const pre = block.match(/^(?:const|let|var) ([\w$]+)=(await )?([\w$]+)\(/);
+      if (!pre) {
+        miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
+      } else {
+        const [, resultId, awaited, preFn] = pre;
+        // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
+        // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
+        if (!awaited && new RegExp(`async function ${preFn}\\(`).test(consuming))
+          miss(
+            "canUseTool wrapper await",
+            `the pre-pass \`${preFn}\` is async but is not awaited — the early deny and the post-pass are both inert`,
+          );
+        const preBody = bodyOf(preFn);
+        if (!preBody) miss("canUseTool wrapper", `the pre-pass \`${preFn}\` has no resolvable definition in the hook chunk`);
+        else {
+          if (!/is a VM path/.test(preBody))
+            miss("canUseTool wrapper vm-deny", "the pre-pass no longer carries a /sessions VM-path deny — a VM path could reach the tool");
+          if (!/finish/.test(preBody))
+            miss("canUseTool wrapper finish", "the pre-pass no longer builds a finish() continuation — the post-pass veto cannot fire");
+        }
+        // The early deny must be consulted BEFORE the chain runs.
+        if (!new RegExp(`${resultId}\\?\\.[\\w$]+\\)return`).test(block))
+          miss("canUseTool wrapper early-deny", "the pre-pass result is no longer checked for an early deny ahead of the chain");
+        // The chain's result must flow through finish(), or the ALLOW-veto is gone.
+        if (!new RegExp(`${resultId}===null\\?([\\w$]+):${resultId}\\.finish\\(\\1\\)`).test(block))
+          miss(
+            "canUseTool wrapper post-pass",
+            "the chain result no longer flows through the pre-pass's finish() — an approved call can no longer be vetoed after the fact",
+          );
+      }
+    }
 
     // (2) LINK COUNT: tolerate the 3-link (<=1.28929.0) and 4-link (1.30096.1) shapes so an older install
     //     still syncs; a FIFTH link is a new decision point that must be classified, never absorbed.
@@ -2350,7 +2495,12 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // allowedTools (S9 pins that head at 19 entries) — it is tools-only, exactly like AskUserQuestion, so
     // it is NOT pre-approved and every call transits can_use_tool. Model it as a GATED tool; treating it
     // as allowed would false-green a permission prompt production raises. It is also VM-loop-only
-    // (`!isHostLoop` below), so the host-loop tier is correct by construction and must not gain it.
+    // D7 (Desktop 1.32352.0): the predicate DROPPED its `!isHostLoop` conjunct, at the call site and in
+    // the body, so `Artifact` now reaches the HOST-LOOP tier too when the server flag is on. Earlier
+    // guidance here said the host-loop tier was "correct by construction and must not gain it" — that is
+    // no longer true, and the same release added a host-loop-only Artifact approval guard (see
+    // checkPathHookFacts' wrapper rules), which is the corroborating evidence. Both term lists are
+    // admitted so an older Desktop still syncs; what is pinned is that the REMAINING terms are intact.
     const artifactCond = s6[3];
     if (artifactCond !== undefined) {
       const escC = artifactCond.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2382,10 +2532,10 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
             "S6c Artifact gate",
             "the Artifact condition is no longer exactly the frame-artifacts expression (cached-arm/HIPAA/trailing-term change) — reclassify before admitting the spread",
           );
-        else if (!/isHostLoop:/.test(whole[3]))
+        else if (!/isBridgeSession:/.test(whole[3]) || !/isDispatchChild:/.test(whole[3]))
           miss(
             "S6c Artifact gate",
-            "the frame-artifacts predicate is no longer passed isHostLoop — Artifact could reach the host-loop tier",
+            "the frame-artifacts predicate is no longer passed isBridgeSession/isDispatchChild — the tier restriction may have been emptied",
           );
         else {
           // Attended-turn wrapper: function F(e,t){return P(e,t)&&e._isUnattended!==!0}
@@ -2395,12 +2545,12 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           if (!wrap) miss("S6c Artifact gate", "the attended-turn wrapper body changed — _isUnattended may no longer restrict Artifact");
           else if (
             !new RegExp(
-              `function ${wrap[3]}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&!\\2\\.isHostLoop&&`,
+              `function ${wrap[3]}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?`,
             ).test(toolsSite)
           )
             miss(
               "S6c Artifact gate",
-              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isHostLoop before admitting the spread",
+              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
             );
           // S6e (B17): the trailing conjunct must still be the HIPAA-restriction reader. Resolving it is
           // what the old hard-coded `.r()` only pretended to do — that regex accepted ANY single-letter

@@ -871,6 +871,16 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   );
   const fixture1289290 = () => `HEADER;${W3};${W2};${W1_1289290}${STIER_1289290};${MODELCFG}TAIL`;
 
+  // D7 (Desktop 1.32352.0): production dropped `!isHostLoop` from BOTH the call site and the predicate
+  // body, so Artifact now reaches the host-loop tier. Without this case the new shape is proven only by
+  // the real-asar oracle, which skips wherever there is no Desktop install — i.e. in CI.
+  it("1.32352.0 build shape: the predicate without !isHostLoop is still clean", () => {
+    const without = fixture1289290()
+      .replace("{isBridgeSession:b,isDispatchChild:x,isHostLoop:v}", "{isBridgeSession:b,isDispatchChild:x}")
+      .replace("&&!t.isHostLoop&&", "&&");
+    expect(checkSpawnContractFacts(without)).toEqual([]);
+  });
+
   it("1.28929.0 build shape: the conditional Artifact spread + frame-artifacts env key stay clean and unpinned", () => {
     expect(checkSpawnContractFacts(fixture1289290())).toEqual([]);
     const { env, flags } = deriveSpawnEnv(fixture1289290(), greenGates());
@@ -892,8 +902,17 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       () => fixture1289290().replace(ARTIFACT_DEF, "let zde=!0;" + ARTIFACT_DEF.split(";").slice(1).join(";")),
       "S6c Artifact gate",
     ],
-    // The exact widening that would let Artifact reach the host-loop tier.
-    ["M3 predicate drops !isHostLoop", () => fixture1289290().replace("&&!t.isHostLoop&&", "&&"), "S6c Artifact gate"],
+    // D7 (Desktop 1.32352.0): production itself dropped `!isHostLoop` — Artifact now legitimately reaches
+    // the host-loop tier — so that is no longer a violation and both term lists are admitted. What must
+    // still fail loud is losing one of the REMAINING tier restrictions, or emptying the argument object
+    // so the predicate can no longer see any of them.
+    ["M3a predicate drops !isDispatchChild", () => fixture1289290().replace("&&!t.isDispatchChild", ""), "S6c Artifact gate"],
+    ["M3b predicate drops !isBridgeSession", () => fixture1289290().replace("&&!t.isBridgeSession", ""), "S6c Artifact gate"],
+    [
+      "M3c the predicate's argument object is emptied",
+      () => fixture1289290().replace("{isBridgeSession:b,isDispatchChild:x,isHostLoop:v}", "{}"),
+      "S6c Artifact gate",
+    ],
     // Definition hoisted out of the spawn window ⇒ must fail CLOSED, not open.
     [
       "M4 definition outside the window",
@@ -1750,6 +1769,21 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
   });
 });
 
+/** The Desktop 1.32352.0 install shape: a BLOCK-bodied arrow wrapping the `??` chain in a pre-pass that
+ *  can deny before any link, and a post-pass that can overturn the chain's ALLOW. */
+function blockBodyInstall(): string {
+  return (
+    `async function ss(e,n,r){if(e!=="Artifact")return null;const s=async x=>x;` +
+    `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
+    `const f=await stat(n.file_path);return{finish:async x=>x&&f?x:{behavior:"deny",message:"changed"}}}` +
+    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{` +
+    `const a=await ss(g,S,d);` +
+    `if(a?.vmPathDeny)return a.vmPathDeny;` +
+    `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
+    `return a===null?o:a.finish(o)});`
+  );
+}
+
 function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string) => string>> = {}): Map<string, string> {
   let defining =
     `const g5e=["Read","Write","Edit","Glob","Grep"],p5e=["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"],Jse="request_cowork_directory",Bse="chat";` +
@@ -1791,6 +1825,50 @@ function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string)
 describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)", () => {
   it("clean bundle → no flags", () => {
     expect(checkPathHookFacts(pathHookFiles())).toEqual([]);
+  });
+
+  // The synthetic fixture uses READABLE export names, so it cannot see a release that mangles them —
+  // which is how Desktop 1.32352.0 reached `sync` with every path-hook anchor reporting "gone" and not
+  // one red test. checkSpawnContractFacts and checkMountModeFacts both have a real-asar regression;
+  // this is the one that was missing.
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkPathHookFacts(files)).toEqual([]);
+  });
+
+  // Desktop 1.32352.0 restructured the install: the `??` chain is now inside a BLOCK body, wrapped by a
+  // pre-pass that can deny before every link and a post-pass that can turn the chain's ALLOW into a DENY.
+  // Teaching the extractor the block shape without anchoring the wrapper would silence three flags and
+  // leave both new decision points invisible — the B16/B18 failure mode.
+  const blockFiles = (mutate?: (s: string) => string) =>
+    pathHookFiles({
+      consuming: (c) => {
+        const swapped = c.replace(/const Se=e\.canUseTool;[\s\S]*$/, blockBodyInstall());
+        return mutate ? mutate(swapped) : swapped;
+      },
+    });
+
+  it("block-bodied install with pre/post-pass → no flags", () => {
+    expect(checkPathHookFacts(blockFiles())).toEqual([]);
+  });
+
+  it("MUTATION: the pre-pass is not awaited → flags", () => {
+    // `ss` is async, so an un-awaited call yields a Promise: `a?.vmPathDeny` is undefined and
+    // `a.finish` is not a function. The VM-path deny silently stops applying.
+    expect(checkPathHookFacts(blockFiles((s) => s.replace("const a=await ss(", "const a=ss("))).length).toBeGreaterThan(0);
+  });
+
+  it("MUTATION: the post-pass is bypassed → flags", () => {
+    expect(checkPathHookFacts(blockFiles((s) => s.replace("return a===null?o:a.finish(o)", "return o"))).length).toBeGreaterThan(0);
+  });
+
+  it("MUTATION: the pre-pass loses its VM-path deny → flags", () => {
+    expect(
+      checkPathHookFacts(
+        blockFiles((s) => s.replace("is a VM path. In this session the Artifact tool publishes from the host filesystem", "nope")),
+      ).length,
+    ).toBeGreaterThan(0);
   });
   it("MUTATION: gated set membership changed → flags", () => {
     const f = pathHookFiles({ defining: (s) => s.replace(`"Grep"]`, `"Grep","Bash"]`) });

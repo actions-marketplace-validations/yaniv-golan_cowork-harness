@@ -113,6 +113,27 @@ All notable changes to this project are documented here. The format is based on
   reported only when the RAW text parses and the normalized text does not, so a future Desktop shipping
   syntax the parser does not know reads as "not our damage" rather than blocking every sync.
 
+- **The path-gate and Artifact sentinels survive a release that mangles exported CONSTANT names.**
+  Desktop 1.32352.0 renamed `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS` to `Cg` (and
+  `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS`, `REQUEST_COWORK_DIRECTORY`, `SESSION_TYPE_CHAT` with it) while the
+  values behind them stayed byte-identical, so every path-hook anchor reported the machinery "gone". The
+  guidance to never anchor on a minified *member* name did not cover exported *constants*. Each now binds
+  by content — the defining chunk is resolved through the install site's spread, the tool-set arrays are
+  matched literally and then required to still be exported, and the two constants are anchored on their
+  values. A second codegen change in the same release (arrow bodies are now parenthesised) is admitted the
+  same way. `checkPathHookFacts` gains the real-asar regression test its two sibling checkers already had —
+  its absence is why this reached `sync` with nothing red.
+
+- **The host-loop `canUseTool` chain is checked as a whole, including its new wrapper.** Production moved
+  the `??` chain inside a block body wrapped by a pre-pass that can deny before any link runs and a
+  post-pass that can turn the chain's ALLOW into a DENY. Teaching the extractor the block shape alone
+  would have silenced three flags while leaving both new decision points invisible, so the wrapper is
+  pinned too: the pre-pass must be awaited (an un-awaited async link yields a Promise, which is never
+  nullish, so the early deny and the veto both go inert), must still carry the `/sessions` VM-path deny,
+  and the chain's result must still flow through its `finish()`. Separately, the frame-artifacts predicate
+  legitimately **dropped** its `!isHostLoop` term — `Artifact` now reaches the host-loop tier — so both
+  term lists are admitted while the remaining tier restrictions are pinned.
+
 ## [1.23.0] — 2026-08-14
 
 ### Added
