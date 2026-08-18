@@ -293,6 +293,8 @@ them by what you're trying to prove:
 | the skill didn't error out of a tool | `tool_no_error: <regex>`, `max_tool_errors: <N>` |
 | it didn't waste repeated identical calls | `max_redundant_tool_calls: <N>` |
 | a deliverable reached the user | `user_visible_artifact: <path>` (+ `no_scratchpad_leak: true` if it delivers via `present_files` — **`container` only**) |
+| an internal name/path did **not** leak into a delivered file | `artifact_text: {artifact, not_contains}` — `artifact_json`'s companion for non-JSON bodies; literal path, no glob, so one entry per delivered surface |
+| a named path must **not** exist after the run | `file_absent: <path>` (**live/verify-run only**) — do NOT invert `no_unexpected_files`: that is an allowlist over *newly created* files and needs a pre-run manifest |
 | a to-do workflow finished | `all_tasks_completed: true`, `task_status: {match, status}` |
 | a skill / connector / tool was **offered** | `skill_available`, `connector_available`, `tool_available` (all `<regex>`) |
 | a skill actually **ran** (or must NOT) | `skill_triggered: <regex>`, `no_skill_triggered: <regex>` |
@@ -301,6 +303,7 @@ them by what you're trying to prove:
 | a pre-existing input wasn't mutated (incl. `uploads/**`) | `input_unmodified: <glob>` or `[<glob>, …]` (live/verify-run) |
 | no authored interactive artifact silently loses its Submit under Cowork | `no_lost_write_back: true` (**live-only**; static Tier A over the run's authored `.html`/`.py`/`.js`; per-scenario gate for the same class `analyze-skill` scans) |
 | a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
+| the user was **shown** the right choices, in order | `question_options: {when_question, equals}` — the option SET/ORDER a gate offered (`question_asked` matches the text only); order is compared by default |
 | a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
 | every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
 | a context compaction happened | `compaction_occurred: true` |
@@ -393,8 +396,8 @@ the discovery/encode/record dance entirely and answer gates **live during the re
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
 `cowork-harness record <file.yaml> --dry-run` — it runs the real loader AND the same scenario-level
-refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing), so it
-cannot green something a paid run would reject. On a directory it reports every offender and the batch
+refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing) **plus the
+cassette-portability pre-flight below**, so it cannot green something a paid run would reject. On a directory it reports every offender and the batch
 cost estimate. `lint` checks the assertion invariants (both above).
 
 **Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
@@ -404,7 +407,12 @@ That choice is permanent: the cassette rewrites `scenario.session` and `scenario
 its own directory** at record time, so moving the file later — a different `--out`, a `git mv`, a copy
 into another repo — leaves those unresolvable and
 `verify-cassettes` reports `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you
-re-record at the new location. Related: recording at a **host-inheriting** tier
+re-record at the new location. **`record` now says so BEFORE it spends:** a pre-flight — at the same
+pre-spend point as the host-inventory refusal, and in `record --dry-run`, so the rehearsal is free —
+warns when the cassette would be written outside the scenario's tree, or when `session:` itself lives
+outside it (an absolute or `~` path: the mirror case, invisible to a check that only looks at where the
+cassette lands). A warning, not a refusal — an out-of-tree throwaway cassette is legitimate; what was
+missing was anything saying so while you could still act. Related: recording at a **host-inheriting** tier
 (`protocol`/`hostloop`/`cowork`→hostloop) into a repo-visible path is refused outright (gotcha 25).
 The clean answer there is `fidelity: container` (sealed, `HOME=/tmp`, nothing to leak) — **not**
 redirecting `--out` outside the repo and moving the file in afterwards, which trades a loud refusal
@@ -584,7 +592,10 @@ What the harness gives you here is the run execution and the control arm — des
 
 1. **Pin the model.** With no `model:` in the session (or `--model` on the `skill` lane) the run uses
    whatever the staged agent binary defaults to — not a harness constant, and it can move under a
-   baseline bump. Read `result.json`'s `models` back before believing any cross-run comparison.
+   baseline bump. Read `result.json`'s `models` back before believing any cross-run comparison — and when
+   you do, **ignore any entry wrapped in angle brackets**: `<synthetic>` is the agent marking a turn it
+   fabricated locally (no API call), not a model, so two runs of the same pinned model can differ on this
+   array purely by whether such a turn occurred.
 2. **Commit the skill first.** `fingerprint.skillHash` is content-exact, so an edit mid-batch silently
    splits your dataset into two generations — and a hash whose source was never committed identifies a
    generation that is unrecoverable. `stats --group-by skill-hash` separates them after the fact;
@@ -787,11 +798,13 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 
 1. **An assertion passed but tested nothing on the PR gate.** *Why:* on a manifest-less cassette
    `replay` skips filesystem/egress keys (`file_exists`, `user_visible_artifact`, `artifact_json`,
-   `egress_*`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`); a *mixed* item like
+   `artifact_text`, `egress_*`, `no_delete_in_outputs`, `self_heal_ran`, `transcript_no_host_path`); a
+   *mixed* item like
    `{result, egress_denied}` greens on `result` while its `egress_denied` half is dropped. (`record`
    snapshots an `artifacts` manifest, which makes
-   `file_exists`/`user_visible_artifact`/`artifact_json`/`computer_links_resolve`
-   replay-checkable — but the live-only egress keys stay skipped.) *Fix:* put egress/live-only checks on
+   `file_exists`/`user_visible_artifact`/`artifact_json`/`artifact_text`/`computer_links_resolve`
+   replay-checkable — but the live-only egress keys stay skipped, and `file_absent` is never
+   replay-checkable at all: proving absence needs an exhaustive, healthy walk a manifest does not record.) *Fix:* put egress/live-only checks on
    a live gate; keep one concern per `assert:` item; run the linter. The harness warns loudly on skip.
 
 2. **A steered gate answer never reached the model.** *Why:* `serializeDecision` must emit
@@ -800,8 +813,8 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    channel: scripted `choose:` list, in-band `--decider-dir` via a repeated `--choose` / a JSON-array
    reply, and `--decider-cmd` via a JSON-array reply — all deliver the same `", "`-joined wire shape.
    Free-text "Other" via `answer:`. Do NOT hand-write a multiSelect reply as a bare comma-joined
-   string — send an array; a scalar is treated as one selection.) `question_asked` / `questions_count_max` /
-   `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
+   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` /
+   `questions_count_max` / `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
    old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).
 
@@ -911,7 +924,9 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 14. **A positional `choose` (`first` / index) is order-dependent.** `choose: "2"` survives label drift
     but NOT option *re-ordering* — if the gate presents its options in a different order run-to-run, the
     index lands on a different option (a silent re-record flake). Prefer an exact label when order is
-    stable; `lint` flags positional `choose` with an advisory.
+    stable; `lint` flags positional `choose` with an advisory. Unstable option order is also what the
+    **user** sees — a reordered gate puts a different choice in the default slot — so pin what was shown
+    with `question_options`, rather than only hardening the answer rule against it.
 15. **A scripted `choose:` matching no offered option HARD-fails the run — `on_unanswered: first` does NOT
     backstop it.** This is distinct from an *unanswered* gate (no rule matched → falls to `on_unanswered`): a
     rule that DID match the gate but whose `choose:` names a label the gate never offered (the model reworded

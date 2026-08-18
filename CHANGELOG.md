@@ -71,6 +71,12 @@ All notable changes to this project are documented here. The format is based on
   `ALL_CLASSIFICATION_KEYS` now spreads `MANIFEST_KEYS` instead of hand-listing it — that literal was
   the one place a new manifest key threw at first replay for want of a second edit.
 
+  Documented in `docs/scenario.md`, `docs/cassette.md` and the bundled skill — catalog rows, the goal→key
+  index, and the replay-class lists: `artifact_text` joins the manifest class (its "all five" count
+  becomes six) and `file_absent` the live-only class, with the reason it can never be replay-checked. The
+  docs-sync guard cannot see that placement — `test/skill-docs-sync.test.ts` requires only that each key
+  appear backtick-quoted somewhere in the skill's schema reference, which a single catalog row satisfies.
+
 - **`question_options` — assert the option SET and ORDER a gate offered the user.** The gate family could
   assert *that* a question was asked (`question_asked`, text only), how many, and whether the answer was
   delivered — nothing could assert what the person was actually SHOWN. A consumer hit the consequence:
@@ -106,7 +112,9 @@ All notable changes to this project are documented here. The format is based on
   keys.
 
   A cassette recorded with this key still stamps format v10 and is rejected by installs that predate the
-  key — the standing consequence of any assertion-key addition.
+  key — the standing consequence of any assertion-key addition. Documented in `docs/scenario.md` and in
+  the bundled skill: the assertion catalog, the goal→key index, the four gate-key replay lists, and the
+  `positional-choose-order` advisory, which stops telling you to compare option order by hand.
 
 ### Changed
 
@@ -178,7 +186,9 @@ All notable changes to this project are documented here. The format is based on
   climbing out of the project tree, the stored relatives resolve only from that one filesystem layout —
   the file is uncommittable, and `verify-cassettes` reports it permanently `unverifiable` for staleness.
   Two consumers discovered that *after* paying for the run. The new preflight fires at the same
-  pre-spend point as the host-inventory guard, and in `record --dry-run`, so the rehearsal is free.
+  pre-spend point as the host-inventory guard, and in `record --dry-run`, so the rehearsal is free. The
+  bundled skill states it where it already warned that a cassette cannot be moved after the fact, and on
+  `--dry-run` itself.
 
   It tests **climb-out**, in both directions: the cassette written outside the tree (the reported
   `--out /tmp/…` case) and a `session:` that lives outside it (an absolute or `~` path) — the mirror
@@ -221,6 +231,14 @@ All notable changes to this project are documented here. The format is based on
 ### Fixed
 
 
+- **`assertions --list` was advertised as emitting each key's replay class. It does not.** The
+  bundled skill's CI recipe offered the JSON form as the authoritative substitute for hand-typed key
+  enumerations — "every key, with its replay class" — and the output is `{key, description}`, with no
+  structured class field to filter on. A consumer taking that at face value writes a `jq` selector
+  against a field that has never existed, on the one surface recommended for not going stale. The line
+  now says what the command emits, and points at the catalog's replay-class tables for the classes
+  themselves.
+
 - **Five published sentences described `fingerprint.skillSources` as cassette-relative. It is not.** The
   "a cassette is not relocatable" guidance added earlier in this release listed `scenario.session`,
   `fingerprint.skillSources` and `scenarioSource` as all being rewritten relative to the cassette's own
@@ -243,7 +261,9 @@ All notable changes to this project are documented here. The format is based on
   spelling), and `docs/gotchas.md` gains a symptom-keyed entry for the literal token someone greps for.
   The maintainer-only eval gate has filtered this since it was bitten live, but its comment mis-attributed
   the value to "a cassette/replay rep that used NO live model" — an ordinary live rep can carry it —
-  and referenced a `single()` sort that F20 replaced; both corrected.
+  and referenced a `single()` sort that F20 replaced; both corrected. The bundled skill carried the same
+  "read `models` back" instruction in three places (measurement hygiene, the scenario schema's `model:`
+  comment, the repeat-batch recipe); all three now carry the caveat with it.
 
 - **Documented what the harness is *for*, not only that it is faithful.** The README leads with the
   record as well as the contract, and a new **"Why not just `claude -p` or the Agent SDK?"** section

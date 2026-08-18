@@ -118,15 +118,21 @@ The split is not just about tokens — it decides **where each lane can run**:
   `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
   `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
-  `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
-  `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
-  (`file_exists` / `user_visible_artifact` / `artifact_json`) **if** it carries an artifact manifest.
+  `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
+  `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
+  (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
+  manifest. `file_absent` is in neither class — it is live/verify-run only.
   **That list is illustrative, not the authoritative set** — more keys are replay-checkable than fit a
   paragraph, and a hand-typed enumeration is exactly what goes stale. For the current set, ask the CLI:
 
   ```bash
-  cowork-harness assertions --list --output-format json   # every key, with its replay class
+  cowork-harness assertions --list --output-format json   # every key + its one-line semantics
   ```
+
+  It emits `{key, description}` — there is no structured replay-class field to filter on; the
+  live-only / manifest / `controlOut` preconditions are stated in each key's `description` prose and,
+  in full, in the catalog's replay-class tables in
+  [`references/scenario-schema.md`](./scenario-schema.md).
 
   **`replay --mutate`** is a distinct, reporting-only diagnostic on this same lane: it perturbs each
   recorded JSON artifact value one at a time, re-runs the assertions against the perturbed cassette,

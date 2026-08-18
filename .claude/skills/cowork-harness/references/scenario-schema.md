@@ -122,7 +122,9 @@ model: claude-opus-4-8           # omit ONLY to track the agent default: with no
                                   # no --model flag at all, so the run uses whatever the STAGED AGENT BINARY
                                   # defaults to — not a harness constant, and it can move under a baseline
                                   # bump. PIN IT for anything you will compare (a --repeat batch, a
-                                  # before/after, a with/without); read result.json's `models` back to confirm.
+                                  # before/after, a with/without); read result.json's `models` back to confirm,
+                                  # IGNORING any `<…>`-wrapped entry (`<synthetic>` = a turn the agent
+                                  # fabricated locally, not a model id).
                                   # On the ad-hoc `skill` lane there is no session file, so `--model <id>`
                                   # (or COWORK_HARNESS_MODEL) is the ONLY way to pin it.
 account_name: my-account         # OPTIONAL — display name rendered into {{accountName}} / the prompt's
@@ -439,7 +441,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
-**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
+**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see the assertion
 table). With `controlOut` present they evaluate; on an old
@@ -451,13 +453,16 @@ the question keys: a custom hook's block/allow decision is an opaque async reply
 built-in Task hook's view and could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
-`artifact_json`, `computer_links_resolve` run on replay when the cassette carries an `artifacts` snapshot
+`artifact_json`, `artifact_text`, `computer_links_resolve` (+ `computer_links_resolve_if_present`) run on
+replay when the cassette carries an `artifacts` snapshot
 (`record` captures `outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the
 small-file JSON `body` inlined; a hash-only entry still satisfies `file_exists`. `computer_links_resolve`
 resolves a `/sessions/…/mnt/…`-shaped link directly against the manifest, and a host-shaped (hostloop) link
 by first normalizing it to a mount-relative path (recorded connected-folder prefixes + the outputs/uploads
 mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes) all five are skipped (five need the manifest; two
+`run`/`verify-run`). `artifact_text` is manifest-class for the same reason `artifact_json` is — a
+body-less, symlinked or over-cap entry fails evidence-unavailable rather than passing.
+Without a manifest (older cassettes) all six are skipped (six need the manifest; two
 more — `no_unexpected_files` and `input_unmodified` — need the pre-run path/hash capture, below); `no_unexpected_files` also
 needs `preRunPaths` (≥0.24 recordings) — without it the key is excluded with a loud warning (live/verify-run
 hard-fails evidence-unavailable instead). `input_unmodified` is the same shape but needs `preRunHashes`
@@ -467,7 +472,9 @@ warning. A green replay re-confirms
 staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-skill-drift` only on
 skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
-**Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
+**Egress + other filesystem — still skipped on replay (live-only):** `file_absent` (proving a path is
+ABSENT needs an exhaustive, healthy walk; a manifest records no walk health, so "not captured" and "not
+there" are indistinguishable and the key would pass while proving nothing), `no_delete_in_outputs`,
 `self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
 `no_lost_write_back`. These run only on a live `run`/`record`.
 

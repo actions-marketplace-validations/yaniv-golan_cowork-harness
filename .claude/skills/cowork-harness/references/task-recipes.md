@@ -17,11 +17,12 @@ a paid live re-record? Walk this tree — the answer is usually no:
    `cowork-harness replay <cassette> --assert-from <scenario.yaml>`. Token-free, no re-record.
    If the recording genuinely lacks the telemetry a key needs (very old cassettes), the key fails
    **loud** as `evidence-unavailable` — that is correct behavior, not a bug; only then re-record.
-2. **Gate keys** (`question_asked`, `questions_count_max`, `gate_answers_delivered`) on a cassette
+2. **Gate keys** (`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`) on a cassette
    **with `controlOut`** (any modern recording) → same token-free `--assert-from` path.
 3. **Gate keys** on a **pre-`controlOut`** cassette → one re-record unlocks gate asserts for that
    cassette permanently.
-4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `egress_allowed`,
+4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `file_absent` — live-only
+   whatever the cassette carries — `egress_allowed`,
    `egress_denied`, `no_delete_in_outputs`) → live lane **by design**; replay skips them with a
    loud `::warning::`. Keep them in the scenario, run them on the nightly live gate.
 
@@ -242,7 +243,8 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    whose source was never committed names a generation that is unrecoverable, which makes the
    comparison uninterpretable rather than merely noisy. And with no `model:` in the session (or
    `--model` on the `skill` lane) each run uses whatever the staged agent binary defaults to, so a
-   before/after can silently straddle two models; read `result.json`'s `models` back to confirm.
+   before/after can silently straddle two models; read `result.json`'s `models` back to confirm —
+   ignoring any `<…>`-wrapped entry (`<synthetic>` marks a turn the agent fabricated locally, not a model).
 3. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
    content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but only on ≥ 1.5.0; earlier CLIs emit
