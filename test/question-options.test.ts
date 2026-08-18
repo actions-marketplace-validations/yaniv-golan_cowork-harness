@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { QUESTION_GATE_KEYS } from "../src/run/cassette.js";
 import { assertContradiction } from "../src/run/execute.js";
-import type { Assertion, Scenario } from "../src/types.js";
+import { ScenarioObject, type Assertion, type Scenario } from "../src/types.js";
 
 // The defect this key exists for, in one sentence: a consumer's skill enforced an option tuple ON THE
 // FILE, the agent presented that list REVERSED — demoting "Stop review" from first to last, putting a
@@ -107,6 +107,16 @@ describe("question_options fails closed, never vacuously", () => {
     expect(r.message).toMatch(/no `when_question` selects one/);
   });
 
+  // `questionLabel` is `question || header`, and `question_asked` selects on that same string. A
+  // header-only gate is a real shape (the in-VM handler indexes by header when `question` is empty), so
+  // selecting on `q.question` alone would make authors write two regexes for one gate.
+  it("selects a header-only gate by its header, the same string question_asked matches", () => {
+    const headerOnly = [{ question: "Pick a stage", options: [{ label: "Seed" }, { label: "Series A" }] }];
+    expect(
+      run({ question_options: { when_question: "Pick a stage", equals: ["Seed", "Series A"] } }, ctx({ gateOptions: headerOnly })).pass,
+    ).toBe(true);
+  });
+
   it("omitting when_question is fine when exactly one sub-question fired", () => {
     expect(
       run({ question_options: { equals: ["Seed", "Series A"] } }, ctx({ gateOptions: [gate("Which stage?", ["Seed", "Series A"])] })).pass,
@@ -143,6 +153,18 @@ describe("question_options wiring", () => {
   // otherwise a controlOut-less replay would evaluate it against a record that never drove a decision.
   it("is classified as a controlOut-gated replay key", () => {
     expect(QUESTION_GATE_KEYS).toContain("question_options");
+  });
+
+  // LOAD time, not evaluate time: on run/record a contradictory assert must be refused BEFORE the
+  // spawn. The evaluator repeats the check for hand-built contexts, which is why an evaluate()-only
+  // test passed while the schema still accepted the document.
+  it("rejects equals + contains at LOAD, before any run is spent", () => {
+    const doc = (qo: unknown) => ({ prompt: "p", assert: [{ question_options: qo }] });
+    expect(() => ScenarioObject.parse(doc({ equals: ["a"], contains: ["a"] }))).toThrow(/exactly one of/);
+    expect(() => ScenarioObject.parse(doc({ when_question: "x" }))).toThrow(/exactly one of/);
+    // The valid forms still parse.
+    expect(() => ScenarioObject.parse(doc({ equals: ["a"] }))).not.toThrow();
+    expect(() => ScenarioObject.parse(doc({ contains: ["a"], order: "any" }))).not.toThrow();
   });
 
   it("contradicts questions_count_max: 0 at load time", () => {

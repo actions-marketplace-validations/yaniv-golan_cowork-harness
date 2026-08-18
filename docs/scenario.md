@@ -667,8 +667,8 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `allow_l0_plugin_divergence` / `allow_stall` / `allow_undelivered_deliverables` / `allow_outputs_delete` / `allow_delete_in` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
-**`question_asked`, `questions_count_max`, `gate_answers_delivered`, and `gate_answer_count_min`**
-are also content assertions, plus the hook-blocked keys `hook_blocked` and `no_hook_blocked`, and the
+**`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`, and
+`gate_answer_count_min`** are also content assertions, plus the hook-blocked keys `hook_blocked` and `no_hook_blocked`, and the
 path-denial keys `vm_path_denied`, `path_denied`, and `no_path_denied` — all of
 which require the cassette to carry `controlOut` (full-fidelity replay). When
 `controlOut` is present, the decision pipeline runs on replay and populates `rec.questions` /

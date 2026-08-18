@@ -615,6 +615,13 @@ export const Assertion = z.strictObject({
           "`exact` (default) compares order as well as membership — an option list re-ordered by the model is the defect this key exists for; `any` compares membership only",
         ),
     })
+    // Load-time, so a contradictory assert is refused BEFORE the spawn rather than after it. `equals`
+    // and `contains` express different claims (complete set vs subset) and their intersection is
+    // undefined; neither one means the assertion checks nothing at all. `evaluate()` repeats both
+    // checks because hand-built contexts (tests, library callers) never pass through parse.
+    .refine((v) => (v.equals === undefined) !== (v.contains === undefined), {
+      message: "question_options: set exactly one of `equals` or `contains`",
+    })
     .optional()
     .describe(
       "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",

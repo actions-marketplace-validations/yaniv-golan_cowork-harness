@@ -2159,6 +2159,16 @@ function check(
     if (wantsAny === undefined) {
       // Rejected by the schema too; repeated because evaluate() is also reached by hand-built contexts.
       results.push(fail("artifact_text: set at least one of contains / not_contains / matches / not_matches"));
+    } else if (ctx.lane === "remote") {
+      // `artifact_json` has no such branch and reds with a bare "file not found" here, which reads as
+      // "the skill didn't write it" when the truth is "this lane has no locally observable filesystem".
+      // Not a false green either way — a missing file fails both — but a misleading message on a lane
+      // where the assertion can never be satisfied is worth one branch.
+      results.push(
+        fail(
+          `artifact_text cannot be evaluated on \`lane: remote\` — a remote container's filesystem is not locally observable, so there is no body to scan. Assert on the agent's own statement of the content (\`transcript_matches\`), or use \`lane: local\``,
+        ),
+      );
     } else if (!file) {
       results.push(fail(`unsafe artifact_text path "${at.artifact}" — must stay under the work root (no absolute paths or "..")`));
     } else {
@@ -2171,6 +2181,11 @@ function check(
       const replayReason = truncated.get(rel);
       const bodyLess = truncated.has(rel) || liveReadonly;
       const isLink = ctx.linkPaths?.has(rel) === true;
+      // NO `preRunOrigin` guard here, deliberately (the question `file_absent` had to answer). That flag
+      // describes the pre-run BASELINE, and this key never consults it: it reads one named body from the
+      // post-run tree. Every way that body can be unavailable already fails CLOSED below — absent (file
+      // not found), body-less, link placeholder, non-UTF-8 for the negative forms. There is no path on
+      // which a degraded baseline turns into a passing text match.
       if (isLink) {
         results.push(
           fail(
