@@ -106,6 +106,13 @@ All notable changes to this project are documented here. The format is based on
   bundle and skips cleanly where there is no install. The previous check — confirming that one known key
   had normalised — stayed green through two of the three defects.
 
+  `sync` now also carries the tripwire itself, because that oracle needs a Desktop install and so never
+  runs in CI — while `sync --diff` is the first thing run when a release lands. Any chunk whose
+  normalized text stops parsing is reported **above** the deltas, saying in as many words that absent
+  anchors may be phantom *and* real deltas may be masked. It is fail-soft by construction: a chunk is
+  reported only when the RAW text parses and the normalized text does not, so a future Desktop shipping
+  syntax the parser does not know reads as "not our damage" rather than blocking every sync.
+
 ## [1.23.0] — 2026-08-14
 
 ### Added

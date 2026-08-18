@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
+import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 
@@ -650,7 +651,7 @@ export function normalizeBundleQuotes(src: string): string {
   return parts.join("");
 }
 
-export function readMainBundleFiles(dir: string): Map<string, string> {
+export function readMainBundleFilesRaw(dir: string): Map<string, string> {
   const entryPath = join(dir, ".vite/build/index.js");
   const visited = new Set<string>();
   const queue = [entryPath];
@@ -663,13 +664,51 @@ export function readMainBundleFiles(dir: string): Map<string, string> {
     if (visited.has(p) || !existsSync(p)) continue;
     visited.add(p);
     const content = readFileSync(p, "utf8");
-    out.set(p.slice(p.lastIndexOf("/") + 1), normalizeBundleQuotes(content));
+    out.set(p.slice(p.lastIndexOf("/") + 1), content);
     for (const m of content.matchAll(localRequireRe)) {
       queue.push(join(dirname(p), m[1]));
     }
   }
   return out;
 }
+export function readMainBundleFiles(dir: string): Map<string, string> {
+  return new Map([...readMainBundleFilesRaw(dir)].map(([name, raw]) => [name, normalizeBundleQuotes(raw)]));
+}
+
+/** Tripwire: `normalizeBundleQuotes` must never leave a chunk that a parser rejects.
+ *
+ *  Every anchor in this file is written against normalized text, so a tokenizer desync does not fail
+ *  loudly — it makes anchors read as "gone" and can rewrite stretches of code into string literals.
+ *  Desktop 1.32352.0 produced 32 unknown deltas that way, 21 of them phantom, while also MASKING four
+ *  real ones. `sync --diff` is the first command the per-release runbook runs, so the signal belongs
+ *  here and not only in the (install-dependent, CI-skipped) test oracle.
+ *
+ *  FAIL-SOFT BY CONSTRUCTION: a chunk is only reported when the RAW text parses and the normalized text
+ *  does not. A future Desktop shipping syntax this acorn does not know then reads as "not our damage"
+ *  and stays silent, instead of blocking every sync for an unrelated reason. */
+export function checkNormalizationSanity(raw: Map<string, string>, normalized: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const parses = (src: string): boolean => {
+    try {
+      acorn.parse(src, { ecmaVersion: "latest" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const [name, before] of raw) {
+    const after = normalized.get(name);
+    if (after === undefined || after === before) continue; // nothing was rewritten — nothing to verify
+    if (parses(after) || !parses(before)) continue;
+    flags.push(
+      `tokenizer: normalizeBundleQuotes left ${name} unparseable (the RAW chunk parses) — the quote scanner ` +
+        `desynchronised, so EVERY anchor over this chunk is unreliable: absent anchors may be phantom AND real ` +
+        `deltas may be masked. Fix the tokenizer before classifying any delta below`,
+    );
+  }
+  return flags;
+}
+
 export function readMainBundle(dir: string): string {
   return [...readMainBundleFiles(dir).values()].join("");
 }
@@ -874,8 +913,11 @@ function extractFromAsar(
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
     execFileSync("npx", ["--yes", "@electron/asar", "extract", ASAR, tmp], { stdio: "ignore" });
-    const bundleFiles = readMainBundleFiles(tmp);
+    const rawFiles = readMainBundleFilesRaw(tmp);
+    const bundleFiles = new Map([...rawFiles].map(([name, raw]) => [name, normalizeBundleQuotes(raw)]));
     const bundle = [...bundleFiles.values()].join("");
+    // FIRST: everything below reads normalized text, so a desync here invalidates all of it.
+    for (const f of checkNormalizationSanity(rawFiles, bundleFiles)) flag(unknown, f);
     // Domains: anthropic.com / claude.ai / sentry.io / statsig hosts referenced in the bundle.
     const re = /[a-z0-9.-]+\.(?:anthropic\.com|claude\.ai)|sentry\.io|statsig[a-z.]*\.[a-z]+/g;
     const domains = dedupe([...bundle.matchAll(re)].map((m) => m[0]));

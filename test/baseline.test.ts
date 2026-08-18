@@ -48,6 +48,7 @@ import {
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
+import { checkNormalizationSanity } from "../src/sync/cowork-sync.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
@@ -2037,6 +2038,32 @@ describe("1.25927.0 bundler change: normalizeBundleQuotes", () => {
 // tokenizer desync — and the desync also MASKED four real flags. Spot-checking that one known key
 // normalized was the check in place at the time; it stayed green through two of the three defects.
 // ==========================================================================================
+// The oracle above needs a live Desktop install, so it never runs in CI — and `sync` is the command a
+// maintainer actually runs first when a release lands (docs/maintenance.md's runbook opens with
+// `sync --diff`). checkNormalizationSanity is the in-`sync` tripwire for the same failure, and taking
+// BOTH maps keeps it a pure function: these cases need no asar at all.
+describe("checkNormalizationSanity — in-sync tokenizer tripwire", () => {
+  it("flags a chunk whose normalized text stopped parsing", () => {
+    const raw = new Map([["a.js", "x=`ok`"]]);
+    const bad = new Map([["a.js", 'x=(0,t._)"ok"']]); // what a desync/tagged-template rewrite leaves behind
+    expect(checkNormalizationSanity(raw, bad)[0]).toMatch(/a\.js/);
+  });
+
+  it("stays silent when the RAW chunk does not parse either — not our damage to own", () => {
+    // A future Desktop could ship syntax this acorn does not know. Failing closed on that would block
+    // every sync for a reason that has nothing to do with the tokenizer.
+    const raw = new Map([["a.js", "x=<<<not js>>>"]]);
+    const out = new Map([["a.js", "x=<<<not js>>>"]]);
+    expect(checkNormalizationSanity(raw, out)).toEqual([]);
+  });
+
+  it("stays silent on a correct rewrite", () => {
+    const raw = new Map([["a.js", "k:[`user`]"]]);
+    const out = new Map([["a.js", 'k:["user"]']]);
+    expect(checkNormalizationSanity(raw, out)).toEqual([]);
+  });
+});
+
 describe("normalizeBundleQuotes — parser oracle against the real asar", () => {
   /** Every string value the source contains, from BOTH string literals and template cooked pieces.
    *  Normalization converts a substitution-free template into a string with the identical cooked
