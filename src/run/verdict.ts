@@ -46,6 +46,11 @@ export interface Verdict {
    *    the same convention `verify-run`'s text output (cli.ts) and the cassette replay-drift summary use
    *    — alongside its message. Reads `result.assertions` directly (not `signals`) because a
    *    `VerdictSignal` of code `"assertion"` doesn't itself carry which assertion failed.
+   *  - EVERY entry carries `kind`, which is the actual discriminator. Keying off `assertion`'s presence
+   *    was never sufficient and is now demonstrably wrong: guard, staleness and cassette-format failures
+   *    all arrived key-less and indistinguishable from each other, while verify-run's answer-coverage
+   *    misses inject a non-Assertion `answer_coverage` key and therefore READ as an authored assert.
+   *    Filter on `kind`, not on whether `assertion` is set.
    *  - a hard-verdict GUARD reason that failed the run independent of an explicit assert (infra error,
    *    scan-based host-path leak/outputs-delete, a stalled/transport/usage-limit/capability signal, …)
    *    carries just its message, no `assertion` key.
@@ -54,8 +59,15 @@ export interface Verdict {
    *    reason. Substitute the gate's own message (the decider's failure text, question embedded) so a
    *    salvaged run's `failures` actually names the gate reason instead of the generic placeholder.
    *  Empty on a pass. */
-  failures: Array<{ assertion?: string; message: string }>;
+  failures: Array<{ assertion?: string; message: string; kind: FailureKind }>;
 }
+
+/** What produced a `failures[]` entry. `assertion` = one of the author's own `assert:` items;
+ *  `guard` = a hard-verdict signal they did not write (infra error, stall, host-path leak, unanswered
+ *  gate, …); `staleness` = skill/baseline drift escalated to a failure by `--strict` /
+ *  `--fail-on-skill-drift`; `cassette-format` = a cassette too new to interpret; `coverage` = a
+ *  verify-run answer-coverage miss. */
+export type FailureKind = "assertion" | "guard" | "staleness" | "cassette-format" | "coverage";
 
 /** build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
  *  outcome), not from the signal list — a guard that ran clean pushes no signal, so absence is ambiguous. */
@@ -527,12 +539,16 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   // `failures[]` — the flat, jq-friendly projection (see the field's doc comment on `Verdict` above).
   // Plain JSON in shape (no functions, and `assertion: undefined` — set only when no key was found — is
   // dropped by `JSON.stringify` like every other optional field on this type).
-  const failures: Array<{ assertion?: string; message: string }> = [];
+  const failures: Array<{ assertion?: string; message: string; kind: FailureKind }> = [];
 
   for (const a of result.assertions) {
     if (a.pass) continue;
     const key = Object.keys(a.assertion).filter((k) => (a.assertion as Record<string, unknown>)[k] !== undefined)[0];
-    failures.push(key ? { assertion: key, message: a.message ?? "assertion failed" } : { message: a.message ?? "assertion failed" });
+    // `source` is stamped by whoever injected the pseudo-assertion; its absence means the author wrote it.
+    const kind: FailureKind = a.source ?? "assertion";
+    failures.push(
+      key ? { assertion: key, message: a.message ?? "assertion failed", kind } : { message: a.message ?? "assertion failed", kind },
+    );
   }
 
   for (const s of signals) {
@@ -541,10 +557,10 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // result_error/transport_error signal emitted above for the same result:"error" so a salvaged run's
     // failures[] doesn't carry two entries for one root cause.
     if (result.unansweredGate && (s.code === "result_error" || s.code === "transport_error")) continue;
-    failures.push({ message: s.message });
+    failures.push({ message: s.message, kind: "guard" });
   }
 
-  if (result.unansweredGate) failures.push({ message: result.unansweredGate.message });
+  if (result.unansweredGate) failures.push({ message: result.unansweredGate.message, kind: "guard" });
 
   return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals), failures };
 }

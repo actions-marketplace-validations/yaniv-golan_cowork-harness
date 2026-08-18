@@ -113,6 +113,7 @@ CONTENT_KEYS = {
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {
     "question_asked",
+    "question_options",
     "questions_count_max",
     "gate_answers_delivered",
     "gate_answer_count_min",
@@ -128,6 +129,7 @@ GATE_KEYS = {
 # either a live filesystem or the cassette's artifacts manifest — see cassette.ts's manifestKeys comment.
 MANIFEST_KEYS = {
     "file_exists",
+    "artifact_text",
     "user_visible_artifact",
     "artifact_json",
     "computer_links_resolve",
@@ -137,6 +139,7 @@ MANIFEST_KEYS = {
 }
 # live-only: ALWAYS skipped on replay, with a loud warning (no filesystem, no network on the token-free lane)
 LIVE_ONLY_KEYS = {
+    "file_absent",
     "egress_denied",
     "egress_allowed",
     "no_delete_in_outputs",
@@ -460,9 +463,13 @@ def lint_doc(doc, path, raw_lines):
             Finding(
                 "WARN",
                 "unknown-assert-key",
-                f"unknown assertion key `{k}` — not in the assertion catalog (the harness would "
-                "ignore it, so it silently does nothing).",
-                "Use a real assertion key — see references/scenario-schema.md for the full catalog.",
+                f"unknown assertion key `{k}` — not in the assertion catalog. `run`/`skill`/`record` "
+                "REJECT the scenario at load (zod `unrecognized_keys`), so this is a hard failure "
+                "waiting to happen, not a silently-ignored line.",
+                "Use a real assertion key — `cowork-harness assertions --list` is the authoritative "
+                "catalog (references/scenario-schema.md documents the same set). Check for a near-miss "
+                "first: the negative forms are `tool_not_called`, `no_skill_triggered`, "
+                "`subagent_tool_absent`, `transcript_not_contains`.",
                 path,
             )
         )
@@ -667,6 +674,8 @@ def lint_doc(doc, path, raw_lines):
     #     silent false-green — worse than the loud one this rule was written for.
     #   · question_asked — fails "no question matched" against an empty question list, for ANY pattern
     #     (`.some` over an empty list is false, so no value gate is needed here).
+    #   · question_options — same: with zero gates recorded it fails "no question ... was asked", never
+    #     passes vacuously, so it witnesses a gate just as well.
     #   · tool_called whose GLOB matches AskUserQuestion — fails "tool not called".
     # `questions_count_max` is deliberately NOT a companion: a MAX passes vacuously at zero, so pairing it
     # leaves the hole wide open. The harness's own `scaffold` emits `question_asked` alongside this key,
@@ -681,7 +690,7 @@ def lint_doc(doc, path, raw_lines):
     # YAML 1.1 but are rejected by the loader as strings — see _numeric for the same dialect gap.)
     delivered_values = _assert_values(items, "gate_answers_delivered")
     if any(v is not False for v in delivered_values):
-        has_companion = "question_asked" in assert_keys or any(
+        has_companion = "question_asked" in assert_keys or "question_options" in assert_keys or any(
             (n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")
         )
         if not has_companion:
@@ -763,6 +772,7 @@ def lint_doc(doc, path, raw_lines):
                     any((n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")),
                 ),
                 ("question_asked", "question_asked" in assert_keys),
+                ("question_options", "question_options" in assert_keys),
                 ("gate_answers_delivered: false", any(v is False for v in _assert_values(items, "gate_answers_delivered"))),
             ],
             "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",
@@ -841,8 +851,10 @@ def lint_doc(doc, path, raw_lines):
                 f"assertion(s) {manifest_present} evaluate on replay only when the cassette carries an "
                 "`artifacts` manifest (`record` snapshots one). A manifest-less cassette skips them "
                 "(with a loud warning).",
-                "If the cassette carries no `artifacts` manifest (recorded by an older harness), re-record "
-                "so these assertions evaluate against the captured artifacts; a current cassette already has one.",
+                "No action needed if you have a current cassette — `record` has snapshotted a manifest "
+                "since 0.24. This is advisory only (the linter never reads your cassettes, so it cannot "
+                "tell); re-record only if yours predates that. `lint --min-severity WARN` silences the "
+                "whole INFO class in CI.",
                 path,
             )
         )
@@ -865,7 +877,10 @@ def lint_doc(doc, path, raw_lines):
                 "drift but NOT to option re-ordering: the gate's option order can vary run-to-run, so the "
                 "index can land on a different option (a silent re-record flake).",
                 'If the gate\'s option order is stable, pin by exact label (choose: "<label>"); use a '
-                "positional index only when labels drift but order holds.",
+                "positional index only when labels drift but order holds. Worth a second look for a "
+                "different reason: unstable option order is also what the USER sees — a reordered gate "
+                "puts a different choice in the default slot. Pin what the user was shown with "
+                "`question_options: {when_question: ..., equals: [...]}` (order is compared by default).",
                 path,
             )
         )
@@ -879,7 +894,29 @@ def lint_doc(doc, path, raw_lines):
                 "gate-needs-controlout",
                 f"gate assertion(s) {gate_present} only evaluate on replay when the cassette has "
                 "controlOut (full-fidelity). An old cassette excludes them (with a loud warning).",
-                "Re-record with a current harness so the cassette carries controlOut.",
+                "No action needed if you have a current cassette — one recorded by a current harness "
+                "carries controlOut. This is advisory only (the linter never reads your cassettes, so it "
+                "cannot tell); re-record only if yours is old. `lint --min-severity WARN` silences the "
+                "whole INFO class in CI.",
+                path,
+            )
+        )
+
+    # E: `file_exists: X` and `file_absent: X` on the SAME path cannot both hold. Checked here rather
+    # than in the TS contradiction groups because those match on key PRESENCE across the array and
+    # cannot compare values; the linter already has the parsed YAML, so the value comparison is free.
+    exists_paths = {v for v in _assert_values(items, "file_exists") if isinstance(v, str)}
+    absent_paths = {v for v in _assert_values(items, "file_absent") if isinstance(v, str)}
+    both = sorted(exists_paths & absent_paths)
+    if both:
+        findings.append(
+            Finding(
+                "ERROR",
+                "file-absent-contradiction",
+                f"assert requires {both} to both exist (`file_exists`) and not exist (`file_absent`) — "
+                "no run can satisfy that, so this would spend a run to fail.",
+                "Drop whichever half the scenario does not mean. If you meant 'this file must be replaced', "
+                "assert the new content with `artifact_text`/`artifact_json` instead.",
                 path,
             )
         )
@@ -1877,7 +1914,14 @@ def main(argv=None):
     lp = sub.add_parser("lint", prog=f"{prog} lint" if prog else None, help="lint scenario(s) for silent-false-green invariants")
     lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
-    lp.add_argument("--strict", action="store_true", help="exit non-zero on WARN/INFO too, not just ERROR")
+    lp.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero on WARN/INFO too, not just ERROR. NOTE: this is STRICTER than `lint-skill "
+        "--strict`, which never fails on INFO — the two flags share a name and do not share a rule. "
+        "Pair with `--min-severity WARN` for the ERROR+WARN behaviour (what this repo's own CI uses, "
+        "because the advisory INFO class fires on scenarios that are perfectly fine).",
+    )
     lp.add_argument(
         "--min-severity",
         choices=("ERROR", "WARN", "INFO"),
@@ -1925,7 +1969,10 @@ def main(argv=None):
     lsp.add_argument(
         "--strict",
         action="store_true",
-        help="exit non-zero on WARN too, not just ERROR (CI-recommended invocation; plain lint-skill is advisory-only)",
+        help="exit non-zero on WARN too, not just ERROR (CI-recommended invocation; plain lint-skill is "
+        "advisory-only). NEVER fails on INFO — unlike `lint --strict`, which does; the two flags share a "
+        "name and not a rule. See the subparser description for why the INFO-class subagent_type findings "
+        "are deliberately unfailable.",
     )
     lsp.set_defaults(func=cmd_lint_skill)
 

@@ -427,7 +427,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   own baseline, `preRunHashes` (the pre-run per-path sha256 manifest, captured alongside `preRunPaths` but a
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
-- **Egress / live-only assertions** (`no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`,
+- **Egress / live-only assertions** (`file_absent`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`,
   `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `no_lost_write_back`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated

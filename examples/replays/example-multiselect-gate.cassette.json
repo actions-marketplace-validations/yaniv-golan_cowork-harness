@@ -102,7 +102,7 @@
   "preRunHashes": {},
   "scenarioSource": "../../e2e/scenarios/smoke-multiselect.yaml",
   "fingerprint": {
-    "baseline": "1.30096.1",
+    "baseline": "1.32352.0",
     "promptAssetsHash": "91fd12581e13a464"
   },
   "timeline": [

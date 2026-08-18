@@ -8,7 +8,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { warn } from "./io.js";
-import { collectArtifactPathsWithHealth } from "./run/artifacts.js";
+import { collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { isVmSessionsPath } from "./vm-paths.js";
@@ -37,6 +37,39 @@ function resolveContainedManifestPath(workRoot: string, p: string): string | nul
   if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return null;
   return abs;
 }
+
+/** The assertion keys that can ONLY be evaluated at `fidelity: hostloop` — on any other tier each one
+ *  FAILS "cannot verify" rather than being skipped (see `hostloopOnly` in `check()`), because
+ *  `/sessions/...` is a valid path there and no path hook exists, so a skip could green a wrong-tier
+ *  scenario.
+ *
+ *  Exported because one caller outside the evaluator has to reason about the set: the host-inventory
+ *  record refusal (`src/run/cassette.ts`) recommends re-recording at `container`, which is advice a
+ *  scenario asserting any of these CANNOT take. A hand-copied list there would rot exactly the way the
+ *  `--out`-outside-the-repo advice it replaces did. `test/hostloop-only-keys.test.ts` pins this array
+ *  against the `hostloopOnly("…")` call sites by scanning this file's source. */
+/** Order-insensitive multiset equality over option labels — `question_options` with `order: "any"`.
+ *  A multiset, not a Set: a gate that offered the same label twice is a different offer from one that
+ *  offered it once, and collapsing them would green a duplicated option. */
+function sameSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const counts = new Map<string, number>();
+  for (const x of a) counts.set(x, (counts.get(x) ?? 0) + 1);
+  for (const y of b) {
+    const n = counts.get(y);
+    if (!n) return false;
+    counts.set(y, n - 1);
+  }
+  return true;
+}
+
+export const HOSTLOOP_ONLY_KEYS: (keyof Assertion)[] = [
+  "no_vm_path_file_op",
+  "vm_path_denied",
+  "path_denied",
+  "no_path_denied",
+  "subagent_dispatch_healthy",
+];
 
 /** Derives the four AssertContext budget fields (costUsd/tokensTotal/toolCallsTotal/turns) uniformly from
  *  any RunResult/RunRecord-shaped source — live, replay, and verify-run all read the same shapes (the
@@ -289,6 +322,15 @@ export interface AssertContext {
    *  because `check()` only ever sees one assertion and the two keys can sit in separate entries. */
   deleteWaivedMounts?: string[];
   questions: string[]; // AskUserQuestion question texts asked
+  /** Per sub-question, the option set the model OFFERED — the evidence behind `question_options`.
+   *  Captured at ask time (RunRecord.gateOptions), so it includes a gate that was shown and then denied,
+   *  stalled or left unanswered. Optional so hand-built test fixtures keep compiling; absent is treated
+   *  as evidence-MISSING by the evaluator (never "no gates"), together with `gateOptionsMissing`. */
+  gateOptions?: { question: string; options: { label: string; description?: string }[]; multiSelect?: boolean }[];
+  /** Set when the lane could not read the gate-option evidence at all: a truncated-cassette replay, or a
+   *  verify-run dir whose `events.jsonl` is absent or partly corrupt. Prevents question_options from
+   *  passing over an empty list it never populated. */
+  gateOptionsMissing?: boolean;
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
   subagents: {
@@ -1129,6 +1171,45 @@ function check(
       }
     }
   }
+  if (a.file_absent !== undefined) {
+    const p = a.file_absent;
+    // LANE FIRST. This is the dangerous inverse of file_exists: where the filesystem is not locally
+    // observable, a missing snapshot is indistinguishable from a file that was never created, and the
+    // assertion would PASS having proved nothing. `file_exists` fails safe in that situation (not found
+    // ⇒ fail); this one does not, so it needs the guard `user_visible_artifact` already carries.
+    if (ctx.lane === "remote") {
+      results.push(
+        fail(
+          `file_absent cannot be verified on \`lane: remote\` — a remote container's filesystem is not locally observable, so "not found here" is not evidence the run did not create it. Assert on the delivered artifact instead, or use \`lane: local\``,
+        ),
+      );
+    } else if (ctx.preRunOrigin === "remote-unavailable") {
+      // Same physics, reached the other way: the run's tree was never local to begin with.
+      results.push(
+        fail(
+          `evidence unavailable: pre-run manifest origin is remote-unavailable (a cloud run's filesystem is not locally observable) — cannot prove absence`,
+        ),
+      );
+    } else {
+      // NOTE: `local-unreadable` is deliberately NOT fatal here. It means the pre-run BASELINE is
+      // incomplete, which matters to the exhaustive keys (no_unexpected_files) and not to a point query:
+      // existsSync on the post-run tree still proves whether THIS path is there.
+      const abs = containedPath(ctx.workRoot, p);
+      if (!abs) results.push(fail(`unsafe file_absent path "${p}" — must stay under the work root (no absolute paths or "..")`));
+      else {
+        const real = containedRealPath(ctx.workRoot, abs);
+        // An escaping symlink is not "absent" — it exists and points out of the root. Fail loud rather
+        // than report a clean absence for a path that resolves somewhere unexpected.
+        if (!real) results.push(fail(`unsafe file_absent path "${p}" — symlink target escapes the work root`));
+        else
+          results.push(
+            existsSync(real)
+              ? fail(`file exists but was asserted absent: ${p} (under ${ctx.workRoot})`)
+              : ok(`file_absent: "${p}" is not present under ${ctx.workRoot}`),
+          );
+      }
+    }
+  }
   if (a.user_visible_artifact !== undefined) {
     const p = a.user_visible_artifact;
     const abs = containedPath(ctx.workRoot, p);
@@ -1943,6 +2024,78 @@ function check(
       else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
     }
   }
+  if (a.question_options !== undefined) {
+    const qo = a.question_options;
+    // Fail CLOSED on every "we cannot see the gates" path. An empty/absent list must never satisfy a
+    // negative-shaped read of this key: the whole point is to prove what a person was shown.
+    if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
+      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_options"));
+    } else if ((qo.equals === undefined) === (qo.contains === undefined)) {
+      // Both or neither. Rejected at load by the scenario schema; repeated here because `evaluate()` is
+      // also called on hand-built contexts (tests, library callers) that never went through parse.
+      results.push(fail("question_options: set exactly one of `equals` or `contains`"));
+    } else {
+      const all = ctx.gateOptions;
+      let pool = all;
+      let selector = "";
+      if (qo.when_question !== undefined) {
+        const c = compileUserRegex(qo.when_question);
+        if ("error" in c) {
+          results.push(fail(`question_options: bad regex "${qo.when_question}": ${c.error}`));
+          pool = [];
+          selector = "\u0000bad-regex";
+        } else {
+          pool = all.filter((g) => c.re.test(g.question));
+          selector = ` matching /${qo.when_question}/i`;
+        }
+      }
+      if (selector === "\u0000bad-regex") {
+        /* already reported */
+      } else if (pool.length === 0) {
+        results.push(fail(`question_options: no question${selector} was asked (${all.length} gate(s) recorded)`));
+      } else if (qo.when_question === undefined && all.length > 1) {
+        // Silently taking the first would make the assertion depend on gate ORDER — the very thing this
+        // key exists to pin. Ambiguity is an authoring error, not something to resolve by guessing.
+        results.push(
+          fail(
+            `question_options: ${all.length} sub-questions were asked and no \`when_question\` selects one — add a selector (asked: ${all.map((g) => JSON.stringify(g.question)).join(", ")})`,
+          ),
+        );
+      } else {
+        const want = (qo.equals ?? qo.contains)!;
+        const exact = (qo.order ?? "exact") === "exact";
+        // "At least one selected gate satisfies it" — mirrors question_asked's any-match semantics.
+        const why: string[] = [];
+        const hit = pool.find((g) => {
+          const got = g.options.map((o) => o.label);
+          if (qo.equals !== undefined) {
+            const ok2 = exact ? got.length === want.length && got.every((l, i) => l === want[i]) : sameSet(got, want);
+            if (!ok2) why.push(`offered [${got.join(", ")}]`);
+            return ok2;
+          }
+          const missing = want.filter((w) => !got.includes(w));
+          if (missing.length) {
+            why.push(`offered [${got.join(", ")}] (missing ${missing.join(", ")})`);
+            return false;
+          }
+          if (!exact) return true;
+          // Subsequence check: the wanted labels appear in this relative order among the offered ones.
+          let i = 0;
+          for (const l of got) if (i < want.length && l === want[i]) i++;
+          if (i !== want.length) why.push(`offered [${got.join(", ")}] (present but out of order)`);
+          return i === want.length;
+        });
+        const kind = qo.equals !== undefined ? "equals" : "contains";
+        results.push(
+          hit
+            ? ok(`question_options: gate ${JSON.stringify(hit.question)} offered the expected options`)
+            : fail(
+                `question_options (${kind}${exact ? ", order exact" : ", order any"}): expected [${want.join(", ")}]; ${why.join("; ")}`,
+              ),
+        );
+      }
+    }
+  }
   if (a.questions_count_max !== undefined)
     results.push(
       ctx.questionsMissing
@@ -1999,6 +2152,116 @@ function check(
       );
     }
   }
+  if (a.artifact_text !== undefined) {
+    const at = a.artifact_text;
+    const wantsAny = at.contains ?? at.not_contains ?? at.matches ?? at.not_matches;
+    const file = containedPath(ctx.workRoot, at.artifact);
+    if (wantsAny === undefined) {
+      // Rejected by the schema too; repeated because evaluate() is also reached by hand-built contexts.
+      results.push(fail("artifact_text: set at least one of contains / not_contains / matches / not_matches"));
+    } else if (ctx.lane === "remote") {
+      // `artifact_json` has no such branch and reds with a bare "file not found" here, which reads as
+      // "the skill didn't write it" when the truth is "this lane has no locally observable filesystem".
+      // Not a false green either way — a missing file fails both — but a misleading message on a lane
+      // where the assertion can never be satisfied is worth one branch.
+      results.push(
+        fail(
+          `artifact_text cannot be evaluated on \`lane: remote\` — a remote container's filesystem is not locally observable, so there is no body to scan. Assert on the agent's own statement of the content (\`transcript_matches\`), or use \`lane: local\``,
+        ),
+      );
+    } else if (!file) {
+      results.push(fail(`unsafe artifact_text path "${at.artifact}" — must stay under the work root (no absolute paths or "..")`));
+    } else {
+      const rel = relative(resolve(ctx.workRoot), file);
+      const realFile = containedRealPath(ctx.workRoot, file);
+      // Same evidence gates as artifact_json, in the same order and for the same reasons — see the
+      // block below. Duplicated deliberately rather than abstracted: the two differ only in what they do
+      // with the bytes, and a shared helper would have to thread five failure messages through.
+      const liveReadonly = (ctx.readonlyFolderRoots ?? []).some((pre) => rel === pre || rel.startsWith(pre + "/"));
+      const replayReason = truncated.get(rel);
+      const bodyLess = truncated.has(rel) || liveReadonly;
+      const isLink = ctx.linkPaths?.has(rel) === true;
+      // NO `preRunOrigin` guard here, deliberately (the question `file_absent` had to answer). That flag
+      // describes the pre-run BASELINE, and this key never consults it: it reads one named body from the
+      // post-run tree. Every way that body can be unavailable already fails CLOSED below — absent (file
+      // not found), body-less, link placeholder, non-UTF-8 for the negative forms. There is no path on
+      // which a degraded baseline turns into a passing text match.
+      if (isLink) {
+        results.push(
+          fail(
+            `evidence unavailable: "${at.artifact}" was a symlink/hardlink at record time — its content is not in the cassette; re-record or assert on the deliverable`,
+          ),
+        );
+      } else if (!realFile) {
+        results.push(fail(`unsafe artifact_text path "${at.artifact}" — symlink target escapes the work root`));
+      } else if (!existsSync(realFile)) {
+        results.push(fail(`artifact_text: file not found: ${at.artifact} (under ${ctx.workRoot})`));
+      } else if (bodyLess) {
+        const cause =
+          replayReason === "input"
+            ? "(an uploaded input — captured hash-only, never inlined)"
+            : replayReason === "readonly" || liveReadonly
+              ? "(read-only connected-folder input — its content is never captured)"
+              : replayReason === "size"
+                ? "(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)"
+                : "(a read-only input, or an artifact larger than the body cap)";
+        results.push(
+          fail(
+            `evidence unavailable: artifact_text target "${at.artifact}" was captured body-less ${cause} — content is not available to match against`,
+          ),
+        );
+      } else {
+        let buf: Buffer | undefined;
+        try {
+          const size = statSync(realFile).size;
+          if (size > 10 * 1024 * 1024) results.push(fail(`artifact_text: file too large to scan (${size} bytes, limit 10 MiB)`));
+          else buf = readFileSync(realFile);
+        } catch (e) {
+          results.push(fail(`artifact_text: ${at.artifact} could not be read: ${String((e as Error).message)}`));
+        }
+        if (buf !== undefined) {
+          const negative = at.not_contains !== undefined || at.not_matches !== undefined;
+          // A binary body decoded as UTF-8 becomes replacement characters. A POSITIVE match on that is
+          // simply false (harmless); a NEGATIVE one would "pass" against bytes it never actually read,
+          // which is the false-green this key must not ship.
+          if (negative && !isLosslessUtf8(buf)) {
+            results.push(
+              fail(
+                `evidence unavailable: "${at.artifact}" is not lossless UTF-8 (binary or invalid encoding) — a negative text assertion over it would pass without reading the real bytes`,
+              ),
+            );
+          } else {
+            const body = buf.toString("utf8");
+            const missing = (at.contains ?? []).filter((n) => !body.includes(n));
+            const present = (at.not_contains ?? []).filter((n) => body.includes(n));
+            if (missing.length)
+              results.push(fail(`artifact_text: ${at.artifact} does not contain ${missing.map((m) => JSON.stringify(m)).join(", ")}`));
+            if (present.length)
+              results.push(fail(`artifact_text: ${at.artifact} unexpectedly contains ${present.map((m) => JSON.stringify(m)).join(", ")}`));
+            for (const [pat, want] of [
+              [at.matches, true],
+              [at.not_matches, false],
+            ] as const) {
+              if (pat === undefined) continue;
+              const c = compileUserRegex(pat);
+              if ("error" in c) results.push(fail(`artifact_text: bad regex "${pat}": ${c.error}`));
+              else if (c.re.test(body) !== want)
+                results.push(
+                  fail(
+                    want
+                      ? `artifact_text: ${at.artifact} did not match /${pat}/i`
+                      : `artifact_text: ${at.artifact} unexpectedly matched /${pat}/i`,
+                  ),
+                );
+            }
+            if (!missing.length && !present.length && !results.some((r) => !r.pass && r.message?.startsWith("artifact_text"))) {
+              results.push(ok(`artifact_text: ${at.artifact} satisfied every matcher`));
+            }
+          }
+        }
+      }
+    }
+  }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
     const file = containedPath(ctx.workRoot, aj.artifact);
@@ -2023,7 +2286,19 @@ function check(
       const isUploadInput = replayReason === "input"; // an uploaded file — captured hash-only, body deliberately absent
       const isOverCap = replayReason === "size";
       const bodyLess = truncated.has(rel) || liveReadonly;
-      if (!realFile) {
+      // A link entry travels a DIFFERENT channel from `truncated`: buildManifest emits it with
+      // `linkKind` and no truncation flag, and materializeManifest writes a real 0-byte placeholder.
+      // artifact_json survives that only by accident — JSON.parse("") throws. Any TEXT matcher over the
+      // same block would read the placeholder and pass, so the guard belongs here, once, for every
+      // body-reading key. (`file_exists`/`user_visible_artifact` each carry their own copy.)
+      const isLink = ctx.linkPaths?.has(rel) === true;
+      if (isLink) {
+        results.push(
+          fail(
+            `evidence unavailable: "${aj.artifact}" was a symlink/hardlink at record time — its content is not in the cassette (replay materializes a 0-byte placeholder); re-record or assert on the deliverable`,
+          ),
+        );
+      } else if (!realFile) {
         results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
       } else if (!existsSync(realFile)) {
         results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
@@ -2144,6 +2419,10 @@ function check(
   // path (no path hook exists there), so excluding the key could green a wrong-tier scenario — it must
   // FAIL "cannot verify" instead.
   const VM_PATH = isVmSessionsPath;
+  // Every key gated below is listed in HOSTLOOP_ONLY_KEYS (top of this file) — the exported set exists
+  // so a caller OUTSIDE the evaluator can reason about "which scenarios cannot be re-recorded at
+  // container fidelity" without hand-copying the list. test/hostloop-only-keys.test.ts pins the two
+  // together by scanning the `hostloopOnly("…")` call sites in this file.
   const hostloopOnly = (key: string): KeyResult | null =>
     ctx.effectiveFidelity !== "hostloop"
       ? fail(

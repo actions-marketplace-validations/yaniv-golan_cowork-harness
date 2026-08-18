@@ -451,7 +451,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
+      "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment). SCOPE: the window's tool counts INCLUDE calls made by any sub-agent dispatched during it, so this key cannot distinguish a main-agent call from a sub-agent one (use subagent_tool_used for a sub-agent-only claim), and it matches tool NAMES only — never the path/arguments a tool was called with",
     ),
   all_tasks_completed: z
     .literal(true)
@@ -538,6 +538,28 @@ export const Assertion = z.strictObject({
     .describe(
       "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), except a --resume run (no fresh manifest ⇒ fails loud)",
     ),
+  file_absent: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+    ),
+  artifact_text: z
+    .object({
+      artifact: z
+        .string()
+        .min(1)
+        .describe("relative path to an artifact under the work root (e.g. outputs/report.json) — a literal path, not a glob"),
+      contains: z.array(z.string().min(1)).min(1).optional().describe("every listed substring appears in the body"),
+      not_contains: z.array(z.string().min(1)).min(1).optional().describe("no listed substring appears in the body"),
+      matches: z.string().min(1).optional().describe("the body matches this regex"),
+      not_matches: z.string().min(1).optional().describe("the body does not match this regex"),
+    })
+    .optional()
+    .describe(
+      "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw",
+    ),
   input_unmodified: z
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
     .optional()
@@ -570,6 +592,40 @@ export const Assertion = z.strictObject({
       "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
+  question_options: z
+    .object({
+      when_question: z
+        .string()
+        .optional()
+        .describe(
+          "regex selecting the sub-question by its label (`question`, falling back to `header` — the same string question_asked matches); omit only when the run fired exactly one sub-question",
+        ),
+      equals: z
+        .array(z.string())
+        .optional()
+        .describe("the offered option labels, as a complete set — in this exact ORDER unless `order: any`"),
+      contains: z
+        .array(z.string())
+        .optional()
+        .describe("these option labels are present (others may be too); in this relative order unless `order: any`"),
+      order: z
+        .enum(["exact", "any"])
+        .optional()
+        .describe(
+          "`exact` (default) compares order as well as membership — an option list re-ordered by the model is the defect this key exists for; `any` compares membership only",
+        ),
+    })
+    // Load-time, so a contradictory assert is refused BEFORE the spawn rather than after it. `equals`
+    // and `contains` express different claims (complete set vs subset) and their intersection is
+    // undefined; neither one means the assertion checks nothing at all. `evaluate()` repeats both
+    // checks because hand-built contexts (tests, library callers) never pass through parse.
+    .refine((v) => (v.equals === undefined) !== (v.contains === undefined), {
+      message: "question_options: set exactly one of `equals` or `contains`",
+    })
+    .optional()
+    .describe(
+      "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+    ),
   questions_count_max: z
     .number()
     .int()
@@ -1162,6 +1218,15 @@ export interface RunResult {
   // distinct model ids seen across assistant_text/tool_use/thinking events, in first-seen order.
   // Absent only when replayErrorResult (no run ever happened). Populated for buildPartialResult too,
   // when the salvaged run had at least one assistant message.
+  //
+  // VERBATIM from the agent, NOT validated as a live model id. The agent stamps the literal
+  // `<synthetic>` — its own constant, present in both the native and the VM binary — on assistant
+  // messages it fabricates LOCALLY: no API call, zero-filled `usage`. So `["claude-sonnet-5",
+  // "<synthetic>"]` is a normal array, and two runs of the SAME pinned model can differ here purely by
+  // whether a synthesized turn occurred. Any consumer reading this as run provenance must drop
+  // `<…>`-wrapped entries — match the angle-bracket prefix, not the one spelling (scripts/eval-gate.ts
+  // learned this the hard way: an unfiltered `<synthetic>` flipped its observed answerer and refused a
+  // valid gate).
   models?: string[];
   // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
   // silently dropped; see `thinkingElided` below for the dropped count). An author reads the
@@ -1237,6 +1302,14 @@ export interface RunResult {
     assertion: Assertion;
     pass: boolean;
     message?: string;
+    /** Provenance for an entry the harness INJECTED rather than one the author wrote. Absent = a real
+     *  `assert:` item. Set it whenever you push a pseudo-assertion, or `verdict.failures[]` cannot tell
+     *  the reader "your assertion failed" from "the cassette is stale" — the distinction a consumer was
+     *  text-scraping stderr for. `staleness`: skill/baseline drift escalated by `--strict` or
+     *  `--fail-on-skill-drift`. `cassette-format`: a cassette too new to interpret. `coverage`: a
+     *  verify-run answer-coverage miss (those inject a non-Assertion `answer_coverage` key, which
+     *  otherwise renders as if the author had written it). */
+    source?: "staleness" | "cassette-format" | "coverage";
     evidence?: string;
     /** Per-claim results for a `semantic_matches` assert (aligned to its rubric by index) — present only
      *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change. */
@@ -1310,7 +1383,11 @@ export interface RunResult {
       message: string;
     }>;
     guards: Array<{ name: string; status: "ok" | "fired" | "na" | "unverified" }>;
-    failures: Array<{ assertion?: string; message: string }>;
+    /** `kind` is the discriminator — see `FailureKind` in src/run/verdict.ts, which is the SOURCE of
+     *  this shape. This copy is structural (verdict.ts imports from here, so referencing it back would
+     *  close a cycle), which means a change there must be mirrored HERE: a divergence is silent, and
+     *  `test/run-result-schema.test.ts` catches it only because its fixture is typed `RunResult`. */
+    failures: Array<{ assertion?: string; message: string; kind: "assertion" | "guard" | "staleness" | "cassette-format" | "coverage" }>;
   };
   /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
    *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from

@@ -6,6 +6,391 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.24.0] — 2026-08-18
+
+### Added
+
+
+- **`verdict.failures[]` entries carry a `kind`, so "did MY assertions fail?" is answerable from the
+  envelope.** A consumer was scraping stderr for this, because the only available discriminator was
+  whether an entry carried an `assertion` key — and that was wrong in **both** directions. `verify-run`
+  injects `{ answer_coverage: <question> }`, which is not an `Assertion` key at all, so a coverage miss
+  rendered exactly like one of the author's own asserts; meanwhile guard failures, `--strict` staleness,
+  `--fail-on-skill-drift` drift and a too-new cassette all arrived key-less and indistinguishable from
+  one another. (The sentence in the shipped CI recipe describing key-presence as the discriminator was
+  therefore already false — corrected here.)
+
+  Every entry now carries one of `assertion` | `guard` | `staleness` | `cassette-format` | `coverage`,
+  stamped at each of the **five** pseudo-assertion injection sites via a new optional
+  `RunResult.assertions[].source`. `jq '[.verdict.failures[] | select(.kind=="assertion")]'` is now the
+  supported way to ask whether your own asserts held, and `select(.kind=="staleness")` whether the
+  cassette is stale — neither is inferable from the exit code, since all of them land on exit 1.
+
+  Additive: `assertion` and `message` are unchanged, so an existing consumer reading them is unaffected.
+  A source-scanning guard fails if any future pseudo-assertion is pushed without a `source`, because the
+  unit tests could only ever cover the sites they happen to construct — a mutation run proved that gap
+  by deleting one stamp with every other test still green.
+
+- **`file_absent` and `artifact_text` — the two file-family gaps a consumer report named.**
+
+  `file_absent: <path>` is the direct negative-existence check. The workaround until now was inverting
+  `no_unexpected_files`, which is a different claim with two traps: it is **new-files-only**, so a file
+  that existed before the run is invisible to it however tight the allowlist, and it needs a pre-run
+  manifest — the consumer paid for a re-record just to allowlist an incidental `.lock` file.
+  **LIVE/verify-run only**, deliberately: proving absence needs an exhaustive, healthy walk, and
+  `buildManifest` collects through the health-*discarding* `collectArtifactPaths`, so on replay a
+  containment-skipped or unreadable subtree is indistinguishable from an empty one and the key would
+  pass while proving nothing. It also fails evidence-unavailable on `lane: remote` and on
+  `preRunOrigin: remote-unavailable` — where the filesystem is not locally observable, a missing
+  snapshot is not evidence of absence. It does **not** inherit `local-unreadable`: that flag describes
+  an incomplete pre-run *baseline*, which says nothing about whether one named path is on the post-run
+  tree.
+
+  `artifact_text: {artifact, contains?, not_contains?, matches?, not_matches?}` asserts over a
+  delivered artifact's text body — `artifact_json`'s companion for non-JSON deliverables, and the way
+  to prove an internal filename did not leak into a file a user receives. A consumer shipped exactly
+  that to a founder: an internal reference name appeared 13 times in the delivered `report.json` and 0
+  times in `report.md`, so the fix looked complete. `artifact` is a literal path, not a glob — one
+  entry per delivered surface; a glob would be an exhaustive claim over the manifest's file set, which
+  is `file_absent`'s class and unprovable there for the same reason. On `lane: remote` it names the lane
+  rather than reporting a bare "file not found" — not a false green either way, but on a lane with no
+  locally observable filesystem that message reads as "the skill didn't write it" (`artifact_json` still
+  has that wart; the new key does not inherit it).
+
+  Both are fail-closed on missing evidence, and one of those paths was a latent bug in the key they
+  share a code path with: **`artifact_json` never checked `ctx.linkPaths`.** A manifest entry recorded
+  as a symlink travels a different channel from `truncated` and materializes as a real 0-byte file;
+  `artifact_json` survives it only because `JSON.parse("")` throws. A text matcher would have read the
+  placeholder and reported "does not contain" as a pass, so the guard now lives in the shared block for
+  every body-reading key. For the negative matchers, a body that is not lossless UTF-8 also fails
+  evidence-unavailable rather than "passing" against replacement characters. And the record-time
+  over-cap refusal that keeps `artifact_json` honest across lanes now covers `artifact_text` too — a
+  deliverable big enough to be worth scanning for a leak is exactly the one that clears the 64 KiB body
+  cap.
+
+  Supporting change: `isLosslessUtf8` moved to the leaf module `src/run/artifacts.ts` (re-exported from
+  `cassette.ts`) so `assert.ts` can use it without closing an import cycle, and
+  `ALL_CLASSIFICATION_KEYS` now spreads `MANIFEST_KEYS` instead of hand-listing it — that literal was
+  the one place a new manifest key threw at first replay for want of a second edit.
+
+  Documented in `docs/scenario.md`, `docs/cassette.md` and the bundled skill — catalog rows, the goal→key
+  index, and the replay-class lists: `artifact_text` joins the manifest class (its "all five" count
+  becomes six) and `file_absent` the live-only class, with the reason it can never be replay-checked. The
+  docs-sync guard cannot see that placement — `test/skill-docs-sync.test.ts` requires only that each key
+  appear backtick-quoted somewhere in the skill's schema reference, which a single catalog row satisfies.
+
+- **`question_options` — assert the option SET and ORDER a gate offered the user.** The gate family could
+  assert *that* a question was asked (`question_asked`, text only), how many, and whether the answer was
+  delivered — nothing could assert what the person was actually SHOWN. A consumer hit the consequence:
+  their skill enforced an option tuple on the file, the agent presented that list **reversed** — demoting
+  the safe choice from first to last and putting a different option in the default slot — and every
+  artifact assertion passed, because the artifact was correct. The only wrong thing was what a founder
+  saw.
+
+  ```yaml
+  - question_options:
+      when_question: "rubric doesn't fit"
+      equals: ["Stop review", "Proceed anyway", "Pick another rubric"]   # order compared by default
+  ```
+
+  `when_question` is a regex over the same label `question_asked` matches (`question`, falling back to
+  `header`); omit it only when the run fired exactly one sub-question — more than one without a selector
+  FAILS as ambiguous rather than silently taking the first, since guessing would make the assertion
+  depend on the gate order it exists to pin. Set exactly one of `equals` (the complete set) or `contains`
+  (a subset) — both, or neither, is rejected at **load**, so a contradictory assert is refused before the
+  run is spent rather than after. `order: exact` is the default; `order: any` compares membership only,
+  as a multiset so a duplicated label is not equal to a distinct one.
+
+  **The evidence is captured when the gate is ASKED, not when it is answered.** The answer-time channel
+  (`decisions[].questions`) is written only on the answered branch, so a gate that was shown and then
+  denied, stalled or left undelivered carries no option set there — which is precisely the case worth
+  asserting. Live and replay read the new ask-time `RunRecord.gateOptions`; `verify-run` reads
+  `events.jsonl`, the only sidecar that retains option labels (the distilled `trace.json` drops them),
+  and does so whenever the key is asserted rather than only when the scenario has scripted `answers` —
+  a scenario using `on_unanswered: first` or an LLM-decided gate would otherwise have reached the
+  evaluator with no evidence at all. Every unreadable-evidence path fails **evidence-unavailable**: a
+  truncated-cassette replay, an absent `events.jsonl`, or one with any unparseable frame (a partial gate
+  set must never be graded as complete). Replay evaluates it only with `controlOut`, like the other gate
+  keys.
+
+  A cassette recorded with this key still stamps format v10 and is rejected by installs that predate the
+  key — the standing consequence of any assertion-key addition. Documented in `docs/scenario.md` and in
+  the bundled skill: the assertion catalog, the goal→key index, the four gate-key replay lists, and the
+  `positional-choose-order` advisory, which stops telling you to compare option order by hand.
+
+### Changed
+
+
+- **A `scripts/`-grounded `not-adjudicable` now says WHY it could not be decided.** `scripts/` is
+  outside the evaluator's corpus by design — it grades authored guidance (`SKILL.md`, `references/**`,
+  `agents/<name>.md`), not implementation — and `docs/critique.md` has always said so. What the verdict
+  never said is which kind of "can't decide" it meant. A consumer read `not-adjudicable` on a claim
+  about their own `gate_state.py` and treated it as unproven; it was a **verified product bug**, and the
+  evaluator had simply never been shown the file. The report now appends one note to that section
+  naming the boundary, the reading ("could not SEE the code, not that the claim is false"), and the
+  documented remedy — state a script's contract in `SKILL.md` or a `references/` file if it matters to
+  how the skill is used. The corpus boundary itself is unchanged: packaging script bodies would widen
+  the evaluator from grading guidance to grading implementation, which is a scope decision, not a bug
+  fix.
+
+- **`lint` gains an ERROR-class `file-absent-contradiction` rule.** `file_exists: X` and
+  `file_absent: X` on the same path cannot both hold, so a scenario carrying both would spend a run to
+  fail. Like every ERROR-class finding it gates **without** `--strict`. It lives in the linter rather
+  than in the TypeScript contradiction groups because those match on key PRESENCE across the assert
+  array and cannot compare values — the linter already has the parsed YAML, so the comparison is free
+  there. The `positional-choose-order` advisory also stops telling you to read
+  `decisions[].questions[].options[]` by hand and points at `question_options` instead.
+
+- **`--strict` means two different things in one CLI, and both help strings now say so.**
+  `lint --strict` fails on ERROR+WARN+**INFO**; `lint-skill --strict` fails on ERROR+WARN and **never**
+  INFO, deliberately. Each help text was individually accurate and the pair was silently contradictory —
+  a consumer met the stricter of the two and read its INFO findings as a gate. Each now names the
+  other's rule, and the CI recipe states the `--strict --min-severity WARN` pairing at the line where
+  someone copies it. The semantics are unchanged: narrowing `lint --strict` would silently weaken a gate
+  people may be relying on, which needs a deliberate major-version decision rather than a quiet fix.
+
+- **Three documented gaps gain the framing a field report supplied.** The elicitation gap is not only
+  "the form branch goes untested" — because the host's guidance is absent, so is every **conflict**
+  between it and a skill's own instructions, and a real session produced exactly that (a skill mandating
+  `AskUserQuestion` "(NOT plain chat)" against the host's injected form guidance). That class is
+  structurally unobservable here, so a skill can ship a directive production silently overrides with
+  every harness run green — which reframes what the planned opt-in stub server is worth.
+  `docs/critique.md` now also states that a **fleet-consistency** defect is out of scope for any single
+  critique by construction (the graded agent mounts the whole plugin; the evaluator's corpus is one
+  skill), and the N-run recipe carries a measured case for why one critique is a sample: two runs of the
+  same skill over the same document produced 78 vs 50 extracted figures and 12 vs 0 first-pass errors
+  from the same real bug.
+
+- **`critique`'s cost guidance stated one ratio unconditionally, and it inverts for the skills people
+  most want to critique.** `--help` and `docs/critique.md` said the two evaluator passes dominate spend
+  at ~3/4 of an end-to-end total. That holds for a trivial probe. Measured on a real document-analysis
+  run: **task turn ~61%, evaluator ~30%** — because evaluator cost is roughly fixed (bounded by the
+  evidence package) while the graded task turn is unbounded. The harm was the advice that followed:
+  swap `--evaluator-model` on a fleet sweep, trading the injection-resistance property that is verified
+  **for the default evaluator only** for a saving a third the advertised size. Both surfaces now name
+  both regimes and point at the per-run split, and the report's `cost:` line prints the evaluator's
+  **share of the total** alongside the four-way breakdown — so a run corrects the guidance itself rather
+  than waiting for the next reader of the docs. When the task turn dominates, the levers named are
+  `--model`, `--timeout` and probe scope.
+
+- **`critique --out report.json` warns when the extension and `--output-format` disagree.**
+  `--output-format` defaults to `text` and `--out` writes whatever it says, so the flag most likely to
+  be scripted against had its format decided by a different flag with a non-obvious default: a
+  downstream `json.load()` failed with `Expecting value: line 1 column 1`, which reads as a corrupt or
+  missing report rather than a format mismatch. The warning fires at **argument-parse time**, before the
+  four workloads spawn — the reported cost of this was a paid run discovered to be unparseable after the
+  fact. Deliberately a warning and not extension inference: a filename is not proof of intent, and
+  silently changing what an existing `--out foo.json` writes would break a script that already parses
+  the text.
+
+- **`record` warns BEFORE the run when a cassette would not be portable.** A cassette stores its
+  `scenario.session` and `scenarioSource` relative to its own directory, so if reaching them means
+  climbing out of the project tree, the stored relatives resolve only from that one filesystem layout —
+  the file is uncommittable, and `verify-cassettes` reports it permanently `unverifiable` for staleness.
+  Two consumers discovered that *after* paying for the run. The new preflight fires at the same
+  pre-spend point as the host-inventory guard, and in `record --dry-run`, so the rehearsal is free. The
+  bundled skill states it where it already warned that a cassette cannot be moved after the fact, and on
+  `--dry-run` itself.
+
+  It tests **climb-out**, in both directions: the cassette written outside the tree (the reported
+  `--out /tmp/…` case) and a `session:` that lives outside it (an absolute or `~` path) — the mirror
+  image, equally unresolvable, and invisible to a check that only looks at where the cassette lands.
+  `~` is expanded first: `parseScenarioFile` deliberately leaves a `~/…` session untouched, and a raw
+  `~/x` reads as *relative*, so an unexpanded check resolves it under the cwd and calls it in-tree.
+  The reference root is the scenario source's git top-level, falling back to the **cwd** — not the
+  session file's directory, since `sessions/` and `cassettes/` are conventionally siblings and that
+  anchor would warn on every default record. Paths are canonicalized as far as they exist, because
+  `git rev-parse --show-toplevel` always returns a real path and `/var` vs `/private/var` would
+  otherwise warn on every macOS record. A warning, not a refusal: an out-of-tree throwaway cassette is
+  legitimate — the defect was that nothing said so while the author could still act.
+
+- **The host-inventory record refusal no longer recommends an out-of-repo `--out`, and its remedy is
+  branch-aware.** Two consumers hit the same trap: the refusal told them to `--out` a path outside the
+  repo, and taking that advice bakes a cassette whose `scenario.session` / `scenarioSource` — stored
+  relative to its own directory — can never resolve again, so `verify-cassettes` reports it
+  `unverifiable` for staleness (can't verify ⇒ not green, exit 3) and only a re-record recovers. It cost
+  paid runs to discover, and the skill's own guidance had already started contradicting the message.
+  That branch is gone; the message now names it as explicitly NOT a fix, with the consequence spelled
+  out. The remedy it *does* offer is now scenario-dependent: `fidelity: container` normally, but a
+  scenario asserting a hostloop-only key (`no_vm_path_file_op`, `vm_path_denied`, `path_denied`,
+  `no_path_denied`, `subagent_dispatch_healthy`) cannot run at container at all, so it is pointed at
+  `--allow-host-inventory-fixture` after auditing the session instead. The key set is read from the
+  evaluator's own gate sites (`HOSTLOOP_ONLY_KEYS`, newly exported from `src/assert.ts`) rather than
+  restated — `test/hostloop-only-keys.test.ts` scans the `hostloopOnly("…")` call sites and fails if the
+  two drift, in either direction.
+
+- **Parity baseline synced to Claude Desktop 1.32352.0** (agent ELF unchanged at 2.1.229). Two spawn env
+  keys are new: `CLAUDE_PREVIEW_CLASSIFIER_FLOOR` is **pinned** — it is unconditional in the Cowork spawn
+  env, so every first-party session receives it (the variable is older; what is new is Cowork setting it
+  outright rather than the desktop code-session runner setting it behind a gate) — and
+  `CLAUDE_CODE_DIAGNOSTICS_FILE` is **allowlisted, not pinned**, because it is constructed only inside the
+  third-party/MDM deployment branch and never on a first-party session. The `automode-permission-rubric`
+  gate flipped `off (defaultValue)` → `on (force)` server-side; the rubric it enables is Desktop-side and
+  applies to VM-loop non-chat sessions, which the harness does not construct — see `docs/fidelity-gaps.md`.
+  `DESIGN.md`'s scope note moves from "no baselines have shipped since" to naming what the last live
+  end-to-end pass does **not** cover, which is what shipping a baseline is supposed to force.
+
+### Fixed
+
+
+- **`assertions --list` was advertised as emitting each key's replay class. It does not.** The
+  bundled skill's CI recipe offered the JSON form as the authoritative substitute for hand-typed key
+  enumerations — "every key, with its replay class" — and the output is `{key, description}`, with no
+  structured class field to filter on. A consumer taking that at face value writes a `jq` selector
+  against a field that has never existed, on the one surface recommended for not going stale. The line
+  now says what the command emits, and points at the catalog's replay-class tables for the classes
+  themselves.
+
+- **Five published sentences described `fingerprint.skillSources` as cassette-relative. It is not.** The
+  "a cassette is not relocatable" guidance added earlier in this release listed `scenario.session`,
+  `fingerprint.skillSources` and `scenarioSource` as all being rewritten relative to the cassette's own
+  directory. Only the first and third are. `skillSources` is stored relative to the **session-file**
+  directory and is diagnostics-only — nothing resolves against it. The real break chain is one hop
+  (cassette dir → relative `session:` → that file's declared skill dirs), which is why a moved cassette
+  loses the skill hash. Corrected in `SKILL.md`, `references/scenario-schema.md`, `docs/session.md`,
+  `docs/cassette.md` and this file's own earlier entry; `docs/cassette.md` gains a note stating the chain
+  positively, since knowing which reference actually breaks is what tells you whether a move is
+  recoverable.
+
+- **`result.json`'s `models` array is documented as agent-verbatim, and `<synthetic>` is named.** A
+  consumer hit `<synthetic>` in `models` and could find it nowhere — because it is not a harness string:
+  the agent stamps that literal on assistant messages it fabricates locally (no API call, zero-filled
+  `usage`), and the harness records model ids verbatim. Every surface that describes `models` said or
+  implied each entry is a real model id — `schema/run-result.json` carried no `description` at all, while
+  `docs/session.md` and `docs/debugging.md` told you to read the array back as run provenance, which two
+  runs of the *same* pinned model can differ on purely by whether a synthesized turn occurred. All four
+  now state the rule (drop `<…>`-wrapped entries — the angle-bracket prefix is the marker, not the one
+  spelling), and `docs/gotchas.md` gains a symptom-keyed entry for the literal token someone greps for.
+  The maintainer-only eval gate has filtered this since it was bitten live, but its comment mis-attributed
+  the value to "a cassette/replay rep that used NO live model" — an ordinary live rep can carry it —
+  and referenced a `single()` sort that F20 replaced; both corrected. The bundled skill carried the same
+  "read `models` back" instruction in three places (measurement hygiene, the scenario schema's `model:`
+  comment, the repeat-batch recipe); all three now carry the caveat with it.
+
+- **Documented what the harness is *for*, not only that it is faithful.** The README leads with the
+  record as well as the contract, and a new **"Why not just `claude -p` or the Agent SDK?"** section
+  states the five things that are structurally hard to get otherwise — the staged Cowork agent in cowork
+  mode, a test of the **real** router (the agent binary does discovery, so `skill_triggered` checks a
+  `description` edit rather than your own dispatcher), real plugin loading (a failed load surfaces as a
+  missing skill in `context.availableSkills`), **derived** run evidence a raw `stream-json` stream does
+  not carry (`skillActivity`, `skillsInvoked`, `subagents[].referencesRead`, `ablated`, …), and the
+  reproduced *limitations* — plus token-free replay and scripted gate answers. Mirrored in `llms.txt`.
+  `docs/README.md`'s "I want to…" table grows from 5 rows to 11, covering the questions the harness
+  uniquely answers (did the skill actually run · did a description edit break triggering · did it pass or
+  pass once · does the skill beat no skill · testing a skill that asks questions · proving no egress).
+
+- **`--ablate-skill` is documented as ONE arm.** The flag runs a single invocation with the skill
+  removed — the control arm of a with/without comparison, not both arms; composed with `--repeat N` it
+  produces N *ablated* runs and zero treatment runs. Now stated on `skill` and `run` in the README, in
+  `docs/scenario.md`, in the companion skill (a new **Measure** section in Part II), and in the skill's
+  Recipe 5, which described the experiment in prose without naming the flag. The scope is stated with
+  it: the harness supplies the runs and the control arm; designing the comparison (scrubbing, shuffling,
+  blind judging, unblinding) is the caller's.
+
+- **A `skill`-lane `PASS` is explained.** With no `assert:` block it reports that no *guard* fired — not
+  that the skill was invoked, nor which model or arm produced the run. New gotcha in the companion skill
+  and a note in the README, both pointing at `skillsInvoked` / `skillActivity` / `models` / `ablated`.
+
+- **"Confirm the skill was invoked" is now the first entry in the false-green hunt** (`docs/debugging.md`),
+  alongside the failure family it belongs to: an answer that describes work the run never did. The skill's
+  own source is mounted where the model can read it — in production too — so an answer that reads like
+  skill output is not evidence of invocation.
+
+- **Model pinning is documented as a measurement requirement.** Omitting `model:` emits no `--model` flag
+  at all, so the run uses whatever the *staged agent binary* defaults to — fine for tracking the agent
+  default, never fine for a `--repeat` batch or a before/after. `docs/session.md` and the skill's schema
+  reference say so, and note that the ad-hoc `skill` lane has no session file, so `--model` is the only
+  control there.
+
+- **A recorded cassette is documented as NOT relocatable.** It rewrites `scenario.session` and
+  `scenarioSource` relative to its **own** directory at record time, so a
+  later move (a different `--out`, a `git mv`, a copy) leaves them unresolvable and `verify-cassettes`
+  reports `unverifiable-skill` (exit 3). New section in `docs/cassette.md`, with caveats added next to the
+  "relocatable bundle" promise in `docs/session.md` and the skill's schema reference, and next to the
+  host-inventory record refusal — where `fidelity: container`, not an out-of-repo `--out`, is the answer.
+
+- **Assertion families now state their ceiling, not just their members.** The gate keys match question
+  **text**, counts and delivery — no key asserts a gate's **option set or order** (the options are
+  recorded at `decisions[].questions[].options[]`); `no_unexpected_files` is an allowlist over *newly
+  created* files and is not a stand-in for "file X must not exist"; `skill_tool_used` counts
+  **sub-agent** calls inside the window and matches tool **names** only, so it can say neither which
+  agent called nor with what path. `allow_stall` is marked scenario-only — an open-ended `skill` run has
+  no `assert:` block and therefore no way to suppress a `stalled` verdict.
+
+- **`lint` messages corrected and de-noised.** The unknown-assertion-key warning said the harness "would
+  ignore it, so it silently does nothing"; `run`/`skill`/`record` in fact **reject** the scenario at load,
+  and the message now says so and names the negative-form keys people reach for. The two unconditional
+  INFO advisories (`manifest-needs-snapshot`, `gate-needs-controlout`) are reworded from imperative
+  "re-record…" to "no action needed if your cassette is current", and `positional-choose-order` now notes
+  that unstable option order is also what the *user* sees, not only a re-record flake.
+
+- **`verdict.failures[]` documented as the machine-readable failure breakdown** (`references/ci-recipe.md`):
+  entries carrying an `assertion` key are your failed assertions; entries without one are guard signals,
+  infra errors, or — under `replay --assert-from`/`--reassert` — skill-source drift. Both land on exit 1,
+  so the exit code cannot separate them and the envelope can.
+
+- **`sync` mis-scanned the Desktop bundle, and it had been doing so silently since Desktop 1.25927.0.**
+  `normalizeBundleQuotes` — the tokenizer that rewrites the bundle's backtick literals so every anchor in
+  `sync` can be written against one quoting style — carried three defects that each desynchronised it, so
+  that from the first bad character onward it paired the CLOSING backtick of one string with the OPENING
+  backtick of the next. Downstream, whole regions were left unnormalised (every anchor over them reads as
+  "gone") and stretches of code were rewritten into string literals. On Desktop 1.32352.0 this produced
+  **32** unknown deltas of which **21** were phantom — and, less obviously, it *masked* four real ones, so
+  the flag list was wrong in both directions rather than merely noisy.
+
+  The three: an interpolation is code and may contain a **regex literal**, so a quote inside one (the
+  POSIX shell-quote escaper `` `'${t.replace(/'/g, …)}'` ``) opened a phantom string; the regex-vs-division
+  test admitted only punctuation, so a regex in a **keyword** context (`return/…/`) was read as division;
+  and a substitution-free **tagged** template was rewritten into a string, which stops the tag being called
+  and leaves text no parser accepts.
+
+  Guarded by a parser oracle rather than by more anchors: `normalizeBundleQuotes` is now required to emit
+  output that still parses, and that contains exactly the same multiset of string values as its input — a
+  desync mints strings that were never in the source. It runs over every chunk of the installed Desktop
+  bundle and skips cleanly where there is no install. The previous check — confirming that one known key
+  had normalised — stayed green through two of the three defects.
+
+  `sync` now also carries the tripwire itself, because that oracle needs a Desktop install and so never
+  runs in CI — while `sync --diff` is the first thing run when a release lands. Any chunk whose
+  normalized text stops parsing is reported **above** the deltas, saying in as many words that absent
+  anchors may be phantom *and* real deltas may be masked. It is fail-soft by construction: a chunk is
+  reported only when the RAW text parses and the normalized text does not, so a future Desktop shipping
+  syntax the parser does not know reads as "not our damage" rather than blocking every sync.
+
+- **The path-gate and Artifact sentinels survive a release that mangles exported CONSTANT names.**
+  Desktop 1.32352.0 renamed `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS` to `Cg` (and
+  `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS`, `REQUEST_COWORK_DIRECTORY`, `SESSION_TYPE_CHAT` with it) while the
+  values behind them stayed byte-identical, so every path-hook anchor reported the machinery "gone". The
+  guidance to never anchor on a minified *member* name did not cover exported *constants*. Each now binds
+  by content — the defining chunk is resolved through the install site's spread, the tool-set arrays are
+  matched literally and then required to still be exported, and the two constants are anchored on their
+  values. A second codegen change in the same release (arrow bodies are now parenthesised) is admitted the
+  same way. `checkPathHookFacts` gains the real-asar regression test its two sibling checkers already had —
+  its absence is why this reached `sync` with nothing red.
+
+- **The host-loop `canUseTool` chain is checked as a whole, including its new wrapper.** Production moved
+  the `??` chain inside a block body wrapped by a pre-pass that can deny before any link runs and a
+  post-pass that can turn the chain's ALLOW into a DENY. Teaching the extractor the block shape alone
+  would have silenced three flags while leaving both new decision points invisible, so the wrapper is
+  pinned too: the pre-pass must be awaited (an un-awaited async link yields a Promise, which is never
+  nullish, so the early deny and the veto both go inert), must still carry the `/sessions` VM-path deny,
+  and the chain's result must still flow through its `finish()`. Separately, the frame-artifacts predicate
+  legitimately **dropped** its `!isHostLoop` term — `Artifact` now reaches the host-loop tier — so both
+  term lists are admitted while the remaining tier restrictions are pinned.
+
+- **Prompt fingerprints compare rendered content, not codegen.** The Cowork system-prompt and
+  sub-agent-append fingerprints hashed the RAW minified template source, justified as being independent
+  of minifier-assigned names. It is not independent of **escape form**: Desktop 1.32352.0 began emitting
+  non-ASCII as `\uXXXX`, which moved the prompt hash by +630 code points and moved **both** sub-agent
+  branch fingerprints — while the rendered text was byte-identical, as a diff of the decoded bodies
+  confirms. Every fingerprint now also records a `decodedSha256`/`decodedCodePoints` over the body with
+  escapes resolved, and drift is judged on those; a raw-only move is reported as a re-stamp note instead
+  of an unknown delta. The raw hashes stay — they are the committed history — and an entry predating the
+  decoded pair still compares raw, saying so in the message. The golden-oracle test that pinned the
+  1.20186.0 raw hash was a version pin in an invariant's clothing (it went red the day Desktop updated,
+  for no product reason); it now asserts the rendered-prompt hash, which genuinely has not moved since
+  1.20186.0.
+
 ## [1.23.0] — 2026-08-14
 
 ### Added

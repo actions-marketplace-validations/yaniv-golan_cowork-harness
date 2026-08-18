@@ -351,7 +351,7 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     const v = computeVerdict(r, "live");
     expect(v.pass).toBe(false);
     expect(v.exitCode).toBe(1);
-    expect(v.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
+    expect(v.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called", kind: "assertion" }]);
   });
 
   it("a passing run → pass:true, failures:[], exitCode 0", () => {
@@ -364,8 +364,10 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
   it("a hard-verdict guard failure independent of any assert (infra error) is named without an `assertion` key", () => {
     const v = computeVerdict(rr({ infraErrors: [{ source: "egress-sidecar", message: "sidecar exited 1" }] }), "live");
     expect(v.pass).toBe(false);
-    expect(v.failures).toEqual([{ message: expect.stringContaining("sidecar exited 1") }]);
+    expect(v.failures).toEqual([{ message: expect.stringContaining("sidecar exited 1"), kind: "guard" }]);
     expect(v.failures[0]).not.toHaveProperty("assertion");
+    // `kind` is the discriminator — key-absence never was one (a coverage miss carries a key too).
+    expect(v.failures[0].kind).toBe("guard");
   });
 
   it("names BOTH a failing assertion (keyed) and a guard reason (unkeyed) when both fire on the same run", () => {
@@ -386,7 +388,7 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     const v = computeVerdict(r, "live");
     expect(v.pass).toBe(false);
     expect(v.exitCode).toBe(1);
-    expect(v.failures).toEqual([{ message: gateMsg }]);
+    expect(v.failures).toEqual([{ message: gateMsg, kind: "guard" }]);
     // the generic result_error placeholder is suppressed in favor of the real gate reason
     expect(v.failures.some((f) => f.message === "run result was error")).toBe(false);
   });
@@ -449,8 +451,8 @@ describe("the persisted channel (result.json) and the streamed channel (--output
 
     expect(persisted).toEqual(streamed);
     // the exact bug this fix closes: failures[] must survive on BOTH channels, not just one.
-    expect(persisted.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
-    expect(streamed.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called" }]);
+    expect(persisted.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called", kind: "assertion" }]);
+    expect(streamed.failures).toEqual([{ assertion: "tool_called", message: "expected Bash to be called", kind: "assertion" }]);
   });
 });
 

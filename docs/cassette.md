@@ -209,6 +209,33 @@ under `cassettes/`, which is **gitignored** — this repo's own committed exampl
 `examples/replays/` instead. Pass `--out examples/replays/<name>.cassette.json` (or your own tracked
 path) if the cassette should be committed.
 
+### Where a cassette lives, and why it can't move afterwards
+
+**Choose the path before you record.** A cassette stores its references — `scenario.session` and
+`scenarioSource` — **relative to its own directory**, computed at record time. That keeps a committed
+fixture free of absolute host paths, and it means the file is *not* relocatable: move it to another
+directory and those paths stop resolving, so `verify-cassettes` cannot recompute the skill hash and
+reports
+
+```
+[unverifiable] skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)
+```
+
+which is exit `3`, permanently, until you re-record at the new location. This applies to any move — a
+`git mv` during a repo reorganisation, a copy into another project, or recording to one `--out` and
+committing to a different path — not just to the hostloop case below.
+
+> **Why the skill hash is what breaks.** The chain is one hop: the cassette resolves its relative
+> `scenario.session` against its own directory, and the skill dirs come from **that session file**.
+> `fingerprint.skillSources` is stored relative to the *session-file* directory and is diagnostics-only
+> — nothing resolves against it, so it is not the thing that breaks. Miss the session file and there are
+> no dirs to hash, which is exactly the `unverifiable-skill` finding above.
+
+
+(The session-shape check degrades more gently: it falls back to a name lookup and downgrades a
+mismatch to a non-failing note, precisely because a relocated cassette can't be trusted to match by
+path. The skill-hash check has no such fallback.)
+
 On that default path, `record` refuses to overwrite an existing cassette that belongs to a **different**
 scenario name (their names slugify to the same default path — a silent-clobber guard, not a general
 "don't overwrite" check; a routine same-scenario re-record is unaffected). `--force` narrowly opts out of
@@ -370,6 +397,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `task_count_min` | at least N tasks were created (`RunResult.tasks.length >= N`) — presence companion for task assertions; evidence-unavailable when `tasks` telemetry is absent |
 | `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
+| `question_options` | the option set + order that gate offered the user |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min: >= 1` to also require a gate, or drop it and declare `questions_count_max: 0` in a gate-clean scenario |
 | `gate_answers_delivered: false` | the inverse — asserts a *confirmed* delivery failure (at least one gate whose `delivered === false`); an unobserved (`null`) delivery satisfies neither `true` nor `false` |
@@ -390,7 +418,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_delete_in` | verdict modifier — kept on replay → no-op pass (the live per-mount delete scan it waives is zeroed on replay, same as its outputs-scoped sibling) |
 | `allow_undelivered_deliverables` | verdict modifier — kept on replay → no-op pass (suppresses the `undelivered_deliverables` WARN; a replay runs no scratchpad walk of its own, so the signal is evidence-unavailable there regardless) |
 
-**`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
+**`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
 `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these keys are excluded from evaluation — not vacuously
 passed — and a loud warning fires (see §Backward compatibility). The hook and path-denial keys need
@@ -399,7 +427,7 @@ passed — and a loud warning fires (see §Backward compatibility). The hook and
 the `events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
 could vacuously pass `no_hook_blocked`/`no_path_denied` even if a custom hook or gated ask genuinely blocked.
 
-`file_exists`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
+`file_exists`, `artifact_text`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`,
 `no_unexpected_files`, and `input_unmodified` are **not** in the table above — see the next subsection; they're replay-checkable only
 when the cassette carries an artifacts manifest (`no_unexpected_files` also requires `preRunPaths`,
 recorded since 0.24 on every live sandbox tier including microvm; `input_unmodified` requires `preRunHashes`,
@@ -465,6 +493,8 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 
 ### Still skipped on replay (no filesystem/network in a cassette)
 
+`file_absent` (proving a path is ABSENT needs an exhaustive, healthy walk; the manifest records no walk
+health, so "not captured" and "not there" are indistinguishable — it would pass while proving nothing),
 `no_delete_in_outputs`, `no_delete_in_mounts` (both need the live post-run bash scan; a cassette freezes no
 commands to re-scan), `self_heal_ran`, `transcript_no_host_path`, `egress_denied`, `egress_allowed`,
 `no_mcp_error` (MCP round-trips are harness-computed at drive time, not in the cassette's frozen stdout
@@ -510,7 +540,7 @@ When the cassette carries `controlOut`, replay consumes **both** recorded direct
 On replay, the replay decider (built by `buildReplayDecider()`) indexes `controlOut` by `request_id` and serves the recorded response to
 the decision pipeline instead of consulting a live decider or asking the user. This makes the full
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
-`rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `questions_count_max`,
+`rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `question_options`, `questions_count_max`,
 `gate_answers_delivered`, and `gate_answer_count_min` are now genuinely evaluated, not silently skipped
 or vacuously passed.
 
@@ -594,7 +624,7 @@ regressing to the prior false-green behavior:
    ::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions
    are NOT checked; re-record to enable them
    ```
-2. **`question_asked`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
+2. **`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
    excluded** from the evaluated assertion set for that run — not vacuously passed, absent.
 3. All other content assertions (transcript, tool, subagent, result) evaluate normally.
 
@@ -852,6 +882,11 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   anyway; it is distinct from `verify-cassettes`' `--allow-host-inventory <regex>` above (a per-finding
   suppressor, not a record-time consent) and is appropriate only when the session has no personal MCP
   servers or plugins.
+  **The right way out is usually `fidelity: container`**, which is sealed (`HOME=/tmp`) and has nothing
+  to leak. Redirecting the *output* elsewhere is not equivalent: a cassette recorded outside the repo
+  and moved in afterwards is [permanently unverifiable for staleness](#where-a-cassette-lives-and-why-it-cant-move-afterwards),
+  so you would trade a loud refusal for a silent one. Record where the file will live, at a tier whose
+  recording you're willing to publish.
   **Tier-gated on purpose:** at `container` the agent is sealed (`HOME=/tmp`), so a foreign server name there
   can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
   it would fail a legitimate fixture.

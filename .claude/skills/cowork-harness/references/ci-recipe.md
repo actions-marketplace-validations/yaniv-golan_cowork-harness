@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.23.0` (baseline `desktop-1.30096.1`).
+Self-contained reference. Tracks `cowork-harness 1.24.0` (baseline `desktop-1.32352.0`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.23.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "1.24.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -58,13 +58,17 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.23.0"
+- run: npm i -g "cowork-harness@>=1.24.0"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
                                                     # vacuous-gate-assert) — it would print the
                                                     # finding and still exit 0. --min-severity WARN
-                                                    # keeps the advisory INFO class advisory.
+                                                    # keeps the advisory INFO class advisory — pair them.
+                                                    # Bare `lint --strict` fails on INFO too, which reds
+                                                    # on scenarios that are perfectly fine. (`lint-skill
+                                                    # --strict` never fails on INFO: same flag name, a
+                                                    # different rule. Do not carry one over to the other.)
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
                                                     # ALSO fails on a leaked host inventory: recording at
                                                     # protocol/hostloop freezes YOUR machine's MCP servers,
@@ -114,15 +118,21 @@ The split is not just about tokens — it decides **where each lane can run**:
   `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
   `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
-  `allow_stall` (no-op passes); plus the gate keys `question_asked` / `questions_count_max` /
-  `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
-  (`file_exists` / `user_visible_artifact` / `artifact_json`) **if** it carries an artifact manifest.
+  `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
+  `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
+  (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
+  manifest. `file_absent` is in neither class — it is live/verify-run only.
   **That list is illustrative, not the authoritative set** — more keys are replay-checkable than fit a
   paragraph, and a hand-typed enumeration is exactly what goes stale. For the current set, ask the CLI:
 
   ```bash
-  cowork-harness assertions --list --output-format json   # every key, with its replay class
+  cowork-harness assertions --list --output-format json   # every key + its one-line semantics
   ```
+
+  It emits `{key, description}` — there is no structured replay-class field to filter on; the
+  live-only / manifest / `controlOut` preconditions are stated in each key's `description` prose and,
+  in full, in the catalog's replay-class tables in
+  [`references/scenario-schema.md`](./scenario-schema.md).
 
   **`replay --mutate`** is a distinct, reporting-only diagnostic on this same lane: it perturbs each
   recorded JSON artifact value one at a time, re-runs the assertions against the perturbed cassette,
@@ -279,7 +289,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.23.0"
+      - run: npm i -g "cowork-harness@>=1.24.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -308,7 +318,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.23.0"
+        run: npm i -g "cowork-harness@>=1.24.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:
@@ -334,6 +344,31 @@ sandbox).
 scenario = `result === "success" && assertions.every(pass)`. Exit code is non-zero if any assertion
 fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
 JSON.
+
+**Telling *why* a run failed, without scraping stderr.** Each result carries a `verdict` whose
+`failures[]` is the one place every failure reason is enumerated, in one shape (the same object lands
+in `result.json` and in the stdout envelope, by construction). Each entry is
+`{kind, assertion?: "<key>", message}`, and **`kind` is the discriminator**:
+
+- **`assertion`** — one of *your* `assert:` items failed; `assertion` names its key (`file_exists`,
+  `semantic_matches`, …).
+- **`guard`** — a signal you didn't author: `stalled`, `permissive_auto_allow`, `missing_capability`, a
+  host-path leak, an `outputs/` delete, an infra or transport error, an unanswered gate.
+- **`staleness`** — on `replay --strict` / `--assert-from` / `--reassert`, skill or baseline drift,
+  which those modes escalate to a hard failure on purpose (frozen events must not green an edited
+  assert against a skill whose current source produces something else).
+- **`cassette-format`** — the cassette is too new for this build to interpret.
+- **`coverage`** — a `verify-run` answer-coverage miss: a gate the run fired that your `answers:` block
+  does not cover.
+
+So `jq '[.verdict.failures[] | select(.kind=="assertion")]'` answers "did MY assertions pass?" and
+`select(.kind=="staleness")` answers "is the cassette stale?", from the envelope alone. Do not infer
+either from the exit code: every kind lands on exit 1.
+
+> **Do not filter on whether `assertion` is present.** That was the only discriminator before `kind`
+> existed and it never worked in both directions: `coverage` entries carry a key too (an internal
+> `answer_coverage` marker), so they read as authored asserts, while `guard`, `staleness` and
+> `cassette-format` all arrive key-less and indistinguishable from one another.
 
 **For the commands in this recipe, stdout carries the machine envelope and nothing else.** Without
 `--output-format json`, `run` / `record` / `replay` / `verify-cassettes` / `status` write their whole

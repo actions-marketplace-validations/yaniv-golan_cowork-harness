@@ -85,10 +85,13 @@ describe("critique roll-up tier — single source of truth for the resolveGroups
         callSites.push({ file: rel, line: i + 1, text: line.trim() });
       });
     }
+    // Pinned by FILE and TEXT, not by line: the invariant is "exactly one call site, and it is this
+    // one", and a line number adds nothing to it while rotting on any unrelated edit above it (it did —
+    // 1710 → 1743 — turning an ordinary change three functions away into a red guard).
     expect(
-      callSites.map((c) => `${c.file}:${c.line}: ${c.text}`),
+      callSites.map((c) => `${c.file}: ${c.text}`),
       "a second call site is an unreviewed path that could stamp a roll-up's tier differently from its turns' — this precondition test would then need re-deriving for that site too",
-    ).toEqual(["src/critique/command.ts:1710: appendCritiqueRollupRow(runsWriteRoot(), {"]);
+    ).toEqual(["src/critique/command.ts: appendCritiqueRollupRow(runsWriteRoot(), {"]);
   });
 
   it("the graded turn's own result.json is the ONLY source both the row and the roll-up read effectiveFidelity from", () => {

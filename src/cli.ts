@@ -27,7 +27,7 @@ import {
   type RunContext,
 } from "./decide/decider.js";
 import { claudeCliComplete } from "./decide/llm-transport.js";
-import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
+import { toDecisionRequest, questionLabel, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
 import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
@@ -4046,6 +4046,11 @@ async function cmdVerifyRun(args: string[]) {
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
   const FS_KEYS: (keyof Assertion)[] = [
     "file_exists",
+    // Both read the run's real tree: artifact_text scans a body, file_absent proves a path is not there.
+    // file_absent is the one that MUST be here — with no work dir, existsSync returns false for every
+    // path and it would pass vacuously, the same false-green no_unexpected_files is listed for.
+    "artifact_text",
+    "file_absent",
     "user_visible_artifact",
     "artifact_json",
     "no_unexpected_files",
@@ -4060,7 +4065,7 @@ async function cmdVerifyRun(args: string[]) {
       "verify-run",
       "runtime",
       `verify-run: work dir not found (${workRoot || "<unset>"}) — filesystem assertions ` +
-        `(file_exists/artifact_json/user_visible_artifact/no_unexpected_files/input_unmodified/no_lost_write_back) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
+        `(file_exists/file_absent/artifact_json/artifact_text/user_visible_artifact/no_unexpected_files/input_unmodified/no_lost_write_back) cannot be re-evaluated from this run dir; re-record. (can't verify ⇒ not green)`,
       undefined,
       isJsonOutput(args),
     );
@@ -4071,6 +4076,32 @@ async function cmdVerifyRun(args: string[]) {
   const vrTurn = turns[0];
   const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
   const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
+
+  // `question_options` grades the option SET a gate offered, and the distilled trace.json drops options
+  // (see parseGatesFromEvents' own doc) — so this lane reads `events.jsonl` directly. Deliberately NOT
+  // the answer-coverage call below: that one is gated on `scenario.answers.length > 0`, so a scenario
+  // asserting option order with no scripted answers (`on_unanswered: first`, an LLM-decided gate, a
+  // post-hoc check on a kept run) would silently reach the evaluator with no evidence at all. Parsed only
+  // when the key is asserted — a full events.jsonl read is not free on a long run.
+  const wantsGateOptions = scenario.assert.some((a) => a.question_options !== undefined);
+  const parsedGates = wantsGateOptions ? parseGatesFromEvents(join(runDir, "events.jsonl")) : undefined;
+  // Absent file OR any unparseable frame ⇒ evidence-missing, never a partial set graded as complete:
+  // a present-but-corrupt events.jsonl is otherwise indistinguishable from "these were all the gates".
+  const gateOptionsMissing = wantsGateOptions && (!parsedGates || parsedGates.corruptLines > 0);
+  const vrGateOptions = parsedGates
+    ? (parsedGates.gates as DecisionRequest[]).flatMap((g) =>
+        g.kind === "question"
+          ? g.questions.map((q) => ({
+              question: questionLabel(q),
+              options: (q.options ?? []).map((o) => ({
+                label: o.label,
+                ...(o.description === undefined ? {} : { description: o.description }),
+              })),
+              ...(q.multiSelect === undefined ? {} : { multiSelect: q.multiSelect }),
+            }))
+          : [],
+      )
+    : undefined;
 
   // no_lost_write_back needs the run's authored-file set. It isn't persisted in result.json, so recompute it
   // from the KEPT work dir (verify-run re-checks on the same machine, exactly as input_unmodified re-hashes
@@ -4127,6 +4158,8 @@ async function cmdVerifyRun(args: string[]) {
     outputsDeletes: scan.outputsDeletes,
     mountDeletes: scan.mountDeletes ?? [],
     questions: sidecarQuestions ?? [],
+    gateOptions: vrGateOptions,
+    gateOptionsMissing,
     hostPathLeaked: scan.hostPathLeaked,
     selfHealRan: scan.selfHealRan,
     subagents: result.subagents ?? [],
@@ -4275,6 +4308,7 @@ async function cmdVerifyRun(args: string[]) {
           if (!softFallback)
             assertions.push({
               assertion: { answer_coverage: q } as unknown as Assertion,
+              source: "coverage" as const,
               pass: false,
               message: `no answer rule matched gate "${q}" (on_unanswered=${scenario.on_unanswered ?? "fail"})`,
             });
@@ -4286,6 +4320,7 @@ async function cmdVerifyRun(args: string[]) {
         // single/multi shape is wrong — the answer is INVALID against what the run actually offered. A miss.
         assertions.push({
           assertion: { answer_coverage: q } as unknown as Assertion,
+          source: "coverage" as const,
           pass: false,
           message: `answer for gate "${q}" is invalid against the offered options: ${(e as Error).message}`,
         });
@@ -4409,6 +4444,8 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
  *  cannot be matched structurally. A new file-ish key must be added here or the family test reds. */
 const FILE_FAMILY = new Set([
   "file_exists",
+  "file_absent",
+  "artifact_text",
   "user_visible_artifact",
   "artifact_json",
   "no_unexpected_files",

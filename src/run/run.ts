@@ -236,6 +236,14 @@ export interface RunRecord {
   subagentTools: Set<string>;
   subagents: SubagentDispatch[];
   questions: string[];
+  /** The option set OFFERED for each sub-question, captured at ASK time (right beside `questions` above,
+   *  in `handleDecision`) so it covers EVERY gate — including one that was then denied, stalled, or left
+   *  unanswered. The answer-time channel (`decisions[].questions`) is written only on the answered
+   *  branch of `recordDecision`, so a key grading "what the user was SHOWN" cannot be sourced from it:
+   *  a gate that was shown and then not taken is exactly the case that matters. `question` is
+   *  `questionLabel(q)` — the same string `questions` carries, so `question_asked` and `question_options`
+   *  select on one vocabulary. */
+  gateOptions: { question: string; options: { label: string; description?: string }[]; multiSelect?: boolean }[];
   decisions: DecisionRecord[];
   permissiveAutoAllow: string[]; // tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
   unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
@@ -439,6 +447,7 @@ export class Run {
       subagentTools: new Set(),
       subagents: [],
       questions: [],
+      gateOptions: [],
       decisions: [],
       permissiveAutoAllow: [],
       unanswered: [],
@@ -1146,7 +1155,21 @@ export class Run {
   }
 
   private async handleDecision(req: DecisionRequest) {
-    if (req.kind === "question") for (const q of req.questions) this.rec.questions.push(questionLabel(q));
+    if (req.kind === "question")
+      for (const q of req.questions) {
+        this.rec.questions.push(questionLabel(q));
+        // Ask-time, not answer-time — see RunRecord.gateOptions. `options` is optional on the wire
+        // (optionless/free-text gates are real), so an absent list records as [] rather than dropping the
+        // gate: "this gate offered nothing" and "no gate fired" must stay distinguishable.
+        this.rec.gateOptions.push({
+          question: questionLabel(q),
+          options: (q.options ?? []).map((o) => ({
+            label: o.label,
+            ...(o.description === undefined ? {} : { description: o.description }),
+          })),
+          ...(q.multiSelect === undefined ? {} : { multiSelect: q.multiSelect }),
+        });
+      }
 
     // an empty `questions` array would be "answered" with `{}` (scripted) and recorded as success —
     // a silent false-green. The in-VM schema enforces `questions.min(1)` so the model can't emit this

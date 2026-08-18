@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.23.0`
-(baseline `desktop-1.30096.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.24.0`
+(baseline `desktop-1.32352.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
@@ -103,6 +103,13 @@ allow_host_writes: true             # OPTIONAL — required to run `hostloop` fi
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
 form a relocatable bundle. `~` expands to home.
 
+> **A recorded cassette is NOT part of that bundle and is NOT relocatable.** It rewrites its own
+> references relative to **its own** directory at record time (`scenario.session` and
+> `scenarioSource`), so moving it afterwards — a different `--out`, a
+> `git mv`, a copy into another repo — leaves them unresolvable and `verify-cassettes` reports
+> `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location.
+> Decide where a cassette will live *before* you record it.
+
 ## Session YAML
 
 A session (`sessions/*.yaml`) captures everything you'd configure in Cowork **before the first
@@ -111,7 +118,15 @@ session = your setup.**
 
 ```yaml
 # model & reasoning
-model: claude-opus-4-8           # omit for the agent default
+model: claude-opus-4-8           # omit ONLY to track the agent default: with no `model:` the harness emits
+                                  # no --model flag at all, so the run uses whatever the STAGED AGENT BINARY
+                                  # defaults to — not a harness constant, and it can move under a baseline
+                                  # bump. PIN IT for anything you will compare (a --repeat batch, a
+                                  # before/after, a with/without); read result.json's `models` back to confirm,
+                                  # IGNORING any `<…>`-wrapped entry (`<synthetic>` = a turn the agent
+                                  # fabricated locally, not a model id).
+                                  # On the ad-hoc `skill` lane there is no session file, so `--model <id>`
+                                  # (or COWORK_HARNESS_MODEL) is the ONLY way to pin it.
 account_name: my-account         # OPTIONAL — display name rendered into {{accountName}} / the prompt's
                                     # "User name:" line; NOT a credential/identity selector (see src/prompt.ts,
                                     # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md)
@@ -282,9 +297,11 @@ same set live from the schema.
 | `user_visible_artifact: <path>` | exists **and** under a user-visible root (`outputs/` + each connected folder's mount name) — the right primitive for a workspace deliverable when a folder is connected |
 | `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
 | `no_delete_in_mounts: true` | no delete op touched ANY delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount, so `no_delete_in_outputs` covers only part of the real rule. **only `true` is valid** |
-| `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); an **incomplete post-run filesystem walk** (an unreadable subtree — a permission/I-O error) also fails evidence-unavailable rather than reporting "no strays" over a partial tree — distinct from the missing-manifest case (a `--resume` run), which fails for a different reason; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay needs `cassette.preRunPaths` (≥0.24 recordings) — cassettes without it **exclude** the key with a loud warning |
+| `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); an **incomplete post-run filesystem walk** (an unreadable subtree — a permission/I-O error) also fails evidence-unavailable rather than reporting "no strays" over a partial tree — distinct from the missing-manifest case (a `--resume` run), which fails for a different reason; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay needs `cassette.preRunPaths` (≥0.24 recordings) — cassettes without it **exclude** the key with a loud warning. ⚠️ **Not a stand-in for "file X must not exist":** there is no negative-existence key, and inverting this one is a different claim — it is new-files-only (a pre-existing file is invisible to it) and needs a pre-run manifest. Assert the content-level consequence instead (`tool_not_called`, or the absent `artifact_json`) rather than widening an allowlist for every incidental lock/temp file |
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. uploaded files under `uploads/**`) whose workRoot-relative path matches ≥1 glob keeps an unchanged content hash after the run — the in-place-mutation companion to `no_unexpected_files`'s new-files check (`[]` is rejected by the schema — list at least one glob); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise verify zero files and pass vacuously); a matched file that was deleted counts as a content change (fails); live/verify-run without a pre-run hash manifest ⇒ evidence-unavailable hard-fail (a `--resume` run); captured on every live sandbox tier including microvm; replay needs `cassette.preRunHashes` — cassettes without it **exclude** the key with a loud warning; on replay it compares against the manifest's recorded `sha256`, never a re-hash of the materialized tree |
 | `self_heal_ran: <bool>` | a plugin-root self-heal script was (not) invoked |
+| `file_absent: <path>` | the named path does **not** exist under the work root after the run — the direct negative-existence key. Do NOT invert `no_unexpected_files` for this: that is an allowlist over NEW files only, and it needs a pre-run manifest. **LIVE/verify-run only** (a cassette records no walk health, so absence is unprovable on replay); evidence-unavailable on `lane: remote` / `preRunOrigin: remote-unavailable` |
+| `artifact_text: {artifact, contains?, not_contains?, matches?, not_matches?}` | assert over a delivered artifact's TEXT body — `artifact_json`'s companion for non-JSON files, and how you prove an internal name did not leak into a file the user receives. Literal path (no glob), so one entry per delivered surface. Manifest-class; body-less / symlinked / over-cap targets fail evidence-unavailable, and a non-UTF-8 body fails the NEGATIVE matchers rather than passing against bytes it never read |
 | `no_lost_write_back: true` | fails if the run authored an interactive HTML artifact (or a `.py`/`.js` generator of one) whose **relative** Submit/POST write-back is lost under Cowork (served from Cowork's own origin → resolves non-ok, a "Saved!" is silently false). Runs the shipped **static Tier A** analyzer over the files the run authored (diffed vs the pre-run manifest). A lost write-back on an **added** agent-authored source (`outputs/`, scratchpad) **fails**; a **pre-existing** file the skill only modified on a read-write mount is **advisory**; `-suspect` findings surface but pass. **Only `true` is valid**. **Live/verify-run only** — skipped-loud on replay; runs on every live sandbox tier including **microvm** (its outputs are snapshotted from the VM into the run dir); could-not-verify (fail-closed) on a `--resume` scratchpad or an unanalyzable candidate |
 | `tool_called: <glob>` | a tool the agent ran matched this **glob** — `*` = any run, `?` = one char, exact when literal, anchored + case-sensitive. Exact name (`Write`) matches only that tool; `mcp__workspace__*` matches any workspace tool. GLOB, not regex (`.` is literal) — an empty glob, or one containing a regex/brace-expansion metacharacter (`.*`, `.+`, `\|`, `()`, `[]`, `+`, `^`, `$`, `{}`, `\d`/`\w`/`\s`/`\b`), is **rejected at load** (a hard schema error, not a runtime warning) — it would match no real tool name and pass a `_not_`/`_absent` assert vacuously. Applies whether the glob comes from an authored scenario or a recorded cassette's frozen assert. The bundled `scenario.py lint` does NOT perform this check — only the harness enforces it, at actual load (`run`/`skill`/`record`) |
 | `tool_not_called: <glob>` | NO tool the agent ran matched this glob (`mcp__*` = "no MCP tool ran"). Same glob semantics as `tool_called`, including the empty/regex-ish rejection |
@@ -312,7 +329,7 @@ same set live from the schema.
 `skill_triggered`/`no_skill_triggered`, `skill_available`, `connector_available`, `skill_tool_used`,
 `subagent_type` are **regex** (unanchored, case-insensitive). So `tool_called: mcp__workspace__*` (glob) but
 `tool_available: mcp__workspace__.*` (regex) — a `.*` in a `tool_called` glob is a load-time schema error, not silently-matches-nothing.
-| `skill_tool_used: {skill, tool}` | a tool whose name matches `tool` ran inside a skill-activation window whose `skillId` matches `skill` (`RunResult.skillActivity`) — evidence-unavailable if skill-activity telemetry is absent; heuristic for inline skills (a sticky, sequential window matching the agent's `activeSkill` scope, not an exact per-tool boundary) |
+| `skill_tool_used: {skill, tool}` | a tool whose name matches `tool` ran inside a skill-activation window whose `skillId` matches `skill` (`RunResult.skillActivity`) — evidence-unavailable if skill-activity telemetry is absent; heuristic for inline skills (a sticky, sequential window matching the agent's `activeSkill` scope, not an exact per-tool boundary). **Scope:** the window's tool counts **include sub-agent calls** made during it, so this key can't say which agent called (`subagent_tool_used` is the sub-agent-only claim), and it matches tool **names** only — never the path/args, so "did it read *this* file" isn't expressible (per-sub-agent reads are recorded at `subagents[].referencesRead`, readable but not assertable) |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD — evidence-unavailable if cost telemetry is absent. **Replay asserts the frozen recording's cost, not fresh spend** — a real regression needs a live `run` |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache tokens excluded) — same replay caveat as `max_cost_usd` |
 | `tool_calls_max: <N>` | total top-level tool calls (sum of `toolCounts`) ≤ N — meaningfully replay-checkable (re-drive recomputes `toolCounts` deterministically) |
@@ -327,7 +344,8 @@ same set live from the schema.
 | `task_status: {match, status}` | a task whose `subject` OR `id` matches the regex `match` reached `status` — evidence-unavailable if tasks telemetry is absent; also fails **malformed** when a TaskCreate result was unparseable (corrupt task telemetry), mirroring the guard `all_tasks_completed`/`task_count_min` already had |
 | `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives identically on replay (meaningfully replay-checkable, same as `skill_triggered`); evidence-unavailable if `presentedFiles` telemetry is absent (an older run predating the feature). **Container-only on the merits**: hostloop serves `present_files` but never promotes (its handler passes a validated path through), so there is no scratch→outputs copy that could leak. On microvm/protocol a scratchpad-delivered file is neither promoted to `mnt/outputs` nor detected there (a skill that delivers via write-to-cwd→`present_files` will false-red `user_visible_artifact` on those tiers; use `container`, or write directly to `outputs/`). Hostloop is not one of them: the agent's cwd there already *is* the outputs dir, so a write-to-cwd delivery is under a user-visible root from the start and `user_visible_artifact` passes. **The tool name is lane-specific:** `present_files` is the desktop-local lane's tool (the one this harness emulates); remote Cowork delivers via the agent-native `SendUserFile` instead, so a skill should describe the delivery outcome rather than naming either tool — this key asserts the harness-side delivery record either way. **Only `true` is valid** |
 | `present_files_called: true` | at least one file was actually delivered via the `present_files` tool (`RunResult.presentedFiles` is non-empty) — the presence companion to `no_scratchpad_leak` (which passes vacuously when nothing was presented). Pair them to require a delivery **and** require it not to leak. Content-class (re-derives identically on replay). **`fidelity: container` or `hostloop`** — the harness serves `present_files` at both (hostloop via a handler mirroring production's own host-loop branch: validate the path, pass it through, no promotion). `protocol` and `microvm` report cannot-verify. See the `no_scratchpad_leak` row, which stays container-only for a different reason; and see the lane note there — the tool name differs on remote Cowork. **Only `true` is valid** |
-| `question_asked: <regex>` | the agent asked an AskUserQuestion whose text matches |
+| `question_asked: <regex>` | the agent asked an AskUserQuestion whose **question text** matches (`question`, falling back to `header`). Text only — for the options it offered, use `question_options` |
+| `question_options: {when_question?, equals?, contains?, order?}` | the option SET and ORDER a gate offered — what the user was actually SHOWN. `when_question` selects the sub-question by the same label `question_asked` matches (omit only if exactly one fired; ambiguity FAILS). Exactly one of `equals` (complete set) / `contains` (subset); `order: exact` is the default because a re-ordered list is the defect this exists for. Captured at ask time, so a gate that was shown then denied/stalled still counts; unreadable evidence fails evidence-unavailable |
 | `questions_count_max: <N>` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | every answered gate's answer reached the model (observed `tool_result`; unobserved = fail); **zero gates fired passes vacuously** — pair with `gate_answer_count_min: >= 1` to also require a gate, or drop this key and declare `questions_count_max: 0` in a scenario that expects none |
 | `gate_answers_delivered: false` | asserts at least one answered gate's answer was **confirmed not delivered** (an observed delivery failure); an unobserved/null delivery does **not** satisfy this — for negative-path delivery tests. Requires a gate, so **mutually exclusive** with `questions_count_max: 0` (refused by `run`/`skill`/`record`) |
@@ -340,7 +358,7 @@ same set live from the schema.
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
 | `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
-| `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an `AskUserQuestion`); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider) |
+| `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an `AskUserQuestion`); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider). **Scenario-only:** an open-ended `skill` run has no `assert:` block, so it cannot opt out — a helpful closing offer ("want me to run this through a structured pass?") fails `stalled` there with no suppressor. Read the final message before believing it, or move the check to a `run` scenario |
 | `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap |
 | `allow_outputs_delete: true` | verdict modifier — accepts a detected outputs delete instead of failing the run, for a skill whose deletion is intended. Omitting `no_delete_in_outputs` does **not** permit deletes (a detected delete fails via the `outputs_delete` signal precisely because the key was not authored), so this is the way to accept one. **Mutually exclusive** with `no_delete_in_outputs`. Waives the harness's post-hoc detection; it does not model Cowork's `allow_cowork_file_delete` approval handshake |
 | `allow_delete_in: [<mount>…]` | verdict modifier — accepts detected deletes in the named mounts (the per-mount analogue of `allow_outputs_delete`, mirroring production's `fileDeleteApprovedMounts`). Waives the verdict only; detection still runs and the hits stay in `result.json`. Listing `outputs` conflicts with `no_delete_in_outputs` |
@@ -423,7 +441,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
-**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `questions_count_max`,
+**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see the assertion
 table). With `controlOut` present they evaluate; on an old
@@ -435,13 +453,16 @@ the question keys: a custom hook's block/allow decision is an opaque async reply
 built-in Task hook's view and could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
 
 **Filesystem — replay-checkable WITH an artifact manifest:** `file_exists`, `user_visible_artifact`,
-`artifact_json`, `computer_links_resolve` run on replay when the cassette carries an `artifacts` snapshot
+`artifact_json`, `artifact_text`, `computer_links_resolve` (+ `computer_links_resolve_if_present`) run on
+replay when the cassette carries an `artifacts` snapshot
 (`record` captures `outputs/` + connected folders; `replay` materializes it). `artifact_json` needs the
 small-file JSON `body` inlined; a hash-only entry still satisfies `file_exists`. `computer_links_resolve`
 resolves a `/sessions/…/mnt/…`-shaped link directly against the manifest, and a host-shaped (hostloop) link
 by first normalizing it to a mount-relative path (recorded connected-folder prefixes + the outputs/uploads
 mounts) — replay has no live filesystem to check a host path against directly (that only happens on a live
-`run`/`verify-run`). Without a manifest (older cassettes) all five are skipped (five need the manifest; two
+`run`/`verify-run`). `artifact_text` is manifest-class for the same reason `artifact_json` is — a
+body-less, symlinked or over-cap entry fails evidence-unavailable rather than passing.
+Without a manifest (older cassettes) all six are skipped (six need the manifest; two
 more — `no_unexpected_files` and `input_unmodified` — need the pre-run path/hash capture, below); `no_unexpected_files` also
 needs `preRunPaths` (≥0.24 recordings) — without it the key is excluded with a loud warning (live/verify-run
 hard-fails evidence-unavailable instead). `input_unmodified` is the same shape but needs `preRunHashes`
@@ -451,7 +472,9 @@ warning. A green replay re-confirms
 staleness `fingerprint` shows ANY skill/baseline drift, or `replay --fail-on-skill-drift` only on
 skill-source drift; every replay result also reports it class-tagged in `staleness[]` for a JSON gate.
 
-**Egress + other filesystem — still skipped on replay (live-only):** `no_delete_in_outputs`,
+**Egress + other filesystem — still skipped on replay (live-only):** `file_absent` (proving a path is
+ABSENT needs an exhaustive, healthy walk; a manifest records no walk health, so "not captured" and "not
+there" are indistinguishable and the key would pass while proving nothing), `no_delete_in_outputs`,
 `self_heal_ran`, `transcript_no_host_path`, `egress_*` / `expect_denied`, `no_mcp_error`, `max_peak_rss_bytes`,
 `no_lost_write_back`. These run only on a live `run`/`record`.
 

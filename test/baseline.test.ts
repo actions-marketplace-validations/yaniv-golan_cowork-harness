@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import * as acorn from "acorn";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -47,6 +48,7 @@ import {
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
+import { checkNormalizationSanity } from "../src/sync/cowork-sync.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
@@ -869,6 +871,16 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   );
   const fixture1289290 = () => `HEADER;${W3};${W2};${W1_1289290}${STIER_1289290};${MODELCFG}TAIL`;
 
+  // D7 (Desktop 1.32352.0): production dropped `!isHostLoop` from BOTH the call site and the predicate
+  // body, so Artifact now reaches the host-loop tier. Without this case the new shape is proven only by
+  // the real-asar oracle, which skips wherever there is no Desktop install — i.e. in CI.
+  it("1.32352.0 build shape: the predicate without !isHostLoop is still clean", () => {
+    const without = fixture1289290()
+      .replace("{isBridgeSession:b,isDispatchChild:x,isHostLoop:v}", "{isBridgeSession:b,isDispatchChild:x}")
+      .replace("&&!t.isHostLoop&&", "&&");
+    expect(checkSpawnContractFacts(without)).toEqual([]);
+  });
+
   it("1.28929.0 build shape: the conditional Artifact spread + frame-artifacts env key stay clean and unpinned", () => {
     expect(checkSpawnContractFacts(fixture1289290())).toEqual([]);
     const { env, flags } = deriveSpawnEnv(fixture1289290(), greenGates());
@@ -890,8 +902,17 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       () => fixture1289290().replace(ARTIFACT_DEF, "let zde=!0;" + ARTIFACT_DEF.split(";").slice(1).join(";")),
       "S6c Artifact gate",
     ],
-    // The exact widening that would let Artifact reach the host-loop tier.
-    ["M3 predicate drops !isHostLoop", () => fixture1289290().replace("&&!t.isHostLoop&&", "&&"), "S6c Artifact gate"],
+    // D7 (Desktop 1.32352.0): production itself dropped `!isHostLoop` — Artifact now legitimately reaches
+    // the host-loop tier — so that is no longer a violation and both term lists are admitted. What must
+    // still fail loud is losing one of the REMAINING tier restrictions, or emptying the argument object
+    // so the predicate can no longer see any of them.
+    ["M3a predicate drops !isDispatchChild", () => fixture1289290().replace("&&!t.isDispatchChild", ""), "S6c Artifact gate"],
+    ["M3b predicate drops !isBridgeSession", () => fixture1289290().replace("&&!t.isBridgeSession", ""), "S6c Artifact gate"],
+    [
+      "M3c the predicate's argument object is emptied",
+      () => fixture1289290().replace("{isBridgeSession:b,isDispatchChild:x,isHostLoop:v}", "{}"),
+      "S6c Artifact gate",
+    ],
     // Definition hoisted out of the spawn window ⇒ must fail CLOSED, not open.
     [
       "M4 definition outside the window",
@@ -1532,19 +1553,54 @@ afterAll(() => {
 // Prompt drift guard (H1-H3): extractPromptFingerprint (golden oracle against the real asar) +
 // checkPromptDrift (pure, token-free — the synthetic cases don't need a live Desktop install).
 // ==========================================================================================
+// Desktop 1.32352.0's codegen escapes non-ASCII (`—` -> `\u2014`). The committed fingerprints hash the
+// RAW template source — minifier-NAME-independent, but NOT escape-form-independent — so that change alone
+// moved the prompt sha by +630 code points and BOTH sub-agent-append fingerprints, while the rendered text
+// was byte-identical. A version pin that fires on a pure codegen change is a false alarm the maintainer
+// has to hand-decode to dismiss.
+describe("prompt fingerprints are escape-form independent", () => {
+  const site = (body: string) => `cowork_system_prompt:{value:{prompt:zz};const zz=\`${body}\`;`;
+
+  it("the RAW sha still moves when only the escape form changes (that is the false alarm)", () => {
+    const a = extractPromptFingerprint(site("a—b"))!;
+    const b = extractPromptFingerprint(site("a\\u2014b"))!;
+    expect(a.sha256).not.toBe(b.sha256);
+  });
+
+  it("the DECODED sha does not move", () => {
+    const a = extractPromptFingerprint(site("a—b"))!;
+    const b = extractPromptFingerprint(site("a\\u2014b"))!;
+    // Assert the SHAPE first: `undefined === undefined` would pass this vacuously before the field exists.
+    expect(a.decodedSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.decodedSha256).toBe(b.decodedSha256);
+    expect(a.decodedCodePoints).toBe(b.decodedCodePoints);
+    expect(a.decodedCodePoints).toBe(3); // "a—b" decoded
+  });
+
+  it("the DECODED sha still moves on a REAL content change", () => {
+    const a = extractPromptFingerprint(site("a—b"))!;
+    const c = extractPromptFingerprint(site("a—c"))!;
+    expect(a.decodedSha256).not.toBe(c.decodedSha256);
+  });
+});
+
 describe("prompt drift guard (H1-H3)", () => {
-  const COMMITTED_1_20186_0_SHA = "0189a96cafe73f82bf9c492a17a4ff2f1b87c8486c54232c4e70e78ab98d836a";
+  // D8: the RENDERED prompt has not moved since 1.20186.0 — but its RAW sha has, twice, purely from
+  // codegen (1.32352.0 began escaping non-ASCII). Pinning the raw sha here made this oracle a VERSION pin
+  // wearing an invariant's clothes: it went red the day Desktop updated, for no product reason. The
+  // decoded hash is the invariant it was always reaching for.
+  const RENDERED_PROMPT_SHA = "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf";
 
   // Golden oracle (non-circular): extractPromptFingerprint over the REAL asar must match the
   // committed 1.20186.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
   // Desktop install (same readRealBundleOrSkip seam the spawn-contract oracles use).
-  it("golden oracle: extractPromptFingerprint(real asar) matches the committed 1.20186.0 fingerprint", () => {
+  it("golden oracle: the RENDERED prompt in the real asar is unchanged since 1.20186.0", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
     const fp = extractPromptFingerprint(bundle);
     expect(fp).not.toBeNull();
-    expect(fp!.sha256).toBe(COMMITTED_1_20186_0_SHA);
-    expect(fp!.codePoints).toBe(37875);
+    expect(fp!.decodedSha256).toBe(RENDERED_PROMPT_SHA);
+    expect(fp!.decodedCodePoints).toBe(37811);
     expect(fp!.sectionTags).toBe(43);
     expect(fp!.placeholders).toHaveLength(10);
   });
@@ -1578,6 +1634,8 @@ describe("prompt drift guard (H1-H3)", () => {
     codePoints: 100,
     sectionTags: 1,
     sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    decodedSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    decodedCodePoints: 100,
     placeholders: ["cwd", "modelName"],
     sectionTagNames: ["env"],
     ...overrides,
@@ -1748,6 +1806,21 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
   });
 });
 
+/** The Desktop 1.32352.0 install shape: a BLOCK-bodied arrow wrapping the `??` chain in a pre-pass that
+ *  can deny before any link, and a post-pass that can overturn the chain's ALLOW. */
+function blockBodyInstall(): string {
+  return (
+    `async function ss(e,n,r){if(e!=="Artifact")return null;const s=async x=>x;` +
+    `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
+    `const f=await stat(n.file_path);return{finish:async x=>x&&f?x:{behavior:"deny",message:"changed"}}}` +
+    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{` +
+    `const a=await ss(g,S,d);` +
+    `if(a?.vmPathDeny)return a.vmPathDeny;` +
+    `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
+    `return a===null?o:a.finish(o)});`
+  );
+}
+
 function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string) => string>> = {}): Map<string, string> {
   let defining =
     `const g5e=["Read","Write","Edit","Glob","Grep"],p5e=["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"],Jse="request_cowork_directory",Bse="chat";` +
@@ -1789,6 +1862,50 @@ function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string)
 describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)", () => {
   it("clean bundle → no flags", () => {
     expect(checkPathHookFacts(pathHookFiles())).toEqual([]);
+  });
+
+  // The synthetic fixture uses READABLE export names, so it cannot see a release that mangles them —
+  // which is how Desktop 1.32352.0 reached `sync` with every path-hook anchor reporting "gone" and not
+  // one red test. checkSpawnContractFacts and checkMountModeFacts both have a real-asar regression;
+  // this is the one that was missing.
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkPathHookFacts(files)).toEqual([]);
+  });
+
+  // Desktop 1.32352.0 restructured the install: the `??` chain is now inside a BLOCK body, wrapped by a
+  // pre-pass that can deny before every link and a post-pass that can turn the chain's ALLOW into a DENY.
+  // Teaching the extractor the block shape without anchoring the wrapper would silence three flags and
+  // leave both new decision points invisible — the B16/B18 failure mode.
+  const blockFiles = (mutate?: (s: string) => string) =>
+    pathHookFiles({
+      consuming: (c) => {
+        const swapped = c.replace(/const Se=e\.canUseTool;[\s\S]*$/, blockBodyInstall());
+        return mutate ? mutate(swapped) : swapped;
+      },
+    });
+
+  it("block-bodied install with pre/post-pass → no flags", () => {
+    expect(checkPathHookFacts(blockFiles())).toEqual([]);
+  });
+
+  it("MUTATION: the pre-pass is not awaited → flags", () => {
+    // `ss` is async, so an un-awaited call yields a Promise: `a?.vmPathDeny` is undefined and
+    // `a.finish` is not a function. The VM-path deny silently stops applying.
+    expect(checkPathHookFacts(blockFiles((s) => s.replace("const a=await ss(", "const a=ss("))).length).toBeGreaterThan(0);
+  });
+
+  it("MUTATION: the post-pass is bypassed → flags", () => {
+    expect(checkPathHookFacts(blockFiles((s) => s.replace("return a===null?o:a.finish(o)", "return o"))).length).toBeGreaterThan(0);
+  });
+
+  it("MUTATION: the pre-pass loses its VM-path deny → flags", () => {
+    expect(
+      checkPathHookFacts(
+        blockFiles((s) => s.replace("is a VM path. In this session the Artifact tool publishes from the host filesystem", "nope")),
+      ).length,
+    ).toBeGreaterThan(0);
   });
   it("MUTATION: gated set membership changed → flags", () => {
     const f = pathHookFiles({ defining: (s) => s.replace(`"Grep"]`, `"Grep","Bash"]`) });
@@ -1976,6 +2093,149 @@ describe("1.25927.0 bundler change: normalizeBundleQuotes", () => {
     const src = "x=`line1\nline2`";
     expect(normalizeBundleQuotes(src)).toBe(src);
   });
+
+  // Desktop 1.32352.0 defect A: the `${…}` expression scanner knew about "…", '…' and `…` but not
+  // REGEX literals, so a quote inside one opened a phantom string and flipped quote parity for the
+  // whole rest of the chunk. Live trigger: the POSIX shell single-quote escaper below, present since
+  // Desktop 1.25927.0. The trailing literal is the observable: it must still normalize.
+  it("does not desync on a regex literal containing a quote inside an interpolation", () => {
+    expect(normalizeBundleQuotes('x=`${a.replace(/\'/g,"")}`,k:[`user`]')).toContain('k:["user"]');
+  });
+
+  it("does not desync on the production shell-quote escaper", () => {
+    const src = "d=`'${t.replace(/'/g,`'\\\\''`)}'`,k:[`user`]";
+    expect(normalizeBundleQuotes(src)).toContain('k:["user"]');
+  });
+
+  // Desktop 1.32352.0 defect B: REGEX_OK holds only punctuation, so a regex in a KEYWORD context read
+  // as division. Live trigger: `return/unable to access '[^']*':…/i` — the apostrophes then opened a
+  // phantom string. The keyword list must be matched on a word boundary (see the `remain/512` case).
+  it("treats a regex after a keyword as a regex, not division", () => {
+    expect(normalizeBundleQuotes("function f(){return/ab'cd/i.test(x)}k:[`user`]")).toContain('k:["user"]');
+  });
+
+  it("still treats division after an identifier ENDING in a keyword as division (remain/2 … a/b)", () => {
+    // A naive /(return|…|in|…)$/ matches the "in" at the end of "remain". The SECOND slash is what
+    // makes that mis-detection bite: the phantom regex then closes and swallows the `x` template.
+    // Mutation-verified — drop the `[^\w$.]` boundary from REGEX_KEYWORD and this case fails.
+    expect(normalizeBundleQuotes("v=remain/2,s=`x`,t=a/b;k:[`user`]")).toContain('s="x"');
+  });
+
+  it("still treats division inside an interpolation as division", () => {
+    expect(normalizeBundleQuotes("t=`${(a)/b/c}`,k:[`user`]")).toContain('k:["user"]');
+  });
+
+  // Desktop 1.32352.0 defect C: a substitution-free TAGGED template was rewritten into a string, which
+  // is a SEMANTIC change (the tag stops being called) and leaves text that no longer parses. Live in
+  // the asar as `(0,t._)`{}`` and `String.raw`https://…``.
+  it("does not rewrite a TAGGED template into a string", () => {
+    expect(normalizeBundleQuotes("x=(0,t._)`abc`,k:[`user`]")).toBe('x=(0,t._)`abc`,k:["user"]');
+  });
+
+  it("does not rewrite a String.raw tagged template", () => {
+    expect(normalizeBundleQuotes("u=String.raw`a/b`,k:[`user`]")).toBe('u=String.raw`a/b`,k:["user"]');
+  });
+
+  it("still rewrites a plain template that FOLLOWS a keyword (not a tag)", () => {
+    expect(normalizeBundleQuotes("function f(){return`ok`}")).toBe('function f(){return"ok"}');
+  });
+});
+
+// ==========================================================================================
+// PARSER ORACLE for normalizeBundleQuotes (Desktop 1.32352.0).
+//
+// The unit cases above are hand-picked shapes. This is the ground-truth check: normalization is
+// only correct if a real JS parser agrees that (a) the output is still valid JavaScript, and
+// (b) it still contains exactly the same string content as the input. A desync that reads code as
+// a string literal breaks BOTH — it mints string values that were never in the source.
+//
+// Why this exists: Desktop 1.32352.0's `sync` reported 32 unknown deltas, 21 of which were a single
+// tokenizer desync — and the desync also MASKED four real flags. Spot-checking that one known key
+// normalized was the check in place at the time; it stayed green through two of the three defects.
+// ==========================================================================================
+// The oracle above needs a live Desktop install, so it never runs in CI — and `sync` is the command a
+// maintainer actually runs first when a release lands (docs/maintenance.md's runbook opens with
+// `sync --diff`). checkNormalizationSanity is the in-`sync` tripwire for the same failure, and taking
+// BOTH maps keeps it a pure function: these cases need no asar at all.
+describe("checkNormalizationSanity — in-sync tokenizer tripwire", () => {
+  it("flags a chunk whose normalized text stopped parsing", () => {
+    const raw = new Map([["a.js", "x=`ok`"]]);
+    const bad = new Map([["a.js", 'x=(0,t._)"ok"']]); // what a desync/tagged-template rewrite leaves behind
+    expect(checkNormalizationSanity(raw, bad)[0]).toMatch(/a\.js/);
+  });
+
+  it("stays silent when the RAW chunk does not parse either — not our damage to own", () => {
+    // A future Desktop could ship syntax this acorn does not know. Failing closed on that would block
+    // every sync for a reason that has nothing to do with the tokenizer.
+    const raw = new Map([["a.js", "x=<<<not js>>>"]]);
+    const out = new Map([["a.js", "x=<<<not js>>>"]]);
+    expect(checkNormalizationSanity(raw, out)).toEqual([]);
+  });
+
+  it("stays silent on a correct rewrite", () => {
+    const raw = new Map([["a.js", "k:[`user`]"]]);
+    const out = new Map([["a.js", 'k:["user"]']]);
+    expect(checkNormalizationSanity(raw, out)).toEqual([]);
+  });
+});
+
+describe("normalizeBundleQuotes — parser oracle against the real asar", () => {
+  /** Every string value the source contains, from BOTH string literals and template cooked pieces.
+   *  Normalization converts a substitution-free template into a string with the identical cooked
+   *  value, so this multiset is invariant under correct normalization. */
+  function stringValues(src: string): string[] {
+    const out: string[] = [];
+    const walk = (node: unknown): void => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) return node.forEach(walk);
+      const n = node as Record<string, unknown> & { type?: string };
+      if (n.type === "Literal" && typeof n.value === "string") out.push(n.value);
+      if (n.type === "TemplateLiteral")
+        for (const q of n.quasis as Array<{ value: { cooked: string | null } }>) out.push(q.value.cooked ?? "");
+      for (const k in n) {
+        if (k === "type" || k === "start" || k === "end") continue;
+        walk(n[k]);
+      }
+    };
+    walk(acorn.parse(src, { ecmaVersion: "latest" }));
+    return out.sort();
+  }
+
+  it("every chunk still parses, and mints no string value that was not in the source", () => {
+    if (!readRealBundleFilesOrSkip()) return; // skip-guard: no macOS / no Desktop install
+    if (!realBundleTmpDir) return; // COWORK_ASAR_BUNDLE override path has no raw chunk dir
+    const buildDir = join(realBundleTmpDir, ".vite/build");
+    const failures: string[] = [];
+    let checked = 0;
+    for (const f of readdirSync(buildDir)) {
+      if (!f.endsWith(".js")) continue;
+      const raw = readFileSync(join(buildDir, f), "utf8");
+      let before: string[];
+      try {
+        before = stringValues(raw);
+      } catch {
+        continue; // the RAW chunk does not parse under this acorn — not our damage to own
+      }
+      checked++;
+      const out = normalizeBundleQuotes(raw);
+      let after: string[];
+      try {
+        after = stringValues(out);
+      } catch (e) {
+        failures.push(`${f}: normalized output does not parse — ${(e as Error).message}`);
+        continue;
+      }
+      if (before.length !== after.length) {
+        const minted = after.filter((v) => !before.includes(v)).slice(0, 2);
+        failures.push(`${f}: string count ${before.length} -> ${after.length}; e.g. minted ${JSON.stringify(minted)}`);
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+    // Explicit budget: this parses ~12 MB of bundle TWICE (raw + normalized). It lands around 3-4 s on
+    // an idle machine but exceeded vitest's 5 s default under full-suite load, which reads as a failing
+    // guard rather than a slow one. 60 s is ~15x headroom, so a real hang still fails.
+  }, 60_000);
 });
 
 describe("1.25927.0 bundler change: exportLocalOf / resolveNamespaceRef", () => {

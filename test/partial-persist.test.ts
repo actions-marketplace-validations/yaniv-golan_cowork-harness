@@ -18,6 +18,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     subagentTools: new Set(),
     subagents: [],
     questions: [],
+    gateOptions: [],
     decisions: [{ kind: "tool", name: "Read", decision: "allow", by: "parity" }],
     permissiveAutoAllow: [],
     unanswered: [],
@@ -265,7 +266,7 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     expect(result.verdict).toBeDefined();
     expect(result.verdict?.pass).toBe(false);
     expect(result.verdict?.exitCode).toBe(1);
-    expect(result.verdict?.failures).toEqual([{ message: gateMsg }]);
+    expect(result.verdict?.failures).toEqual([{ message: gateMsg, kind: "guard" }]);
     // plain JSON — the persisted result.json round-trips this field with no functions/undefined-keys weirdness
     expect(JSON.parse(JSON.stringify(result.verdict))).toEqual(result.verdict);
   });

@@ -2565,6 +2565,17 @@
       ".verdict.failures[].assertion": {
         "type": "string"
       },
+      ".verdict.failures[].kind": {
+        "type": "string",
+        "enum": [
+          "assertion",
+          "guard",
+          "staleness",
+          "cassette-format",
+          "coverage"
+        ],
+        "required": true
+      },
       ".verdict.failures[].message": {
         "type": "string",
         "required": true
@@ -2826,6 +2837,32 @@
       ".assert[].artifact_json.path": {
         "type": "string"
       },
+      ".assert[].artifact_text": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].artifact_text.artifact": {
+        "type": "string",
+        "required": true
+      },
+      ".assert[].artifact_text.contains": {
+        "type": "array"
+      },
+      ".assert[].artifact_text.contains[]": {
+        "type": "string"
+      },
+      ".assert[].artifact_text.matches": {
+        "type": "string"
+      },
+      ".assert[].artifact_text.not_contains": {
+        "type": "array"
+      },
+      ".assert[].artifact_text.not_contains[]": {
+        "type": "string"
+      },
+      ".assert[].artifact_text.not_matches": {
+        "type": "string"
+      },
       ".assert[].compaction_occurred": {
         "type": "boolean",
         "const": true
@@ -2848,6 +2885,9 @@
         "type": "string"
       },
       ".assert[].egress_denied": {
+        "type": "string"
+      },
+      ".assert[].file_absent": {
         "type": "string"
       },
       ".assert[].file_exists": {
@@ -2961,6 +3001,32 @@
         "const": true
       },
       ".assert[].question_asked": {
+        "type": "string"
+      },
+      ".assert[].question_options": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].question_options.contains": {
+        "type": "array"
+      },
+      ".assert[].question_options.contains[]": {
+        "type": "string"
+      },
+      ".assert[].question_options.equals": {
+        "type": "array"
+      },
+      ".assert[].question_options.equals[]": {
+        "type": "string"
+      },
+      ".assert[].question_options.order": {
+        "type": "string",
+        "enum": [
+          "exact",
+          "any"
+        ]
+      },
+      ".assert[].question_options.when_question": {
         "type": "string"
       },
       ".assert[].questions_count_max": {

@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.23.0` (baseline `desktop-1.30096.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.24.0` (baseline `desktop-1.32352.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -17,11 +17,12 @@ a paid live re-record? Walk this tree — the answer is usually no:
    `cowork-harness replay <cassette> --assert-from <scenario.yaml>`. Token-free, no re-record.
    If the recording genuinely lacks the telemetry a key needs (very old cassettes), the key fails
    **loud** as `evidence-unavailable` — that is correct behavior, not a bug; only then re-record.
-2. **Gate keys** (`question_asked`, `questions_count_max`, `gate_answers_delivered`) on a cassette
+2. **Gate keys** (`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`) on a cassette
    **with `controlOut`** (any modern recording) → same token-free `--assert-from` path.
 3. **Gate keys** on a **pre-`controlOut`** cassette → one re-record unlocks gate asserts for that
    cassette permanently.
-4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `egress_allowed`,
+4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `file_absent` — live-only
+   whatever the cassette carries — `egress_allowed`,
    `egress_denied`, `no_delete_in_outputs`) → live lane **by design**; replay skips them with a
    loud `::warning::`. Keep them in the scenario, run them on the nightly live gate.
 
@@ -176,9 +177,16 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    from `RunResult.assertions[].semanticClaims`. Do **not** chase single-run all-pass — set `min_pass` to
    the reliably-hit core for a green verdict, and treat the per-claim rates as the real signal. (N=1
    routinely mislabels a stable 0/3 as "intermittent" and vice-versa.)
-5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed (or
-   inspect a not-invoked rep). If the answer still scores high, that claim is answerable from priors and
-   tests the model, not your skill — strengthen it (a skill-specific fact) or drop it.
+5. **Check discrimination — does the skill actually help?** Run one rep with the skill NOT installed and
+   compare. `--ablate-skill` is the flag for it: it empties every skill/plugin discovery source for
+   **that one invocation**, so the agent answers from its own priors, and stamps the result
+   `ablated: true`. It is the **control arm only** — run the same prompt again *without* the flag for
+   the treatment arm; `--ablate-skill --repeat 5` gives you 5 control runs and 0 treatment runs, not an
+   A/B. (Inspecting an organically not-invoked rep works too, but is not a substitute: that rep may
+   differ for other reasons.) If the answer still scores high without the skill, that claim is
+   answerable from priors and tests the model, not your skill — strengthen it (a skill-specific fact) or
+   drop it. Everything past "run both arms" — scrubbing giveaways, shuffling, judging blind, unblinding
+   after grading — is yours to build; the harness supplies the runs and the control.
 6. **Gate a change on the profile diff.** Capture the per-claim profile before your edit (the baseline),
    make the edit, re-capture, and compare per claim: a claim that DROPPED (e.g. 3/3 → 0/3) is a regression
    your edit caused; a claim already at 0/3 (a known gap) cannot regress. That turns "did my SKILL.md
@@ -229,7 +237,15 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    - `cowork-harness inspect <run-dir>` → what the run produced, plus the run's `label` and `skillHash`.
    - In-run alternative: dispatch a checker **sub-agent** (maker/checker) whose result folds into the
      verdict.
-2. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
+2. **Commit the skill before a measurement batch, and pin the model.** Two cheap disciplines that are
+   unrecoverable if skipped. `skillHash` is content-exact, so an edit mid-batch silently splits the
+   dataset into two generations — `stats --group-by skill-hash` separates them afterwards, but a hash
+   whose source was never committed names a generation that is unrecoverable, which makes the
+   comparison uninterpretable rather than merely noisy. And with no `model:` in the session (or
+   `--model` on the `skill` lane) each run uses whatever the staged agent binary defaults to, so a
+   before/after can silently straddle two models; read `result.json`'s `models` back to confirm —
+   ignoring any `<…>`-wrapped entry (`<synthetic>` marks a turn the agent fabricated locally, not a model).
+3. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
    content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but only on ≥ 1.5.0; earlier CLIs emit
    no `skillHash` on the `skill` lane at all, so verify the field is present before pairing on it** (a run that mounts nothing

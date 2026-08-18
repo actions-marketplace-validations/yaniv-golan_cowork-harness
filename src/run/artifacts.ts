@@ -3,6 +3,18 @@ import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, re
 import { join, sep } from "node:path";
 import { warn } from "../io.js";
 
+/** A buffer round-trips losslessly through UTF-8 only if re-encoding the decoded string reproduces the
+ *  exact bytes. Binary content (and lone surrogates / invalid sequences) fail this.
+ *
+ *  Lives HERE, in a leaf module, for the same reason `collectArtifacts` does: `assert.ts` needs it (a
+ *  text matcher over an artifact body must fail closed on bytes that are not text, or a `not_contains`
+ *  "passes" against replacement characters it never actually read), and `src/run/cassette.ts` already
+ *  imports FROM assert.ts — so exporting it there would close an import cycle. Re-exported from
+ *  cassette.ts for its existing callers. */
+export function isLosslessUtf8(buf: Buffer): boolean {
+  return Buffer.from(buf.toString("utf8"), "utf8").equals(buf);
+}
+
 /** Short, stable reason string for a caught fs error: the errno code when available, else the raw
  *  message. Shared by every health/error-recording path in this file so a consumer sees one convention. */
 function errMsg(err: unknown): string {

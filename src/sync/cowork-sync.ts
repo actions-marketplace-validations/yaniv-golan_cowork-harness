@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
+import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 
@@ -158,10 +159,18 @@ export const PINNED_GATES: Record<string, string> = {
   // NAME CAVEAT: the call site passes the bare id and the flag name appears nowhere in the asar, so the
   // value below is a kebab-case descriptor, deliberately NOT shaped like a verified camelCase flag name.
   "286376943": "skill-arg-elicitation",
-  // AUTO-MODE permission rubric (Desktop >=1.28929.0), off/defaultValue for a standard account. Merged
-  // into the auto-mode ruleset only for non-chat, non-host-loop sessions, so it is dark AND outside the
-  // chat sessions the harness models. Pinned as a dormant sentinel: if it turns on it becomes a second,
-  // host-side judgement layer over tool calls that a scenario's scripted allow cannot represent.
+  // AUTO-MODE permission rubric (Desktop >=1.28929.0). LIVE since 1.32352.0: {on:true, source:"force"}.
+  // It was pinned as a dormant sentinel precisely so this flip would surface, and it did.
+  //
+  // Two corrections to what this comment used to say. (1) It called the gate "dark"; off/defaultValue is
+  // SERVED-and-off, which a server rule can flip — which is what happened. (2) It said the rubric sits
+  // "outside the chat sessions the harness models", implying the harness is spared by session type. It
+  // is not: the harness never constructs `settings.autoMode` on ANY tier (grep autoMode in src/ — only
+  // gate-name constants; argv passes --permission-mode and --setting-sources, never an autoMode payload),
+  // so the rubric is STRUCTURALLY unreachable here rather than excluded. Live effect in production, for
+  // VM-loop non-chat sessions: the PreToolUse hook can answer `deferred_to_classifier` (an empty result)
+  // INSTEAD of permissionDecision:"ask", so a tool this harness models as always-gated may raise no
+  // prompt there. Documented in docs/fidelity-gaps.md, not modeled.
   // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
   "3424551112": "automode-permission-rubric",
   // Selects which of Cowork's two mutually exclusive artifact mechanisms a session gets. force/on for a
@@ -449,13 +458,75 @@ export function sync(): SyncResult {
  *  and regex literals are copied through verbatim; a template is rewritten ONLY when it has no `${}`
  *  substitution, no raw newline and no embedded `"` — anything else is passed through unchanged, so
  *  real templates (including every prompt body the fingerprints hash) keep their exact text. */
+/** Chars after which a `/` starts a REGEX literal rather than a division operator. */
+const REGEX_OK = new Set("(,=:[!&|?{};+-*%~^<>".split(""));
+
+/** Keywords after which a `/` starts a REGEX, not division. The leading `[^\w$.]` alternative is what
+ *  keeps `remain/512` (division) from matching the `in` keyword, and `a.in/2` from matching at all. */
+const REGEX_KEYWORD = /(?:^|[^\w$.])(return|typeof|case|in|of|new|delete|void|throw|do|else|yield|await|instanceof)$/;
+
+/** True when the `/` at `at` starts a regex literal. `prev` is the last significant char.
+ *
+ *  D2 (Desktop 1.32352.0): REGEX_OK is punctuation-only, so a regex in a KEYWORD context
+ *  (`return/…/`, `typeof/…/`, `case/…/`) was read as division — and a quote inside it then opened a
+ *  phantom string. Live trigger: `return/unable to access '[^']*':.*operation not permitted/i`. The
+ *  keyword scan is bounded (a keyword is at most 10 chars) so this stays O(1) per candidate. */
+function regexCanStart(src: string, at: number, prev: string): boolean {
+  if (prev === "" || REGEX_OK.has(prev)) return true;
+  let j = at - 1;
+  while (j >= 0 && /\s/.test(src[j])) j--;
+  return REGEX_KEYWORD.test(src.slice(Math.max(0, j - 11), j + 1));
+}
+
+/** Offset just past the regex literal starting at `at` (its closing `/` plus flags). If the literal
+ *  never closes on this line it is not a regex — return `at + 1` so the caller advances by one char. */
+function skipRegex(src: string, at: number): number {
+  const n = src.length;
+  let j = at + 1;
+  let inClass = false;
+  while (j < n) {
+    const c = src[j];
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "\n") return at + 1;
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (c === "/" && !inClass) {
+      j++;
+      while (j < n && /[a-z]/.test(src[j])) j++; // flags
+      return j;
+    }
+    j++;
+  }
+  return at + 1;
+}
+
+/** True when the backtick at `at` opens a TAGGED template (`` tag`…` ``) rather than a plain one.
+ *
+ *  D3 (Desktop 1.32352.0): rewriting a substitution-free TAGGED quasi into a string is a SEMANTIC
+ *  change — the tag function stops being called — and leaves text a parser rejects. Live in the asar
+ *  as ``(0,t._)`{}`` and ``String.raw`https://…``. A template is tagged when the previous significant
+ *  token ENDS an expression: `)`, `]`, or an identifier that is not one of the keywords a plain
+ *  template may legally follow (``return`ok` `` is NOT tagged). Ambiguity resolves toward "tagged",
+ *  which merely leaves the literal un-normalized; the other direction re-introduces the defect. */
+function isTaggedTemplate(src: string, at: number): boolean {
+  let j = at - 1;
+  while (j >= 0 && /\s/.test(src[j])) j--;
+  if (j < 0) return false;
+  const c = src[j];
+  if (c === ")" || c === "]") return true;
+  if (!/[\w$]/.test(c)) return false;
+  return !REGEX_KEYWORD.test(src.slice(Math.max(0, j - 11), j + 1));
+}
+
 export function normalizeBundleQuotes(src: string): string {
   const n = src.length;
   const parts: string[] = [];
   let mark = 0; // start of the pending verbatim run
   let i = 0;
   let prev = ""; // last significant char — disambiguates a regex literal from division
-  const REGEX_OK = new Set("(,=:[!&|?{};+-*%~^<>".split(""));
 
   const skipQuoted = (start: number): number => {
     const q = src[start];
@@ -490,14 +561,25 @@ export function normalizeBundleQuotes(src: string): string {
         let depth = 1;
         j += 2;
         const exprStart = j;
+        // D1 (Desktop 1.32352.0): an interpolation is CODE, so it can contain a REGEX literal — and a
+        // quote inside one (`t.replace(/'/g, …)`, the POSIX shell-quote escaper) opened a phantom
+        // string here, flipping quote parity for every literal after it in the chunk. Track the
+        // previous significant char so a regex can be told from division, exactly as the outer loop
+        // does. Verified against a parser oracle: without this, 7 chunks of the live asar normalize
+        // into text that no longer parses.
+        let pe = "";
         while (j < n && depth > 0) {
           const d = src[j];
-          if (d === "\\") j += 2;
-          else if (d === "{") (depth++, j++);
-          else if (d === "}") (depth--, j++);
-          else if (d === '"' || d === "'") j = skipQuoted(j);
-          else if (d === "`") j = readTemplate(j)[0];
-          else j++;
+          if (d === "\\") ((j += 2), (pe = "\\"));
+          else if (d === "{") (depth++, j++, (pe = "{"));
+          else if (d === "}") (depth--, j++, (pe = "}"));
+          else if (d === '"' || d === "'") ((j = skipQuoted(j)), (pe = src[j - 1]));
+          else if (d === "`") ((j = readTemplate(j)[0]), (pe = "`"));
+          else if (d === "/" && regexCanStart(src, j, pe)) ((j = skipRegex(src, j)), (pe = "/"));
+          else {
+            if (!/\s/.test(d)) pe = d;
+            j++;
+          }
         }
         subs.push([exprStart, depth === 0 ? j - 1 : j]);
         continue;
@@ -518,7 +600,7 @@ export function normalizeBundleQuotes(src: string): string {
       const [end, subs] = readTemplate(i);
       const body = src.slice(i + 1, end - 1);
       if (subs.length === 0) {
-        if (!body.includes("\n") && !body.includes('"')) {
+        if (!body.includes("\n") && !body.includes('"') && !isTaggedTemplate(src, i)) {
           parts.push(src.slice(mark, i), '"', body, '"');
           mark = end;
         }
@@ -543,7 +625,7 @@ export function normalizeBundleQuotes(src: string): string {
       i = at === -1 ? n : isLine ? at : at + 2;
       continue;
     }
-    if (c === "/" && (prev === "" || REGEX_OK.has(prev))) {
+    if (c === "/" && regexCanStart(src, i, prev)) {
       let j = i + 1;
       let inClass = false;
       let closed = false;
@@ -577,7 +659,7 @@ export function normalizeBundleQuotes(src: string): string {
   return parts.join("");
 }
 
-export function readMainBundleFiles(dir: string): Map<string, string> {
+export function readMainBundleFilesRaw(dir: string): Map<string, string> {
   const entryPath = join(dir, ".vite/build/index.js");
   const visited = new Set<string>();
   const queue = [entryPath];
@@ -590,13 +672,51 @@ export function readMainBundleFiles(dir: string): Map<string, string> {
     if (visited.has(p) || !existsSync(p)) continue;
     visited.add(p);
     const content = readFileSync(p, "utf8");
-    out.set(p.slice(p.lastIndexOf("/") + 1), normalizeBundleQuotes(content));
+    out.set(p.slice(p.lastIndexOf("/") + 1), content);
     for (const m of content.matchAll(localRequireRe)) {
       queue.push(join(dirname(p), m[1]));
     }
   }
   return out;
 }
+export function readMainBundleFiles(dir: string): Map<string, string> {
+  return new Map([...readMainBundleFilesRaw(dir)].map(([name, raw]) => [name, normalizeBundleQuotes(raw)]));
+}
+
+/** Tripwire: `normalizeBundleQuotes` must never leave a chunk that a parser rejects.
+ *
+ *  Every anchor in this file is written against normalized text, so a tokenizer desync does not fail
+ *  loudly — it makes anchors read as "gone" and can rewrite stretches of code into string literals.
+ *  Desktop 1.32352.0 produced 32 unknown deltas that way, 21 of them phantom, while also MASKING four
+ *  real ones. `sync --diff` is the first command the per-release runbook runs, so the signal belongs
+ *  here and not only in the (install-dependent, CI-skipped) test oracle.
+ *
+ *  FAIL-SOFT BY CONSTRUCTION: a chunk is only reported when the RAW text parses and the normalized text
+ *  does not. A future Desktop shipping syntax this acorn does not know then reads as "not our damage"
+ *  and stays silent, instead of blocking every sync for an unrelated reason. */
+export function checkNormalizationSanity(raw: Map<string, string>, normalized: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const parses = (src: string): boolean => {
+    try {
+      acorn.parse(src, { ecmaVersion: "latest" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const [name, before] of raw) {
+    const after = normalized.get(name);
+    if (after === undefined || after === before) continue; // nothing was rewritten — nothing to verify
+    if (parses(after) || !parses(before)) continue;
+    flags.push(
+      `tokenizer: normalizeBundleQuotes left ${name} unparseable (the RAW chunk parses) — the quote scanner ` +
+        `desynchronised, so EVERY anchor over this chunk is unreliable: absent anchors may be phantom AND real ` +
+        `deltas may be masked. Fix the tokenizer before classifying any delta below`,
+    );
+  }
+  return flags;
+}
+
 export function readMainBundle(dir: string): string {
   return [...readMainBundleFiles(dir).values()].join("");
 }
@@ -698,72 +818,145 @@ export function braceBodyOf(text: string, header: string): string | null {
  *  Handles nesting of ()[]{} , '' , "" and backtick templates including `${}` recursion. It does NOT
  *  track regex literals: the chain body is a sequence of calls, and a body that ever contains one would
  *  mis-split into operands that fail the assertions below — loudly, never silently. */
-export function extractCanUseToolChain(text: string): { orig: string; operands: string[] } | null {
+/** Index just past a string/template literal starting at `i`, or -1 if `i` does not open one. */
+function skipLiteralAt(text: string, i: number): number {
+  const c = text[i];
+  if (c === "'" || c === '"') {
+    let j = i + 1;
+    while (j < text.length && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
+    return j + 1;
+  }
+  if (c !== "`") return -1;
+  let j = i + 1;
+  let tdepth = 0;
+  while (j < text.length) {
+    if (text[j] === "\\") {
+      j += 2;
+      continue;
+    }
+    if (tdepth === 0 && text[j] === "`") break;
+    if (text[j] === "$" && text[j + 1] === "{") {
+      tdepth++;
+      j += 2;
+      continue;
+    }
+    if (tdepth > 0 && text[j] === "}") tdepth--;
+    j++;
+  }
+  return j + 1;
+}
+
+/** Index of the `}` closing the block that opens at `open`, or -1 if unbalanced. */
+function matchBrace(text: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Split a `a??b??c` expression on its TOP-LEVEL `??` operators. */
+function splitNullish(expr: string): string[] {
+  const ops: string[] = [];
+  let depth = 0;
+  let mark = 0;
+  let i = 0;
+  while (i < expr.length) {
+    const lit = skipLiteralAt(expr, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = expr[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (depth === 0 && c === "?" && expr[i + 1] === "?") {
+      ops.push(expr.slice(mark, i).trim());
+      i += 2;
+      mark = i;
+      continue;
+    }
+    i++;
+  }
+  ops.push(expr.slice(mark).trim());
+  return ops;
+}
+
+/** The `??`-chain expression bound to a local inside a block body, or null. */
+function nullishChainInBlock(block: string): string | null {
+  const decl = /(?:const|let|var) [\w$]+=/g;
+  for (const m of block.matchAll(decl)) {
+    const from = m.index! + m[0].length;
+    let depth = 0;
+    let i = from;
+    while (i < block.length) {
+      const lit = skipLiteralAt(block, i);
+      if (lit >= 0) {
+        i = lit;
+        continue;
+      }
+      const c = block[i];
+      if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") depth--;
+      else if (depth === 0 && c === ";") break;
+      i++;
+    }
+    const expr = block.slice(from, i);
+    if (splitNullish(expr).length > 1) return expr;
+  }
+  return null;
+}
+
+/** Extract the installed `canUseTool` chain.
+ *
+ *  D6 (Desktop 1.32352.0): the arrow gained a BLOCK body — the `??` chain is now one statement inside it,
+ *  wrapped by a pre-pass that can deny before any link and a post-pass that can overturn the chain's
+ *  ALLOW. The previous scanner split on `??` at the paren depth of `\1&&(`, so a block body came back as
+ *  ONE operand ("the chain has 1 links"). Both shapes are handled; `block` is non-null only for the block
+ *  form, and the caller MUST assert the wrapper facts on it — teaching the extractor the shape without
+ *  that would silence three flags and leave two new decision points invisible. */
+export function extractCanUseToolChain(text: string): { orig: string; operands: string[]; block: string | null } | null {
   // `\1` binds the guard to the SAVED ORIGINAL: `let K=e.canUseTool;K&&(e.canUseTool=async(…)=>`.
   // Without the backreference, `let K=e.canUseTool;zz&&(…)` reads as guarded while being unconditional.
   const m = text.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>/);
   if (!m || m.index === undefined) return null;
   const start = m.index + m[0].length;
 
-  let depth = 1; // we are inside the `(` opened by `\1&&(`
-  const ops: string[] = [];
-  let opStart = start;
-  let i = start;
-  const pushOp = (end: number) => ops.push(text.slice(opStart, end).trim());
+  if (text[start] === "{") {
+    const close = matchBrace(text, start);
+    if (close < 0) return null; // unbalanced — fail loud rather than guess
+    const block = text.slice(start + 1, close);
+    const expr = nullishChainInBlock(block);
+    if (!expr) return null;
+    return { orig: m[1], operands: splitNullish(expr), block };
+  }
 
+  // Expression body: the chain runs to the `)` that closes `\1&&(`.
+  let depth = 1;
+  let i = start;
   while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
     const c = text[i];
-    if (c === "'" || c === '"') {
-      const q = c;
-      i++;
-      while (i < text.length && text[i] !== q) i += text[i] === "\\" ? 2 : 1;
-      i++;
-      continue;
-    }
-    if (c === "`") {
-      // Template: skip to the unescaped closing backtick, recursing through `${ … }` in code mode.
-      i++;
-      let tdepth = 0;
-      while (i < text.length) {
-        if (text[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (tdepth === 0 && text[i] === "`") break;
-        if (text[i] === "$" && text[i + 1] === "{") {
-          tdepth++;
-          i += 2;
-          continue;
-        }
-        if (tdepth > 0 && text[i] === "}") {
-          tdepth--;
-          i++;
-          continue;
-        }
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{") {
-      depth++;
-      i++;
-      continue;
-    }
-    if (c === ")" || c === "]" || c === "}") {
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
       depth--;
-      if (depth === 0) {
-        pushOp(i);
-        return { orig: m[1], operands: ops };
-      } // the `&&(` closed: chain done
-      i++;
-      continue;
-    }
-    if (depth === 1 && c === "?" && text[i + 1] === "?") {
-      pushOp(i);
-      i += 2;
-      opStart = i;
-      continue;
+      if (depth === 0) return { orig: m[1], operands: splitNullish(text.slice(start, i)), block: null };
     }
     i++;
   }
@@ -801,8 +994,11 @@ function extractFromAsar(
   const tmp = mkdtempSync(join(tmpdir(), "cowork-sync-"));
   try {
     execFileSync("npx", ["--yes", "@electron/asar", "extract", ASAR, tmp], { stdio: "ignore" });
-    const bundleFiles = readMainBundleFiles(tmp);
+    const rawFiles = readMainBundleFilesRaw(tmp);
+    const bundleFiles = new Map([...rawFiles].map(([name, raw]) => [name, normalizeBundleQuotes(raw)]));
     const bundle = [...bundleFiles.values()].join("");
+    // FIRST: everything below reads normalized text, so a desync here invalidates all of it.
+    for (const f of checkNormalizationSanity(rawFiles, bundleFiles)) flag(unknown, f);
     // Domains: anthropic.com / claude.ai / sentry.io / statsig hosts referenced in the bundle.
     const re = /[a-z0-9.-]+\.(?:anthropic\.com|claude\.ai)|sentry\.io|statsig[a-z.]*\.[a-z]+/g;
     const domains = dedupe([...bundle.matchAll(re)].map((m) => m[0]));
@@ -1049,20 +1245,49 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // B8 (Desktop 1.25927.0): the arrow export form `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se` puts `(`
   // after the colon, which the old `[:=][\w$]` tail rejected — the chunk DOES still export the name.
   const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS(?::\(\)=>|[:=])[\w$]/;
-  const defining = [...files.values()].find((c) => definesExport.test(c));
+  const GATED_ARRAY = /\["Read","Write","Edit","Glob","Grep"\]/;
+  // The install site's shape is name-independent and is the ONE anchor that survived 1.32352.0; it is
+  // declared here (not below) because the defining-chunk fallback resolves through it.
+  const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
+  // D5 (Desktop 1.32352.0): exported CONSTANT names mangle too — `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS`
+  // became `Cg` while the array it names stayed byte-identical, so the name lookup reported the whole
+  // machinery "gone". Try the readable name first (older asars + the fixtures bind it), then fall back to
+  // the chunk the install site's spread actually RESOLVES to — and only accept that chunk if the spread
+  // is still the gated 5-set, so a mis-resolution fails rather than silently re-pointing the sentinel.
+  let defining = [...files.values()].find((c) => definesExport.test(c));
+  if (!defining) {
+    const site = [...files.values()].find((c) => installRe.test(c));
+    const spreadId = site?.match(installRe)?.[1];
+    const ref = site && spreadId ? resolveNamespaceRef(spreadId, site, files) : null;
+    if (ref && new RegExp(`(?<![\\w$])${esc(ref.local)}=${GATED_ARRAY.source}`).test(ref.chunk)) defining = ref.chunk;
+  }
   if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
   else {
+    /** True when `local` is bound to SOME export of this chunk, under any of the emitted shapes. */
+    const isExportedLocal = (chunk: string, local: string) =>
+      new RegExp(`defineProperty\\(exports,"[\\w$]+",\\{[^}]*?return ${esc(local)}\\}`).test(chunk) ||
+      new RegExp(`(?<![\\w$])[\\w$]+:\\(\\)=>${esc(local)}(?![\\w$])`).test(chunk) ||
+      new RegExp(`(?<![\\w$])${esc(local)}\\s+as\\s+[\\w$]+`).test(chunk);
+
     const hop = (exportName: string, arrayRe: RegExp, label: string) => {
       // Resolve the LOCAL bound to this export across every export shape, then require
       // `<local>=<exact array>`. Binding to the export (not a free array search) is what makes a decoy
       // array fail.
       const local = exportLocalOf(defining, exportName);
-      if (!local) {
-        miss(label, `could not resolve the local bound to the ${exportName} export`);
+      if (local) {
+        if (!new RegExp(`(?<![\\w$])${esc(local)}=${arrayRe.source}`).test(defining))
+          miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
         return;
       }
-      if (!new RegExp(`(?<![\\w$])${esc(local)}=${arrayRe.source}`).test(defining))
-        miss(label, `the ${exportName} export's local (${local}) is not bound to its exact array literal`);
+      // D5: the export NAME is mangled. Bind by CONTENT instead — the exact array must still be present
+      // AND still be exported. Requiring the export is what keeps a same-shaped decoy array from passing.
+      const byContent = defining.match(new RegExp(`(?<![\\w$])([\\w$]+)=${arrayRe.source}`));
+      if (!byContent) {
+        miss(label, `neither the ${exportName} export nor its exact array literal is present in the defining chunk`);
+        return;
+      }
+      if (!isExportedLocal(defining, byContent[1]))
+        miss(label, `the ${exportName} array is present (${byContent[1]}) but is no longer exported — it may be dead`);
     };
     hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
     // "PowerShell" joined the set at Desktop 1.24012.9 (was the 5-element list through 1.24012.1). It is a
@@ -1071,9 +1296,13 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     // to hostloop's `disallowed` set (see the note in src/runtime/hostloop.ts). Pinned exactly so a future
     // set change still fires here rather than silently widening what production excludes.
     hop("HOST_LOOP_EXCLUDED_BUILTIN_TOOLS", /\["Bash","PowerShell","NotebookEdit","REPL","JavaScript","WebFetch"\]/, "excluded set");
-    if (!/REQUEST_COWORK_DIRECTORY/.test(defining) || !/"request_cowork_directory"/.test(defining))
-      miss("REQUEST_COWORK_DIRECTORY", "the export or its literal is gone");
-    if (!/SESSION_TYPE_CHAT/.test(defining) || !/"chat"/.test(defining)) miss("SESSION_TYPE_CHAT", "the export or its literal is gone");
+    // D5: both export NAMES are 0 in Desktop 1.32352.0 while the constants they name are unchanged, so
+    // anchor on the VALUES. `"chat"` alone is far too common to assert on — require it bound to a
+    // constant, which is what the session-type comparison actually reads.
+    if (!/"request_cowork_directory"/.test(defining))
+      miss("REQUEST_COWORK_DIRECTORY", "the request_cowork_directory tool-name literal is gone from the defining chunk");
+    if (!/(?<![\w$])[\w$]+="chat"/.test(defining))
+      miss("SESSION_TYPE_CHAT", "no constant in the defining chunk is bound to the chat session-type literal");
   }
 
   // --- consuming chunk: located by the install site (namespace-property connectivity) ---
@@ -1082,7 +1311,6 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // the shape — a namespace spread joined with "MultiEdit" — then RESOLVE the spread and require it to be
   // the gated 5-set. That is strictly stronger than the old name match: a rename now passes only if the
   // thing actually installed is still the same array.
-  const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
   const consuming = [...files.values()].find((c) => installRe.test(c));
   if (!consuming) {
     miss("install site", 'no chunk contains [...NS.HOST_LOOP_PATH_GATED_BUILTIN_TOOLS,"MultiEdit"].join("|")');
@@ -1133,7 +1361,10 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // The keys are bound to a local (real: `pe=["file_path","path"]`, used as `pe.map(…)`) rather than
   // inlined, so anchor the map/find/typeof-string SHAPE (both proven by the separate path-key anchor).
   inHook(
-    /\.map\([\w$]+=>[\w$]+\[[\w$]+\]\)\.find\([\w$]+=>typeof [\w$]+=="string"\)/,
+    // D4 (Desktop 1.32352.0): the codegen now PARENTHESISES arrow bodies —
+    // `.map((e=>n[e])).find((e=>typeof e=="string"))`. Same expression, newer output target; admit both
+    // forms exactly as B14 does for the optional-call shape.
+    /\.map\(\(?[\w$]+=>[\w$]+\[[\w$]+\]\)?\)\.find\(\(?[\w$]+=>typeof [\w$]+=="string"\)?\)/,
     "first-match extraction",
     "the .map().find() extraction shape is gone",
   );
@@ -1166,7 +1397,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       "the `let O=e.canUseTool;O&&(e.canUseTool=async…)` install (guarded by the SAVED original) is gone",
     );
   } else {
-    const { orig, operands } = chain;
+    const { orig, operands, block } = chain;
     const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
     const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
 
@@ -1178,6 +1409,43 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
         "canUseTool chain terminal",
         `the chain no longer ends in a bare call to the saved original (${orig}) — fall-through may be rewritten`,
       );
+
+    // (0) WRAPPER (Desktop 1.32352.0, block form only). The chain is no longer the whole decision: a
+    //     pre-pass runs FIRST and can deny outright, and a post-pass can turn the chain's ALLOW into a
+    //     DENY. Accepting the block shape without pinning both would silence three flags and leave two
+    //     new decision points unmodelled — the exact way B16/B18 failed open.
+    if (block !== null) {
+      const pre = block.match(/^(?:const|let|var) ([\w$]+)=(await )?([\w$]+)\(/);
+      if (!pre) {
+        miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
+      } else {
+        const [, resultId, awaited, preFn] = pre;
+        // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
+        // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
+        if (!awaited && new RegExp(`async function ${preFn}\\(`).test(consuming))
+          miss(
+            "canUseTool wrapper await",
+            `the pre-pass \`${preFn}\` is async but is not awaited — the early deny and the post-pass are both inert`,
+          );
+        const preBody = bodyOf(preFn);
+        if (!preBody) miss("canUseTool wrapper", `the pre-pass \`${preFn}\` has no resolvable definition in the hook chunk`);
+        else {
+          if (!/is a VM path/.test(preBody))
+            miss("canUseTool wrapper vm-deny", "the pre-pass no longer carries a /sessions VM-path deny — a VM path could reach the tool");
+          if (!/finish/.test(preBody))
+            miss("canUseTool wrapper finish", "the pre-pass no longer builds a finish() continuation — the post-pass veto cannot fire");
+        }
+        // The early deny must be consulted BEFORE the chain runs.
+        if (!new RegExp(`${resultId}\\?\\.[\\w$]+\\)return`).test(block))
+          miss("canUseTool wrapper early-deny", "the pre-pass result is no longer checked for an early deny ahead of the chain");
+        // The chain's result must flow through finish(), or the ALLOW-veto is gone.
+        if (!new RegExp(`${resultId}===null\\?([\\w$]+):${resultId}\\.finish\\(\\1\\)`).test(block))
+          miss(
+            "canUseTool wrapper post-pass",
+            "the chain result no longer flows through the pre-pass's finish() — an approved call can no longer be vetoed after the fact",
+          );
+      }
+    }
 
     // (2) LINK COUNT: tolerate the 3-link (<=1.28929.0) and 4-link (1.30096.1) shapes so an older install
     //     still syncs; a FIFTH link is a new decision point that must be classified, never absorbed.
@@ -1304,6 +1572,10 @@ export interface PromptFingerprint {
   codePoints: number;
   sectionTags: number;
   sha256: string;
+  /** sha256 / code points of the template body with `\uXXXX`-style escapes DECODED — see
+   *  decodeTemplateEscapes for why the raw hash alone is not a content fingerprint. */
+  decodedSha256: string;
+  decodedCodePoints: number;
   placeholders: string[]; // sorted unique {{name}} names
   sectionTagNames: string[]; // sorted unique <name> open-tag names
 }
@@ -1319,6 +1591,50 @@ export interface PromptFingerprint {
  * prompt-asset layout moved — the caller turns that into a hard-fail unknown delta, never a silent
  * skip).
  */
+/** Decode a raw template body to the string the engine would produce.
+ *
+ *  D8 (Desktop 1.32352.0): the committed fingerprints hash the RAW template SOURCE, which the
+ *  fingerprints file justifies as minifier-NAME-independent. It is NOT escape-form-independent — the
+ *  1.32352.0 codegen started emitting non-ASCII as `\uXXXX`, which moved the prompt sha and BOTH
+ *  sub-agent-append fingerprints by +630 code points while the RENDERED text stayed byte-identical.
+ *  Hashing the decoded body is what makes a fingerprint a content fingerprint. The raw hashes are kept
+ *  alongside: they are the committed history and must not be reinterpreted retroactively.
+ *
+ *  Unknown escapes pass through as their escaped character (`\q` -> `q`), matching JS semantics. */
+export function decodeTemplateEscapes(raw: string): string {
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const n = raw[++i];
+    if (n === undefined) break;
+    if (n === "n") out += "\n";
+    else if (n === "t") out += "\t";
+    else if (n === "r") out += "\r";
+    else if (n === "b") out += "\b";
+    else if (n === "f") out += "\f";
+    else if (n === "v") out += "\v";
+    else if (n === "0" && !/[0-9]/.test(raw[i + 1] ?? "")) out += "\0";
+    else if (n === "x") {
+      out += String.fromCharCode(parseInt(raw.substr(i + 1, 2), 16));
+      i += 2;
+    } else if (n === "u") {
+      if (raw[i + 1] === "{") {
+        const end = raw.indexOf("}", i);
+        out += String.fromCodePoint(parseInt(raw.slice(i + 2, end), 16));
+        i = end;
+      } else {
+        out += String.fromCharCode(parseInt(raw.substr(i + 1, 4), 16));
+        i += 4;
+      }
+    } else out += n; // \` \$ \\ and anything else: the escaped char itself
+  }
+  return out;
+}
+
 export function extractPromptFingerprint(bundle: string): PromptFingerprint | null {
   const consumptionM = bundle.match(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/);
   if (!consumptionM) return null;
@@ -1348,10 +1664,13 @@ export function extractPromptFingerprint(bundle: string): PromptFingerprint | nu
 
   const sha256 = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
   const codePoints = [...body].length;
+  const decoded = decodeTemplateEscapes(body);
+  const decodedSha256 = createHash("sha256").update(Buffer.from(decoded, "utf8")).digest("hex");
+  const decodedCodePoints = [...decoded].length;
   const sectionTags = [...body.matchAll(/<[a-z_]+>/g)].length;
   const placeholders = dedupe([...body.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1])).sort();
   const sectionTagNames = dedupe([...body.matchAll(/<([a-z_]+)>/g)].map((m) => m[1])).sort();
-  return { constantId: id, codePoints, sectionTags, sha256, placeholders, sectionTagNames };
+  return { constantId: id, codePoints, sectionTags, sha256, decodedSha256, decodedCodePoints, placeholders, sectionTagNames };
 }
 
 interface PromptFingerprintsFile {
@@ -1393,7 +1712,12 @@ function readSubagentFingerprints(): { versions: Record<string, { hl: string; vm
  */
 export function checkPromptDrift(
   fp: PromptFingerprint | null,
-  fingerprintsFile: { versions: Record<string, { sha256?: string | null; placeholders?: string[]; sectionTagNames?: string[] }> } | null,
+  fingerprintsFile: {
+    versions: Record<
+      string,
+      { sha256?: string | null; decodedSha256?: string | null; placeholders?: string[]; sectionTagNames?: string[] }
+    >;
+  } | null,
   modeled: ReadonlySet<string>,
   allowlisted: ReadonlySet<string>,
 ): { unknownDeltas: string[]; notes: string[] } {
@@ -1413,10 +1737,26 @@ export function checkPromptDrift(
     for (const v of versions) if (cmpVersionStrings(v, newestVer) > 0) newestVer = v;
     const entry = fingerprintsFile.versions[newestVer];
 
-    // H1 — sha drift vs the newest committed entry (BLOCK).
-    if (entry.sha256 && fp.sha256 !== entry.sha256) {
+    // H1 — content drift vs the newest committed entry (BLOCK), compared on the DECODED body.
+    //
+    // D8: comparing the RAW hash makes a pure codegen change (Desktop 1.32352.0 began escaping non-ASCII
+    // as `\uXXXX`) indistinguishable from real prompt drift — it moved the sha by +630 code points while
+    // the rendered text was byte-identical. Decoded is the content comparison; a raw-only move is a NOTE,
+    // because it still wants a re-stamp, just not a paraphrase-baseline re-derivation.
+    if (entry.decodedSha256) {
+      if (fp.decodedSha256 !== entry.decodedSha256) {
+        unknownDeltas.push(
+          `prompt content drifted vs the newest committed fingerprint (${newestVer}): decoded sha ${entry.decodedSha256.slice(0, 12)}… -> ${fp.decodedSha256.slice(0, 12)}… (decodedCodePoints -> ${fp.decodedCodePoints}, sectionTags -> ${fp.sectionTags}). This is a REAL content change, not a codegen escape change. Confirm the RENDERED-prompt impact (a placeholder may be deployment-gated/stripped like {{modelIdentity}}), then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
+        );
+      } else if (entry.sha256 && fp.sha256 !== entry.sha256) {
+        notes.push(
+          `NOTE: prompt RAW source changed (${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}…, codePoints -> ${fp.codePoints}) while the DECODED content is IDENTICAL — a codegen escape-form change, not prompt drift. Re-stamp sha256/codePoints/constantId on the newest entry; no paraphrase-baseline work is owed.`,
+        );
+      }
+    } else if (entry.sha256 && fp.sha256 !== entry.sha256) {
+      // Legacy entry captured before decodedSha256 existed: fall back to the raw comparison, and say so.
       unknownDeltas.push(
-        `prompt content drifted vs the newest committed fingerprint (${newestVer}): sha ${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}… (codePoints -> ${fp.codePoints}, sectionTags -> ${fp.sectionTags}). Confirm the RENDERED-prompt impact (a placeholder may be deployment-gated/stripped like {{modelIdentity}}), then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
+        `prompt content drifted vs the newest committed fingerprint (${newestVer}): sha ${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}… (codePoints -> ${fp.codePoints}, sectionTags -> ${fp.sectionTags}). That entry predates decodedSha256, so this compares RAW source and CANNOT tell a codegen escape change from real drift — decode both before concluding. Then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
       );
     }
 
@@ -1526,7 +1866,11 @@ export function extractSubagentBranchSlices(files: Map<string, string>): { modul
  *  replaced by the canonical token `${}` so a minifier rename never moves the hash, while any
  *  body-text edit does. */
 export function subagentBranchFingerprint(branchText: string): string {
-  const normalized = branchText.replace(/\$\{[^{}]*\}/g, "${}");
+  // D8: DECODE before normalising. Desktop 1.32352.0's codegen escape change moved BOTH branch
+  // fingerprints while the rendered branch text was byte-identical; decoding makes the fingerprint track
+  // content rather than codegen. The committed 1.20186.1 values are unchanged by this — they were
+  // captured from a build that emitted the same characters literally.
+  const normalized = decodeTemplateEscapes(branchText).replace(/\$\{[^{}]*\}/g, "${}");
   return createHash("sha256").update(Buffer.from(normalized, "utf8")).digest("hex").slice(0, 16);
 }
 
@@ -1660,6 +2004,15 @@ const SPAWN_GATES: Record<string, string> = {
  * key here is skipped regardless of its construct shape (this is what keeps the messy host-derived / 3p /
  * session ternaries out of the generated env). A stale entry (allowlisted but no longer constructed
  * anywhere) emits a non-blocking NOTE for pruning, surfaced as SyncResult.notes in the sync output.
+ *
+ * "harness models chat sessions" below means one specific thing: the modeled session carries NO
+ * `sessionType`, so it takes neither the `sessionType==="agent"` branch (hence no BRIEF keys) nor any
+ * other explicit-type branch, and `CLAUDE_CODE_TAGS` resolves through the `??"chat"` default. It does NOT
+ * mean production would consider the session chat-typed — production's own `isChatSession` requires an
+ * EXPLICIT `sessionType==="chat"`, which the modeled session does not set. The distinction is inert for
+ * these env keys but is not inert generally: reasoning "the harness models chat, so chat-excluded
+ * Desktop behaviour cannot reach it" is how the auto-mode rubric gap came to be understated
+ * (docs/fidelity-gaps.md).
  */
 const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CONFIG_DIR: "modeled as spawn.configDirInGuest; injected per-session by spawnEnv() (src/runtime/argv.ts)",
@@ -1713,6 +2066,12 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   DISABLE_ERROR_REPORTING: "3p-provider-only branch; harness models 1p",
   CLAUDE_CODE_ENABLE_AUTO_MODE: "3p-provider-only branch; harness models 1p",
   CLAUDE_CODE_HOST_AUTH_ENV_VAR: "3p-provider-only branch; harness models 1p",
+  // Desktop 1.32352.0. Constructed in the SAME `...deploymentType==='3p' && {…}` literal as
+  // DISABLE_GROWTHBOOK/DISABLE_TELEMETRY above (verified at its construction site: `let t=<deployment>(),
+  // n=t.type==="3p"`), so it is never built on a first-party Cowork session. Allowlisted, not pinned —
+  // pinning would bake a 3p-only key into a baseline that describes the 1p spawn, which is the same call
+  // made for the 3p-only key in 1.26832.0.
+  CLAUDE_CODE_DIAGNOSTICS_FILE: "3p-provider-only branch; harness models 1p",
 };
 
 /**
@@ -1740,6 +2099,12 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   "API_TIMEOUT_MS",
   "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES",
   "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
+  // Desktop 1.32352.0. UNCONDITIONAL in W1 (no gate, no session/deployment branch), so a first-party
+  // Cowork session always receives it — pin it, so a later move to a gate or a value change is a --diff
+  // line rather than a silent contract shift. Note the key is not itself new: the bundled CLI has
+  // declared it for several releases and the desktop CODE-session runner already set it behind a gate;
+  // what is new is the Cowork spawn setting it outright.
+  "CLAUDE_PREVIEW_CLASSIFIER_FLOOR",
   "DISABLE_AUTOUPDATER",
   "MCP_TOOL_TIMEOUT",
   "USE_LOCAL_OAUTH",
@@ -2235,7 +2600,12 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // allowedTools (S9 pins that head at 19 entries) — it is tools-only, exactly like AskUserQuestion, so
     // it is NOT pre-approved and every call transits can_use_tool. Model it as a GATED tool; treating it
     // as allowed would false-green a permission prompt production raises. It is also VM-loop-only
-    // (`!isHostLoop` below), so the host-loop tier is correct by construction and must not gain it.
+    // D7 (Desktop 1.32352.0): the predicate DROPPED its `!isHostLoop` conjunct, at the call site and in
+    // the body, so `Artifact` now reaches the HOST-LOOP tier too when the server flag is on. Earlier
+    // guidance here said the host-loop tier was "correct by construction and must not gain it" — that is
+    // no longer true, and the same release added a host-loop-only Artifact approval guard (see
+    // checkPathHookFacts' wrapper rules), which is the corroborating evidence. Both term lists are
+    // admitted so an older Desktop still syncs; what is pinned is that the REMAINING terms are intact.
     const artifactCond = s6[3];
     if (artifactCond !== undefined) {
       const escC = artifactCond.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2267,10 +2637,10 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
             "S6c Artifact gate",
             "the Artifact condition is no longer exactly the frame-artifacts expression (cached-arm/HIPAA/trailing-term change) — reclassify before admitting the spread",
           );
-        else if (!/isHostLoop:/.test(whole[3]))
+        else if (!/isBridgeSession:/.test(whole[3]) || !/isDispatchChild:/.test(whole[3]))
           miss(
             "S6c Artifact gate",
-            "the frame-artifacts predicate is no longer passed isHostLoop — Artifact could reach the host-loop tier",
+            "the frame-artifacts predicate is no longer passed isBridgeSession/isDispatchChild — the tier restriction may have been emptied",
           );
         else {
           // Attended-turn wrapper: function F(e,t){return P(e,t)&&e._isUnattended!==!0}
@@ -2280,12 +2650,12 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           if (!wrap) miss("S6c Artifact gate", "the attended-turn wrapper body changed — _isUnattended may no longer restrict Artifact");
           else if (
             !new RegExp(
-              `function ${wrap[3]}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&!\\2\\.isHostLoop&&`,
+              `function ${wrap[3]}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?`,
             ).test(toolsSite)
           )
             miss(
               "S6c Artifact gate",
-              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isHostLoop before admitting the spread",
+              "the frame-artifacts predicate changed (a term was dropped or reordered) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
             );
           // S6e (B17): the trailing conjunct must still be the HIPAA-restriction reader. Resolving it is
           // what the old hard-coded `.r()` only pretended to do — that regex accepted ANY single-letter

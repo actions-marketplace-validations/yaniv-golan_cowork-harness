@@ -87,13 +87,29 @@ readable-path entries, not mounts. When the `Artifact` tool is present, it sits 
 list but outside the pre-approved allowed-tools list, so it must go through the same `can_use_tool`
 permission flow as `AskUserQuestion`.
 
+**The tool is not VM-loop-only.** The frame-artifacts predicate tests the session flag, the session
+type, the scheduled-task id, bridge and dispatch-child status and the HIPAA restriction — it does *not*
+test the loop tier. So a **host-loop** session with the server flag on gets the `Artifact` tool as well,
+even though host-loop never receives artifact *mounts*.
+
+The same release added a **host-loop-only approval-integrity guard** in front of the permission chain,
+and it is a shape nothing here models. Before any other check runs it denies an `Artifact` publish whose
+`file_path` is a VM path (`/sessions/...`) — the host loop publishes from the host filesystem, where that
+path does not exist. Then it records the file's identity (`realpath`, device, inode) at the moment the
+approval is *requested*, and after the user answers it re-checks: if the file changed, moved, never
+existed at that path, or cannot be verified, the publish is refused even though it was approved. It also
+refuses an approval whose `updatedInput` widened a non-publish action into a publish. **This is a
+post-decision veto** — an `allow` returned by the permission flow can still become a `deny` afterwards —
+and the harness's Decider chain has no such stage: a decision here is final once made.
+
 **Harness behaviour:** neither mechanism is modeled. The harness's mount kinds are connected folders,
 projects, uploads, and the three plugin kinds (local, remote, marketplace) — there is no
 artifact-directory mount, and no `Artifact` tool at any tier. (`outputs` is not a mount at all; it is a
 synthetic root the run tree always carries.)
 
 **The residual, stated plainly:** on the VM tiers, production currently mounts artifact directories
-and the harness mounts none; host-loop is unaffected, since production doesn't mount there either.
+and the harness mounts none; on host-loop there are no artifact *mounts* to differ over, but the `tool`
+is reachable there and the harness serves it at no tier.
 This is a deliberate non-modeling decision, not an oversight: the mount branch is the one Anthropic is
 retiring, and the harness has no way to observe the server flag that selects between the two
 mechanisms. If the flag flips, the mount difference disappears on its own and the gap becomes the
@@ -624,18 +640,29 @@ agent — be the one who named the action, covering things like granting folder 
 file-delete permission, saving a skill, and creating or deleting scheduled tasks. It also carries
 explicit carve-outs: reading connected folders or uploads and writing derived content to the outputs
 directory is not treated as data exfiltration. The rubric applies only to auto-mode, only for
-non-chat sessions, and only outside host-loop. Its feature gate is off by default, so it is dark for a
-standard account today.
+non-chat sessions, and only outside host-loop. **Its feature gate is ON** (`force`), so the rubric is
+live for the sessions that qualify.
 
 **Harness behaviour:** not modeled. A scenario's scripted permission answers can express "the user
 allowed this but the rubric refused it" only by scripting the refusal directly — there is no mechanism
 that decides a denial on its own the way the rubric would.
 
-**The residual, stated plainly:** currently dark, and out of the harness's modeled scope in any case —
-the harness models chat sessions, and the rubric explicitly excludes them. Recorded because if the
-gate turns on, it becomes a second, host-side judgement layer sitting over every tool call in
-auto-mode, one a scenario cannot currently reproduce. A scenario can already *express* a denial by
-scripting one; it cannot *decide* one the way the rubric would.
+**The residual, stated plainly.** It is tempting to read the rubric's `!isChatSession` term as the reason
+this cannot reach the harness. It is not: production's test requires an *explicit* `sessionType === "chat"`,
+and the session this harness models carries no `sessionType` at all — the baseline's
+`CLAUDE_CODE_TAGS: "lam_session_type:chat"` is a `??` default, and the frame-artifacts predicate the
+harness models requires `sessionType === undefined` — so that term does not exclude it.
+
+What does is simpler and stronger: **the harness never constructs `settings.autoMode` on any tier.** The spawn passes `--permission-mode` and `--setting-sources`, never an autoMode payload, and
+the rubric-merging code is Desktop-side and never runs here. The rubric is *structurally unreachable*,
+not excluded by session type.
+
+So the residual is: in a real VM-loop, non-chat Cowork session the rubric is now a second, host-side
+judgement layer over every tool call in auto-mode, and its observable effect is that the PreToolUse hook
+can answer `deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool
+this harness models as always-gated may therefore raise no prompt in production. A scenario can already
+*express* a denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot
+reproduce a gate that silently stops prompting.
 
 ---
 
@@ -664,6 +691,19 @@ makes scripted answers and cassettes work at all — but it means **the elicitat
 skill is never exercised here.** If your skill renders a form in production, the harness is testing the
 other path. Scripted answers (`answers:`, `--answer`) and the deciders keep working exactly as
 documented; they are unaffected by this gap, because the competing channel is simply absent.
+
+**The residual is wider than "a branch goes untested", and this is the part worth acting on.** Because
+the host's elicitation guidance is absent, so is every CONFLICT between it and your skill's own
+instructions — and a real session produced exactly that. A skill whose SKILL.md mandates
+`AskUserQuestion` *"(NOT plain chat)"* found itself holding two contradictory authorities, the skill's
+mandate and the host's injected guidance, and had to adjudicate; it chose the form and reported the
+conflict. That whole class — **skill instruction vs host instruction** — is structurally unobservable
+here, because only one of the two authorities is ever present. A skill can therefore ship a directive
+that production silently overrides, and every harness run stays green.
+
+So when the opt-in stub server lands, its value is not only "the form branch runs". A scenario that can
+turn the guidance **on without rendering a form** would make instruction conflicts observable at all,
+which is the larger half.
 
 A related sharp edge, for anyone driving MCP elicitation from their own server: the harness models an
 `elicit` request kind, but scenario answers do **not** cover it. `answers:` / `--answer` and

@@ -395,7 +395,7 @@
             "maximum": 9007199254740991
           },
           "skill_tool_used": {
-            "description": "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment)",
+            "description": "a tool matching `tool` ran inside a skill-activation window whose skillId matches `skill` — heuristic for inline skills (a sticky, sequential window faithfully matching the real agent's activeSkill scope, not an exact per-tool boundary; see RunResult.skillActivity's doc comment). SCOPE: the window's tool counts INCLUDE calls made by any sub-agent dispatched during it, so this key cannot distinguish a main-agent call from a sub-agent one (use subagent_tool_used for a sub-agent-only claim), and it matches tool NAMES only — never the path/arguments a tool was called with",
             "type": "object",
             "properties": {
               "skill": {
@@ -505,6 +505,54 @@
               "minLength": 1
             }
           },
+          "file_absent": {
+            "description": "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact_text": {
+            "description": "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw",
+            "type": "object",
+            "properties": {
+              "artifact": {
+                "type": "string",
+                "minLength": 1,
+                "description": "relative path to an artifact under the work root (e.g. outputs/report.json) — a literal path, not a glob"
+              },
+              "contains": {
+                "description": "every listed substring appears in the body",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "not_contains": {
+                "description": "no listed substring appears in the body",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "matches": {
+                "description": "the body matches this regex",
+                "type": "string",
+                "minLength": 1
+              },
+              "not_matches": {
+                "description": "the body does not match this regex",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "artifact"
+            ],
+            "additionalProperties": false
+          },
           "input_unmodified": {
             "description": "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
             "anyOf": [
@@ -549,6 +597,39 @@
           "question_asked": {
             "description": "a question matching this regex was asked",
             "type": "string"
+          },
+          "question_options": {
+            "description": "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+            "type": "object",
+            "properties": {
+              "when_question": {
+                "description": "regex selecting the sub-question by its label (`question`, falling back to `header` — the same string question_asked matches); omit only when the run fired exactly one sub-question",
+                "type": "string"
+              },
+              "equals": {
+                "description": "the offered option labels, as a complete set — in this exact ORDER unless `order: any`",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "contains": {
+                "description": "these option labels are present (others may be too); in this relative order unless `order: any`",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "order": {
+                "description": "`exact` (default) compares order as well as membership — an option list re-ordered by the model is the defect this key exists for; `any` compares membership only",
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "any"
+                ]
+              }
+            },
+            "additionalProperties": false
           },
           "questions_count_max": {
             "description": "at most N sub-questions asked — a bundled AskUserQuestion with K sub-questions counts as K, not 1",

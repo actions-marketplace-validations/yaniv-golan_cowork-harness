@@ -28,6 +28,7 @@ function minimalChatRecord(): RunRecord {
     subagentTools: new Set(),
     subagents: [],
     questions: [],
+    gateOptions: [],
     decisions: [],
     permissiveAutoAllow: [],
     unanswered: [],

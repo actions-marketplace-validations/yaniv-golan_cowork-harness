@@ -89,6 +89,55 @@ describe("recordDecision — AskUserQuestion full option set", () => {
   });
 });
 
+describe("gateOptions — ask-time capture, so a gate that was SHOWN and not taken still counts", () => {
+  // `decisions[].questions` is written only on recordDecision's ANSWERED branch. A key that grades "what
+  // the user was SHOWN" cannot be sourced from it: a gate that was presented and whose answer never
+  // landed records `decision: "undelivered"` with NO `questions` at all. handleDecision pushes the
+  // offered set BEFORE deciding, so the ask-time channel survives every one of those paths.
+  class ClosingSession extends MockSession {
+    respond(_id: string, _r: DecisionResponse): DecisionDelivery {
+      return { delivered: false, reason: "session-closing" };
+    }
+  }
+
+  it("captures the offered options even when the answer was never delivered", async () => {
+    const ev: AgentEvent[] = [
+      {
+        type: "decision",
+        request: {
+          id: "d1",
+          kind: "question",
+          toolUseId: "toolu_q1",
+          questions: [{ question: "The rubric does not fit", options: [{ label: "Stop review" }, { label: "Proceed anyway" }] }],
+        },
+      },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new ClosingSession(ev), new ScriptedDecider([{ when_question: "rubric", choose: "Stop review" }])).drive(
+      "go",
+    );
+
+    // Ask-time: present, in offered order.
+    expect(rec.gateOptions).toEqual([
+      { question: "The rubric does not fit", options: [{ label: "Stop review" }, { label: "Proceed anyway" }] },
+    ]);
+    // Answer-time: the gate is recorded, but carries no option set — the reason question_options is not
+    // sourced from here.
+    const q = rec.decisions.find((d) => d.kind === "question");
+    expect(q!.decision).toBe("undelivered");
+    expect(q!.questions).toBeUndefined();
+  });
+
+  it("records an optionless gate as an EMPTY option list, not as an absent gate", async () => {
+    const ev: AgentEvent[] = [
+      { type: "decision", request: { id: "d1", kind: "question", toolUseId: "t1", questions: [{ question: "Free text?", options: [] }] } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), new ScriptedDecider([{ when_question: "Free text", choose: "" }])).drive("go");
+    expect(rec.gateOptions).toEqual([{ question: "Free text?", options: [] }]);
+  });
+});
+
 describe("recordDecision — undelivered answer (#20)", () => {
   // A session that reports the answer did NOT reach the agent (the live session was draining when
   // respond() ran). The run must record the truth ("undelivered"), never a false "answered".

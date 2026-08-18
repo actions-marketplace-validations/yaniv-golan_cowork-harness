@@ -294,6 +294,9 @@ const CONTRADICTION_GROUPS: {
     presences: [
       { label: "`gate_answer_count_min: >= 1`", test: (a) => a.gate_answer_count_min !== undefined && a.gate_answer_count_min >= 1 },
       { label: "`question_asked`", test: (a) => a.question_asked !== undefined },
+      // Same reasoning as question_asked: asserting WHICH options a gate offered requires a gate to have
+      // fired, which contradicts requiring zero sub-questions.
+      { label: "`question_options`", test: (a) => a.question_options !== undefined },
       // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
       // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
       // inert alongside the declaration (lint says so; not worth refusing a run over).
@@ -1283,6 +1286,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       outputsDeletes: scan.outputsDeletes,
       mountDeletes: scan.mountDeletes,
       questions: record.questions,
+      gateOptions: record.gateOptions,
       hostPathLeaked: scan.hostPathLeaked,
       selfHealRan: scan.selfHealRan,
       // Missing/corrupt events.jsonl → the scan-dependent assertions (no_delete_in_outputs /

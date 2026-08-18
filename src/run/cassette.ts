@@ -1,6 +1,17 @@
 import { z } from "zod";
-import { warn, writeAllSync } from "../io.js";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, mkdtempSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
+import { warn, writeAllSync, tildeify } from "../io.js";
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+  mkdtempSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -26,8 +37,12 @@ const CONCURRENCY_BUDGET_CAVEAT = (n: number) =>
   `::warning:: --max-budget-usd with --concurrency ${n}: the running-total stop is DISABLED (with ${n} runs in flight the total is only known after an overshoot is already paid for). ` +
   `The cap is a pre-flight estimate only here. Use --concurrency 1 for a running total.\n`;
 import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
+// Re-exported (not re-defined): moved to the leaf module so assert.ts can use it without closing an
+// assert → cassette import cycle. Existing importers keep their path.
+export { isLosslessUtf8 } from "./artifacts.js";
+import { isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
-import { loadSession, resolveSessionPaths, agentEnvOverrides, type SessionConfig } from "../session.js";
+import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, type SessionConfig } from "../session.js";
 import { loadBaseline, BASELINES_DIR } from "../baseline.js";
 import { stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
@@ -64,7 +79,7 @@ import { isVmSessionsPath } from "../vm-paths.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate, budgetFields, type AssertContext } from "../assert.js";
+import { evaluate, budgetFields, HOSTLOOP_ONLY_KEYS, type AssertContext } from "../assert.js";
 import {
   planMutationsWithStats,
   summarizeMutationPlan,
@@ -449,12 +464,6 @@ function containedPath(root: string, rel: string): string {
   if (abs !== rootResolved && !abs.startsWith(rootResolved + sep))
     throw new Error(`artifact path "${rel}" escapes the work root — refusing (path traversal)`);
   return abs;
-}
-
-/** a buffer round-trips losslessly through UTF-8 only if re-encoding the decoded string reproduces
- *  the exact bytes. Binary content (and lone surrogates / invalid sequences) fail this — store them base64. */
-function isLosslessUtf8(buf: Buffer): boolean {
-  return Buffer.from(buf.toString("utf8"), "utf8").equals(buf);
 }
 
 /** Snapshot the user-visible artifacts under `workRoot` into manifest entries.
@@ -1603,6 +1612,10 @@ function minimalRec(): RunRecord {
     subagentTools: new Set(),
     subagents: [],
     questions: [],
+    // A truncated cassette could not be driven, so it observed NO gates. [] here is not "zero gates
+    // fired" — the replay ctx flags it `gateOptionsMissing`, so question_options fails
+    // evidence-unavailable rather than passing over an empty list it never populated.
+    gateOptions: [],
     decisions: [],
     permissiveAutoAllow: [],
     unanswered: [],
@@ -2317,6 +2330,112 @@ function isRepoVisiblePath(p: string): boolean {
   return ignored.status !== 0;
 }
 
+/** Resolve symlinks as far as the path EXISTS, keeping the not-yet-created tail. Needed because the
+ *  containment test below compares against `git rev-parse --show-toplevel`, which always returns a
+ *  REAL path: on macOS a perfectly in-tree `/var/folders/...` cassette would otherwise read as outside a
+ *  `/private/var/folders/...` root and warn on every record. The planned cassette itself never exists
+ *  yet, so resolving only the existing ancestor is the whole trick. */
+function realish(p: string): string {
+  let dir = resolve(p);
+  const tail: string[] = [];
+  while (!existsSync(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return resolve(p); // walked off the root — nothing to canonicalize
+    tail.unshift(dir.slice(up.length + 1));
+    dir = up;
+  }
+  try {
+    return join(realpathSync(dir), ...tail);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** Is `p` at or under `root`? Pure lexical containment on already-resolved absolute paths. */
+function insideRoot(root: string, p: string): boolean {
+  const rel = relative(root, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** The tree a cassette and its references must share for the cassette to be portable: the git top-level
+ *  containing `anchor`, else the cwd. Cwd — NOT the session file's own directory: the conventional layout
+ *  puts `sessions/` and `cassettes/` as SIBLINGS, so anchoring on the session dir would warn on every
+ *  default record in a non-git tree, and a warning that fires on the happy path is one nobody reads. */
+function portabilityRoot(anchor: string | undefined): string {
+  if (anchor) {
+    let dir = dirname(resolve(anchor));
+    while (!existsSync(dir)) {
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+    if (existsSync(dir)) {
+      const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+      if (top.status === 0 && top.stdout.trim()) return resolve(top.stdout.trim());
+    }
+  }
+  return realish(process.cwd());
+}
+
+/**
+ * Warn — BEFORE the paid run — when the cassette's stored references would have to climb out of the
+ * project tree to reach their targets.
+ *
+ * What this is NOT: a check that the written cassette can resolve its own references. That check is
+ * VACUOUS by construction — `resolve(dir, relative(dir, X)) === X`, so it always passes on the recording
+ * machine and would never fire. The condition that actually predicts the failure is CLIMB-OUT: a
+ * reference stored as `../../Users/you/...` resolves fine here and nowhere else, so the cassette is
+ * uncommittable and unverifiable the moment it leaves this filesystem layout.
+ *
+ * Both directions matter, and only checking one is how the first draft of this missed half the defect:
+ *   - cassette OUTSIDE the tree, session inside — the reported case (`--out /tmp/...`);
+ *   - cassette inside, session OUTSIDE — an absolute or `~` session path, equally unresolvable.
+ * Both reduce to the same test: the cassette dir and every stored reference must sit under one root.
+ *
+ * `~` MUST be expanded first. `parseScenarioFile` resolves a file-relative `session:` to absolute but
+ * deliberately leaves `~/...` alone (see `isFileRelative`), and a raw `~/x` looks RELATIVE to
+ * `path.relative`, which would resolve it under the cwd and silently conclude it is in-tree.
+ *
+ * A warning, not a refusal: recording outside the tree is legitimate for a throwaway cassette. The point
+ * is that today nothing says so at any point where the author can still act.
+ */
+export function cassettePortabilityPreflight(
+  scenario: Scenario,
+  plannedCassettePath: string,
+  scenarioSourceFile?: string,
+): { kind: "ok" } | { kind: "warn"; message: string } {
+  const refs: { name: string; path: string }[] = [];
+  // `(inline)` is stored as the literal sentinel, never as a path — nothing to resolve, nothing to break.
+  if (scenario.session !== "(inline)") refs.push({ name: "session", path: realish(expandUserPath(scenario.session)) });
+  if (scenarioSourceFile) refs.push({ name: "scenarioSource", path: realish(scenarioSourceFile) });
+  if (refs.length === 0) return { kind: "ok" };
+
+  const cassetteDir = realish(dirname(resolve(plannedCassettePath)));
+  const root = portabilityRoot(scenarioSourceFile ?? refs[0].path);
+  const cassetteOut = !insideRoot(root, cassetteDir);
+  const strays = refs.filter((r) => !insideRoot(root, r.path));
+  if (!cassetteOut && strays.length === 0) return { kind: "ok" };
+
+  const which = cassetteOut
+    ? `the cassette would be written outside ${tildeify(root)}`
+    : `${strays.map((r) => `\`${r.name}\` (${tildeify(r.path)})`).join(" and ")} ${strays.length > 1 ? "live" : "lives"} outside ${tildeify(root)}`;
+  return {
+    kind: "warn",
+    message:
+      `::warning:: [record] this cassette will not be portable — ${which}, so its stored references are ` +
+      `written as paths that climb out of the tree and resolve only from this exact layout.
+` +
+      `  cassette: ${tildeify(cassetteDir)}
+` +
+      `  Consequence: verify-cassettes cannot resolve the skill dirs from it and reports 'unverifiable' ` +
+      `for staleness (can't verify ⇒ not green, exit 3). Only a re-record at the final location fixes it.
+` +
+      `  Fix: record into the same tree as the scenario and its session, and decide that path BEFORE ` +
+      `spending the run — a cassette cannot be moved afterwards.
+`,
+  };
+}
+
 /**
  * Decide whether a record may write a host-inheriting transcript to this path.
  *
@@ -2345,13 +2464,33 @@ export function hostInventoryPreflight(
         `Verify with 'verify-cassettes' before committing — it fails on a host-inventory finding.\n`,
     };
   }
+  // The FIX line is branch-aware, and deliberately no longer offers "--out a path outside the repo".
+  // Two defects that advice caused, both reported by consumers:
+  //  1. It trades a loud refusal for a SILENT worse state. A cassette's `session`/`scenarioSource` are
+  //     stored relative to its own dir, so one written outside the tree can never resolve its skill dirs
+  //     again — `verify-cassettes` reports `unverifiable-skill` ("can't verify ⇒ not green", exit 3) and
+  //     only a re-record fixes it. Two paid runs were spent discovering that.
+  //  2. "Record at container" is not universally available: a scenario asserting a HOSTLOOP_ONLY_KEYS key
+  //     fails "cannot verify" on every other tier, so that branch would send exactly those authors in a
+  //     circle. Read the set from assert.ts rather than restating it here — a hand list is how the
+  //     previous advice rotted.
+  const blocked = HOSTLOOP_ONLY_KEYS.filter((k) => (scenario.assert ?? []).some((a) => a[k] !== undefined));
+  const fix = blocked.length
+    ? `  Fix: this scenario asserts ${blocked.join(", ")}, which only evaluate at hostloop — 'container' is not ` +
+      `available to it. Audit the session (personal MCP servers, plugins, account metadata) and re-run with ` +
+      `--allow-host-inventory-fixture once you're satisfied the recording carries none.\n`
+    : `  Fix: record at 'container' fidelity (sealed, HOME=/tmp) — it inherits nothing from this machine, so the ` +
+      `cassette stays committable AND verifiable.\n`;
   return {
     kind: "refuse",
     message:
       `refusing to record into a repo-visible path at ${tier} — ${why}, and committing that publishes it.\n` +
       `  path: ${plannedCassettePath}\n` +
-      `  Fix: record at 'container' fidelity (sealed, HOME=/tmp), or --out a path outside the repo ` +
-      `(the default 'cassettes/' dir is gitignored).\n` +
+      fix +
+      `  NOT a fix: redirecting --out outside the repo. The cassette stores its session/scenario references ` +
+      `relative to its own directory, so one written outside the tree can never resolve them again — ` +
+      `verify-cassettes reports it 'unverifiable' for staleness (can't verify ⇒ not green) and only a ` +
+      `re-record recovers.\n` +
       `  Override with --allow-host-inventory-fixture if this session has no personal MCP servers or plugins.`,
   };
 }
@@ -2392,9 +2531,13 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
-    const aj = a.artifact_json;
-    if (!aj?.artifact) continue;
-    if (truncatedAbs.has(resolve(workRoot, aj.artifact)) && !hits.includes(aj.artifact)) hits.push(aj.artifact);
+    // EVERY body-reading key, not just artifact_json: artifact_text has the identical green-record/
+    // red-replay shape (it passes against the on-disk file at record and finds no body on replay), and
+    // a deliverable big enough to be worth scanning for a leak is exactly the one that clears the cap.
+    for (const target of [a.artifact_json?.artifact, a.artifact_text?.artifact]) {
+      if (!target) continue;
+      if (truncatedAbs.has(resolve(workRoot, target)) && !hits.includes(target)) hits.push(target);
+    }
   }
   return hits;
 }
@@ -2896,6 +3039,11 @@ export async function cmdRecord(args: string[]) {
       log(tokenLine);
       log(agentLine);
     }
+    // Part of the preview for the same reason the budget gate is: a rehearsal whose whole job is "tell me
+    // what this would do before I spend" must surface the thing that cannot be undone afterwards. `target`
+    // IS the scenario source here, so the reference root resolves exactly as it will on the real record.
+    const dryPort = cassettePortabilityPreflight(scenario, cassettePath, target);
+    if (dryPort.kind === "warn") warn(dryPort.message);
     // See the dir branch above: the budget gate is part of the preview, not skipped by it.
     if (maxBudgetUsd !== undefined) preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
     return process.exit(0);
@@ -3255,6 +3403,10 @@ async function recordScenarioObject(
     const verdict = hostInventoryPreflight(scenario, plannedCassettePath, opts.allowHostInventoryFixture === true);
     if (verdict.kind === "refuse") return fail("record", "usage", verdict.message, undefined, isJsonOutput(process.argv)) as never;
     if (verdict.kind === "warn") warn(verdict.message);
+    // Portability — also pre-spend, and for the same reason: after the run the tokens are gone and the
+    // only remedy is to spend them again at the right path.
+    const port = cassettePortabilityPreflight(scenario, plannedCassettePath, opts.scenarioSourceFile);
+    if (port.kind === "warn") warn(port.message);
   }
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
@@ -3392,7 +3544,7 @@ async function recordScenarioObject(
     if (truncatedAsserted.length) {
       const cap = opts.maxArtifactBytes ?? defaultBodyCap();
       const msg =
-        `artifact_json asserts artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
+        `assert targets artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
         `this passes at record (on-disk) but FAILS replay (no body). Raise --max-artifact-bytes / ` +
         `COWORK_HARNESS_MAX_ARTIFACT_BYTES, or assert a smaller artifact.`;
       if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
@@ -5153,6 +5305,7 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
 export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "question_asked",
+  "question_options",
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",
@@ -5174,6 +5327,7 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
  *  "not checkable, skipped" treatment as the other manifest keys. */
 export const MANIFEST_KEYS: (keyof Assertion)[] = [
   "file_exists",
+  "artifact_text",
   "user_visible_artifact",
   "artifact_json",
   "computer_links_resolve",
@@ -5188,6 +5342,12 @@ export const MANIFEST_KEYS: (keyof Assertion)[] = [
  *  NOT include `expect_denied`, which is a scenario field (not an Assertion key) — see
  *  `warnUncheckableOnDiskKeys`. */
 export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
+  // LIVE-ONLY, and NOT a MANIFEST key despite reading the filesystem: proving a path is ABSENT needs an
+  // exhaustive, healthy walk, and `buildManifest` collects through the health-DISCARDING
+  // `collectArtifactPaths` (artifacts.ts). A containment-skipped or unreadable subtree is therefore
+  // indistinguishable from an empty one on replay, so "not in the manifest" would pass while proving
+  // nothing. Positive keys survive that (absent ⇒ "file not found" ⇒ fail-closed); this one would not.
+  "file_absent",
   "egress_denied",
   "egress_allowed",
   "no_delete_in_outputs",
@@ -5493,13 +5653,9 @@ export async function replayCassette(
     const ALL_CLASSIFICATION_KEYS = new Set<keyof Assertion>([
       ...alwaysContentKeys,
       ...questionGateKeys,
-      "file_exists",
-      "user_visible_artifact",
-      "artifact_json",
-      "computer_links_resolve",
-      "computer_links_resolve_if_present",
-      "no_unexpected_files",
-      "input_unmodified",
+      // Spread, not hand-listed: the manifest bucket was the one enumerated by NAME here, so adding a
+      // manifest key elsewhere threw at the first replay until someone remembered this literal too.
+      ...MANIFEST_KEYS,
       ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
       // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
@@ -5632,6 +5788,12 @@ export async function replayCassette(
       outputsDeletes: [],
       mountDeletes: [], // replay has no live scan — the same shape outputsDeletes already uses here
       questions: rec.questions,
+      gateOptions: rec.gateOptions,
+      // A truncated cassette could not be driven, so `gateOptions` is empty because nothing was OBSERVED
+      // — not because no gate fired. Flag it so question_options fails evidence-unavailable. (A cassette
+      // with no controlOut needs no flag: the whole QUESTION_GATE_KEYS bucket is excluded from that
+      // replay, so the key is never reached.)
+      gateOptionsMissing: truncatedMsg !== undefined,
       hostPathLeaked: false,
       selfHealRan: false,
       subagents: rec.subagents,
@@ -5786,10 +5948,20 @@ export async function replayCassette(
     const SKILL_DRIFT_CLASSES: ReadonlySet<StalenessFinding["class"]> = new Set(["skill", "shared-root", "unverifiable-skill"]);
     if (opts.strict)
       for (const s of staleness)
-        assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s.message}` });
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `cassette stale (--strict): ${s.message}`,
+          source: "staleness",
+        });
     else if (opts.failOnSkillDrift)
       for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
-        assertions.push({ assertion: {} as Assertion, pass: false, message: `skill-source drift (--fail-on-skill-drift): ${s.message}` });
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `skill-source drift (--fail-on-skill-drift): ${s.message}`,
+          source: "staleness",
+        });
 
     // future cassette version — hard failure under --strict (forward semantics may not be
     // correctly interpreted here, so a green replay would be a false-green).
@@ -5797,6 +5969,7 @@ export async function replayCassette(
       assertions.push({
         assertion: {} as Assertion,
         pass: false,
+        source: "cassette-format",
         message: `cassette format too new: ${futureVersionMsg} (pass --best-effort-future-cassette to attempt replay anyway)`,
       });
 

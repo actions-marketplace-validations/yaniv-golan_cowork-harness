@@ -129,7 +129,9 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
    ```
 
    **Includes the Cowork system-prompt drift guard.** Alongside the asar-structure checks above, `sync`
-   also fingerprints the Cowork system-prompt append itself (a minifier-independent content hash plus a
+   also fingerprints the Cowork system-prompt append itself (a content hash over the template body with
+   escapes DECODED — minifier-name-independent AND codegen-escape-independent, which the earlier raw-source
+   hash was not — plus a
    `{{placeholder}}` / `<section>` inventory — `src/prompt.ts`'s `MODELED_PLACEHOLDER_NAMES` /
    `INTENTIONALLY_UNMODELED_PLACEHOLDERS`) and feeds two more cases into the same unknown-deltas list: a
    sha drift against the newest entry in `baselines/prompts/cowork-system-prompt-fingerprints.json`

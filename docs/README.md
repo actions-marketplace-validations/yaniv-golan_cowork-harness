@@ -20,11 +20,18 @@ reading order and tables that follow.
 
 | I want to… | Start here |
 |---|---|
-| Gate CI without spending tokens | [cassette.md](./cassette.md) (record/replay) + the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) |
 | Test a local skill before shipping it | [scenario.md](./scenario.md) (author a scenario) and the `skill` command in [README → Commands at a glance](../README.md#commands-at-a-glance) |
-| Sync after a Claude Desktop update | [maintenance.md](./maintenance.md) |
+| Gate CI without spending tokens | [cassette.md](./cassette.md) (record/replay) + the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) |
+| **Check my skill actually *ran*** — not that the answer merely looked right | [debugging.md → hunt the false-green](./debugging.md#the-run-was-green-but-you-dont-trust-it--hunt-the-false-green) (`skillsInvoked` / `skillActivity`) |
+| **Prove a `description` edit didn't break triggering** | `skill_triggered` / `no_skill_triggered` in [scenario.md](./scenario.md#full-schema); the router model in [discovery.md](./discovery.md) |
+| **Find out whether it passed — or just passed once** | `--repeat N` ([README → Commands at a glance](../README.md#commands-at-a-glance)) and [stats.md](./stats.md) across separate runs |
+| **Check whether the skill beats no skill at all** | `--ablate-skill` (the control arm — one invocation per arm; see [scenario.md → Running](./scenario.md#running)) |
+| **Test a skill that asks the user questions** | scripted `answers:` in [scenario.md](./scenario.md), or a live decider while you're still discovering what it asks ([decider-dir.md](./decider-dir.md)) |
+| **Prove my skill doesn't reach the network, or leak host paths** | `egress_denied` / `transcript_no_host_path` in [scenario.md](./scenario.md#full-schema); the enforcement model in [boundary.md](./boundary.md) |
+| Compare a skill across a fix (before/after, without averaging over both) | [debugging.md → iterate across fixes](./debugging.md#iterating-a-skill-across-fixes--the-verification-loop) + `stats --group-by skill-hash` ([stats.md](./stats.md)) |
 | Debug a run that no-ops an assertion | [debugging.md](./debugging.md) |
 | Check whether the sandbox really enforces the boundary | [boundary.md](./boundary.md) |
+| Sync after a Claude Desktop update | [maintenance.md](./maintenance.md) |
 
 ## Guides
 
