@@ -2049,6 +2049,12 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   DISABLE_ERROR_REPORTING: "3p-provider-only branch; harness models 1p",
   CLAUDE_CODE_ENABLE_AUTO_MODE: "3p-provider-only branch; harness models 1p",
   CLAUDE_CODE_HOST_AUTH_ENV_VAR: "3p-provider-only branch; harness models 1p",
+  // Desktop 1.32352.0. Constructed in the SAME `...deploymentType==='3p' && {…}` literal as
+  // DISABLE_GROWTHBOOK/DISABLE_TELEMETRY above (verified at its construction site: `let t=<deployment>(),
+  // n=t.type==="3p"`), so it is never built on a first-party Cowork session. Allowlisted, not pinned —
+  // pinning would bake a 3p-only key into a baseline that describes the 1p spawn, which is the same call
+  // made for the 3p-only key in 1.26832.0.
+  CLAUDE_CODE_DIAGNOSTICS_FILE: "3p-provider-only branch; harness models 1p",
 };
 
 /**
@@ -2076,6 +2082,12 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   "API_TIMEOUT_MS",
   "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES",
   "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
+  // Desktop 1.32352.0. UNCONDITIONAL in W1 (no gate, no session/deployment branch), so a first-party
+  // Cowork session always receives it — pin it, so a later move to a gate or a value change is a --diff
+  // line rather than a silent contract shift. Note the key is not itself new: the bundled CLI has
+  // declared it for several releases and the desktop CODE-session runner already set it behind a gate;
+  // what is new is the Cowork spawn setting it outright.
+  "CLAUDE_PREVIEW_CLASSIFIER_FLOOR",
   "DISABLE_AUTOUPDATER",
   "MCP_TOOL_TIMEOUT",
   "USE_LOCAL_OAUTH",

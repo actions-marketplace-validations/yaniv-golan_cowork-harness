@@ -83,6 +83,19 @@ All notable changes to this project are documented here. The format is based on
   infra errors, or — under `replay --assert-from`/`--reassert` — skill-source drift. Both land on exit 1,
   so the exit code cannot separate them and the envelope can.
 
+### Changed
+
+- **Parity baseline synced to Claude Desktop 1.32352.0** (agent ELF unchanged at 2.1.229). Two spawn env
+  keys are new: `CLAUDE_PREVIEW_CLASSIFIER_FLOOR` is **pinned** — it is unconditional in the Cowork spawn
+  env, so every first-party session receives it (the variable is older; what is new is Cowork setting it
+  outright rather than the desktop code-session runner setting it behind a gate) — and
+  `CLAUDE_CODE_DIAGNOSTICS_FILE` is **allowlisted, not pinned**, because it is constructed only inside the
+  third-party/MDM deployment branch and never on a first-party session. The `automode-permission-rubric`
+  gate flipped `off (defaultValue)` → `on (force)` server-side; the rubric it enables is Desktop-side and
+  applies to VM-loop non-chat sessions, which the harness does not construct — see `docs/fidelity-gaps.md`.
+  `DESIGN.md`'s scope note moves from "no baselines have shipped since" to naming what the last live
+  end-to-end pass does **not** cover, which is what shipping a baseline is supposed to force.
+
 ### Fixed
 
 - **`sync` mis-scanned the Desktop bundle, and it had been doing so silently since Desktop 1.25927.0.**
