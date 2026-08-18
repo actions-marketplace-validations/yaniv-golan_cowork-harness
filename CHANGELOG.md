@@ -83,6 +83,29 @@ All notable changes to this project are documented here. The format is based on
   infra errors, or — under `replay --assert-from`/`--reassert` — skill-source drift. Both land on exit 1,
   so the exit code cannot separate them and the envelope can.
 
+### Fixed
+
+- **`sync` mis-scanned the Desktop bundle, and it had been doing so silently since Desktop 1.25927.0.**
+  `normalizeBundleQuotes` — the tokenizer that rewrites the bundle's backtick literals so every anchor in
+  `sync` can be written against one quoting style — carried three defects that each desynchronised it, so
+  that from the first bad character onward it paired the CLOSING backtick of one string with the OPENING
+  backtick of the next. Downstream, whole regions were left unnormalised (every anchor over them reads as
+  "gone") and stretches of code were rewritten into string literals. On Desktop 1.32352.0 this produced
+  **32** unknown deltas of which **21** were phantom — and, less obviously, it *masked* four real ones, so
+  the flag list was wrong in both directions rather than merely noisy.
+
+  The three: an interpolation is code and may contain a **regex literal**, so a quote inside one (the
+  POSIX shell-quote escaper `` `'${t.replace(/'/g, …)}'` ``) opened a phantom string; the regex-vs-division
+  test admitted only punctuation, so a regex in a **keyword** context (`return/…/`) was read as division;
+  and a substitution-free **tagged** template was rewritten into a string, which stops the tag being called
+  and leaves text no parser accepts.
+
+  Guarded by a parser oracle rather than by more anchors: `normalizeBundleQuotes` is now required to emit
+  output that still parses, and that contains exactly the same multiset of string values as its input — a
+  desync mints strings that were never in the source. It runs over every chunk of the installed Desktop
+  bundle and skips cleanly where there is no install. The previous check — confirming that one known key
+  had normalised — stayed green through two of the three defects.
+
 ## [1.23.0] — 2026-08-14
 
 ### Added

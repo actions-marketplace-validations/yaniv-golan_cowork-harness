@@ -449,13 +449,75 @@ export function sync(): SyncResult {
  *  and regex literals are copied through verbatim; a template is rewritten ONLY when it has no `${}`
  *  substitution, no raw newline and no embedded `"` — anything else is passed through unchanged, so
  *  real templates (including every prompt body the fingerprints hash) keep their exact text. */
+/** Chars after which a `/` starts a REGEX literal rather than a division operator. */
+const REGEX_OK = new Set("(,=:[!&|?{};+-*%~^<>".split(""));
+
+/** Keywords after which a `/` starts a REGEX, not division. The leading `[^\w$.]` alternative is what
+ *  keeps `remain/512` (division) from matching the `in` keyword, and `a.in/2` from matching at all. */
+const REGEX_KEYWORD = /(?:^|[^\w$.])(return|typeof|case|in|of|new|delete|void|throw|do|else|yield|await|instanceof)$/;
+
+/** True when the `/` at `at` starts a regex literal. `prev` is the last significant char.
+ *
+ *  D2 (Desktop 1.32352.0): REGEX_OK is punctuation-only, so a regex in a KEYWORD context
+ *  (`return/…/`, `typeof/…/`, `case/…/`) was read as division — and a quote inside it then opened a
+ *  phantom string. Live trigger: `return/unable to access '[^']*':.*operation not permitted/i`. The
+ *  keyword scan is bounded (a keyword is at most 10 chars) so this stays O(1) per candidate. */
+function regexCanStart(src: string, at: number, prev: string): boolean {
+  if (prev === "" || REGEX_OK.has(prev)) return true;
+  let j = at - 1;
+  while (j >= 0 && /\s/.test(src[j])) j--;
+  return REGEX_KEYWORD.test(src.slice(Math.max(0, j - 11), j + 1));
+}
+
+/** Offset just past the regex literal starting at `at` (its closing `/` plus flags). If the literal
+ *  never closes on this line it is not a regex — return `at + 1` so the caller advances by one char. */
+function skipRegex(src: string, at: number): number {
+  const n = src.length;
+  let j = at + 1;
+  let inClass = false;
+  while (j < n) {
+    const c = src[j];
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (c === "\n") return at + 1;
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (c === "/" && !inClass) {
+      j++;
+      while (j < n && /[a-z]/.test(src[j])) j++; // flags
+      return j;
+    }
+    j++;
+  }
+  return at + 1;
+}
+
+/** True when the backtick at `at` opens a TAGGED template (`` tag`…` ``) rather than a plain one.
+ *
+ *  D3 (Desktop 1.32352.0): rewriting a substitution-free TAGGED quasi into a string is a SEMANTIC
+ *  change — the tag function stops being called — and leaves text a parser rejects. Live in the asar
+ *  as ``(0,t._)`{}`` and ``String.raw`https://…``. A template is tagged when the previous significant
+ *  token ENDS an expression: `)`, `]`, or an identifier that is not one of the keywords a plain
+ *  template may legally follow (``return`ok` `` is NOT tagged). Ambiguity resolves toward "tagged",
+ *  which merely leaves the literal un-normalized; the other direction re-introduces the defect. */
+function isTaggedTemplate(src: string, at: number): boolean {
+  let j = at - 1;
+  while (j >= 0 && /\s/.test(src[j])) j--;
+  if (j < 0) return false;
+  const c = src[j];
+  if (c === ")" || c === "]") return true;
+  if (!/[\w$]/.test(c)) return false;
+  return !REGEX_KEYWORD.test(src.slice(Math.max(0, j - 11), j + 1));
+}
+
 export function normalizeBundleQuotes(src: string): string {
   const n = src.length;
   const parts: string[] = [];
   let mark = 0; // start of the pending verbatim run
   let i = 0;
   let prev = ""; // last significant char — disambiguates a regex literal from division
-  const REGEX_OK = new Set("(,=:[!&|?{};+-*%~^<>".split(""));
 
   const skipQuoted = (start: number): number => {
     const q = src[start];
@@ -490,14 +552,25 @@ export function normalizeBundleQuotes(src: string): string {
         let depth = 1;
         j += 2;
         const exprStart = j;
+        // D1 (Desktop 1.32352.0): an interpolation is CODE, so it can contain a REGEX literal — and a
+        // quote inside one (`t.replace(/'/g, …)`, the POSIX shell-quote escaper) opened a phantom
+        // string here, flipping quote parity for every literal after it in the chunk. Track the
+        // previous significant char so a regex can be told from division, exactly as the outer loop
+        // does. Verified against a parser oracle: without this, 7 chunks of the live asar normalize
+        // into text that no longer parses.
+        let pe = "";
         while (j < n && depth > 0) {
           const d = src[j];
-          if (d === "\\") j += 2;
-          else if (d === "{") (depth++, j++);
-          else if (d === "}") (depth--, j++);
-          else if (d === '"' || d === "'") j = skipQuoted(j);
-          else if (d === "`") j = readTemplate(j)[0];
-          else j++;
+          if (d === "\\") ((j += 2), (pe = "\\"));
+          else if (d === "{") (depth++, j++, (pe = "{"));
+          else if (d === "}") (depth--, j++, (pe = "}"));
+          else if (d === '"' || d === "'") ((j = skipQuoted(j)), (pe = src[j - 1]));
+          else if (d === "`") ((j = readTemplate(j)[0]), (pe = "`"));
+          else if (d === "/" && regexCanStart(src, j, pe)) ((j = skipRegex(src, j)), (pe = "/"));
+          else {
+            if (!/\s/.test(d)) pe = d;
+            j++;
+          }
         }
         subs.push([exprStart, depth === 0 ? j - 1 : j]);
         continue;
@@ -518,7 +591,7 @@ export function normalizeBundleQuotes(src: string): string {
       const [end, subs] = readTemplate(i);
       const body = src.slice(i + 1, end - 1);
       if (subs.length === 0) {
-        if (!body.includes("\n") && !body.includes('"')) {
+        if (!body.includes("\n") && !body.includes('"') && !isTaggedTemplate(src, i)) {
           parts.push(src.slice(mark, i), '"', body, '"');
           mark = end;
         }
@@ -543,7 +616,7 @@ export function normalizeBundleQuotes(src: string): string {
       i = at === -1 ? n : isLine ? at : at + 2;
       continue;
     }
-    if (c === "/" && (prev === "" || REGEX_OK.has(prev))) {
+    if (c === "/" && regexCanStart(src, i, prev)) {
       let j = i + 1;
       let inClass = false;
       let closed = false;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import * as acorn from "acorn";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -1976,6 +1977,123 @@ describe("1.25927.0 bundler change: normalizeBundleQuotes", () => {
     const src = "x=`line1\nline2`";
     expect(normalizeBundleQuotes(src)).toBe(src);
   });
+
+  // Desktop 1.32352.0 defect A: the `${…}` expression scanner knew about "…", '…' and `…` but not
+  // REGEX literals, so a quote inside one opened a phantom string and flipped quote parity for the
+  // whole rest of the chunk. Live trigger: the POSIX shell single-quote escaper below, present since
+  // Desktop 1.25927.0. The trailing literal is the observable: it must still normalize.
+  it("does not desync on a regex literal containing a quote inside an interpolation", () => {
+    expect(normalizeBundleQuotes('x=`${a.replace(/\'/g,"")}`,k:[`user`]')).toContain('k:["user"]');
+  });
+
+  it("does not desync on the production shell-quote escaper", () => {
+    const src = "d=`'${t.replace(/'/g,`'\\\\''`)}'`,k:[`user`]";
+    expect(normalizeBundleQuotes(src)).toContain('k:["user"]');
+  });
+
+  // Desktop 1.32352.0 defect B: REGEX_OK holds only punctuation, so a regex in a KEYWORD context read
+  // as division. Live trigger: `return/unable to access '[^']*':…/i` — the apostrophes then opened a
+  // phantom string. The keyword list must be matched on a word boundary (see the `remain/512` case).
+  it("treats a regex after a keyword as a regex, not division", () => {
+    expect(normalizeBundleQuotes("function f(){return/ab'cd/i.test(x)}k:[`user`]")).toContain('k:["user"]');
+  });
+
+  it("still treats division after an identifier ENDING in a keyword as division (remain/2 … a/b)", () => {
+    // A naive /(return|…|in|…)$/ matches the "in" at the end of "remain". The SECOND slash is what
+    // makes that mis-detection bite: the phantom regex then closes and swallows the `x` template.
+    // Mutation-verified — drop the `[^\w$.]` boundary from REGEX_KEYWORD and this case fails.
+    expect(normalizeBundleQuotes("v=remain/2,s=`x`,t=a/b;k:[`user`]")).toContain('s="x"');
+  });
+
+  it("still treats division inside an interpolation as division", () => {
+    expect(normalizeBundleQuotes("t=`${(a)/b/c}`,k:[`user`]")).toContain('k:["user"]');
+  });
+
+  // Desktop 1.32352.0 defect C: a substitution-free TAGGED template was rewritten into a string, which
+  // is a SEMANTIC change (the tag stops being called) and leaves text that no longer parses. Live in
+  // the asar as `(0,t._)`{}`` and `String.raw`https://…``.
+  it("does not rewrite a TAGGED template into a string", () => {
+    expect(normalizeBundleQuotes("x=(0,t._)`abc`,k:[`user`]")).toBe('x=(0,t._)`abc`,k:["user"]');
+  });
+
+  it("does not rewrite a String.raw tagged template", () => {
+    expect(normalizeBundleQuotes("u=String.raw`a/b`,k:[`user`]")).toBe('u=String.raw`a/b`,k:["user"]');
+  });
+
+  it("still rewrites a plain template that FOLLOWS a keyword (not a tag)", () => {
+    expect(normalizeBundleQuotes("function f(){return`ok`}")).toBe('function f(){return"ok"}');
+  });
+});
+
+// ==========================================================================================
+// PARSER ORACLE for normalizeBundleQuotes (Desktop 1.32352.0).
+//
+// The unit cases above are hand-picked shapes. This is the ground-truth check: normalization is
+// only correct if a real JS parser agrees that (a) the output is still valid JavaScript, and
+// (b) it still contains exactly the same string content as the input. A desync that reads code as
+// a string literal breaks BOTH — it mints string values that were never in the source.
+//
+// Why this exists: Desktop 1.32352.0's `sync` reported 32 unknown deltas, 21 of which were a single
+// tokenizer desync — and the desync also MASKED four real flags. Spot-checking that one known key
+// normalized was the check in place at the time; it stayed green through two of the three defects.
+// ==========================================================================================
+describe("normalizeBundleQuotes — parser oracle against the real asar", () => {
+  /** Every string value the source contains, from BOTH string literals and template cooked pieces.
+   *  Normalization converts a substitution-free template into a string with the identical cooked
+   *  value, so this multiset is invariant under correct normalization. */
+  function stringValues(src: string): string[] {
+    const out: string[] = [];
+    const walk = (node: unknown): void => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) return node.forEach(walk);
+      const n = node as Record<string, unknown> & { type?: string };
+      if (n.type === "Literal" && typeof n.value === "string") out.push(n.value);
+      if (n.type === "TemplateLiteral")
+        for (const q of n.quasis as Array<{ value: { cooked: string | null } }>) out.push(q.value.cooked ?? "");
+      for (const k in n) {
+        if (k === "type" || k === "start" || k === "end") continue;
+        walk(n[k]);
+      }
+    };
+    walk(acorn.parse(src, { ecmaVersion: "latest" }));
+    return out.sort();
+  }
+
+  it("every chunk still parses, and mints no string value that was not in the source", () => {
+    if (!readRealBundleFilesOrSkip()) return; // skip-guard: no macOS / no Desktop install
+    if (!realBundleTmpDir) return; // COWORK_ASAR_BUNDLE override path has no raw chunk dir
+    const buildDir = join(realBundleTmpDir, ".vite/build");
+    const failures: string[] = [];
+    let checked = 0;
+    for (const f of readdirSync(buildDir)) {
+      if (!f.endsWith(".js")) continue;
+      const raw = readFileSync(join(buildDir, f), "utf8");
+      let before: string[];
+      try {
+        before = stringValues(raw);
+      } catch {
+        continue; // the RAW chunk does not parse under this acorn — not our damage to own
+      }
+      checked++;
+      const out = normalizeBundleQuotes(raw);
+      let after: string[];
+      try {
+        after = stringValues(out);
+      } catch (e) {
+        failures.push(`${f}: normalized output does not parse — ${(e as Error).message}`);
+        continue;
+      }
+      if (before.length !== after.length) {
+        const minted = after.filter((v) => !before.includes(v)).slice(0, 2);
+        failures.push(`${f}: string count ${before.length} -> ${after.length}; e.g. minted ${JSON.stringify(minted)}`);
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+    // Explicit budget: this parses ~12 MB of bundle TWICE (raw + normalized). It lands around 3-4 s on
+    // an idle machine but exceeded vitest's 5 s default under full-suite load, which reads as a failing
+    // guard rather than a slow one. 60 s is ~15x headroom, so a real hang still fails.
+  }, 60_000);
 });
 
 describe("1.25927.0 bundler change: exportLocalOf / resolveNamespaceRef", () => {
