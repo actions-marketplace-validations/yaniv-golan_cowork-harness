@@ -134,6 +134,19 @@ All notable changes to this project are documented here. The format is based on
   legitimately **dropped** its `!isHostLoop` term — `Artifact` now reaches the host-loop tier — so both
   term lists are admitted while the remaining tier restrictions are pinned.
 
+- **Prompt fingerprints compare rendered content, not codegen.** The Cowork system-prompt and
+  sub-agent-append fingerprints hashed the RAW minified template source, justified as being independent
+  of minifier-assigned names. It is not independent of **escape form**: Desktop 1.32352.0 began emitting
+  non-ASCII as `\uXXXX`, which moved the prompt hash by +630 code points and moved **both** sub-agent
+  branch fingerprints — while the rendered text was byte-identical, as a diff of the decoded bodies
+  confirms. Every fingerprint now also records a `decodedSha256`/`decodedCodePoints` over the body with
+  escapes resolved, and drift is judged on those; a raw-only move is reported as a re-stamp note instead
+  of an unknown delta. The raw hashes stay — they are the committed history — and an entry predating the
+  decoded pair still compares raw, saying so in the message. The golden-oracle test that pinned the
+  1.20186.0 raw hash was a version pin in an invariant's clothing (it went red the day Desktop updated,
+  for no product reason); it now asserts the rendered-prompt hash, which genuinely has not moved since
+  1.20186.0.
+
 ## [1.23.0] — 2026-08-14
 
 ### Added

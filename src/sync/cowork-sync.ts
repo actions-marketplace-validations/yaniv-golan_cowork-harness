@@ -1564,6 +1564,10 @@ export interface PromptFingerprint {
   codePoints: number;
   sectionTags: number;
   sha256: string;
+  /** sha256 / code points of the template body with `\uXXXX`-style escapes DECODED — see
+   *  decodeTemplateEscapes for why the raw hash alone is not a content fingerprint. */
+  decodedSha256: string;
+  decodedCodePoints: number;
   placeholders: string[]; // sorted unique {{name}} names
   sectionTagNames: string[]; // sorted unique <name> open-tag names
 }
@@ -1579,6 +1583,50 @@ export interface PromptFingerprint {
  * prompt-asset layout moved — the caller turns that into a hard-fail unknown delta, never a silent
  * skip).
  */
+/** Decode a raw template body to the string the engine would produce.
+ *
+ *  D8 (Desktop 1.32352.0): the committed fingerprints hash the RAW template SOURCE, which the
+ *  fingerprints file justifies as minifier-NAME-independent. It is NOT escape-form-independent — the
+ *  1.32352.0 codegen started emitting non-ASCII as `\uXXXX`, which moved the prompt sha and BOTH
+ *  sub-agent-append fingerprints by +630 code points while the RENDERED text stayed byte-identical.
+ *  Hashing the decoded body is what makes a fingerprint a content fingerprint. The raw hashes are kept
+ *  alongside: they are the committed history and must not be reinterpreted retroactively.
+ *
+ *  Unknown escapes pass through as their escaped character (`\q` -> `q`), matching JS semantics. */
+export function decodeTemplateEscapes(raw: string): string {
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const n = raw[++i];
+    if (n === undefined) break;
+    if (n === "n") out += "\n";
+    else if (n === "t") out += "\t";
+    else if (n === "r") out += "\r";
+    else if (n === "b") out += "\b";
+    else if (n === "f") out += "\f";
+    else if (n === "v") out += "\v";
+    else if (n === "0" && !/[0-9]/.test(raw[i + 1] ?? "")) out += "\0";
+    else if (n === "x") {
+      out += String.fromCharCode(parseInt(raw.substr(i + 1, 2), 16));
+      i += 2;
+    } else if (n === "u") {
+      if (raw[i + 1] === "{") {
+        const end = raw.indexOf("}", i);
+        out += String.fromCodePoint(parseInt(raw.slice(i + 2, end), 16));
+        i = end;
+      } else {
+        out += String.fromCharCode(parseInt(raw.substr(i + 1, 4), 16));
+        i += 4;
+      }
+    } else out += n; // \` \$ \\ and anything else: the escaped char itself
+  }
+  return out;
+}
+
 export function extractPromptFingerprint(bundle: string): PromptFingerprint | null {
   const consumptionM = bundle.match(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/);
   if (!consumptionM) return null;
@@ -1608,10 +1656,13 @@ export function extractPromptFingerprint(bundle: string): PromptFingerprint | nu
 
   const sha256 = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
   const codePoints = [...body].length;
+  const decoded = decodeTemplateEscapes(body);
+  const decodedSha256 = createHash("sha256").update(Buffer.from(decoded, "utf8")).digest("hex");
+  const decodedCodePoints = [...decoded].length;
   const sectionTags = [...body.matchAll(/<[a-z_]+>/g)].length;
   const placeholders = dedupe([...body.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1])).sort();
   const sectionTagNames = dedupe([...body.matchAll(/<([a-z_]+)>/g)].map((m) => m[1])).sort();
-  return { constantId: id, codePoints, sectionTags, sha256, placeholders, sectionTagNames };
+  return { constantId: id, codePoints, sectionTags, sha256, decodedSha256, decodedCodePoints, placeholders, sectionTagNames };
 }
 
 interface PromptFingerprintsFile {
@@ -1653,7 +1704,12 @@ function readSubagentFingerprints(): { versions: Record<string, { hl: string; vm
  */
 export function checkPromptDrift(
   fp: PromptFingerprint | null,
-  fingerprintsFile: { versions: Record<string, { sha256?: string | null; placeholders?: string[]; sectionTagNames?: string[] }> } | null,
+  fingerprintsFile: {
+    versions: Record<
+      string,
+      { sha256?: string | null; decodedSha256?: string | null; placeholders?: string[]; sectionTagNames?: string[] }
+    >;
+  } | null,
   modeled: ReadonlySet<string>,
   allowlisted: ReadonlySet<string>,
 ): { unknownDeltas: string[]; notes: string[] } {
@@ -1673,10 +1729,26 @@ export function checkPromptDrift(
     for (const v of versions) if (cmpVersionStrings(v, newestVer) > 0) newestVer = v;
     const entry = fingerprintsFile.versions[newestVer];
 
-    // H1 — sha drift vs the newest committed entry (BLOCK).
-    if (entry.sha256 && fp.sha256 !== entry.sha256) {
+    // H1 — content drift vs the newest committed entry (BLOCK), compared on the DECODED body.
+    //
+    // D8: comparing the RAW hash makes a pure codegen change (Desktop 1.32352.0 began escaping non-ASCII
+    // as `\uXXXX`) indistinguishable from real prompt drift — it moved the sha by +630 code points while
+    // the rendered text was byte-identical. Decoded is the content comparison; a raw-only move is a NOTE,
+    // because it still wants a re-stamp, just not a paraphrase-baseline re-derivation.
+    if (entry.decodedSha256) {
+      if (fp.decodedSha256 !== entry.decodedSha256) {
+        unknownDeltas.push(
+          `prompt content drifted vs the newest committed fingerprint (${newestVer}): decoded sha ${entry.decodedSha256.slice(0, 12)}… -> ${fp.decodedSha256.slice(0, 12)}… (decodedCodePoints -> ${fp.decodedCodePoints}, sectionTags -> ${fp.sectionTags}). This is a REAL content change, not a codegen escape change. Confirm the RENDERED-prompt impact (a placeholder may be deployment-gated/stripped like {{modelIdentity}}), then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
+        );
+      } else if (entry.sha256 && fp.sha256 !== entry.sha256) {
+        notes.push(
+          `NOTE: prompt RAW source changed (${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}…, codePoints -> ${fp.codePoints}) while the DECODED content is IDENTICAL — a codegen escape-form change, not prompt drift. Re-stamp sha256/codePoints/constantId on the newest entry; no paraphrase-baseline work is owed.`,
+        );
+      }
+    } else if (entry.sha256 && fp.sha256 !== entry.sha256) {
+      // Legacy entry captured before decodedSha256 existed: fall back to the raw comparison, and say so.
       unknownDeltas.push(
-        `prompt content drifted vs the newest committed fingerprint (${newestVer}): sha ${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}… (codePoints -> ${fp.codePoints}, sectionTags -> ${fp.sectionTags}). Confirm the RENDERED-prompt impact (a placeholder may be deployment-gated/stripped like {{modelIdentity}}), then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
+        `prompt content drifted vs the newest committed fingerprint (${newestVer}): sha ${entry.sha256.slice(0, 12)}… -> ${fp.sha256.slice(0, 12)}… (codePoints -> ${fp.codePoints}, sectionTags -> ${fp.sectionTags}). That entry predates decodedSha256, so this compares RAW source and CANNOT tell a codegen escape change from real drift — decode both before concluding. Then add a new version entry to baselines/prompts/cowork-system-prompt-fingerprints.json.`,
       );
     }
 
@@ -1786,7 +1858,11 @@ export function extractSubagentBranchSlices(files: Map<string, string>): { modul
  *  replaced by the canonical token `${}` so a minifier rename never moves the hash, while any
  *  body-text edit does. */
 export function subagentBranchFingerprint(branchText: string): string {
-  const normalized = branchText.replace(/\$\{[^{}]*\}/g, "${}");
+  // D8: DECODE before normalising. Desktop 1.32352.0's codegen escape change moved BOTH branch
+  // fingerprints while the rendered branch text was byte-identical; decoding makes the fingerprint track
+  // content rather than codegen. The committed 1.20186.1 values are unchanged by this — they were
+  // captured from a build that emitted the same characters literally.
+  const normalized = decodeTemplateEscapes(branchText).replace(/\$\{[^{}]*\}/g, "${}");
   return createHash("sha256").update(Buffer.from(normalized, "utf8")).digest("hex").slice(0, 16);
 }
 

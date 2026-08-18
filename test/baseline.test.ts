@@ -1553,19 +1553,54 @@ afterAll(() => {
 // Prompt drift guard (H1-H3): extractPromptFingerprint (golden oracle against the real asar) +
 // checkPromptDrift (pure, token-free — the synthetic cases don't need a live Desktop install).
 // ==========================================================================================
+// Desktop 1.32352.0's codegen escapes non-ASCII (`—` -> `\u2014`). The committed fingerprints hash the
+// RAW template source — minifier-NAME-independent, but NOT escape-form-independent — so that change alone
+// moved the prompt sha by +630 code points and BOTH sub-agent-append fingerprints, while the rendered text
+// was byte-identical. A version pin that fires on a pure codegen change is a false alarm the maintainer
+// has to hand-decode to dismiss.
+describe("prompt fingerprints are escape-form independent", () => {
+  const site = (body: string) => `cowork_system_prompt:{value:{prompt:zz};const zz=\`${body}\`;`;
+
+  it("the RAW sha still moves when only the escape form changes (that is the false alarm)", () => {
+    const a = extractPromptFingerprint(site("a—b"))!;
+    const b = extractPromptFingerprint(site("a\\u2014b"))!;
+    expect(a.sha256).not.toBe(b.sha256);
+  });
+
+  it("the DECODED sha does not move", () => {
+    const a = extractPromptFingerprint(site("a—b"))!;
+    const b = extractPromptFingerprint(site("a\\u2014b"))!;
+    // Assert the SHAPE first: `undefined === undefined` would pass this vacuously before the field exists.
+    expect(a.decodedSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.decodedSha256).toBe(b.decodedSha256);
+    expect(a.decodedCodePoints).toBe(b.decodedCodePoints);
+    expect(a.decodedCodePoints).toBe(3); // "a—b" decoded
+  });
+
+  it("the DECODED sha still moves on a REAL content change", () => {
+    const a = extractPromptFingerprint(site("a—b"))!;
+    const c = extractPromptFingerprint(site("a—c"))!;
+    expect(a.decodedSha256).not.toBe(c.decodedSha256);
+  });
+});
+
 describe("prompt drift guard (H1-H3)", () => {
-  const COMMITTED_1_20186_0_SHA = "0189a96cafe73f82bf9c492a17a4ff2f1b87c8486c54232c4e70e78ab98d836a";
+  // D8: the RENDERED prompt has not moved since 1.20186.0 — but its RAW sha has, twice, purely from
+  // codegen (1.32352.0 began escaping non-ASCII). Pinning the raw sha here made this oracle a VERSION pin
+  // wearing an invariant's clothes: it went red the day Desktop updated, for no product reason. The
+  // decoded hash is the invariant it was always reaching for.
+  const RENDERED_PROMPT_SHA = "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf";
 
   // Golden oracle (non-circular): extractPromptFingerprint over the REAL asar must match the
   // committed 1.20186.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
   // Desktop install (same readRealBundleOrSkip seam the spawn-contract oracles use).
-  it("golden oracle: extractPromptFingerprint(real asar) matches the committed 1.20186.0 fingerprint", () => {
+  it("golden oracle: the RENDERED prompt in the real asar is unchanged since 1.20186.0", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
     const fp = extractPromptFingerprint(bundle);
     expect(fp).not.toBeNull();
-    expect(fp!.sha256).toBe(COMMITTED_1_20186_0_SHA);
-    expect(fp!.codePoints).toBe(37875);
+    expect(fp!.decodedSha256).toBe(RENDERED_PROMPT_SHA);
+    expect(fp!.decodedCodePoints).toBe(37811);
     expect(fp!.sectionTags).toBe(43);
     expect(fp!.placeholders).toHaveLength(10);
   });
@@ -1599,6 +1634,8 @@ describe("prompt drift guard (H1-H3)", () => {
     codePoints: 100,
     sectionTags: 1,
     sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    decodedSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    decodedCodePoints: 100,
     placeholders: ["cwd", "modelName"],
     sectionTagNames: ["env"],
     ...overrides,
