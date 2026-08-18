@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+
 - **`verdict.failures[]` entries carry a `kind`, so "did MY assertions fail?" is answerable from the
   envelope.** A consumer was scraping stderr for this, because the only available discriminator was
   whether an entry carried an `assertion` key — and that was wrong in **both** directions. `verify-run`
@@ -49,7 +50,10 @@ All notable changes to this project are documented here. The format is based on
   that to a founder: an internal reference name appeared 13 times in the delivered `report.json` and 0
   times in `report.md`, so the fix looked complete. `artifact` is a literal path, not a glob — one
   entry per delivered surface; a glob would be an exhaustive claim over the manifest's file set, which
-  is `file_absent`'s class and unprovable there for the same reason.
+  is `file_absent`'s class and unprovable there for the same reason. On `lane: remote` it names the lane
+  rather than reporting a bare "file not found" — not a false green either way, but on a lane with no
+  locally observable filesystem that message reads as "the skill didn't write it" (`artifact_json` still
+  has that wart; the new key does not inherit it).
 
   Both are fail-closed on missing evidence, and one of those paths was a latent bug in the key they
   share a code path with: **`artifact_json` never checked `ctx.linkPaths`.** A manifest entry recorded
@@ -85,8 +89,9 @@ All notable changes to this project are documented here. The format is based on
   `header`); omit it only when the run fired exactly one sub-question — more than one without a selector
   FAILS as ambiguous rather than silently taking the first, since guessing would make the assertion
   depend on the gate order it exists to pin. Set exactly one of `equals` (the complete set) or `contains`
-  (a subset). `order: exact` is the default; `order: any` compares membership only, as a multiset so a
-  duplicated label is not equal to a distinct one.
+  (a subset) — both, or neither, is rejected at **load**, so a contradictory assert is refused before the
+  run is spent rather than after. `order: exact` is the default; `order: any` compares membership only,
+  as a multiset so a duplicated label is not equal to a distinct one.
 
   **The evidence is captured when the gate is ASKED, not when it is answered.** The answer-time channel
   (`decisions[].questions`) is written only on the answered branch, so a gate that was shown and then
@@ -105,6 +110,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+
 - **A `scripts/`-grounded `not-adjudicable` now says WHY it could not be decided.** `scripts/` is
   outside the evaluator's corpus by design — it grades authored guidance (`SKILL.md`, `references/**`,
   `agents/<name>.md`), not implementation — and `docs/critique.md` has always said so. What the verdict
@@ -116,6 +122,14 @@ All notable changes to this project are documented here. The format is based on
   how the skill is used. The corpus boundary itself is unchanged: packaging script bodies would widen
   the evaluator from grading guidance to grading implementation, which is a scope decision, not a bug
   fix.
+
+- **`lint` gains an ERROR-class `file-absent-contradiction` rule.** `file_exists: X` and
+  `file_absent: X` on the same path cannot both hold, so a scenario carrying both would spend a run to
+  fail. Like every ERROR-class finding it gates **without** `--strict`. It lives in the linter rather
+  than in the TypeScript contradiction groups because those match on key PRESENCE across the assert
+  array and cannot compare values — the linter already has the parsed YAML, so the comparison is free
+  there. The `positional-choose-order` advisory also stops telling you to read
+  `decisions[].questions[].options[]` by hand and points at `question_options` instead.
 
 - **`--strict` means two different things in one CLI, and both help strings now say so.**
   `lint --strict` fails on ERROR+WARN+**INFO**; `lint-skill --strict` fails on ERROR+WARN and **never**
@@ -193,7 +207,19 @@ All notable changes to this project are documented here. The format is based on
   restated — `test/hostloop-only-keys.test.ts` scans the `hostloopOnly("…")` call sites and fails if the
   two drift, in either direction.
 
+- **Parity baseline synced to Claude Desktop 1.32352.0** (agent ELF unchanged at 2.1.229). Two spawn env
+  keys are new: `CLAUDE_PREVIEW_CLASSIFIER_FLOOR` is **pinned** — it is unconditional in the Cowork spawn
+  env, so every first-party session receives it (the variable is older; what is new is Cowork setting it
+  outright rather than the desktop code-session runner setting it behind a gate) — and
+  `CLAUDE_CODE_DIAGNOSTICS_FILE` is **allowlisted, not pinned**, because it is constructed only inside the
+  third-party/MDM deployment branch and never on a first-party session. The `automode-permission-rubric`
+  gate flipped `off (defaultValue)` → `on (force)` server-side; the rubric it enables is Desktop-side and
+  applies to VM-loop non-chat sessions, which the harness does not construct — see `docs/fidelity-gaps.md`.
+  `DESIGN.md`'s scope note moves from "no baselines have shipped since" to naming what the last live
+  end-to-end pass does **not** cover, which is what shipping a baseline is supposed to force.
+
 ### Fixed
+
 
 - **Five published sentences described `fingerprint.skillSources` as cassette-relative. It is not.** The
   "a cassette is not relocatable" guidance added earlier in this release listed `scenario.session`,
@@ -280,21 +306,6 @@ All notable changes to this project are documented here. The format is based on
   entries carrying an `assertion` key are your failed assertions; entries without one are guard signals,
   infra errors, or — under `replay --assert-from`/`--reassert` — skill-source drift. Both land on exit 1,
   so the exit code cannot separate them and the envelope can.
-
-### Changed
-
-- **Parity baseline synced to Claude Desktop 1.32352.0** (agent ELF unchanged at 2.1.229). Two spawn env
-  keys are new: `CLAUDE_PREVIEW_CLASSIFIER_FLOOR` is **pinned** — it is unconditional in the Cowork spawn
-  env, so every first-party session receives it (the variable is older; what is new is Cowork setting it
-  outright rather than the desktop code-session runner setting it behind a gate) — and
-  `CLAUDE_CODE_DIAGNOSTICS_FILE` is **allowlisted, not pinned**, because it is constructed only inside the
-  third-party/MDM deployment branch and never on a first-party session. The `automode-permission-rubric`
-  gate flipped `off (defaultValue)` → `on (force)` server-side; the rubric it enables is Desktop-side and
-  applies to VM-loop non-chat sessions, which the harness does not construct — see `docs/fidelity-gaps.md`.
-  `DESIGN.md`'s scope note moves from "no baselines have shipped since" to naming what the last live
-  end-to-end pass does **not** cover, which is what shipping a baseline is supposed to force.
-
-### Fixed
 
 - **`sync` mis-scanned the Desktop bundle, and it had been doing so silently since Desktop 1.25927.0.**
   `normalizeBundleQuotes` — the tokenizer that rewrites the bundle's backtick literals so every anchor in
