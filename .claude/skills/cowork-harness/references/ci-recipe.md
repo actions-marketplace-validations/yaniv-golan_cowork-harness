@@ -338,18 +338,27 @@ JSON.
 **Telling *why* a run failed, without scraping stderr.** Each result carries a `verdict` whose
 `failures[]` is the one place every failure reason is enumerated, in one shape (the same object lands
 in `result.json` and in the stdout envelope, by construction). Each entry is
-`{assertion?: "<key>", message}`, and the presence of `assertion` is the discriminator:
+`{kind, assertion?: "<key>", message}`, and **`kind` is the discriminator**:
 
-- **has `assertion`** — one of *your* `assert:` items failed, named by its key (`file_exists`,
+- **`assertion`** — one of *your* `assert:` items failed; `assertion` names its key (`file_exists`,
   `semantic_matches`, …).
-- **no `assertion`** — the run failed for a reason you didn't author: a guard signal (`stalled`,
-  `permissive_auto_allow`, `missing_capability`, a host-path leak, an `outputs/` delete), an infra or
-  transport error, an unanswered gate, or — on `replay --assert-from`/`--reassert` — **skill-source
-  drift**, which that mode escalates to a hard failure on purpose (frozen events must not green an
-  edited assert against a skill whose current source produces something else). The `message` names which.
+- **`guard`** — a signal you didn't author: `stalled`, `permissive_auto_allow`, `missing_capability`, a
+  host-path leak, an `outputs/` delete, an infra or transport error, an unanswered gate.
+- **`staleness`** — on `replay --strict` / `--assert-from` / `--reassert`, skill or baseline drift,
+  which those modes escalate to a hard failure on purpose (frozen events must not green an edited
+  assert against a skill whose current source produces something else).
+- **`cassette-format`** — the cassette is too new for this build to interpret.
+- **`coverage`** — a `verify-run` answer-coverage miss: a gate the run fired that your `answers:` block
+  does not cover.
 
-So "did my assertions pass?" and "is the cassette stale?" are separable from the envelope alone. Do
-not infer either from the exit code: both land on exit 1.
+So `jq '[.verdict.failures[] | select(.kind=="assertion")]'` answers "did MY assertions pass?" and
+`select(.kind=="staleness")` answers "is the cassette stale?", from the envelope alone. Do not infer
+either from the exit code: every kind lands on exit 1.
+
+> **Do not filter on whether `assertion` is present.** That was the only discriminator before `kind`
+> existed and it never worked in both directions: `coverage` entries carry a key too (an internal
+> `answer_coverage` marker), so they read as authored asserts, while `guard`, `staleness` and
+> `cassette-format` all arrive key-less and indistinguishable from one another.
 
 **For the commands in this recipe, stdout carries the machine envelope and nothing else.** Without
 `--output-format json`, `run` / `record` / `replay` / `verify-cassettes` / `status` write their whole

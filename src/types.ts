@@ -1295,6 +1295,14 @@ export interface RunResult {
     assertion: Assertion;
     pass: boolean;
     message?: string;
+    /** Provenance for an entry the harness INJECTED rather than one the author wrote. Absent = a real
+     *  `assert:` item. Set it whenever you push a pseudo-assertion, or `verdict.failures[]` cannot tell
+     *  the reader "your assertion failed" from "the cassette is stale" — the distinction a consumer was
+     *  text-scraping stderr for. `staleness`: skill/baseline drift escalated by `--strict` or
+     *  `--fail-on-skill-drift`. `cassette-format`: a cassette too new to interpret. `coverage`: a
+     *  verify-run answer-coverage miss (those inject a non-Assertion `answer_coverage` key, which
+     *  otherwise renders as if the author had written it). */
+    source?: "staleness" | "cassette-format" | "coverage";
     evidence?: string;
     /** Per-claim results for a `semantic_matches` assert (aligned to its rubric by index) — present only
      *  on the live lane where the judge ran; a consumer can diff these across runs to gate a change. */
@@ -1368,7 +1376,11 @@ export interface RunResult {
       message: string;
     }>;
     guards: Array<{ name: string; status: "ok" | "fired" | "na" | "unverified" }>;
-    failures: Array<{ assertion?: string; message: string }>;
+    /** `kind` is the discriminator — see `FailureKind` in src/run/verdict.ts, which is the SOURCE of
+     *  this shape. This copy is structural (verdict.ts imports from here, so referencing it back would
+     *  close a cycle), which means a change there must be mirrored HERE: a divergence is silent, and
+     *  `test/run-result-schema.test.ts` catches it only because its fixture is typed `RunResult`. */
+    failures: Array<{ assertion?: string; message: string; kind: "assertion" | "guard" | "staleness" | "cassette-format" | "coverage" }>;
   };
   /** The agent's final answer — the SDK result message (`{type:"result"}`.result), i.e. the model's
    *  designated final response. This is what llm-transport treats as "the answer"; it is distinct from

@@ -4308,6 +4308,7 @@ async function cmdVerifyRun(args: string[]) {
           if (!softFallback)
             assertions.push({
               assertion: { answer_coverage: q } as unknown as Assertion,
+              source: "coverage" as const,
               pass: false,
               message: `no answer rule matched gate "${q}" (on_unanswered=${scenario.on_unanswered ?? "fail"})`,
             });
@@ -4319,6 +4320,7 @@ async function cmdVerifyRun(args: string[]) {
         // single/multi shape is wrong — the answer is INVALID against what the run actually offered. A miss.
         assertions.push({
           assertion: { answer_coverage: q } as unknown as Assertion,
+          source: "coverage" as const,
           pass: false,
           message: `answer for gate "${q}" is invalid against the offered options: ${(e as Error).message}`,
         });

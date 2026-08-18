@@ -5948,10 +5948,20 @@ export async function replayCassette(
     const SKILL_DRIFT_CLASSES: ReadonlySet<StalenessFinding["class"]> = new Set(["skill", "shared-root", "unverifiable-skill"]);
     if (opts.strict)
       for (const s of staleness)
-        assertions.push({ assertion: {} as Assertion, pass: false, message: `cassette stale (--strict): ${s.message}` });
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `cassette stale (--strict): ${s.message}`,
+          source: "staleness",
+        });
     else if (opts.failOnSkillDrift)
       for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
-        assertions.push({ assertion: {} as Assertion, pass: false, message: `skill-source drift (--fail-on-skill-drift): ${s.message}` });
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `skill-source drift (--fail-on-skill-drift): ${s.message}`,
+          source: "staleness",
+        });
 
     // future cassette version — hard failure under --strict (forward semantics may not be
     // correctly interpreted here, so a green replay would be a false-green).
@@ -5959,6 +5969,7 @@ export async function replayCassette(
       assertions.push({
         assertion: {} as Assertion,
         pass: false,
+        source: "cassette-format",
         message: `cassette format too new: ${futureVersionMsg} (pass --best-effort-future-cassette to attempt replay anyway)`,
       });
 

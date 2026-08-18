@@ -2360,6 +2360,11 @@
       ".verdict.failures[].assertion": {
         "type": "string"
       },
+      ".verdict.failures[].kind": {
+        "type": "string",
+        "enum": ["assertion", "guard", "staleness", "cassette-format", "coverage"],
+        "required": true
+      },
       ".verdict.failures[].message": {
         "type": "string",
         "required": true

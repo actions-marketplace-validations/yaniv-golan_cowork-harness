@@ -81,7 +81,7 @@ const full: RunResult = {
   ],
   gateDeliveries: [{ question: "Proceed?", delivered: true, error: undefined, reason: "ok" }],
   egress: [{ host: "api.anthropic.com", decision: "allow" }],
-  assertions: [{ assertion: { result: "success" }, pass: true, message: undefined }],
+  assertions: [{ assertion: { result: "success" }, pass: true, message: undefined, source: undefined }],
   verdict: {
     pass: false,
     exitCode: 1,
@@ -90,7 +90,10 @@ const full: RunResult = {
       { code: "ended_with_question", severity: "warn", message: "x" },
     ],
     guards: [{ name: "capability-use", status: "na" }],
-    failures: [{ assertion: "result", message: "expected result to be success" }],
+    failures: [
+      { assertion: "result", message: "expected result to be success", kind: "assertion" as const },
+      { message: "cassette stale (--strict): skill files changed", kind: "staleness" as const },
+    ],
   },
   subagents: [
     {

@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`verdict.failures[]` entries carry a `kind`, so "did MY assertions fail?" is answerable from the
+  envelope.** A consumer was scraping stderr for this, because the only available discriminator was
+  whether an entry carried an `assertion` key — and that was wrong in **both** directions. `verify-run`
+  injects `{ answer_coverage: <question> }`, which is not an `Assertion` key at all, so a coverage miss
+  rendered exactly like one of the author's own asserts; meanwhile guard failures, `--strict` staleness,
+  `--fail-on-skill-drift` drift and a too-new cassette all arrived key-less and indistinguishable from
+  one another. (The sentence in the shipped CI recipe describing key-presence as the discriminator was
+  therefore already false — corrected here.)
+
+  Every entry now carries one of `assertion` | `guard` | `staleness` | `cassette-format` | `coverage`,
+  stamped at each of the **five** pseudo-assertion injection sites via a new optional
+  `RunResult.assertions[].source`. `jq '[.verdict.failures[] | select(.kind=="assertion")]'` is now the
+  supported way to ask whether your own asserts held, and `select(.kind=="staleness")` whether the
+  cassette is stale — neither is inferable from the exit code, since all of them land on exit 1.
+
+  Additive: `assertion` and `message` are unchanged, so an existing consumer reading them is unaffected.
+  A source-scanning guard fails if any future pseudo-assertion is pushed without a `source`, because the
+  unit tests could only ever cover the sites they happen to construct — a mutation run proved that gap
+  by deleting one stamp with every other test still green.
+
 - **`file_absent` and `artifact_text` — the two file-family gaps a consumer report named.**
 
   `file_absent: <path>` is the direct negative-existence check. The workaround until now was inverting
