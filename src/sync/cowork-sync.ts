@@ -159,10 +159,18 @@ export const PINNED_GATES: Record<string, string> = {
   // NAME CAVEAT: the call site passes the bare id and the flag name appears nowhere in the asar, so the
   // value below is a kebab-case descriptor, deliberately NOT shaped like a verified camelCase flag name.
   "286376943": "skill-arg-elicitation",
-  // AUTO-MODE permission rubric (Desktop >=1.28929.0), off/defaultValue for a standard account. Merged
-  // into the auto-mode ruleset only for non-chat, non-host-loop sessions, so it is dark AND outside the
-  // chat sessions the harness models. Pinned as a dormant sentinel: if it turns on it becomes a second,
-  // host-side judgement layer over tool calls that a scenario's scripted allow cannot represent.
+  // AUTO-MODE permission rubric (Desktop >=1.28929.0). LIVE since 1.32352.0: {on:true, source:"force"}.
+  // It was pinned as a dormant sentinel precisely so this flip would surface, and it did.
+  //
+  // Two corrections to what this comment used to say. (1) It called the gate "dark"; off/defaultValue is
+  // SERVED-and-off, which a server rule can flip — which is what happened. (2) It said the rubric sits
+  // "outside the chat sessions the harness models", implying the harness is spared by session type. It
+  // is not: the harness never constructs `settings.autoMode` on ANY tier (grep autoMode in src/ — only
+  // gate-name constants; argv passes --permission-mode and --setting-sources, never an autoMode payload),
+  // so the rubric is STRUCTURALLY unreachable here rather than excluded. Live effect in production, for
+  // VM-loop non-chat sessions: the PreToolUse hook can answer `deferred_to_classifier` (an empty result)
+  // INSTEAD of permissionDecision:"ask", so a tool this harness models as always-gated may raise no
+  // prompt there. Documented in docs/fidelity-gaps.md, not modeled.
   // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
   "3424551112": "automode-permission-rubric",
   // Selects which of Cowork's two mutually exclusive artifact mechanisms a session gets. force/on for a
@@ -1996,6 +2004,15 @@ const SPAWN_GATES: Record<string, string> = {
  * key here is skipped regardless of its construct shape (this is what keeps the messy host-derived / 3p /
  * session ternaries out of the generated env). A stale entry (allowlisted but no longer constructed
  * anywhere) emits a non-blocking NOTE for pruning, surfaced as SyncResult.notes in the sync output.
+ *
+ * "harness models chat sessions" below means one specific thing: the modeled session carries NO
+ * `sessionType`, so it takes neither the `sessionType==="agent"` branch (hence no BRIEF keys) nor any
+ * other explicit-type branch, and `CLAUDE_CODE_TAGS` resolves through the `??"chat"` default. It does NOT
+ * mean production would consider the session chat-typed — production's own `isChatSession` requires an
+ * EXPLICIT `sessionType==="chat"`, which the modeled session does not set. The distinction is inert for
+ * these env keys but is not inert generally: reasoning "the harness models chat, so chat-excluded
+ * Desktop behaviour cannot reach it" is how the auto-mode rubric gap came to be understated
+ * (docs/fidelity-gaps.md).
  */
 const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CONFIG_DIR: "modeled as spawn.configDirInGuest; injected per-session by spawnEnv() (src/runtime/argv.ts)",

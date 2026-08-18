@@ -87,13 +87,29 @@ readable-path entries, not mounts. When the `Artifact` tool is present, it sits 
 list but outside the pre-approved allowed-tools list, so it must go through the same `can_use_tool`
 permission flow as `AskUserQuestion`.
 
+**Desktop 1.32352.0 removed the host-loop exclusion.** The frame-artifacts predicate dropped its
+`!isHostLoop` conjunct — at the call site and in the predicate body — so a host-loop session with the
+server flag on now gets the `Artifact` tool too. An earlier version of this section said host-loop was
+unaffected; that is no longer true, and the tool is no longer VM-loop-only.
+
+The same release added a **host-loop-only approval-integrity guard** in front of the permission chain,
+and it is a shape nothing here models. Before any other check runs it denies an `Artifact` publish whose
+`file_path` is a VM path (`/sessions/...`) — the host loop publishes from the host filesystem, where that
+path does not exist. Then it records the file's identity (`realpath`, device, inode) at the moment the
+approval is *requested*, and after the user answers it re-checks: if the file changed, moved, never
+existed at that path, or cannot be verified, the publish is refused even though it was approved. It also
+refuses an approval whose `updatedInput` widened a non-publish action into a publish. **This is a
+post-decision veto** — an `allow` returned by the permission flow can still become a `deny` afterwards —
+and the harness's Decider chain has no such stage: a decision here is final once made.
+
 **Harness behaviour:** neither mechanism is modeled. The harness's mount kinds are connected folders,
 projects, uploads, and the three plugin kinds (local, remote, marketplace) — there is no
 artifact-directory mount, and no `Artifact` tool at any tier. (`outputs` is not a mount at all; it is a
 synthetic root the run tree always carries.)
 
 **The residual, stated plainly:** on the VM tiers, production currently mounts artifact directories
-and the harness mounts none; host-loop is unaffected, since production doesn't mount there either.
+and the harness mounts none; host-loop still sees no artifact *mounts*, since production doesn't mount
+there either — but as of 1.32352.0 it can see the *tool*, which it previously could not.
 This is a deliberate non-modeling decision, not an oversight: the mount branch is the one Anthropic is
 retiring, and the harness has no way to observe the server flag that selects between the two
 mechanisms. If the flag flips, the mount difference disappears on its own and the gap becomes the
@@ -624,18 +640,32 @@ agent — be the one who named the action, covering things like granting folder 
 file-delete permission, saving a skill, and creating or deleting scheduled tasks. It also carries
 explicit carve-outs: reading connected folders or uploads and writing derived content to the outputs
 directory is not treated as data exfiltration. The rubric applies only to auto-mode, only for
-non-chat sessions, and only outside host-loop. Its feature gate is off by default, so it is dark for a
-standard account today.
+non-chat sessions, and only outside host-loop. **Its feature gate is now ON** (`force`, as of Desktop
+1.32352.0) — it was off by default when this section was first written, and the note below about "if the
+gate turns on" is therefore no longer hypothetical.
 
 **Harness behaviour:** not modeled. A scenario's scripted permission answers can express "the user
 allowed this but the rubric refused it" only by scripting the refusal directly — there is no mechanism
 that decides a denial on its own the way the rubric would.
 
-**The residual, stated plainly:** currently dark, and out of the harness's modeled scope in any case —
-the harness models chat sessions, and the rubric explicitly excludes them. Recorded because if the
-gate turns on, it becomes a second, host-side judgement layer sitting over every tool call in
-auto-mode, one a scenario cannot currently reproduce. A scenario can already *express* a denial by
-scripting one; it cannot *decide* one the way the rubric would.
+**The residual, stated plainly.** An earlier version of this section said the harness is spared because
+"the harness models chat sessions, and the rubric explicitly excludes them". That reasoning was wrong on
+both halves, and it matters because it understated the gap. Production's `isChatSession` test requires an
+*explicit* `sessionType === "chat"`; the session this harness models carries no `sessionType` at all (the
+baseline's `CLAUDE_CODE_TAGS: "lam_session_type:chat"` is a `??` default, and the frame-artifacts
+predicate the harness models requires `sessionType === undefined`), so that term would not exclude it.
+
+What actually spares the harness is simpler and stronger: **it never constructs `settings.autoMode` on
+any tier.** The spawn passes `--permission-mode` and `--setting-sources`, never an autoMode payload, and
+the rubric-merging code is Desktop-side and never runs here. The rubric is *structurally unreachable*,
+not excluded by session type.
+
+So the residual is: in a real VM-loop, non-chat Cowork session the rubric is now a second, host-side
+judgement layer over every tool call in auto-mode, and its observable effect is that the PreToolUse hook
+can answer `deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool
+this harness models as always-gated may therefore raise no prompt in production. A scenario can already
+*express* a denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot
+reproduce a gate that silently stops prompting.
 
 ---
 
