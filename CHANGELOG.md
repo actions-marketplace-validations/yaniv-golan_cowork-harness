@@ -105,6 +105,38 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **A `scripts/`-grounded `not-adjudicable` now says WHY it could not be decided.** `scripts/` is
+  outside the evaluator's corpus by design — it grades authored guidance (`SKILL.md`, `references/**`,
+  `agents/<name>.md`), not implementation — and `docs/critique.md` has always said so. What the verdict
+  never said is which kind of "can't decide" it meant. A consumer read `not-adjudicable` on a claim
+  about their own `gate_state.py` and treated it as unproven; it was a **verified product bug**, and the
+  evaluator had simply never been shown the file. The report now appends one note to that section
+  naming the boundary, the reading ("could not SEE the code, not that the claim is false"), and the
+  documented remedy — state a script's contract in `SKILL.md` or a `references/` file if it matters to
+  how the skill is used. The corpus boundary itself is unchanged: packaging script bodies would widen
+  the evaluator from grading guidance to grading implementation, which is a scope decision, not a bug
+  fix.
+
+- **`--strict` means two different things in one CLI, and both help strings now say so.**
+  `lint --strict` fails on ERROR+WARN+**INFO**; `lint-skill --strict` fails on ERROR+WARN and **never**
+  INFO, deliberately. Each help text was individually accurate and the pair was silently contradictory —
+  a consumer met the stricter of the two and read its INFO findings as a gate. Each now names the
+  other's rule, and the CI recipe states the `--strict --min-severity WARN` pairing at the line where
+  someone copies it. The semantics are unchanged: narrowing `lint --strict` would silently weaken a gate
+  people may be relying on, which needs a deliberate major-version decision rather than a quiet fix.
+
+- **Three documented gaps gain the framing a field report supplied.** The elicitation gap is not only
+  "the form branch goes untested" — because the host's guidance is absent, so is every **conflict**
+  between it and a skill's own instructions, and a real session produced exactly that (a skill mandating
+  `AskUserQuestion` "(NOT plain chat)" against the host's injected form guidance). That class is
+  structurally unobservable here, so a skill can ship a directive production silently overrides with
+  every harness run green — which reframes what the planned opt-in stub server is worth.
+  `docs/critique.md` now also states that a **fleet-consistency** defect is out of scope for any single
+  critique by construction (the graded agent mounts the whole plugin; the evaluator's corpus is one
+  skill), and the N-run recipe carries a measured case for why one critique is a sample: two runs of the
+  same skill over the same document produced 78 vs 50 extracted figures and 12 vs 0 first-pass errors
+  from the same real bug.
+
 - **`critique`'s cost guidance stated one ratio unconditionally, and it inverts for the skills people
   most want to critique.** `--help` and `docs/critique.md` said the two evaluator passes dominate spend
   at ~3/4 of an end-to-end total. That holds for a trivial probe. Measured on a real document-analysis

@@ -692,6 +692,19 @@ skill is never exercised here.** If your skill renders a form in production, the
 other path. Scripted answers (`answers:`, `--answer`) and the deciders keep working exactly as
 documented; they are unaffected by this gap, because the competing channel is simply absent.
 
+**The residual is wider than "a branch goes untested", and this is the part worth acting on.** Because
+the host's elicitation guidance is absent, so is every CONFLICT between it and your skill's own
+instructions — and a real session produced exactly that. A skill whose SKILL.md mandates
+`AskUserQuestion` *"(NOT plain chat)"* found itself holding two contradictory authorities, the skill's
+mandate and the host's injected guidance, and had to adjudicate; it chose the form and reported the
+conflict. That whole class — **skill instruction vs host instruction** — is structurally unobservable
+here, because only one of the two authorities is ever present. A skill can therefore ship a directive
+that production silently overrides, and every harness run stays green.
+
+So when the opt-in stub server lands, its value is not only "the form branch runs". A scenario that can
+turn the guidance **on without rendering a form** would make instruction conflicts observable at all,
+which is the larger half.
+
 A related sharp edge, for anyone driving MCP elicitation from their own server: the harness models an
 `elicit` request kind, but scenario answers do **not** cover it. `answers:` / `--answer` and
 `--decider-llm` both abstain on an elicit request; `--on-unanswered first` auto-declines it and

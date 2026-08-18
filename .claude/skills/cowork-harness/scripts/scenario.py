@@ -1914,7 +1914,14 @@ def main(argv=None):
     lp = sub.add_parser("lint", prog=f"{prog} lint" if prog else None, help="lint scenario(s) for silent-false-green invariants")
     lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
-    lp.add_argument("--strict", action="store_true", help="exit non-zero on WARN/INFO too, not just ERROR")
+    lp.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero on WARN/INFO too, not just ERROR. NOTE: this is STRICTER than `lint-skill "
+        "--strict`, which never fails on INFO — the two flags share a name and do not share a rule. "
+        "Pair with `--min-severity WARN` for the ERROR+WARN behaviour (what this repo's own CI uses, "
+        "because the advisory INFO class fires on scenarios that are perfectly fine).",
+    )
     lp.add_argument(
         "--min-severity",
         choices=("ERROR", "WARN", "INFO"),
@@ -1962,7 +1969,10 @@ def main(argv=None):
     lsp.add_argument(
         "--strict",
         action="store_true",
-        help="exit non-zero on WARN too, not just ERROR (CI-recommended invocation; plain lint-skill is advisory-only)",
+        help="exit non-zero on WARN too, not just ERROR (CI-recommended invocation; plain lint-skill is "
+        "advisory-only). NEVER fails on INFO — unlike `lint --strict`, which does; the two flags share a "
+        "name and not a rule. See the subparser description for why the INFO-class subagent_type findings "
+        "are deliberately unfailable.",
     )
     lsp.set_defaults(func=cmd_lint_skill)
 

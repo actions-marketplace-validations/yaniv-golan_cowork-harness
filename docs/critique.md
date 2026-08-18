@@ -149,6 +149,14 @@ adjudicable". So:
   **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
   `skills/<name>` (`--skill` or the auto-selection). `--label` remains available for coarser
   generation tags.
+- **A fleet-consistency defect is out of scope for any single critique, by construction.** The graded
+  agent mounts the whole plugin and can observe sibling behaviour; the evaluator's corpus is ONE skill,
+  so a self-report claim about a sibling can only ever route to `not-adjudicable`. A worked example from
+  the field: one skill scored a deck into four bands while its sibling's checklist was binary on failure
+  *count*, so the better-scoring analysis got the harsher word — visible to a reader of both reports,
+  invisible to either critique. Pairing critiques (above) tells you a finding reproduced; it does not
+  surface a defect that exists only in the disagreement BETWEEN two skills. That one needs a human
+  reading both, or a check outside this tool.
 - The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
   `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
   actually invoke it.
@@ -332,6 +340,12 @@ Then pair/cluster across the reports:
   **(`gradedSkillHash`, `gradedSkill`)**; `gradedSkill` is the report's resolved `skills/<name>`.
 - To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
   (the graded run's resolved gate answers) into the next invocation.
+
+> **Why one critique is a SAMPLE, measured.** Two runs of the same skill over the same document
+> produced 78 vs 50 extracted figures, and 12 vs **0** first-pass errors from the same producer bug.
+> The bug was real and reproducible in isolation; the second run simply never generated an input shape
+> that tripped it. For any defect gated on *what the model happens to produce*, a clean report is not
+> evidence of absence — which is the whole reason this recipe exists rather than a `--repeat` flag.
 
 ## Running it on a skill you did not write
 

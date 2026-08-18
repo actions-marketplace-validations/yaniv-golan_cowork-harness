@@ -64,7 +64,11 @@ GitHub-hosted runners, no token/Docker/agent:
                                                     # step cannot fail on a WARN-class rule (e.g.
                                                     # vacuous-gate-assert) — it would print the
                                                     # finding and still exit 0. --min-severity WARN
-                                                    # keeps the advisory INFO class advisory.
+                                                    # keeps the advisory INFO class advisory — pair them.
+                                                    # Bare `lint --strict` fails on INFO too, which reds
+                                                    # on scenarios that are perfectly fine. (`lint-skill
+                                                    # --strict` never fails on INFO: same flag name, a
+                                                    # different rule. Do not carry one over to the other.)
 - run: cowork-harness verify-cassettes cassettes/    # privacy + staleness — FAILS on a stale recording
                                                     # ALSO fails on a leaked host inventory: recording at
                                                     # protocol/hostloop freezes YOUR machine's MCP servers,

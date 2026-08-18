@@ -830,6 +830,12 @@ export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
 
 type Bucket = "actionable" | "other" | "not-adjudicable" | "dropped";
 
+/** Does this finding's text point at a skill SCRIPT? Matches a `scripts/` path or a bare source
+ *  filename — deliberately loose, because it only ever adds an explanatory note to an already-issued
+ *  `not-adjudicable` verdict. A false positive costs one sentence; a false negative leaves a consumer
+ *  reading "unproven" where the truth is "unseen". */
+const SCRIPT_MENTION = /\bscripts\/|\b[\w.-]+\.(?:py|sh|js|mjs|ts)\b/;
+
 function bucketOf(item: CritiqueItem): Bucket {
   if (item.citationResolved === false) return "dropped";
   if (item.classification === "not-adjudicable") return "not-adjudicable";
@@ -1211,6 +1217,24 @@ export function buildTextReport(state: ReportState): string {
   section("ACTIONABLE", "actionable", "grounded, worth doing");
   section("OTHER CLASSIFIED FINDINGS", "other", "grounded-but-not-worth-it / already-covered / confabulated");
   section("NOT ADJUDICABLE", "not-adjudicable", "evidence can't decide — human judgment call");
+  // WHY the evidence couldn't decide, when the reason is structural rather than genuinely ambiguous.
+  // `scripts/` is outside the evaluator's corpus BY DESIGN (it grades authored guidance, not
+  // implementation — docs/critique.md), so a claim about a script's behaviour can only ever land here.
+  // Without this line the verdict reads as "unproven", and a consumer acted on that reading: a VERIFIED
+  // product bug in their own `gate_state.py` was dismissed because the evaluator said not-adjudicable,
+  // when what it meant was "I was never shown the file". Names the documented remedy, not just the gap.
+  const scriptish = (byBucket.get("not-adjudicable") ?? []).filter(
+    (i) => SCRIPT_MENTION.test(i.idea) || SCRIPT_MENTION.test(i.evidence ?? ""),
+  );
+  if (scriptish.length) {
+    out.push(
+      `  note: ${scriptish.length} of these reference \`scripts/\` — those files are OUTSIDE the evaluator's corpus by design ` +
+        `(it grades authored guidance: SKILL.md, references/**, agents/<name>.md). "not adjudicable" there means the evaluator ` +
+        `could not SEE the code, NOT that the claim is false — settle it by reading the script. If a script's contract matters ` +
+        `to how the skill is USED, state it in SKILL.md or a references/ file, where the evaluator can grade it.`,
+      "",
+    );
+  }
   section(
     "DROPPED (citation did not resolve)",
     "dropped",
