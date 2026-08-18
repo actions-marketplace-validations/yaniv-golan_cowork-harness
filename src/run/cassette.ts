@@ -1603,6 +1603,10 @@ function minimalRec(): RunRecord {
     subagentTools: new Set(),
     subagents: [],
     questions: [],
+    // A truncated cassette could not be driven, so it observed NO gates. [] here is not "zero gates
+    // fired" — the replay ctx flags it `gateOptionsMissing`, so question_options fails
+    // evidence-unavailable rather than passing over an empty list it never populated.
+    gateOptions: [],
     decisions: [],
     permissiveAutoAllow: [],
     unanswered: [],
@@ -5173,6 +5177,7 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
 export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "question_asked",
+  "question_options",
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",
@@ -5652,6 +5657,12 @@ export async function replayCassette(
       outputsDeletes: [],
       mountDeletes: [], // replay has no live scan — the same shape outputsDeletes already uses here
       questions: rec.questions,
+      gateOptions: rec.gateOptions,
+      // A truncated cassette could not be driven, so `gateOptions` is empty because nothing was OBSERVED
+      // — not because no gate fired. Flag it so question_options fails evidence-unavailable. (A cassette
+      // with no controlOut needs no flag: the whole QUESTION_GATE_KEYS bucket is excluded from that
+      // replay, so the key is never reached.)
+      gateOptionsMissing: truncatedMsg !== undefined,
       hostPathLeaked: false,
       selfHealRan: false,
       subagents: rec.subagents,

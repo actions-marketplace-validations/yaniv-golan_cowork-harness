@@ -550,6 +550,39 @@
             "description": "a question matching this regex was asked",
             "type": "string"
           },
+          "question_options": {
+            "description": "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+            "type": "object",
+            "properties": {
+              "when_question": {
+                "description": "regex selecting the sub-question by its label (`question`, falling back to `header` — the same string question_asked matches); omit only when the run fired exactly one sub-question",
+                "type": "string"
+              },
+              "equals": {
+                "description": "the offered option labels, as a complete set — in this exact ORDER unless `order: any`",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "contains": {
+                "description": "these option labels are present (others may be too); in this relative order unless `order: any`",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "order": {
+                "description": "`exact` (default) compares order as well as membership — an option list re-ordered by the model is the defect this key exists for; `any` compares membership only",
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "any"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
           "questions_count_max": {
             "description": "at most N sub-questions asked — a bundled AskUserQuestion with K sub-questions counts as K, not 1",
             "type": "integer",

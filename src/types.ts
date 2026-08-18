@@ -570,6 +570,33 @@ export const Assertion = z.strictObject({
       "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
+  question_options: z
+    .object({
+      when_question: z
+        .string()
+        .optional()
+        .describe(
+          "regex selecting the sub-question by its label (`question`, falling back to `header` — the same string question_asked matches); omit only when the run fired exactly one sub-question",
+        ),
+      equals: z
+        .array(z.string())
+        .optional()
+        .describe("the offered option labels, as a complete set — in this exact ORDER unless `order: any`"),
+      contains: z
+        .array(z.string())
+        .optional()
+        .describe("these option labels are present (others may be too); in this relative order unless `order: any`"),
+      order: z
+        .enum(["exact", "any"])
+        .optional()
+        .describe(
+          "`exact` (default) compares order as well as membership — an option list re-ordered by the model is the defect this key exists for; `any` compares membership only",
+        ),
+    })
+    .optional()
+    .describe(
+      "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+    ),
   questions_count_max: z
     .number()
     .int()

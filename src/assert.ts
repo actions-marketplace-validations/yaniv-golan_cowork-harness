@@ -48,6 +48,21 @@ function resolveContainedManifestPath(workRoot: string, p: string): string | nul
  *  scenario asserting any of these CANNOT take. A hand-copied list there would rot exactly the way the
  *  `--out`-outside-the-repo advice it replaces did. `test/hostloop-only-keys.test.ts` pins this array
  *  against the `hostloopOnly("…")` call sites by scanning this file's source. */
+/** Order-insensitive multiset equality over option labels — `question_options` with `order: "any"`.
+ *  A multiset, not a Set: a gate that offered the same label twice is a different offer from one that
+ *  offered it once, and collapsing them would green a duplicated option. */
+function sameSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const counts = new Map<string, number>();
+  for (const x of a) counts.set(x, (counts.get(x) ?? 0) + 1);
+  for (const y of b) {
+    const n = counts.get(y);
+    if (!n) return false;
+    counts.set(y, n - 1);
+  }
+  return true;
+}
+
 export const HOSTLOOP_ONLY_KEYS: (keyof Assertion)[] = [
   "no_vm_path_file_op",
   "vm_path_denied",
@@ -307,6 +322,15 @@ export interface AssertContext {
    *  because `check()` only ever sees one assertion and the two keys can sit in separate entries. */
   deleteWaivedMounts?: string[];
   questions: string[]; // AskUserQuestion question texts asked
+  /** Per sub-question, the option set the model OFFERED — the evidence behind `question_options`.
+   *  Captured at ask time (RunRecord.gateOptions), so it includes a gate that was shown and then denied,
+   *  stalled or left unanswered. Optional so hand-built test fixtures keep compiling; absent is treated
+   *  as evidence-MISSING by the evaluator (never "no gates"), together with `gateOptionsMissing`. */
+  gateOptions?: { question: string; options: { label: string; description?: string }[]; multiSelect?: boolean }[];
+  /** Set when the lane could not read the gate-option evidence at all: a truncated-cassette replay, or a
+   *  verify-run dir whose `events.jsonl` is absent or partly corrupt. Prevents question_options from
+   *  passing over an empty list it never populated. */
+  gateOptionsMissing?: boolean;
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
   selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
   subagents: {
@@ -1959,6 +1983,78 @@ function check(
       const c = compileUserRegex(a.question_asked);
       if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
       else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    }
+  }
+  if (a.question_options !== undefined) {
+    const qo = a.question_options;
+    // Fail CLOSED on every "we cannot see the gates" path. An empty/absent list must never satisfy a
+    // negative-shaped read of this key: the whole point is to prove what a person was shown.
+    if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
+      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_options"));
+    } else if ((qo.equals === undefined) === (qo.contains === undefined)) {
+      // Both or neither. Rejected at load by the scenario schema; repeated here because `evaluate()` is
+      // also called on hand-built contexts (tests, library callers) that never went through parse.
+      results.push(fail("question_options: set exactly one of `equals` or `contains`"));
+    } else {
+      const all = ctx.gateOptions;
+      let pool = all;
+      let selector = "";
+      if (qo.when_question !== undefined) {
+        const c = compileUserRegex(qo.when_question);
+        if ("error" in c) {
+          results.push(fail(`question_options: bad regex "${qo.when_question}": ${c.error}`));
+          pool = [];
+          selector = "\u0000bad-regex";
+        } else {
+          pool = all.filter((g) => c.re.test(g.question));
+          selector = ` matching /${qo.when_question}/i`;
+        }
+      }
+      if (selector === "\u0000bad-regex") {
+        /* already reported */
+      } else if (pool.length === 0) {
+        results.push(fail(`question_options: no question${selector} was asked (${all.length} gate(s) recorded)`));
+      } else if (qo.when_question === undefined && all.length > 1) {
+        // Silently taking the first would make the assertion depend on gate ORDER — the very thing this
+        // key exists to pin. Ambiguity is an authoring error, not something to resolve by guessing.
+        results.push(
+          fail(
+            `question_options: ${all.length} sub-questions were asked and no \`when_question\` selects one — add a selector (asked: ${all.map((g) => JSON.stringify(g.question)).join(", ")})`,
+          ),
+        );
+      } else {
+        const want = (qo.equals ?? qo.contains)!;
+        const exact = (qo.order ?? "exact") === "exact";
+        // "At least one selected gate satisfies it" — mirrors question_asked's any-match semantics.
+        const why: string[] = [];
+        const hit = pool.find((g) => {
+          const got = g.options.map((o) => o.label);
+          if (qo.equals !== undefined) {
+            const ok2 = exact ? got.length === want.length && got.every((l, i) => l === want[i]) : sameSet(got, want);
+            if (!ok2) why.push(`offered [${got.join(", ")}]`);
+            return ok2;
+          }
+          const missing = want.filter((w) => !got.includes(w));
+          if (missing.length) {
+            why.push(`offered [${got.join(", ")}] (missing ${missing.join(", ")})`);
+            return false;
+          }
+          if (!exact) return true;
+          // Subsequence check: the wanted labels appear in this relative order among the offered ones.
+          let i = 0;
+          for (const l of got) if (i < want.length && l === want[i]) i++;
+          if (i !== want.length) why.push(`offered [${got.join(", ")}] (present but out of order)`);
+          return i === want.length;
+        });
+        const kind = qo.equals !== undefined ? "equals" : "contains";
+        results.push(
+          hit
+            ? ok(`question_options: gate ${JSON.stringify(hit.question)} offered the expected options`)
+            : fail(
+                `question_options (${kind}${exact ? ", order exact" : ", order any"}): expected [${want.join(", ")}]; ${why.join("; ")}`,
+              ),
+        );
+      }
     }
   }
   if (a.questions_count_max !== undefined)

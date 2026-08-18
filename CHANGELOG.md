@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`question_options` — assert the option SET and ORDER a gate offered the user.** The gate family could
+  assert *that* a question was asked (`question_asked`, text only), how many, and whether the answer was
+  delivered — nothing could assert what the person was actually SHOWN. A consumer hit the consequence:
+  their skill enforced an option tuple on the file, the agent presented that list **reversed** — demoting
+  the safe choice from first to last and putting a different option in the default slot — and every
+  artifact assertion passed, because the artifact was correct. The only wrong thing was what a founder
+  saw.
+
+  ```yaml
+  - question_options:
+      when_question: "rubric doesn't fit"
+      equals: ["Stop review", "Proceed anyway", "Pick another rubric"]   # order compared by default
+  ```
+
+  `when_question` is a regex over the same label `question_asked` matches (`question`, falling back to
+  `header`); omit it only when the run fired exactly one sub-question — more than one without a selector
+  FAILS as ambiguous rather than silently taking the first, since guessing would make the assertion
+  depend on the gate order it exists to pin. Set exactly one of `equals` (the complete set) or `contains`
+  (a subset). `order: exact` is the default; `order: any` compares membership only, as a multiset so a
+  duplicated label is not equal to a distinct one.
+
+  **The evidence is captured when the gate is ASKED, not when it is answered.** The answer-time channel
+  (`decisions[].questions`) is written only on the answered branch, so a gate that was shown and then
+  denied, stalled or left undelivered carries no option set there — which is precisely the case worth
+  asserting. Live and replay read the new ask-time `RunRecord.gateOptions`; `verify-run` reads
+  `events.jsonl`, the only sidecar that retains option labels (the distilled `trace.json` drops them),
+  and does so whenever the key is asserted rather than only when the scenario has scripted `answers` —
+  a scenario using `on_unanswered: first` or an LLM-decided gate would otherwise have reached the
+  evaluator with no evidence at all. Every unreadable-evidence path fails **evidence-unavailable**: a
+  truncated-cassette replay, an absent `events.jsonl`, or one with any unparseable frame (a partial gate
+  set must never be graded as complete). Replay evaluates it only with `controlOut`, like the other gate
+  keys.
+
+  A cassette recorded with this key still stamps format v10 and is rejected by installs that predate the
+  key — the standing consequence of any assertion-key addition.
+
 ### Changed
 
 - **The host-inventory record refusal no longer recommends an out-of-repo `--out`, and its remedy is

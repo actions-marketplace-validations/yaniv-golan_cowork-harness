@@ -27,7 +27,7 @@ import {
   type RunContext,
 } from "./decide/decider.js";
 import { claudeCliComplete } from "./decide/llm-transport.js";
-import { toDecisionRequest, type DecisionRequest } from "./agent/session.js";
+import { toDecisionRequest, questionLabel, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
 import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
@@ -4072,6 +4072,32 @@ async function cmdVerifyRun(args: string[]) {
   const sidecarTranscript = readTranscriptSidecar(turnArtifactPath(runDir, vrTurn, "run.jsonl"));
   const sidecarQuestions = readQuestionsSidecar(turnArtifactPath(runDir, vrTurn, "trace.json"));
 
+  // `question_options` grades the option SET a gate offered, and the distilled trace.json drops options
+  // (see parseGatesFromEvents' own doc) — so this lane reads `events.jsonl` directly. Deliberately NOT
+  // the answer-coverage call below: that one is gated on `scenario.answers.length > 0`, so a scenario
+  // asserting option order with no scripted answers (`on_unanswered: first`, an LLM-decided gate, a
+  // post-hoc check on a kept run) would silently reach the evaluator with no evidence at all. Parsed only
+  // when the key is asserted — a full events.jsonl read is not free on a long run.
+  const wantsGateOptions = scenario.assert.some((a) => a.question_options !== undefined);
+  const parsedGates = wantsGateOptions ? parseGatesFromEvents(join(runDir, "events.jsonl")) : undefined;
+  // Absent file OR any unparseable frame ⇒ evidence-missing, never a partial set graded as complete:
+  // a present-but-corrupt events.jsonl is otherwise indistinguishable from "these were all the gates".
+  const gateOptionsMissing = wantsGateOptions && (!parsedGates || parsedGates.corruptLines > 0);
+  const vrGateOptions = parsedGates
+    ? (parsedGates.gates as DecisionRequest[]).flatMap((g) =>
+        g.kind === "question"
+          ? g.questions.map((q) => ({
+              question: questionLabel(q),
+              options: (q.options ?? []).map((o) => ({
+                label: o.label,
+                ...(o.description === undefined ? {} : { description: o.description }),
+              })),
+              ...(q.multiSelect === undefined ? {} : { multiSelect: q.multiSelect }),
+            }))
+          : [],
+      )
+    : undefined;
+
   // no_lost_write_back needs the run's authored-file set. It isn't persisted in result.json, so recompute it
   // from the KEPT work dir (verify-run re-checks on the same machine, exactly as input_unmodified re-hashes
   // the real tree under workRoot). The FS_KEYS refusal above already handled a missing work dir; only
@@ -4127,6 +4153,8 @@ async function cmdVerifyRun(args: string[]) {
     outputsDeletes: scan.outputsDeletes,
     mountDeletes: scan.mountDeletes ?? [],
     questions: sidecarQuestions ?? [],
+    gateOptions: vrGateOptions,
+    gateOptionsMissing,
     hostPathLeaked: scan.hostPathLeaked,
     selfHealRan: scan.selfHealRan,
     subagents: result.subagents ?? [],

@@ -113,6 +113,7 @@ CONTENT_KEYS = {
 # content keys, but only evaluated on replay when the cassette carries controlOut
 GATE_KEYS = {
     "question_asked",
+    "question_options",
     "questions_count_max",
     "gate_answers_delivered",
     "gate_answer_count_min",
@@ -671,6 +672,8 @@ def lint_doc(doc, path, raw_lines):
     #     silent false-green — worse than the loud one this rule was written for.
     #   · question_asked — fails "no question matched" against an empty question list, for ANY pattern
     #     (`.some` over an empty list is false, so no value gate is needed here).
+    #   · question_options — same: with zero gates recorded it fails "no question ... was asked", never
+    #     passes vacuously, so it witnesses a gate just as well.
     #   · tool_called whose GLOB matches AskUserQuestion — fails "tool not called".
     # `questions_count_max` is deliberately NOT a companion: a MAX passes vacuously at zero, so pairing it
     # leaves the hole wide open. The harness's own `scaffold` emits `question_asked` alongside this key,
@@ -685,7 +688,7 @@ def lint_doc(doc, path, raw_lines):
     # YAML 1.1 but are rejected by the loader as strings — see _numeric for the same dialect gap.)
     delivered_values = _assert_values(items, "gate_answers_delivered")
     if any(v is not False for v in delivered_values):
-        has_companion = "question_asked" in assert_keys or any(
+        has_companion = "question_asked" in assert_keys or "question_options" in assert_keys or any(
             (n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")
         )
         if not has_companion:
@@ -767,6 +770,7 @@ def lint_doc(doc, path, raw_lines):
                     any((n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")),
                 ),
                 ("question_asked", "question_asked" in assert_keys),
+                ("question_options", "question_options" in assert_keys),
                 ("gate_answers_delivered: false", any(v is False for v in _assert_values(items, "gate_answers_delivered"))),
             ],
             "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",
@@ -873,8 +877,8 @@ def lint_doc(doc, path, raw_lines):
                 'If the gate\'s option order is stable, pin by exact label (choose: "<label>"); use a '
                 "positional index only when labels drift but order holds. Worth a second look for a "
                 "different reason: unstable option order is also what the USER sees — a reordered gate "
-                "puts a different choice in the default slot. No assertion covers option order today; "
-                "read decisions[].questions[].options[] in result.json when what was SHOWN matters.",
+                "puts a different choice in the default slot. Pin what the user was shown with "
+                "`question_options: {when_question: ..., equals: [...]}` (order is compared by default).",
                 path,
             )
         )

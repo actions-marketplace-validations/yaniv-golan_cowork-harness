@@ -18,6 +18,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     subagentTools: new Set(),
     subagents: [],
     questions: [],
+    gateOptions: [],
     decisions: [{ kind: "tool", name: "Read", decision: "allow", by: "parity" }],
     permissiveAutoAllow: [],
     unanswered: [],
