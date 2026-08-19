@@ -763,7 +763,7 @@
                   "cassette-format",
                   "coverage"
                 ],
-                "description": "what produced this failure. \"assertion\" = one of your own assert: items; \"guard\" = a hard-verdict signal you did not write (infra error, stall, host-path leak, unanswered gate, \u2026); \"staleness\" = skill/baseline drift escalated by --strict / --fail-on-skill-drift; \"cassette-format\" = a cassette too new to interpret; \"coverage\" = a verify-run answer-coverage miss. This is the field that separates \"did my assertions pass?\" from \"is the cassette stale?\" \u2014 both land on exit 1, so the exit code cannot."
+                "description": "what produced this failure. \"assertion\" = one of your own assert: items; \"guard\" = a hard-verdict signal you did not write (infra error, stall, host-path leak, unanswered gate, \u2026); \"staleness\" = skill/baseline drift escalated by --strict / --fail-on-skill-drift; \"cassette-format\" = the cassette cannot be interpreted (too new a version, or corrupt: duplicate/malformed control frames, a truncated recording); \"coverage\" = a verify-run answer-coverage miss. This is the field that separates \"did my assertions pass?\" from \"is the cassette stale?\" \u2014 both land on exit 1, so the exit code cannot."
               },
               "message": {
                 "type": "string"

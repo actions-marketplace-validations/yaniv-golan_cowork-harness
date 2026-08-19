@@ -5981,6 +5981,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies — cassette is corrupt; re-record`,
+        source: "cassette-format",
       });
     }
 
@@ -5992,6 +5993,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `control-out.jsonl line ${idx} is not valid JSON — cassette is corrupt; re-record`,
+        source: "cassette-format",
       });
     }
 
@@ -6003,6 +6005,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `cassette events line ${idx} is not valid JSON — replay_protocol_error (malformed line may conceal a failed assertion)`,
+        source: "cassette-format",
       });
     }
 
@@ -6015,6 +6018,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `cassette events line ${pe.line} is a malformed control frame — ${pe.message}`,
+        source: "cassette-format",
       });
     }
 
@@ -6025,6 +6029,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `serializeDecision output for ${m.id} != recorded envelope: expected ${m.expected} got ${m.actual}`,
+        source: "cassette-format",
       });
     }
 
@@ -6036,12 +6041,13 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `decision ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
+        source: "cassette-format",
       });
     }
 
     // A truncated QUESTION (no recorded answer) surfaces here too — same exit-1 class as the permission case.
     if (truncatedMsg) {
-      assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
+      assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg, source: "cassette-format" });
     }
 
     // F46: RunResult.fingerprint is documented (src/types.ts:978-980) as the RUN-TIME staleness

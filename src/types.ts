@@ -1306,7 +1306,8 @@ export interface RunResult {
      *  `assert:` item. Set it whenever you push a pseudo-assertion, or `verdict.failures[]` cannot tell
      *  the reader "your assertion failed" from "the cassette is stale" — the distinction a consumer was
      *  text-scraping stderr for. `staleness`: skill/baseline drift escalated by `--strict` or
-     *  `--fail-on-skill-drift`. `cassette-format`: a cassette too new to interpret. `coverage`: a
+     *  `--fail-on-skill-drift`. `cassette-format`: the cassette itself cannot be interpreted — too new a version, OR corrupt
+     *  (duplicate/malformed control frames, a truncated recording). `coverage`: a
      *  verify-run answer-coverage miss (those inject a non-Assertion `answer_coverage` key, which
      *  otherwise renders as if the author had written it). */
     source?: "staleness" | "cassette-format" | "coverage";

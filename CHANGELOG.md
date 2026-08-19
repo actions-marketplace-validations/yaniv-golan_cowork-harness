@@ -98,6 +98,27 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`verdict.failures[].kind` said "your assertion failed" when the cassette was corrupt.** That field is
+  the documented way to tell an author's own failing `assert:` from something the harness injected — and
+  seven cassette-corruption paths (duplicate `request_id`s with differing bodies, malformed control-out
+  lines, a truncated recording) pushed their pseudo-assertions without the `source` stamp that drives it.
+  `computeVerdict` falls back to `a.source ?? "assertion"`, so every one of them was reported as an
+  authored assertion, in direct contradiction of the contract written above the field. A consumer asking
+  "did MY assertions pass?" with the documented `select(.kind=="assertion")` query got a yes-it-failed on
+  a cassette that was simply unreadable.
+
+  They now stamp `cassette-format`, whose definition widens from "a cassette too new to interpret" to
+  cover corruption as well — the shared property is that the cassette itself cannot be interpreted. No
+  enum changed; `cassette-format` was already a member.
+
+  **The guard that was supposed to catch this could not see it.** It scanned for the `{} as Assertion`
+  cast shape, and all seven pass a real assertion key (`{ replay_protocol_fidelity: true }`), so they
+  never matched — the suite stayed green while the sites shipped unstamped. It now keys on
+  `assertions.push(` itself, which in these files is by construction an injection (an author's own
+  asserts are evaluated elsewhere and never reach that call), and carries a mutation check proving the
+  matcher rejects a bare push. Its site count is now counted rather than inherited: the old comment said
+  2 in `cli.ts`; there are 3.
+
 - **A stale sub-agent prompt pointer can no longer ship with a green `sync`.** The prompt assets a
   baseline points at (`spawn.subagentAppendHostLoop` / `spawn.subagentAppend`) are hand-authored, so
   `sync` carries the previous release's values forward untouched — while the drift sentinel compares the

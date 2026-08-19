@@ -509,7 +509,7 @@ else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go t
 ```
 
 Each emitted result carries a **`verdict`** — a non-mutating serialization-time projection of `computeVerdict`,
-`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }], "failures": [{ "assertion?","message" }] }`
+`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }], "failures": [{ "assertion?","message","kind" }] }`
 — so a consumer can read each result's pass/fail **and why** (the `signals[]`, e.g. an all-green-assertions run
 that is `pass:false` purely on a `stalled` signal, or `failures[]` for a flat jq-friendly reason list) without
 recomputing. As of 0.31.0, the same `verdict` is **also persisted on the on-disk `result.json`** for a kept run
