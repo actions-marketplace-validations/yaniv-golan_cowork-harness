@@ -98,6 +98,39 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The outputs-delete live suite was refusing to run, and a refused case verifies nothing.** It handed
+  the agent a byte-pinned destructive command wrapped in prohibitions ("run this EXACTLY as written… do
+  not modify it… do not run any other command") plus an unexplained sentinel, and asserted the command
+  came back verbatim. The agent increasingly declined — over the framing, not the file operation — and a
+  declined case SKIPS. Measured across 27 case-runs the refusal rate was **41%**; every case was refused
+  at least once and the worst sat at 67%, so the suite could report success having verified almost
+  nothing.
+
+  It now asks for **ordinary tasks** whose completion requires the file operation — write two poems and
+  delete one; write a poem and rename it. The agent has no delete tool, so a deletion must go through
+  Bash, which is exactly the path the scanner watches, while a benign creative task gives it no reason to
+  refuse. Measured 9 of 9 runs complied, zero refusals. The two form a polarity pair: one must trip the
+  guard, one must not.
+
+  Because the task is real, the run is now also asserted on its **effect** — exactly one poem file
+  survives in `mnt/outputs` — where the pinned suite only ever proved the scanner had recorded an
+  *intent* to delete. What is given up is byte-exactness: the agent picks its own filenames and command
+  form, so assertions are on shape plus effect. Command-form distinctions that cannot be asked for
+  naturally ("emptying a file is not a delete", "a commented-out `rm` is not a delete", the `mv`
+  spellings) moved to `test/execute.test.ts`, deterministically and for free — including the
+  `mnt/`-prefixed `mv` bytes the live case depended on, which no unit test had covered.
+
+  Two intermediate attempts are recorded in the file's header so they are not retried blind: explaining
+  the request (stated purpose, what the marker is for) made refusals **worse**, and retargeting one
+  case's destination away from `/tmp` helped that case only.
+
+- **A fixture shrinking could red an unrelated test.** `replay-json-pipe-truncation` multiplied a seed
+  cassette to exceed the 64KB pipe buffer, with the copy count hard-coded at 10 and justified as
+  "~15KB/result". The real figure was ~5.5KB, so the total sat just under the buffer and a routine
+  re-record of the seed tipped it under — reddening the suite for a reason unrelated to the truncation
+  bug it exists to pin. The count is now derived from a measured result at ~2x the buffer; the
+  `> 65536` assertion stays as the tripwire.
+
 - **`replay --help` now says that `--allow-failing` waives the skill-drift gate too.** `--assert-from`
   forces that gate on precisely so a re-asserted block cannot be frozen against a recording whose skill
   sources have moved — but the gate is the verdict, and `--allow-failing` waives the verdict wholesale.
@@ -148,6 +181,10 @@ All notable changes to this project are documented here. The format is based on
   so this enforces coupling and cannot verify faithfulness; it is dormant between fingerprint moves; and
   back-filling an older fingerprint entry equal to the newest silently disarms it.
 
+  Alongside it, the per-tier branch-selection assertions were unfrozen from a pinned `desktop-1.20186.1`
+  to `latest`. Pinned, they asserted real hl-vs-vm content semantics that could never observe a repoint
+  of the CURRENT baseline — coverage in appearance only for the pointer production actually renders.
+
 - **`verify-cassettes` stopped flagging the agent's own built-in skills as operator inventory.** The
   host-inventory scan keys off a closed roster of skills the product itself ships; that roster still held
   a single entry (`deep-research`) while the agent grew fourteen more. The first fresh `protocol`
@@ -184,6 +221,36 @@ All notable changes to this project are documented here. The format is based on
   cannot match a `$`-initial identifier, and backs that structural invariant with behavioural fixtures
   that drive the real sentinels using `$`-named bindings. The fixtures also assert the sentinels still
   *fire* when the contract genuinely breaks, so the widening cannot be mistaken for weakening them.
+
+  Ships with one relaxation on the release checker: `check-versions`' DESIGN.md gap-form regex now
+  accepts the singular *"1 baseline has shipped since"* — this release is the first N=1 gap on record,
+  and the count is still verified against the enumerated list, so the singular form is not a loophole.
+
+### Documentation
+
+- **Three claims about the committed example fixtures were wrong, and are corrected.** `docs/protocol.md`
+  said all three golden protocol vectors were "extracted verbatim" from
+  `example-multiselect-gate.cassette.json`. `initialize.json` cannot have been: it carries an
+  `appendSubagentSystemPrompt` holding the VM sub-agent text and a session id present in no committed
+  cassette, while a `protocol`-tier run renders no sub-agent append at all and that scenario has been
+  `fidelity: protocol` for its entire history. It is a real captured frame, from a container-tier run
+  that was never committed. The other two do come from that scenario, but "verbatim" has a shelf life —
+  one still matches field-for-field, the other carries a `request_id` regenerated on every re-record.
+
+  `examples/replays/README.md` described a fixture as "`protocol`-tier (no Docker/agent needed to
+  replay)", implying the tier is the reason. Replaying any cassette needs neither Docker nor a staged
+  agent whatever tier it was recorded at — replay reads recorded frames and spawns nothing, which is why
+  the token-free CI lane replays the container, protocol and hostloop fixtures side by side. The same
+  file called that fixture "synthetic"; that was true of its hand-written capability catalog and stopped
+  being true when it was re-recorded hermetically for this release's baseline sync.
+
+- **`docs/maintenance.md` now names the repoint step.** The per-release procedure walked a maintainer
+  through updating the paraphrase asset, appending a `subagentAppendVersions` entry and re-running
+  `sync` — and never said to repoint `spawn.subagentAppendHostLoop` at the new asset. Those pointers are
+  hand-authored, so `sync` carries the previous release's value forward untouched, and writing the
+  fingerprint entry clears the sentinel whether or not you repoint. Skipping it ships a host-loop
+  sub-agent the previous release's paraphrase with `sync` green. That is the step that was missed on
+  1.32885.1 and caught by eye.
 
 ## [1.24.0] — 2026-08-18
 
