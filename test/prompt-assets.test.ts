@@ -174,7 +174,13 @@ describe("renderPrompts — host-loop token substitution (P2a)", () => {
 });
 
 describe("subagentAppend — per-tier branch selection (subagent_env_hl / subagent_env_vm)", () => {
-  const baseline = loadBaseline("desktop-1.20186.1");
+  // `latest`, deliberately — NOT a pinned historical baseline. Frozen at desktop-1.20186.1 this block
+  // asserted real hl-vs-vm content semantics that could never observe a repoint of the CURRENT baseline,
+  // so it read as coverage while being inert for the pointer that production actually renders. Against
+  // `latest` the same assertions cover the shipping asset. (It does not, on its own, catch a pointer left
+  // on a STALE hl asset — an outdated hl paraphrase still satisfies every assertion here, because it is
+  // still a correct hl asset. That is the pointer-coupling check's job, not this one's.)
+  const baseline = loadBaseline("latest");
   const session = SessionConfig.parse({});
   const sessionId = "vm_test123";
   const hlOpts = {

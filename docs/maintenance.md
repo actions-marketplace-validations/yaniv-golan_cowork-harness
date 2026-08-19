@@ -160,6 +160,13 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
    entry (BOTH `hl` and `vm` are mandatory — a partial entry is itself a hard-fail), then re-run
    `cowork-harness sync`.
 
+   > **Then REPOINT the baseline at the new asset** — `spawn.subagentAppendHostLoop` (and/or
+   > `spawn.subagentAppend`) in the freshly written `baselines/desktop-<new>.json`. These pointers are
+   > hand-authored, so `sync` carries the PREVIOUS release's value forward untouched; writing the
+   > fingerprint entry clears the sentinel whether or not you repoint. Skip this and a host-loop
+   > sub-agent silently receives the previous release's paraphrase, with `sync` green. This is the step
+   > that was missed on 1.32885.1 and caught by eye.
+
    **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
    `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named
    variant, and which the harness does not model — a disclosed gap, distinct from the paraphrased-append
