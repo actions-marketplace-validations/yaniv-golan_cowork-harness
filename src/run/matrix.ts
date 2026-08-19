@@ -2,7 +2,7 @@
 // rollup/table substrate. Pure functions only — no I/O, no execution; the CLI loop in cli.ts drives cells
 // through runOneScenario/pMapBounded and hands the results here.
 import { z } from "zod";
-import { firstAssertionKey, rollupPasses, type RepeatRollup } from "./repeat.js";
+import { firstAssertionKey, rollupPasses, armLabel, type RepeatRollup } from "./repeat.js";
 import type { RunResult } from "../types.js";
 import { budgetFields } from "../assert.js";
 import { computeVerdict } from "./verdict.js";
@@ -208,8 +208,10 @@ export function formatMatrixRepeatRollup(r: MatrixRepeatRollup, minPassRate: num
     const stopNote = c.rollup.stoppedEarly
       ? ` (stopped early: ${c.rollup.stoppedEarly}, ${c.rollup.completed}/${c.rollup.requested} completed)`
       : "";
+    // Same arm label as the plain `--repeat` rollup (src/run/repeat.ts) — a matrix is where the LARGEST
+    // batches run, so leaving the blind spot open here would be leaving it open where it costs most.
     lines.push(
-      `  ${status} [${c.index}] ${label} — ${c.rollup.passes}/${c.rollup.completed} passed (${(c.rollup.passRate * 100).toFixed(0)}%)${stopNote}`,
+      `  ${status} [${c.index}] ${label}${armLabel(c.rollup)} — ${c.rollup.passes}/${c.rollup.completed} passed (${(c.rollup.passRate * 100).toFixed(0)}%)${stopNote}`,
     );
     if (!passed) {
       const signals = Object.entries(c.rollup.signalHistogram);

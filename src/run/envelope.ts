@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { RunResult } from "../types.js";
 import { computeVerdict } from "./verdict.js";
+import { runProvenance } from "./provenance.js";
 import { rollupPasses, type RepeatRollup } from "./repeat.js";
 import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
 import { deriveOutcome } from "./outcome.js";
@@ -89,7 +90,12 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
   const { rollups, minPassRate, allowBudgetStop, matrix, matrixRepeat, extra } = opts;
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => {
-    const withV = { ...r, verdict: computeVerdict(r, lane) };
+    // `provenance` is a DERIVED projection published beside the verdict — "which experiment actually
+    // ran": the marker-filtered model, the four-state skill-offered/invoked answer, and `ablated`.
+    // Every input is already in the result; publishing the derivation means a consumer never re-does
+    // the `<synthetic>`-filter or the evidence-unavailable states, which is where the misreadings came
+    // from. Non-mutating, same as `verdict`/`outcome`.
+    const withV = { ...r, verdict: computeVerdict(r, lane), provenance: runProvenance(r) };
     return { ...withV, outcome: deriveOutcome(withV) };
   });
   const ok = matrixRepeat

@@ -584,7 +584,9 @@ discovery source removed, so the agent answers from its own priors. **It is ONE 
 experiment**: this invocation is the control. Run the same prompt a second time *without* the flag for
 the treatment arm and compare them yourself. Composed with `--repeat 5` it produces **5 ablated runs
 and 0 treatment runs** — N samples of the control, which is the intended reading and is not an A/B.
-Every ablated run is stamped `ablated: true` in `result.json`; a run that isn't stamped is a real run.
+The rollup says so on its verdict line: `repeat "<skill>": PASS [ABLATED — control arm] — 5/5 passed`.
+Every ablated run is stamped `ablated: true` in `result.json` and carries `ablated=true` on its
+`[provenance]` footer line; a run that isn't stamped is a real run.
 What the harness gives you here is the run execution and the control arm — designing the comparison
 (scrubbing giveaways, shuffling, judging blind, unblinding only after grading) is still yours.
 

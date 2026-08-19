@@ -112,7 +112,21 @@ visible in the transcript — the output is exactly what a correct run would hav
 the reason to read the *record* rather than the answer. (`critique` is built on the same observation:
 [agent self-reports confabulate routinely](./critique.md).)
 
-- **Did the skill actually run?** The first thing to check, and the cheapest. `result.json`'s
+- **Read the `[provenance]` banner first.** Every run's footer prints one line beside the verdict —
+  `[provenance] model=claude-opus-5  skill=offered,invoked  ablated=false` — answering "which
+  experiment actually ran?" before you read a single assertion. It exists because three separate
+  multi-run measurements were silently scoped to the wrong thing: one measured on `claude-sonnet-5`
+  because the session file omitted `model:`, one where the skill was offered and never invoked, and a
+  10-run batch that was all `--ablate-skill` control runs. Each fact was already in `result.json` and
+  nobody looks there until a result seems wrong — which is after the money is spent. `skill=` has four
+  states, and `offered,unknown` / `unknown` mean *evidence unavailable*, never "no": the banner refuses
+  to print a confident negative from a missing field. The same object rides in the
+  `--output-format json` envelope as `results[].provenance`, and a `--repeat` batch gets an aggregate
+  `provenance:` row on its rollup (models and skill states as SETS — a batch spanning two models is the
+  multi-run form of the same defect). `--compact`/`--demo` suppress the line, like `[status]`.
+
+- **Did the skill actually run?** The banner's `skill=` field answers this at a glance; the underlying
+  evidence, when you need the detail: `result.json`'s
   **`skillsInvoked`** lists what the agent invoked via the `Skill` tool; **`skillActivity`** shows the
   per-invocation window (which tools fired inside it, sub-agent calls included); **`context.availableSkills`**
   is what was *offered*, read off each staged skill's `SKILL.md` frontmatter — so `offered but never

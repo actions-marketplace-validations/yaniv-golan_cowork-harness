@@ -6,6 +6,72 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **A `--repeat` rollup now names the ARM it ran, so a one-armed batch can't be banked as an A/B.**
+  `--ablate-skill --repeat 5` produces 5 control runs and zero treatment runs — correct for a
+  single-arm flag — and summarized them as `repeat "<skill>": PASS — 5/5 passed (100%)`, which reads
+  as a completed comparison. A consumer made exactly that read twice, producing 10 baseline runs and 0
+  treatment runs across two prompts before catching it at analysis. The verdict line now carries the
+  arm: `repeat "<skill>": PASS [ABLATED — control arm] — 5/5 passed (100%)`. A partially-ablated batch
+  (no flag produces one today; a resumed or hand-assembled run set could) reads
+  `[MIXED ARMS: 2/3 ablated]` rather than being rounded to either arm, and a normal batch carries no
+  tag at all — a label on every batch is noise, which is how the ablated one would come to be ignored.
+  `--matrix`'s per-cell rollup lines get the same label, since that is where the largest batches run.
+
+  **The flag combination stays legal.** Refusing it would ban a real measurement — "how variable is my
+  no-skill baseline?" is a question these flags compose correctly to answer — and the output was never
+  dishonest, only unlabeled at the one line a human reads. (Contrast `--ablate-skill --resume`, which
+  *is* refused: there ablation does not take effect at all, so `ablated: true` would be a lie.)
+
+- **A `[provenance]` banner on every run verdict — "which experiment actually ran?"** Three separate
+  multi-run measurements by one consumer were silently scoped to the wrong thing, and in every case the
+  run record already held the answer: a whole finding measured on `claude-sonnet-5` because the session
+  file omitted `model:`; a 10-run "A/B" that was 10 `--ablate-skill` control runs and zero treatment
+  runs; an answer that read exactly like skill output, from a run where the skill was offered and never
+  invoked (the model read the mounted `SKILL.md` as a file instead). `models`, `ablated`,
+  `context.availableSkills` and `skillsInvoked` were all in `result.json` and none of them were
+  anywhere a human looks, so checking meant hand-written scripts against the record — which nobody runs
+  until a result looks wrong, i.e. after the money is spent.
+
+  The footer now prints one line beside the verdict, on passing AND failing runs and on the replay lane:
+
+  ```
+  [provenance] model=claude-opus-5  skill=offered,NOT-invoked  ablated=false
+  ```
+
+  `model` drops `<…>`-wrapped agent markers first — `<synthetic>` marks a locally fabricated turn, not a
+  model, and an unfiltered join reads as a two-model run. `skill` has four states, and
+  `offered,unknown` / `unknown` mean **evidence unavailable**, never "no": a banner that exists to
+  prevent false confidence must not manufacture any. `ablated=false` prints too — the value is that the
+  line is on every run.
+
+  The same derived object rides in the `--output-format json` envelope as `results[].provenance`
+  (beside `verdict`), so a consumer never re-derives the marker filter or the evidence-unavailable
+  states. A `--repeat` batch gains an aggregate `provenance:` row on its rollup, reporting models and
+  skill states as **sets** — a batch silently spanning two models is the multi-run form of the same
+  defect, and collapsing to the first run would hide it. `--compact` (and `--demo`) suppress the line,
+  matching the `[status]` contract.
+
+### Changed
+
+- **`verify-run --output-format json` now emits `results[]` with a per-result `verdict`, matching
+  `run`.** The two commands answered the same question — "did my assertions pass?" — in structurally
+  different envelopes: `run` nested everything under `results[].verdict`, `verify-run` was flat
+  (`pass`/`assertions[]`/`signals[]`, no `verdict`, no `failures[]`). The cost was not a missing field
+  but a **silent false green**: the defensive jq idiom from `run`'s own docs —
+  `.results[]? | .verdict.failures[]? | select(.kind=="assertion")` — returns `[]` when `.results` is
+  null, and `[]` reads as "no failures" in the query whose entire purpose is detecting failure. Run
+  against a **failed** `verify-run`, it reported success. This matters most where `verify-run` is
+  promoted hardest: as the cheap, token-free iteration path in CI.
+
+  `results[]` always holds exactly one entry — `verify-run` judges one run dir, which is the same shape
+  `run` emits for a single scenario. **Additive**: the flat `pass`, `assertions[]`, `signals[]` and
+  `answerCoverage` keys are unchanged, so an existing consumer reading them is unaffected; `ok` still
+  mirrors the verdict. A cross-command regression test runs the real documented query against a real
+  failing envelope, so restoring the flat-only shape as a "simplification" fails the suite rather than
+  silently reopening the false green.
+
 ## [1.24.0] — 2026-08-18
 
 ### Added

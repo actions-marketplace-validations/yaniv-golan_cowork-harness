@@ -429,7 +429,14 @@ describe("renderFooter — gate provenance line", () => {
     });
     expect(s.text()).toContain("gates: 3 · 2 decided(llm), 1 scripted");
     // smoke check (not a proof): the line is counts + labels only, so no "=" from answer text leaks in.
-    expect(s.text()).not.toContain("=");
+    // Scoped to the gates LINE, not the whole footer — the footer legitimately carries `key=value` pairs
+    // elsewhere (the `[provenance]` banner), and asserting over all of it made this check fail for a
+    // reason that has nothing to do with answer-text leakage.
+    const gatesLine = s
+      .text()
+      .split("\n")
+      .find((l) => l.includes("gates: 3"))!;
+    expect(gatesLine).not.toContain("=");
   });
 
   it("prints the gates line on a failing run too", () => {

@@ -4,6 +4,7 @@ import type { RunHooks } from "./run.js";
 import type { RunResult } from "../types.js";
 import { computeVerdict, type GuardReport, type GuardStatus, type VerdictSignal } from "./verdict.js";
 import { formatGateProvenanceLine } from "./gate-provenance.js";
+import { formatProvenanceLine } from "./provenance.js";
 import { turnArtifactPath } from "./turn-layout.js";
 import { budgetFields } from "../assert.js";
 
@@ -309,6 +310,7 @@ export function renderFooter(
     // the `?? 1` fallback below is never wrong for whatever reaches this line.
     if (opts.lane !== "replay" && r.outDir)
       write(`   ${dim(plan, "→ result: " + tildeify(turnArtifactPath(r.outDir, r.turn ?? 1, "result.json")))}\n`);
+    renderProvenance(r, plan, write); // WHICH experiment produced this green — the most misreadable line on a pass
     renderWarns(warnSignals, plan, write); // a green run is exactly when an unasserted warn is easiest to miss
     renderGuards(verdict.guards, plan, write); // make the safety nets that ran an enumerable, visible fact
     renderGateProvenance(r, plan, write);
@@ -344,6 +346,7 @@ export function renderFooter(
       `   ${dim(plan, "no terminal result event (likely turn/time exhaustion) — see " + (r.stderrLogPath ? tildeify(r.stderrLogPath) : "the run's agent.stderr.log"))}\n`,
     );
   for (const s of failSignals) write(`   ${red(plan, "✗ " + s.message)}\n`);
+  renderProvenance(r, plan, write); // "it failed" is often "it ran the wrong thing" — say which one it ran
   renderWarns(warnSignals, plan, write);
   renderGuards(verdict.guards, plan, write); // show which guards ran even on a fail (no silent guards)
   renderGateProvenance(r, plan, write);
@@ -382,6 +385,20 @@ export function renderFooter(
  *  message IS the finding (which files, and what to do), so a clipped one is worse than none. */
 function renderWarns(warns: VerdictSignal[], plan: RenderPlan, write: Sink): void {
   for (const s of warns) write(`   ${dim(plan, "· " + s.code + ": " + s.message)}\n`);
+}
+
+/** "Which experiment actually ran?" — model / skill-offered-and-invoked / ablated, on one line beside
+ *  the verdict. Printed in BOTH the pass and fail branches (a failing run is often failing precisely
+ *  because it ran the wrong thing), and on the replay lane too — a replay's provenance is the recorded
+ *  run's, which is what a replay consumer needs. Contrast `cost`, deliberately suppressed on replay
+ *  because printing it would misreport fresh spend; provenance carries no such hazard.
+ *
+ *  Suppressed under `--compact` (and therefore `--demo`), matching the `[status]` line's contract so
+ *  shareable output stays clean. Undimmed on purpose: this is the line that stops a green from being
+ *  read as an answer to a question the run never asked. */
+function renderProvenance(r: RunResult, plan: RenderPlan, write: Sink): void {
+  if (plan.compact) return;
+  write(`   ${dim(plan, formatProvenanceLine(r))}\n`);
 }
 
 function renderGuards(guards: GuardReport[], plan: RenderPlan, write: Sink): void {
