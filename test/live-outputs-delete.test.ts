@@ -117,16 +117,20 @@ const CASES: Case[] = [
     guard: "ok",
     why: "Measured: truncate succeeds in production. Flagging it made the harness stricter than the product.",
   },
-  {
-    name: "allow_outputs_delete accepts an intended delete, and the guard still reports it",
-    cmd: "echo seed > mnt/outputs/t.md && rm mnt/outputs/t.md && echo CWH_C_4e60",
-    sentinel: "CWH_C_4e60",
-    assert: "  - allow_outputs_delete: true\n",
-    expectPass: true,
-    deletes: ["rm mnt/outputs/t.md"],
-    guard: "fired",
-    why: "The roster must derive from EVIDENCE, not from whether the signal fired — `ok` here would be a false tick.",
-  },
+  // RETIRED (2026-08-19): "allow_outputs_delete accepts an intended delete, and the guard still reports it".
+  //
+  // Retired on measurement, not taste. It was the suite's most persistent refuser — declined in 5 of 8
+  // recorded runs — and both halves of its subject are pinned deterministically in test/verdict.test.ts:
+  //   - the waiver: unwaived a detected delete still fails; waived, the `outputs_delete` signal is
+  //     suppressed and the run passes ("allow_outputs_delete accepts a detected delete…");
+  //   - the roster: the outputs-delete guard reports `fired` whether the signal was suppressed by the
+  //     waiver OR by an authored `no_delete_in_outputs`, and `ok`/`unverified` in the other two states.
+  //
+  // What a live run adds over those is that a REAL agent's bash call lands in `scan.outputsDeletes` —
+  // and the `rm under outputs` case above proves exactly that, end to end, at a third of the refusal
+  // rate. The two live cases differed only in the waiver assertion, which is verdict-layer logic with no
+  // agent in it. Keeping the worse-behaved of two cases to re-prove logic a unit test already pins is
+  // how a live lane turns permanently yellow.
   // RETIRED (2026-08-19): "a whole-line # comment is prose, not an executable delete".
   //
   // This case was mis-sited in the live lane. What it asserted — that a commented-out `rm` is not
