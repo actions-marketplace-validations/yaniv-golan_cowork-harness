@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.25.0] — 2026-08-20
+
 ### Added
 
 - **Platform baseline `desktop-1.32885.1` (agent `2.1.234`).** The Cowork system prompt is
