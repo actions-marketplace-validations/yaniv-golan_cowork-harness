@@ -35,7 +35,10 @@ import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
  *
  * What fixes the class is asking for a REAL TASK whose completion requires the file operation. The agent
  * has no delete tool, so removing a file must go through Bash — the exact path the guard watches — and a
- * benign creative task gives it no reason to refuse. Measured: 6/6 runs complied, 0 refusals.
+ * benign creative task gives it no reason to refuse. Measured: 6/6 case-runs complied, 0 refusals —
+ * 3 per case, re-derivable at any time by counting the surviving `cwh-od-*` dirs whose `s.yaml`
+ * mentions a poem. Re-derive rather than inherit this figure: earlier drafts of these comments said
+ * 4/4 and 2/2 for the two cases, and the run dirs say 3 and 3.
  *
  * The trade, stated plainly: the agent picks its own filenames and command form (observed: absolute
  * `/sessions/<id>/mnt/outputs/…` paths, `poem1`/`poem_a` names, a `python3 -c random.choice` to choose),
@@ -103,7 +106,7 @@ const CASES: Case[] = [
     deletes: 1,
     guard: "fired",
     survivors: 1,
-    why: "A real delete must reach scan → signal → guard, and the waiver must accept it. Measured 4/4 runs.",
+    why: "A real delete must reach scan → signal → guard, and the waiver must accept it. Measured 3/3 runs.",
   },
   {
     name: "a task that touches outputs without deleting: the guard stays silent",
@@ -114,7 +117,7 @@ const CASES: Case[] = [
     deletes: 0,
     guard: "ok",
     survivors: 1,
-    why: "The other polarity: a rename WITHIN outputs must not be read as a delete. Measured 2/2 runs.",
+    why: "The other polarity: a rename WITHIN outputs must not be read as a delete. Measured 3/3 runs.",
   },
 ];
 
