@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.24.0` (baseline `desktop-1.32352.0`).
+Self-contained reference. Tracks `cowork-harness 1.24.0` (baseline `desktop-1.32885.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md)
         run: |
-          V=2.1.229   # match your scenario's pinned baseline's agentVersion
+          V=2.1.234   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)

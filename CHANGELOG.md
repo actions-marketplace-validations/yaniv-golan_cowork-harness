@@ -8,6 +8,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Platform baseline `desktop-1.32885.1` (agent `2.1.234`).** The Cowork system prompt is
+  byte-identical to the previous baseline, the egress allowlist is unchanged at 15 domains, and the
+  spawn contract still derives the same 22 env keys — but the **host-loop sub-agent append gained a
+  sentence**, so `baselines/prompts/desktop-1.32885.1/subagent-append-hl.md` is a newly re-derived
+  paraphrase and `spawn.subagentAppendHostLoop` now points at it. The added text tells a host-loop
+  sub-agent that its shell commands start at the VM session root and that anything written outside
+  `<root>/mnt/` — `/tmp` included — stays inside the sandbox, invisible to both the user and the
+  sub-agent's own file tools. That is the host-loop split-filesystem fact the harness already models;
+  it is now stated to the model. The `vm` branch is unchanged and keeps its existing asset.
+
+  Worth knowing for anyone re-deriving this: the branch fingerprints decode `\uXXXX` escapes before
+  hashing, so this is a real content change and not the codegen-escape artifact that moved both
+  fingerprints a release earlier — the `vm` branch, which an escape change would also have moved,
+  did not budge.
+
+  **Live-verified against this baseline on 2026-08-19** across `protocol`, `container` and `hostloop`:
+  the example-scenario suite 6/6, the `boundary-check` sandbox proof with all six constraints enforced,
+  and `npm run test:live` at 4 suites / 24 assertions (20 green, 4 skipped). Three of those four skips
+  passed on a re-run — the model-variance the suite skips loudly for rather than failing. The fourth,
+  `live-outputs-delete`'s "a whole-line `#` comment is prose, not an executable delete", skipped in all
+  three runs made against this baseline and so has **not** been green here; by that suite's own rule a
+  skip persisting across runs means the agent has stopped being willing to run the pinned command, which
+  makes it scenario-maintenance debt rather than a guard defect. Recorded rather than rounded away.
+
 - **A `--repeat` rollup now names the ARM it ran, so a one-armed batch can't be banked as an A/B.**
   `--ablate-skill --repeat 5` produces 5 control runs and zero treatment runs — correct for a
   single-arm flag — and summarized them as `repeat "<skill>": PASS — 5/5 passed (100%)`, which reads
@@ -71,6 +95,45 @@ All notable changes to this project are documented here. The format is based on
   mirrors the verdict. A cross-command regression test runs the real documented query against a real
   failing envelope, so restoring the flat-only shape as a "simplification" fails the suite rather than
   silently reopening the false green.
+
+### Fixed
+
+- **`verify-cassettes` stopped flagging the agent's own built-in skills as operator inventory.** The
+  host-inventory scan keys off a closed roster of skills the product itself ships; that roster still held
+  a single entry (`deep-research`) while the agent grew fourteen more. The first fresh `protocol`
+  recording after a sync therefore reported 14 `host-inventory` findings on a cassette carrying no
+  operator inventory at all — the exact false positive that pushes people toward a blanket
+  `--allow-host-inventory`, which would disable the check that matters.
+
+  The roster is now current, established three ways rather than assumed: the recording was made against
+  a **managed (fresh) config dir** whose session stages no plugins or skills, so nothing from the
+  operator's own config could have been enumerated; every name appears as a literal in both the staged
+  agent ELF and the host CLI; and ten personal/plugin skill names from the same machine are **absent**
+  from that binary, so the check discriminates rather than matching everything. The known cost is
+  unchanged and inherent to a name-keyed set: an operator whose own skill shares one of these bare names
+  is no longer flagged — the same trade the built-in *agent* roster already makes.
+
+- **A minified `$` in the shipping app could make `sync` refuse a perfectly healthy Desktop release.**
+  Several spawn-contract sentinels pinned a minifier-assigned binding, callee or member name with
+  `\w+`. `\w` is `[A-Za-z0-9_]` — it cannot match `$`, which is a legal JavaScript identifier
+  character that minifiers use freely. Claude Desktop 1.32885.1 named the empty-`ANTHROPIC_*`
+  blank-sentinel helper `$s`, and the sentinel asserting that helper runs on the spawn env stopped
+  matching. Nothing about the spawn contract had changed: re-deriving it against the new app produced
+  the same 22 keys with the same values.
+
+  An audit of every regex in the sync module found **11 such atoms across 7 patterns**, all in the
+  spawn family, of which only one was firing — the other six were latent purely because their bindings
+  happened not to draw a `$` this build. All of them are now `[\w$]`, including the captured env-object
+  binding, which previously admitted a *trailing* `$` only and so would still have missed a
+  `$`-initial name even with its callees widened.
+
+  **The whole class fails closed** — an unresolvable value flags and refuses to write, rather than
+  writing a wrong one — so the cost was a false refusal on a good release, never a silently incorrect
+  baseline. That is also why six of the seven went unnoticed for so long, and why the fix ships with a
+  guard rather than just a widening: a new test asserts the module contains **zero** regex atoms that
+  cannot match a `$`-initial identifier, and backs that structural invariant with behavioural fixtures
+  that drive the real sentinels using `$`-named bindings. The fixtures also assert the sentinels still
+  *fire* when the contract genuinely breaks, so the widening cannot be mistaken for weakening them.
 
 ## [1.24.0] — 2026-08-18
 

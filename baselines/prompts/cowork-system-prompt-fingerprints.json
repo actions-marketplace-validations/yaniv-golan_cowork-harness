@@ -272,6 +272,69 @@
         "working_with_user_files"
       ],
       "note": "Captured 2026-08-18. The RAW sha moved (+630 code points) ONLY because the 1.32352.0 codegen began emitting non-ASCII as \\uXXXX escapes (em dash, rightwards arrow). The RENDERED prompt is BYTE-IDENTICAL: both builds decode to 37811 code points / a14592804dfc..., and a diff of the two decoded bodies is empty. The prompt has therefore not changed since 1.20186.0 and the 1.18286.0 paraphrase baseline remains faithful. This entry is what motivated decodedSha256: hashing the RAW template source is minifier-NAME-independent but NOT escape-form-independent, so a raw-only comparison cannot tell a codegen change from real drift."
+    },
+    "1.32885.1": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "Zlt",
+      "placeholders": [
+        "accountName",
+        "currentDateTime",
+        "currentTimezone",
+        "cwd",
+        "folderSelected",
+        "modelIdentity",
+        "modelName",
+        "skillsDir",
+        "workspaceContext",
+        "workspaceFolder"
+      ],
+      "sectionTagNames": [
+        "additional_skills_reminder",
+        "antartifact",
+        "application_details",
+        "artifact",
+        "artifacts",
+        "ask_user_question_tool",
+        "available_skills",
+        "citation_requirements",
+        "claude_behavior",
+        "company",
+        "computer_use",
+        "country",
+        "env",
+        "evenhandedness",
+        "examples",
+        "file_creation_advice",
+        "file_handling_rules",
+        "good_file_sharing_examples",
+        "high_level_computer_use_explanation",
+        "knowledge_cutoff",
+        "legal_and_financial_advice",
+        "lists_and_bullets",
+        "notes_on_user_uploaded_files",
+        "package_management",
+        "producing_outputs",
+        "product_information",
+        "refusal_handling",
+        "responding_to_mistakes_and_criticism",
+        "sharing_files",
+        "skills",
+        "strong",
+        "suggesting_claude_actions",
+        "todo_list_tool",
+        "tone_and_formatting",
+        "tool_result_safety",
+        "unnecessary_computer_use_avoidance",
+        "user_wellbeing",
+        "verification_step",
+        "web_content_restrictions",
+        "working_with_user_files"
+      ],
+      "note": "Cowork system prompt BYTE-IDENTICAL to 1.32352.0 on both the raw and the decoded hash (38505 raw / 37811 decoded code points, 43 tags, same 10 placeholders); only the minifier-assigned constant id rotated umt -> Zlt. Raw retained locally per localRawRetention."
     }
   },
   "subagentAppendMethod": "Independent of the single-text `versions` fingerprints above: the sub-agent environment append is a TWO-BRANCH generator selected on hostLoopMode. In the SINGLE bundle module that references buildSubagentEnvironmentPrompt AND contains both branch discriminators, slice each branch's raw backtick-template body by scanning outward from its discriminator fragment (escaped backticks are decoded to bare backticks; other escapes left intact); DECODE escapes (same decoder as decodedSha256 -- 1.32352.0's codegen escape change moved BOTH branch fingerprints while the rendered branch text was byte-identical), then normalize every ${...} interpolation to the literal token ${} ; sha256 the UTF-8 bytes; keep the first 16 hex chars. The hl (host-loop) branch is discriminated by the fragment 'on the user's machine' (anchored to the occurrence immediately preceding the vm branch, since the phrase also occurs in unrelated prose), the vm (sandbox) branch by 'exist only in the sandbox'. BOTH fingerprints are mandatory per version entry. Consumed by checkSubagentPromptFacts in src/sync/cowork-sync.ts; re-derive with readMainBundleFiles + extractSubagentBranchSlices + subagentBranchFingerprint (see docs/maintenance.md). Raw texts retained locally only (see localRawRetention).",
@@ -280,6 +343,11 @@
       "hl": "8fe5583c5996776a",
       "vm": "859aa136fc15b38f",
       "note": "Branch template texts byte-identical across 1.20186.0 and 1.20186.1 (both derive hl=8fe5583c5996776a, vm=859aa136fc15b38f). The named buildSubagentEnvironmentPrompt generator with these branch bodies is present from 1.20186.0; earlier retained releases (<=1.19367.0) used a differently-structured generator not covered by this fingerprint. Only the newest entry is compared, so one entry covers the current verified family."
+    },
+    "1.32885.1": {
+      "hl": "71e028bfa7ce596d",
+      "vm": "859aa136fc15b38f",
+      "note": "hl branch text CHANGED at this release (8fe5583c5996776a -> 71e028bfa7ce596d): one sentence appended stating that each shell command starts at the VM session root and that writes outside <root>/mnt/ (including /tmp) never reach the user or the sub-agent's file tools. Additive only - the preceding text is byte-identical, and the substitution-value proofs still hold (working directory ${hostCwd??vmRoot}, mounts ${vmRoot}/mnt/). NOT a codegen-escape artifact: the fingerprint decodes escapes before hashing (D8) and the vm branch is unchanged at 859aa136fc15b38f, which an escape-form change would also have moved. Paraphrase re-derived into baselines/prompts/desktop-1.32885.1/subagent-append-hl.md; the 1.20186.1 entry covers 1.20186.0 through 1.32352.0."
     }
   }
 }

@@ -4,7 +4,7 @@ description: Test or debug a Claude Code skill/plugin under Claude Cowork's runt
 metadata:
   author: cowork-harness
   version: 1.24.0
-  tracks-harness: cowork-harness 1.24.0 (baseline desktop-1.32352.0)
+  tracks-harness: cowork-harness 1.24.0 (baseline desktop-1.32885.1)
 ---
 
 # cowork-harness
@@ -23,7 +23,7 @@ allowlist). This skill exists mostly to keep you out of those traps — the Gotc
 the highest-value part. Read it.
 
 > **Version note:** the facts and `file:line` pointers here track `cowork-harness 1.24.0` (baseline
-> `desktop-1.32352.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> `desktop-1.32885.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
