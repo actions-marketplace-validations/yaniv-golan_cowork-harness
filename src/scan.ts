@@ -136,8 +136,42 @@ export const KNOWN_BUILTIN_AGENTS: ReadonlySet<string> = new Set([
  *  came from the operator's own config dir, not the product.
  *
  *  Closed set, same contract as KNOWN_BUILTIN_AGENTS: extend it deliberately when the agent's built-in
- *  roster changes. A new built-in would surface on the first fresh recording after a `sync`. */
-export const KNOWN_BUILTIN_SKILLS: ReadonlySet<string> = new Set(["deep-research"]);
+ *  roster changes. A new built-in would surface on the first fresh recording after a `sync`.
+ *
+ *  EXTENDED 2026-08-19 (agent 2.1.234): the roster below `deep-research` surfaced exactly as that last
+ *  sentence predicts — on the first fresh `protocol` recording after the 1.32885.1 sync, as 14
+ *  host-inventory findings on a cassette that carries no operator inventory at all. They are product
+ *  built-ins, established three ways rather than assumed:
+ *    1. the recording was made against a MANAGED (fresh) config dir — `useManagedConfig` is on whenever
+ *       ANTHROPIC_API_KEY is set (src/runtime/protocol.ts) — and its session stages no plugins or
+ *       skills, so nothing reachable from the operator's own config dir could have been enumerated;
+ *    2. every name is a bare literal in BOTH the staged agent ELF (2.1.234) and the host CLI, which is
+ *       the criterion this doc comment already sets;
+ *    3. negative control: ten personal/plugin skill names from the same machine (plaud-digest, overcut,
+ *       docsend-to-pdf, skill-packager, proof-engine, transcription-reader, youtube-downloader, hookify,
+ *       cowork-harness, pretext) are all ABSENT from that binary — so the substring test discriminates
+ *       rather than matching everything.
+ *  Known cost, same as KNOWN_BUILTIN_AGENTS: a bare name is exempted globally, so an operator whose own
+ *  skill is named e.g. `debug` or `run` stops being flagged. That is inherent to a name-keyed closed set.
+ *  The alternative — leaving the roster stale — reds every fresh protocol/hostloop recording on false
+ *  positives and pushes people to a blanket `--allow-host-inventory`, which is strictly worse. */
+export const KNOWN_BUILTIN_SKILLS: ReadonlySet<string> = new Set([
+  "batch",
+  "claude-api",
+  "code-review",
+  "dataviz",
+  "debug",
+  "deep-research",
+  "design-sync",
+  "doctor",
+  "fewer-permission-prompts",
+  "loop",
+  "run",
+  "run-skill-generator",
+  "simplify",
+  "update-config",
+  "verify",
+]);
 
 /** `account` keys that identify the OPERATOR. A clean recording's account block is `{tokenSource,
  *  apiProvider}` only. `email` is usually redacted upstream by the time it reaches here — the load-bearing
