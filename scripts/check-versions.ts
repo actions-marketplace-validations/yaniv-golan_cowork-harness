@@ -147,8 +147,11 @@ export function checkDesignScopeNote(opts: {
   }
 
   // GAP form — the live pass lags the newest baseline, so the note must enumerate what is unverified.
+  // `baselines?` / `has|have`: the gap can be a single baseline (first hit at desktop-1.32885.1), and
+  // forcing "one baselines have shipped" would trade grammar for nothing — the count is still checked
+  // against the enumerated list below, so the singular form is not a loophole.
   const m = para.match(
-    /\*{0,2}([A-Za-z-]+|\d+)\*{0,2} baselines have shipped since \(([^)]*)\),\s*\*{0,2}([A-Za-z-]+|\d+)\*{0,2} of which moved the agent ELF[^*]*\*\*(\d+\.\d+\.\d+)\*\*/,
+    /\*{0,2}([A-Za-z-]+|\d+)\*{0,2} baselines? (?:has|have) shipped since \(([^)]*)\),\s*\*{0,2}([A-Za-z-]+|\d+)\*{0,2} of which moved the agent ELF[^*]*\*\*(\d+\.\d+\.\d+)\*\*/,
   );
   if (!m) {
     errors.push(

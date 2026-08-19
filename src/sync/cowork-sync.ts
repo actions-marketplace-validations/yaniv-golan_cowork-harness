@@ -2189,7 +2189,7 @@ function resolveStringArg(bundle: string, arg: string, isCall: boolean, scope?: 
  * chat localAgent session pins deterministically (disableCron→"1", oauth-env prod→"", 3p-entrypoint→1p).
  * Anything else → `{ unknown: true }` (never a silent partial substitution).
  */
-function resolveSpawnValue(
+export function resolveSpawnValue(
   bundle: string,
   expr: string,
   gates: Record<string, GateState>,
@@ -2214,11 +2214,14 @@ function resolveSpawnValue(
     const v = resolveStringArg(bundle, m[1], !!m[2], scope, files);
     return v == null ? { unknown: true } : { value: v };
   }
-  // Modeled-session ternaries (matched on stable property/literal tokens, minified object id = \w+).
-  if (/^\w+\.disableCron\?"1":""$/.test(e)) return { value: "1" };
-  if (/^\w+\.type!=="3p"&&\w+==="staging"\?"1":""$/.test(e)) return { value: "" };
-  if (/^\w+\.type!=="3p"&&\w+==="local"\?"1":""$/.test(e)) return { value: "" };
-  if ((m = e.match(/^\w+\.type==="3p"\?"[^"]*":"([^"]*)"$/))) return { value: m[1] };
+  // Modeled-session ternaries (matched on stable property/literal tokens; every binding here is
+  // minifier-assigned, so each one is `[\w$]+` — NOT `\w+`, which cannot match a `$`-initial name.
+  // Desktop 1.32885.1 shipped `t.$s` and `\w` excludes `$`; test/sync-sentinel-identifier-classes.test.ts
+  // holds this file to zero identifier atoms that reject `$`.
+  if (/^[\w$]+\.disableCron\?"1":""$/.test(e)) return { value: "1" };
+  if (/^[\w$]+\.type!=="3p"&&[\w$]+==="staging"\?"1":""$/.test(e)) return { value: "" };
+  if (/^[\w$]+\.type!=="3p"&&[\w$]+==="local"\?"1":""$/.test(e)) return { value: "" };
+  if ((m = e.match(/^[\w$]+\.type==="3p"\?"[^"]*":"([^"]*)"$/))) return { value: m[1] };
   return { unknown: true };
 }
 
@@ -2763,19 +2766,23 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     miss("S11 ENTRYPOINT local-agent", "the W1 local-agent entrypoint literal is gone");
   if (!w1 || !has(/disableCron:!0/, w1) || !has(/localAgent:!0/, w1))
     miss("S12 OnA call args", "disableCron:!0 / localAgent:!0 no longer earn the DISABLE_CRON / PROVIDER_MANAGED_BY_HOST pins");
-  if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:\w+\.disableCron\?"1":""/, w2))
+  if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:[\w$]+\.disableCron\?"1":""/, w2))
     miss("S13 DISABLE_CRON ternary", "the disableCron?'1':'' shape changed");
   // B7 (Desktop 1.25927.0): the loop binding is emitted as `let` in the new codegen (`for(let t of[…])`).
-  // The binding keyword is a minifier choice, never a contract fact — admit all three.
-  if (!has(/for\((?:const|let|var) \w+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
+  // The binding keyword is a minifier choice, never a contract fact — admit all three. Its NAME is a
+  // minifier choice too, hence `[\w$]+` (a `$`-initial name is legal and `\w` cannot match it).
+  if (!has(/for\((?:const|let|var) [\w$]+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
     miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
   // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS
   // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and
   // backreference so the guarantee "blank runs on THIS env" survives the rename without hardcoding the name.
   // B5: both env helper calls may now carry a namespace-method receiver (`o.appendCoworkTelemetryHeaders`
-  // / `o.dropEmptyAuthEnvSentinels`); the `(\w+\$?)\.env … \1\.env` backreference — the guarantee that the
+  // / `o.dropEmptyAuthEnvSentinels`); the `([\w$]+)\.env … \1\.env` backreference — the guarantee that the
   // blank-sentinel helper runs on the SAME env object — is untouched by the added optional receivers.
-  if (!has(/ANTHROPIC_CUSTOM_HEADERS:(?:[\w$]+\.)?\w+\((\w+\$?)\.env[\s\S]{0,40}\},(?:[\w$]+\.)?\w+\(\1\.env\)/))
+  // B8 (Desktop 1.32885.1): the CALLEE names are minifier-assigned and drew `$s` this build, so both
+  // callee slots are `[\w$]+`. The captured env binding is `([\w$]+)` — the older `(\w+\$?)` admitted a
+  // TRAILING `$` only, so a `$`-initial name would still have missed even with the callees widened.
+  if (!has(/ANTHROPIC_CUSTOM_HEADERS:(?:[\w$]+\.)?[\w$]+\(([\w$]+)\.env[\s\S]{0,40}\},(?:[\w$]+\.)?[\w$]+\(\1\.env\)/))
     miss(
       "S14b FnA application",
       "the empty-ANTHROPIC_* blank helper no longer runs on the spawn env — the '' blanks would leak into production",
@@ -2956,7 +2963,10 @@ export function extractModelEffortConfig(bundle: string): { config: ModelEffortC
   // Parse the literal map's top-level `"id":{...}` entries. No entry body nests a `{`, so a non-brace
   // char-class body match is safe (a future nested-object entry would fail this scan, not silently truncate).
   const effortByModel: Record<string, ModelEffortEntry> = {};
-  for (const em of mapBody.matchAll(/"([\w.-]+)":\{([^{}]*)\}/g)) effortByModel[em[1]] = parseModelEntryBody(em[2]);
+  // The key class carries `$` purely to keep the file-wide invariant at zero exceptions (see
+  // sync-sentinel-identifier-classes.test.ts): these keys are model ids like `claude-haiku-4-5`, which
+  // never contain `$`, so admitting it cannot widen what this actually matches.
+  for (const em of mapBody.matchAll(/"([\w$.-]+)":\{([^{}]*)\}/g)) effortByModel[em[1]] = parseModelEntryBody(em[2]);
   if (Object.keys(effortByModel).length === 0) return fail("literal per-model map parsed to zero entries — parser or shape drifted");
 
   const regexDefaultEntry = parseModelEntryBody(mm[0]);
