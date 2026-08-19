@@ -98,6 +98,23 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A stale sub-agent prompt pointer can no longer ship with a green `sync`.** The prompt assets a
+  baseline points at (`spawn.subagentAppendHostLoop` / `spawn.subagentAppend`) are hand-authored, so
+  `sync` carries the previous release's values forward untouched — while the drift sentinel compares the
+  shipping app's text against a recorded fingerprint and never looks at those pointers. Recording a new
+  fingerprint therefore cleared the sentinel whether or not the pointer moved, and a host-loop sub-agent
+  would silently receive the previous release's paraphrase with every check green.
+
+  A new coupling check closes it: when the newest recorded fingerprint differs from the one before it on
+  an axis, the newest baseline's pointer for that axis must differ from the previous baseline's. Both
+  inputs are already-committed data, so there is no new field to fill in — and nothing to copy-paste into
+  compliance, which is what sank an earlier attempt at this. Verified by simulating the real failure: the
+  check fires and names the exact edit required.
+
+  Its limits are documented where it lives, not glossed: the committed asset is a deliberate paraphrase,
+  so this enforces coupling and cannot verify faithfulness; it is dormant between fingerprint moves; and
+  back-filling an older fingerprint entry equal to the newest silently disarms it.
+
 - **`verify-cassettes` stopped flagging the agent's own built-in skills as operator inventory.** The
   host-inventory scan keys off a closed roster of skills the product itself ships; that roster still held
   a single entry (`deep-research`) while the agent grew fourteen more. The first fresh `protocol`
