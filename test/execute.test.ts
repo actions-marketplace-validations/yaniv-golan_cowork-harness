@@ -382,6 +382,19 @@ describe("isOutputsDelete — mv direction + target-based safe-prefix suppressio
     expect(isOutputsDelete("mv outputs/a.txt /tmp/b.txt")).toBe(true);
   });
 
+  // The `mnt/`-prefixed spelling is what the live suite actually pins, and it was covered NOWHERE — the
+  // mv cases above all use the bare `outputs/` form. Container cwd is `/sessions/<id>`, so a real agent
+  // writes `mnt/outputs/...`; the suite header calls that pair the exact place a silent no-op hides.
+  // Both destinations matter: `/tmp` (the original) and a sibling inside the session (what the live case
+  // moved to, to drop the "moves it out of the workspace" objection the refusals raised).
+  it("mv: the mnt/-prefixed spelling is a delete for every destination outside outputs", () => {
+    expect(isOutputsDelete("mv mnt/outputs/a.md /tmp/b.md")).toBe(true);
+    expect(isOutputsDelete("mv mnt/outputs/a.md mnt/b.md")).toBe(true);
+    expect(isOutputsDelete("mv mnt/outputs/a.md ./b.md")).toBe(true);
+    // …and still NOT a delete when the destination stays inside outputs.
+    expect(isOutputsDelete("mv mnt/outputs/a.md mnt/outputs/b.md")).toBe(false);
+  });
+
   it("default (no env): a rm TARGET provably under outputs is flagged", () => {
     expect(isOutputsDelete("rm outputs/report.md")).toBe(true);
     expect(isOutputsDelete("rm mnt/outputs/x")).toBe(true);

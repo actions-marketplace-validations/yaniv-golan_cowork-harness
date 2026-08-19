@@ -92,33 +92,51 @@ describe("verdict.failures[].kind", () => {
 // asserts. A unit test can only cover the sites it happens to construct; this scans for the pattern
 // itself, so a NEW pseudo-assertion added anywhere reds until it is classified. (Mutation-found: the
 // first version of this PR could lose a `source: "coverage"` stamp in cli.ts with every test green.)
+//
+// The scan keys on `assertions.push(` — NOT on the `{} as Assertion` cast the first version looked for.
+// That cast-shaped pattern was blind to seven `replay_protocol_fidelity` injections, which pass a REAL
+// assertion key (`{ replay_protocol_fidelity: true }`) and so never matched, and shipped unstamped:
+// `computeVerdict` labelled cassette-corruption failures `kind: "assertion"`, i.e. as if the author had
+// written them, which is exactly what the contract in types.ts forbids. In these files every
+// `assertions.push` IS an injection — an author's own `assert:` items are evaluated elsewhere and never
+// reach this call — so requiring the stamp on all of them is both sound and shape-independent.
 describe("every pseudo-assertion injection site stamps `source`", () => {
   const files = ["src/run/cassette.ts", "src/cli.ts"];
 
+  /** Every `assertions.push(` in these files, as `{ file, line, literal }`. */
+  const injectionSites = () =>
+    files.flatMap((f) => {
+      const src = readFileSync(resolve(f), "utf8");
+      return [...src.matchAll(/assertions\.push\(/g)].map((m) => {
+        const end = src.indexOf("});", m.index);
+        return {
+          file: f,
+          line: src.slice(0, m.index).split("\n").length,
+          literal: src.slice(m.index!, end === -1 ? m.index! + 500 : end + 3),
+        };
+      });
+    });
+
   it("finds the sites at all (guards against a refactor that changes the shape)", () => {
-    const total = files.reduce(
-      (n, f) => n + [...readFileSync(resolve(f), "utf8").matchAll(/assertion: \{[^}]*\} as (?:unknown as )?Assertion,/g)].length,
-      0,
-    );
-    // 3 in cassette.ts (--strict staleness, --fail-on-skill-drift, future-version) + 2 in cli.ts
-    // (answer-coverage: no rule matched, and the invalid-answer throw).
-    expect(total).toBe(5);
+    // Counted, not inherited: 10 in cassette.ts (--strict staleness, --fail-on-skill-drift,
+    // future-version, and SEVEN replay_protocol_fidelity corruption paths) + 3 in cli.ts (all
+    // answer-coverage). The previous comment here said "2 in cli.ts"; it was 3. A refactor that moves
+    // or renames the call reds here rather than silently scanning nothing.
+    expect(injectionSites().length).toBe(13);
   });
 
-  it("each one is followed by a `source:` within its object literal", () => {
-    const unstamped: string[] = [];
-    for (const f of files) {
-      const src = readFileSync(resolve(f), "utf8");
-      for (const m of src.matchAll(/assertion: \{[^}]*\} as (?:unknown as )?Assertion,/g)) {
-        // The stamp may sit on either side of the `assertion:` line inside the same push({...}).
-        const start = Math.max(0, src.lastIndexOf("push({", m.index));
-        const end = src.indexOf("});", m.index);
-        const literal = src.slice(start, end === -1 ? m.index! + 400 : end);
-        if (!/source:\s*"(staleness|cassette-format|coverage)"/.test(literal)) {
-          unstamped.push(`${f}: ...${src.slice(m.index!, m.index! + 60)}`);
-        }
-      }
-    }
+  it("each one stamps a `source:` within its object literal", () => {
+    const unstamped = injectionSites()
+      .filter((s) => !/source:\s*"(staleness|cassette-format|coverage)"/.test(s.literal))
+      .map((s) => `${s.file}:${s.line}`);
     expect(unstamped, "an injected pseudo-assertion with no `source` renders as one of the author's own asserts").toEqual([]);
+  });
+
+  it("the scan would CATCH an unstamped injection (mutation check)", () => {
+    // The previous version of this guard passed while seven sites were unstamped, because it matched a
+    // cast shape they did not use. Prove the current matcher actually rejects a bare push.
+    const bare = "assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: m });";
+    expect(/source:\s*"(staleness|cassette-format|coverage)"/.test(bare)).toBe(false);
+    expect(/assertions\.push\(/.test(bare)).toBe(true);
   });
 });

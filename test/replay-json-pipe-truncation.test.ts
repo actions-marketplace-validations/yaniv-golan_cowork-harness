@@ -17,14 +17,29 @@ const CLI = resolve("dist/cli.js");
 const REPO = resolve(".");
 const can = existsSync(CLI);
 
-// A committed cassette to multiply (`cassettes/` is gitignored, so use examples/). multiselect-gate is
-// the richest single-envelope (~15KB/result), so a handful of copies clears 64KB with margin.
+// A committed cassette to multiply (`cassettes/` is gitignored, so use examples/).
+//
+// N is DERIVED, not hard-coded. It used to be a literal 10 justified as "~15KB/result", but the real
+// figure was ~5.5KB — so the margin was fiction and the total sat just under 65536. A routine re-record
+// of the seed (1.32885.1: 39.3KB → 34.5KB) then tipped it under and the suite went red for a reason
+// that has nothing to do with the truncation bug this file exists to pin. Measuring one result and
+// sizing N from it cannot rot that way. The `> 65536` assertion below still stands as the tripwire.
 const SEED = join(REPO, "examples", "replays", "example-multiselect-gate.cassette.json");
 const seedExists = existsSync(SEED);
-const N = 10; // 10 × ~15KB/result ≈ ~150KB — comfortably past the 65536-byte pipe buffer
+const PIPE_BUF = 65536;
 
 describe.skipIf(!can || !seedExists)("replay --output-format json is not truncated on a pipe", () => {
   it("emits a complete, parseable envelope exceeding the 64KB pipe buffer", () => {
+    // Measure one result, then take ~2x the pipe buffer so the margin is real whatever the seed weighs.
+    const probe = spawnSync("node", [CLI, "replay", SEED, "--output-format", "json"], {
+      encoding: "utf8",
+      cwd: REPO,
+      maxBuffer: 16 << 20,
+    });
+    const perResult = (probe.stdout ?? "").length;
+    expect(perResult).toBeGreaterThan(0); // a broken probe must fail loudly, not silently pick N=1
+    const N = Math.max(4, Math.ceil((2 * PIPE_BUF) / perResult));
+
     const dir = mkdtempSync(join(tmpdir(), "cc-replay-big-"));
     for (let i = 0; i < N; i++) {
       copyFileSync(SEED, join(dir, `copy-${String(i).padStart(3, "0")}.cassette.json`));

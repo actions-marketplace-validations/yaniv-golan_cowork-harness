@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 1.24.0` (baseline `desktop-1.32352.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 1.25.0` (baseline `desktop-1.32885.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -182,7 +182,7 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    **that one invocation**, so the agent answers from its own priors, and stamps the result
    `ablated: true`. It is the **control arm only** — run the same prompt again *without* the flag for
    the treatment arm; `--ablate-skill --repeat 5` gives you 5 control runs and 0 treatment runs, not an
-   A/B. (Inspecting an organically not-invoked rep works too, but is not a substitute: that rep may
+   A/B — and the rollup labels it `PASS [ABLATED — control arm]` so you cannot bank it as one. (Inspecting an organically not-invoked rep works too, but is not a substitute: that rep may
    differ for other reasons.) If the answer still scores high without the skill, that claim is
    answerable from priors and tests the model, not your skill — strengthen it (a skill-specific fact) or
    drop it. Everything past "run both arms" — scrubbing giveaways, shuffling, judging blind, unblinding

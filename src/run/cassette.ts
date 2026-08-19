@@ -4226,6 +4226,8 @@ export const REPLAY_USAGE =
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
   "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.\n" +
+  "       --allow-failing waives that verdict gate WHOLESALE — including the skill-drift failure --assert-from forces on. So `--assert-from --write --allow-failing` will persist an assert block validated against a recording whose skill sources have since changed. Re-record instead when the drift is real; the flag is for a verdict you have read and understood.\n" +
+  "       text mode writes the footer to STDERR and nothing to stdout (a passing replay is 0 bytes) — machine output needs --output-format json. To tell YOUR failing asserts from injected drift/corruption findings, read verdict.failures[].kind (`assertion` vs `staleness`/`cassette-format`), not the exit code, which collapses them: jq '[.results[]? | .verdict.failures[]? | select(.kind==\"assertion\")] | length'.\n" +
   '       --best-effort-future-cassette: override the refusal to replay a cassette recorded by a NEWER format version and attempt it anyway. `verify-cassettes` deliberately does NOT accept this flag — a verification gate has no "read it anyway" path. Cost: an older CLI reading a newer cassette can silently misread a scenario key it does not recognize — this is a best-effort escape hatch, not a safe one.';
 
 export async function cmdReplay(args: string[]) {
@@ -5981,6 +5983,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `control-out.jsonl has duplicate request_id "${id}" with differing bodies — cassette is corrupt; re-record`,
+        source: "cassette-format",
       });
     }
 
@@ -5992,6 +5995,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `control-out.jsonl line ${idx} is not valid JSON — cassette is corrupt; re-record`,
+        source: "cassette-format",
       });
     }
 
@@ -6003,6 +6007,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `cassette events line ${idx} is not valid JSON — replay_protocol_error (malformed line may conceal a failed assertion)`,
+        source: "cassette-format",
       });
     }
 
@@ -6015,6 +6020,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `cassette events line ${pe.line} is a malformed control frame — ${pe.message}`,
+        source: "cassette-format",
       });
     }
 
@@ -6025,6 +6031,7 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `serializeDecision output for ${m.id} != recorded envelope: expected ${m.expected} got ${m.actual}`,
+        source: "cassette-format",
       });
     }
 
@@ -6036,12 +6043,13 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `decision ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
+        source: "cassette-format",
       });
     }
 
     // A truncated QUESTION (no recorded answer) surfaces here too — same exit-1 class as the permission case.
     if (truncatedMsg) {
-      assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg });
+      assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: truncatedMsg, source: "cassette-format" });
     }
 
     // F46: RunResult.fingerprint is documented (src/types.ts:978-980) as the RUN-TIME staleness

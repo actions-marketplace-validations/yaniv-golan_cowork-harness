@@ -16,7 +16,7 @@ DOES exercise a real gate exchange, see `example-multiselect-gate.cassette.json`
 
 Run it with:
 
-> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g "cowork-harness@>=1.24.0"`. (`replay` itself needs nothing else — no token, no Docker.)
+> Assumes the `cowork-harness` CLI is available — from a source checkout run `npm ci && npm run build && npm link` first, or `npm i -g "cowork-harness@>=1.25.0"`. (`replay` itself needs nothing else — no token, no Docker.)
 
 ```sh
 cowork-harness replay examples/replays/example-pdf-skill.cassette.json
@@ -38,10 +38,21 @@ cowork-harness replay examples/replays/example-pdf-skill.cassette.json --output-
 
 ## example-multiselect-gate.cassette.json
 
-A **synthetic** fixture exercising a **multi-select** `AskUserQuestion` gate — a single question
+A fixture exercising a **multi-select** `AskUserQuestion` gate — a single question
 that allows choosing more than one option (`choose: [Auth, Audit]`, comma-separated), asserting
-`result: success` and `transcript_contains` for each chosen feature. `protocol`-tier (no
-Docker/agent needed to replay).
+`result: success` and `transcript_contains` for each chosen feature. Recorded at `protocol` tier.
+
+> Its capability manifest used to be a hand-written synthetic catalog, because a `protocol`-tier
+> recording keeps the operator's real config dir and would otherwise publish that machine's installed
+> plugins. As of the 1.32885.1 re-record it is a **real captured manifest from a sealed run** — recorded
+> with `ANTHROPIC_API_KEY` set, which switches the tier to a fresh managed config dir, so what it carries
+> is the product's own built-in commands/agents/skills and no operator inventory. `verify-cassettes`
+> enforces that distinction on every commit.
+
+> Replaying a cassette needs neither Docker nor a staged agent **whatever tier it was recorded at** —
+> replay reads the recorded frames and never spawns anything. The token-free CI lane replays the
+> `container`, `protocol` and `hostloop` fixtures side by side for exactly that reason. The tier a
+> cassette was recorded at determines what it captured, not what replaying it costs.
 
 ```sh
 cowork-harness replay examples/replays/example-multiselect-gate.cassette.json

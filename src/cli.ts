@@ -117,7 +117,7 @@ import type { Cassette } from "./run/cassette.js";
 import { buildScaffold } from "./run/scaffold.js";
 import { buildInspectView } from "./run/inspect-view.js";
 import { pkgVersion, jsonEnvelope, jsonPayloadEnvelope, jsonError, parseOutputFormat, fail, isJsonOutput } from "./run/envelope.js";
-import { buildRepeatRollup, rollupPasses, type RepeatRollup } from "./run/repeat.js";
+import { buildRepeatRollup, rollupPasses, armLabel, type RepeatRollup } from "./run/repeat.js";
 import { parseRepeatFlags, RepeatFlagError } from "./run/repeat-flags.js";
 import { cmdCritique } from "./critique/command.js";
 import {
@@ -361,7 +361,8 @@ Questions:
 Output:
   --output-format text|json        text = live stream + footer, written to stderr (default); json = one stdout envelope
   --quiet, -q                      verdict footer only            --verbose       + thinking/tool inputs/sub-agent tree
-  --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
+  --compact                        drop the informational capability ::notice:: lines, the [provenance] banner,
+                                   AND the [status] <outDir>
                                    line (a raw host path). The probe + hard-fail stay; status.json is still
                                    written, so 'status <run-dir-root>' / --session-id still locate the run
   --demo                           shareable output: --compact (incl. its [status] suppression) + suppress the
@@ -473,7 +474,8 @@ Matrix testing — one scenario × a cross-product of axes, in one run:
 Output:
   --output-format text|json        text = verdict + failing transcript, written to stderr (default); json = stdout envelope
   --quiet, -q                      verdict only            --verbose       live stream + per-tool markers
-  --compact                        drop the informational capability ::notice:: lines AND the [status] <outDir>
+  --compact                        drop the informational capability ::notice:: lines, the [provenance] banner,
+                                   AND the [status] <outDir>
                                    line (a raw host path). The probe + hard-fail stay; status.json is still
                                    written, so 'status <run-dir-root>' / --session-id still locate the run
   --demo                           shareable output: --compact (incl. its [status] suppression) + suppress the
@@ -1325,7 +1327,17 @@ function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetSto
   const lines: string[] = [];
   const verdict = rollupPasses(r, minPassRate, allowBudgetStop) ? "PASS" : "FAIL";
   const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
-  lines.push(`repeat "${r.scenario}": ${verdict} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`);
+  // The ARM rides on the verdict itself, not as a trailing note: this is the line a batch's reader
+  // stops at, and "5/5 passed" with no arm named is what read as a completed A/B.
+  lines.push(
+    `repeat "${r.scenario}": ${verdict}${armLabel(r)} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`,
+  );
+  // Which experiment this BATCH ran — the aggregate form of the per-run [provenance] footer line. A
+  // batch is exactly where the per-run banner scrolls past: the rollup is the line people read.
+  lines.push(
+    `  provenance: model=${r.provenance.models.join(",") || "unknown"}  skill=${r.provenance.skills.join(",") || "unknown"}  ` +
+      `ablated=${r.provenance.ablatedRuns}/${r.completed}`,
+  );
   const signals = Object.entries(r.signalHistogram);
   if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
   const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
@@ -4345,14 +4357,32 @@ async function cmdVerifyRun(args: string[]) {
   const failed = assertions.filter((a) => !a.pass);
 
   if (json) {
-    // Wrapped in the shared payload envelope (tool/version/command/ok/error) for cross-command consistency;
-    // every prior field (pass/assertions/signals/answerCoverage) is preserved, and `ok` mirrors the verdict.
+    // FULL envelope parity with `run` — `results[]` + a per-result `verdict`, not a flat payload.
+    //
+    // This used to be a `jsonPayloadEnvelope` with no `results[]`, no `verdict` and no `failures[]`. The
+    // cost was not a missing field, it was a SILENT FALSE GREEN: the defensive jq idiom a consumer
+    // copies from `run`'s own docs — `.results[]? | .verdict.failures[]? | select(.kind=="assertion")` —
+    // returns `[]` here, because `.results` was null and the `?` swallowed it. `[]` reads as "no
+    // failures" in the query whose entire purpose is detecting failure, against a run that FAILED.
+    // Emitting a bare `verdict` beside the flat keys would NOT have fixed that: the copied query still
+    // returns `[]` until the user rewrites it. Parity is what makes the query transfer.
+    //
+    // `results[]` always holds exactly one entry — verify-run judges one run dir — which is the same
+    // shape `run` emits for a single scenario, not a pretense that this is a batch command.
+    //
+    // ADDITIVE: every prior flat field (pass/assertions/signals/answerCoverage) is preserved for
+    // existing consumers, and `ok` still mirrors the verdict (jsonEnvelope derives it from the same
+    // per-result verdict this function already computed). `test/verify-run-envelope-parity.test.ts`
+    // runs the real query against a real failing envelope — that test, not this comment, is what stops
+    // the flat shape from being restored as a "simplification".
     out(
-      jsonPayloadEnvelope("verify-run", verdict.pass, {
-        pass: verdict.pass,
-        assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),
-        signals: verdict.signals,
-        answerCoverage,
+      jsonEnvelope("verify-run", [{ ...result, assertions }], {
+        extra: {
+          pass: verdict.pass,
+          assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),
+          signals: verdict.signals,
+          answerCoverage,
+        },
       }),
     );
   } else {

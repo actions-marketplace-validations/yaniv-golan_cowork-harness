@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.24.0` (baseline `desktop-1.32352.0`).
+Self-contained reference. Tracks `cowork-harness 1.25.0` (baseline `desktop-1.32885.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.24.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "1.25.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md)
         run: |
-          V=2.1.229   # match your scenario's pinned baseline's agentVersion
+          V=2.1.234   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
@@ -58,7 +58,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.24.0"
+- run: npm i -g "cowork-harness@>=1.25.0"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
@@ -289,7 +289,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.24.0"
+      - run: npm i -g "cowork-harness@>=1.25.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -318,7 +318,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.24.0"
+        run: npm i -g "cowork-harness@>=1.25.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:
@@ -357,13 +357,19 @@ in `result.json` and in the stdout envelope, by construction). Each entry is
 - **`staleness`** — on `replay --strict` / `--assert-from` / `--reassert`, skill or baseline drift,
   which those modes escalate to a hard failure on purpose (frozen events must not green an edited
   assert against a skill whose current source produces something else).
-- **`cassette-format`** — the cassette is too new for this build to interpret.
+- **`cassette-format`** — the cassette itself cannot be interpreted: too new a version for this build,
+  OR corrupt (duplicate/malformed control frames, a truncated recording). Before 1.25.0 the corrupt
+  cases were mis-reported as `assertion`, i.e. as if you had written them.
 - **`coverage`** — a `verify-run` answer-coverage miss: a gate the run fired that your `answers:` block
   does not cover.
 
-So `jq '[.verdict.failures[] | select(.kind=="assertion")]'` answers "did MY assertions pass?" and
-`select(.kind=="staleness")` answers "is the cassette stale?", from the envelope alone. Do not infer
-either from the exit code: every kind lands on exit 1.
+So `jq '[.results[]? | .verdict.failures[]? | select(.kind=="assertion")] | length'` answers "did MY
+assertions pass?" and swapping in `select(.kind=="staleness")` answers "is the cassette stale?", from
+the envelope alone. Do not infer either from the exit code: every kind lands on exit 1.
+
+Keep the `.results[]?` hop and the `?` operators. `.results[0]` silently ignores every scenario after
+the first when you pass a directory, and a bare `.verdict` does not exist at the envelope root at all —
+both read as "no failures" against a run that failed.
 
 > **Do not filter on whether `assertion` is present.** That was the only discriminator before `kind`
 > existed and it never worked in both directions: `coverage` entries carry a key too (an internal
@@ -429,6 +435,9 @@ To gate in CI, pick the severity you want:
 - `replay --strict` — fail (exit 1) on **any** staleness class.
 - `replay --fail-on-skill-drift` — fail only on skill-source drift (`skill` / `shared-root` / `unverifiable-skill`);
   baseline / format / `unverifiable-baseline` stay non-failing warnings.
+  Note `--allow-failing` waives this gate wholesale, including the copy `--assert-from` turns on for you:
+  `replay --assert-from … --write --allow-failing` will persist an assert block validated against a
+  recording whose skill sources have since moved. Re-record when the drift is real.
 - Or read `results[].staleness[].class` yourself and decide.
 
 Both flags realize the gate as failing assertions, so the verdict / `ok` / exit code stay consistent with the

@@ -509,7 +509,7 @@ else hits stdout in that mode — the renderer/footer/`[env]`/`[input]` all go t
 ```
 
 Each emitted result carries a **`verdict`** — a non-mutating serialization-time projection of `computeVerdict`,
-`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }], "failures": [{ "assertion?","message" }] }`
+`{ "pass": bool, "exitCode": 0|1, "signals": [{ "code","severity","message" }], "guards": [{ "name","status" }], "failures": [{ "assertion?","message","kind" }] }`
 — so a consumer can read each result's pass/fail **and why** (the `signals[]`, e.g. an all-green-assertions run
 that is `pass:false` purely on a `stalled` signal, or `failures[]` for a flat jq-friendly reason list) without
 recomputing. As of 0.31.0, the same `verdict` is **also persisted on the on-disk `result.json`** for a kept run
@@ -523,14 +523,22 @@ Other commands intentionally do NOT share this exact shape. By mechanism (`src/r
 there are three families:
 
 - **`results[]`-bearing (internally `jsonEnvelope`)** — the stable `{tool, version, command, ok,
-  results[], error}` shape described above. Emitted by **`run`, `skill`, `record`, `replay`**.
-  (`chat` writes the same `RunResult`-shaped `result.json` to disk, but has no `--output-format
-  json`/`isJsonOutput` support at all — it never emits a stdout envelope of any shape.)
+  results[], error}` shape described above. Emitted by **`run`, `skill`, `record`, `replay`,
+  `verify-run`**. (`chat` writes the same `RunResult`-shaped `result.json` to disk, but has no
+  `--output-format json`/`isJsonOutput` support at all — it never emits a stdout envelope of any
+  shape.)
+  - **`verify-run` is a hybrid, deliberately.** It emits `results[]` (always exactly one entry — it
+    judges one run dir, the same shape `run` emits for a single scenario) **and** keeps its
+    historical flat `pass` / `assertions[]` / `signals[]` / `answerCoverage` keys beside it, so the
+    same verdict is readable two ways. It was payload-shaped through 1.24.0; the divergence meant a
+    `.results[]? | .verdict.failures[]? | select(.kind=="assertion")` query copied from `run`
+    returned `[]` — indistinguishable from "no failures" — against a run that FAILED. Parity is what
+    makes a `kind` query written for one command transfer to the other.
 - **Payload-shaped (internally `jsonPayloadEnvelope`)** — shares the `{tool, version, command, ok,
   error}` frame but swaps `results[]` for a command-specific payload. The `ok` is the caller's own
   success criterion, not a per-`RunResult` verdict (the helper itself never calls `computeVerdict`,
   though a caller may compute `ok` however it likes — e.g. `probe-dispatch` sets it from its
-  projection's `verdict.pass`). Callers include **`verify-run`, `assertions`, `probe-dispatch`,
+  projection's `verdict.pass`). Callers include **`assertions`, `probe-dispatch`,
   `diff`, `trace`, `analyze-skill`, `lint`/`lint-skill`**, plus `record --dry-run`'s discovery
   payload, `verify-cassettes` (§11.1), `doctor` (§11.2), and `rehash`.
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON

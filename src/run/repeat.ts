@@ -3,6 +3,7 @@
 import type { RunResult, Assertion } from "../types.js";
 import { computeVerdict, type VerdictSignal } from "./verdict.js";
 import { budgetFields } from "../assert.js";
+import { runProvenance } from "./provenance.js";
 
 export interface RepeatRollup {
   scenario: string;
@@ -16,6 +17,13 @@ export interface RepeatRollup {
   totalCostUsd?: number;
   totalTokens?: number;
   nonDeterministicRuns: number; // gates answered by llm/first/external/human (RunResult.nonDeterministic)
+  /** "Which experiment did this BATCH run?" — the multi-run form of the per-run provenance banner.
+   *  Unions rather than a single value on purpose: a batch that silently spans two models, or mixes an
+   *  invoked skill with a not-invoked one, is the multi-run version of exactly the defect the banner
+   *  exists to catch, and collapsing to the first run would hide it. `ablatedRuns` is a count, not a
+   *  boolean, so a partially-ablated batch (which no flag can currently produce, but a resumed or
+   *  hand-assembled run set could) cannot read as either arm. */
+  provenance: { models: string[]; skills: string[]; ablatedRuns: number };
 }
 
 /** The first DEFINED field name on an assertion object — the same "one behavior name" convention the
@@ -74,6 +82,15 @@ export function buildRepeatRollup(
 
   const nonDeterministicRuns = results.filter((r) => r.nonDeterministic).length;
 
+  // First-seen order, deduped — same convention as RunResult.models itself.
+  const provs = results.map(runProvenance);
+  const uniq = (xs: string[]): string[] => [...new Set(xs)];
+  const provenance = {
+    models: uniq(provs.map((p) => p.model)),
+    skills: uniq(provs.map((p) => p.skill)),
+    ablatedRuns: provs.filter((p) => p.ablated).length,
+  };
+
   return {
     scenario,
     requested,
@@ -86,6 +103,7 @@ export function buildRepeatRollup(
     totalCostUsd,
     totalTokens,
     nonDeterministicRuns,
+    provenance,
   };
 }
 
@@ -112,4 +130,29 @@ export function rollupPasses(rollup: RepeatRollup, minPassRate = 1.0, allowBudge
   if (rollup.stoppedEarly === "diverged" || rollup.stoppedEarly === "unanswered" || rollup.stoppedEarly === "error") return false;
   if (rollup.stoppedEarly === "budget" && !allowBudgetStop) return false;
   return rollup.passRate >= minPassRate;
+}
+
+/**
+ * The batch's ARM, as a suffix for the rollup verdict line — `""` for a normal batch.
+ *
+ * `--ablate-skill --repeat N` produces N control runs and zero treatment runs. That is correct for a
+ * single-arm flag, and the rollup reported it as `repeat "<skill>": PASS — 5/5 passed (100%)`, which a
+ * consumer read as a completed A/B twice (10 baseline runs, 0 treatment runs, ~$16) before catching it
+ * at analysis. The per-run `[provenance]` banner now says `ablated=true` on each run, but a batch is
+ * exactly where per-run output scrolls past — the rollup line is the one people read, so the arm has to
+ * be ON it.
+ *
+ * Deliberately NOT a refusal of the flag combination. Ablation genuinely takes effect here (unlike
+ * `--ablate-skill --resume`, which execute.ts rejects because the skill stays mounted and `ablated:true`
+ * would be a lie), and "how variable is my no-skill baseline?" is a real question these flags compose
+ * correctly to answer. The output was honest and unlabeled, so the fix is the label.
+ *
+ * A PARTIALLY ablated batch is named as mixed rather than rounded to either arm: no flag produces one
+ * today, but a resumed or hand-assembled run set could, and it is interpretable as neither arm.
+ */
+export function armLabel(r: RepeatRollup): string {
+  const { ablatedRuns } = r.provenance;
+  if (r.completed === 0 || ablatedRuns === 0) return "";
+  if (ablatedRuns === r.completed) return " [ABLATED — control arm]";
+  return ` [MIXED ARMS: ${ablatedRuns}/${r.completed} ablated]`;
 }

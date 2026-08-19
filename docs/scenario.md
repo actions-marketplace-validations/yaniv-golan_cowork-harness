@@ -920,9 +920,11 @@ are scripted in the YAML's `answers:` block instead), and any other flag not doc
   the skill(s)-under-test removed, to check whether the agent "succeeds" even without them. It is one
   arm, not both — run the same prompt a second time *without* the flag to get the treatment arm.
   Composed with `--repeat N` it produces **N ablated runs and zero treatment runs**, which is the
-  intended reading of "N samples of the control" and not an A/B. Every ablated run is stamped
-  `ablated: true` in `result.json` so a consumer can never mistake one for a real run — check that
-  field before comparing anything. Designing the comparison itself (scrubbing tells, shuffling, judging
+  intended reading of "N samples of the control" and not an A/B. **The rollup's verdict line names the
+  arm** — `repeat "<skill>": PASS [ABLATED — control arm] — 5/5 passed (100%)` — so a one-armed batch
+  cannot be read as a finished comparison, and each run's `[provenance]` footer line carries
+  `ablated=true` besides. Every ablated run is also stamped `ablated: true` in `result.json`, so a
+  consumer reading the record can never mistake one for a real run. Designing the comparison itself (scrubbing tells, shuffling, judging
   blind, unblinding after grading) is yours; the harness supplies the runs and the control arm.
 
 Already have a run you like the shape of? `cowork-harness scaffold <run-id | run-dir>` turns a **kept**
