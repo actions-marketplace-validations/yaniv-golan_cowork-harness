@@ -98,6 +98,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`replay --help` now says that `--allow-failing` waives the skill-drift gate too.** `--assert-from`
+  forces that gate on precisely so a re-asserted block cannot be frozen against a recording whose skill
+  sources have moved — but the gate is the verdict, and `--allow-failing` waives the verdict wholesale.
+  Nothing downstream re-checks drift. So `--assert-from --write --allow-failing`, which is the natural
+  incantation when your asserts are legitimately failing (that being why you are re-asserting), persists
+  the block against a drifted recording with no warning. Behaviour is unchanged — the flag is an explicit
+  override and stays one — but it is now stated where it is reached for.
+
+  The same block documents that text mode writes to stderr and nothing to stdout (a passing replay is 0
+  bytes), and names `verdict.failures[].kind` as the way to separate your own failing asserts from
+  injected drift/corruption findings, which the exit code collapses.
+
 - **`verdict.failures[].kind` said "your assertion failed" when the cassette was corrupt.** That field is
   the documented way to tell an author's own failing `assert:` from something the harness injected — and
   seven cassette-corruption paths (duplicate `request_id`s with differing bodies, malformed control-out
