@@ -145,7 +145,10 @@ describe("spawn sentinels survive `$`-initial minified names", () => {
   const dollarBundle = [
     `return{CLAUDE_CODE_ENTRYPOINT:"local-agent",`,
     `CLAUDE_CODE_DISABLE_CRON:$o.disableCron?"1":"",`,
-    `CLAUDE_CODE_TAGS:\`lam_session_type:\${$k}\`}`,
+    // Double-quoted, not a template literal: this element interpolates nothing, and writing `\${` in a
+    // template literal trips CodeQL's useless-escape rule (the fixture flows into code that builds
+    // RegExps from bundle text). In a double-quoted string both the backticks and `${` are literal.
+    "CLAUDE_CODE_TAGS:`lam_session_type:${$k}`}",
     `,$x.sessionEnvVars()}`,
     `;function $blank($e){for(let $t of["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])`,
     `if($e[$t]==="")delete $e[$t]}`,
