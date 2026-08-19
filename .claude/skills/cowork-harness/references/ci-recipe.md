@@ -357,13 +357,19 @@ in `result.json` and in the stdout envelope, by construction). Each entry is
 - **`staleness`** — on `replay --strict` / `--assert-from` / `--reassert`, skill or baseline drift,
   which those modes escalate to a hard failure on purpose (frozen events must not green an edited
   assert against a skill whose current source produces something else).
-- **`cassette-format`** — the cassette is too new for this build to interpret.
+- **`cassette-format`** — the cassette itself cannot be interpreted: too new a version for this build,
+  OR corrupt (duplicate/malformed control frames, a truncated recording). Before 1.25.0 the corrupt
+  cases were mis-reported as `assertion`, i.e. as if you had written them.
 - **`coverage`** — a `verify-run` answer-coverage miss: a gate the run fired that your `answers:` block
   does not cover.
 
-So `jq '[.verdict.failures[] | select(.kind=="assertion")]'` answers "did MY assertions pass?" and
-`select(.kind=="staleness")` answers "is the cassette stale?", from the envelope alone. Do not infer
-either from the exit code: every kind lands on exit 1.
+So `jq '[.results[]? | .verdict.failures[]? | select(.kind=="assertion")] | length'` answers "did MY
+assertions pass?" and swapping in `select(.kind=="staleness")` answers "is the cassette stale?", from
+the envelope alone. Do not infer either from the exit code: every kind lands on exit 1.
+
+Keep the `.results[]?` hop and the `?` operators. `.results[0]` silently ignores every scenario after
+the first when you pass a directory, and a bare `.verdict` does not exist at the envelope root at all —
+both read as "no failures" against a run that failed.
 
 > **Do not filter on whether `assertion` is present.** That was the only discriminator before `kind`
 > existed and it never worked in both directions: `coverage` entries carry a key too (an internal
@@ -429,6 +435,9 @@ To gate in CI, pick the severity you want:
 - `replay --strict` — fail (exit 1) on **any** staleness class.
 - `replay --fail-on-skill-drift` — fail only on skill-source drift (`skill` / `shared-root` / `unverifiable-skill`);
   baseline / format / `unverifiable-baseline` stay non-failing warnings.
+  Note `--allow-failing` waives this gate wholesale, including the copy `--assert-from` turns on for you:
+  `replay --assert-from … --write --allow-failing` will persist an assert block validated against a
+  recording whose skill sources have since moved. Re-record when the drift is real.
 - Or read `results[].staleness[].class` yourself and decide.
 
 Both flags realize the gate as failing assertions, so the verdict / `ok` / exit code stay consistent with the
