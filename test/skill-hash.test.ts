@@ -351,3 +351,56 @@ describe("multi-root identity — a KNOWN, PINNED limitation, not a fixed behavi
     expect(new Set(entries.map((e) => e.sha)).size, "same path, different content").toBe(2);
   });
 });
+
+describe("manifest version exemption — CHARACTERIZATION of today's asymmetry", () => {
+  // `hashDir` strips `version` before hashing a manifest, but only for paths matching
+  // `.claude-plugin/plugin.json` or a bare root `plugin.json` (skill-hash.ts:184). Any other manifest
+  // location — `.cursor-plugin/plugin.json` is the live example — falls through to raw-byte hashing, so a
+  // pure version bump there DOES re-stale every cassette that mounts it.
+  //
+  // This is a CHARACTERIZATION test: it pins what the code does today, not what it should do. The
+  // asymmetry was completely uncovered — `grep -rl cursor-plugin test/` found nothing — so either half
+  // could have been "fixed" or broken with nothing going red.
+  //
+  // If a future change makes the exemption path-agnostic (the canonicalisation work is the likely
+  // occasion), THIS TEST FLIPS, and the flip is the evidence that the behaviour changed on purpose rather
+  // than the asymmetry quietly reversing inside a large diff. Update it deliberately; do not delete it.
+  function manifestRoot(dir: string): string {
+    const d = mkdtempSync(join(tmpdir(), "mani-"));
+    mkdirSync(join(d, dir), { recursive: true });
+    writeFileSync(join(d, dir, "plugin.json"), '{"name":"p","version":"1"}');
+    return d;
+  }
+  const bumped = (root: string, dir: string) => {
+    writeFileSync(join(root, dir, "plugin.json"), '{"name":"p","version":"9.9.9"}');
+    return hashSkillDirs([root]).hash;
+  };
+
+  it(".claude-plugin/plugin.json: a version bump is EXEMPT — the hash does not move", () => {
+    const r = manifestRoot(".claude-plugin");
+    const before = hashSkillDirs([r]).hash;
+    expect(bumped(r, ".claude-plugin")).toBe(before);
+  });
+
+  it("a ROOT plugin.json is exempt too — the predicate covers both spellings", () => {
+    const r = manifestRoot(".");
+    const before = hashSkillDirs([r]).hash;
+    expect(bumped(r, ".")).toBe(before);
+  });
+
+  it(".cursor-plugin/plugin.json: a version bump is NOT exempt — the hash DOES move", () => {
+    // The asymmetry, stated as a fact about today rather than an endorsement of it.
+    const r = manifestRoot(".cursor-plugin");
+    const before = hashSkillDirs([r]).hash;
+    expect(bumped(r, ".cursor-plugin")).not.toBe(before);
+  });
+
+  it("the exemption is version-ONLY, wherever it applies", () => {
+    // Guards the other direction: a behaviour-bearing field must still re-stale, or the carve-out would be
+    // silently hiding real drift rather than metadata churn.
+    const r = manifestRoot(".claude-plugin");
+    const before = hashSkillDirs([r]).hash;
+    writeFileSync(join(r, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1","mcpServers":{"x":{}}}');
+    expect(hashSkillDirs([r]).hash).not.toBe(before);
+  });
+});
