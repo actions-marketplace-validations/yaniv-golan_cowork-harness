@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, copyFileSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, copyFileSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveCassetteSessionPath } from "../src/run/cassette.js";
@@ -319,5 +319,93 @@ describe.skipIf(!CAN)("2.0.0 — unverifiable staleness fails the DEFAULT verdic
     const moved = relocate();
     expect(run(["replay", moved, "--session", ignoring]).code, "content drift alone must not fail a bare replay").toBe(0);
     expect(run(["replay", moved, "--session", ignoring, "--fail-on-skill-drift"]).code, "the flag still escalates it").not.toBe(0);
+  });
+});
+
+describe.skipIf(!CAN)("duplicate manifest paths + Ship E's narrow scope", () => {
+  /** A cassette whose recorded skillHash cannot match, so the mismatch branch (where attribution lives)
+   *  is reached. `mode` is dropped so the recorded/live file-set modes agree — a mode flip short-circuits
+   *  BEFORE attribution and silently hid this finding the first time I looked for it. */
+  function mismatchingCassette(mutate: (fp: Record<string, unknown>) => void = () => {}): string {
+    const c = JSON.parse(readFileSync(FIXTURE, "utf8"));
+    c.fingerprint.skillHash = "de".repeat(32);
+    delete c.fingerprint.mode;
+    mutate(c.fingerprint);
+    const d = mkdtempSync(join(tmpdir(), "cwh-dup-"));
+    const f = join(d, "c.cassette.json");
+    writeFileSync(f, JSON.stringify(c));
+    return f;
+  }
+
+  /** Two mounts each holding `skills/SKILL.md` — the same ROOT-RELATIVE path from different roots. */
+  function twoRootSession(): string {
+    const d = mkdtempSync(join(tmpdir(), "cwh-2root-"));
+    for (const r of ["ra", "rb"]) {
+      mkdirSync(join(d, r, "skills"), { recursive: true });
+      writeFileSync(join(d, r, "skills", "SKILL.md"), `CONTENT-${r}\n`);
+    }
+    writeFileSync(
+      join(d, "two.yaml"),
+      `permission_mode: default\nplugins:\n  local_plugins:\n    - ${join(d, "ra")}\n    - ${join(d, "rb")}\n`,
+    );
+    return join(d, "two.yaml");
+  }
+
+  function replayJson(args: string[]) {
+    const r = spawnSync("node", [CLI, ...args, "--output-format", "json"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_GITSET: "0" },
+    });
+    try {
+      return JSON.parse(r.stdout).results?.[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  it("reports duplicate manifest paths as AMBIGUOUS rather than silently under-reporting", () => {
+    const res = replayJson(["replay", mismatchingCassette(), "--session", twoRootSession()]);
+    const msgs = (res?.staleness ?? []).map((s: { message: string }) => s.message);
+    expect(msgs.join("\n")).toMatch(/ambiguous duplicate manifest path\(s\) across mounts \(skills\/SKILL\.md\)/);
+    // The under-reporting it qualifies: two files were added under the same relpath, and the per-file
+    // diff can only name one, because every consumer keys the manifest by path.
+    expect(msgs.join("\n")).toMatch(/1 added \(skills\/SKILL\.md\)/);
+  });
+
+  it("does NOT cry ambiguity when paths are unique", () => {
+    // The control. Without it the assertion above would pass on a finding that fires unconditionally.
+    const res = replayJson(["replay", mismatchingCassette(), "--session", REAL_SESSION]);
+    const msgs = (res?.staleness ?? []).map((s: { message: string }) => s.message).join("\n");
+    expect(msgs, "a single-root manifest has no duplicate paths").not.toMatch(/ambiguous duplicate/);
+    expect(msgs, "but it is still a real drift").toMatch(/changed since record/);
+  });
+
+  it("degrades safely on a fingerprint with NO fileSigs manifest at all", () => {
+    // duplicateManifestPaths() is called on `fp.fileSigs`, which is absent on a pre-v5 cassette and on
+    // any tree above MANIFEST_MAX_FILES (`fileSigsOmitted`). It must not throw or claim ambiguity.
+    for (const mutate of [
+      (fp: Record<string, unknown>) => delete fp.fileSigs,
+      (fp: Record<string, unknown>) => {
+        delete fp.fileSigs;
+        fp.fileSigsOmitted = true;
+      },
+    ]) {
+      const res = replayJson(["replay", mismatchingCassette(mutate), "--session", REAL_SESSION]);
+      expect(res, "must still produce a verdict, not crash").toBeTruthy();
+      expect((res.staleness ?? []).map((s: { message: string }) => s.message).join("\n")).not.toMatch(/ambiguous duplicate/);
+    }
+  });
+
+  it("Ship E is NARROW: a cassette carrying no skillHash still replays green", () => {
+    // checkStaleness returns early on `rec.skillHash === undefined` — there was nothing to verify, so
+    // this is not the "could not check" state. Pinned so a future widening of the 2.0.0 default cannot
+    // silently start failing pre-fingerprint cassettes.
+    const c = JSON.parse(readFileSync(FIXTURE, "utf8"));
+    delete c.fingerprint.skillHash;
+    const d = mkdtempSync(join(tmpdir(), "cwh-nohash-"));
+    const f = join(d, "c.cassette.json");
+    writeFileSync(f, JSON.stringify(c));
+    // Relocated AND fingerprintless: the relocation alone would fail a cassette that had a skillHash.
+    expect(run(["replay", f]).code).toBe(0);
   });
 });

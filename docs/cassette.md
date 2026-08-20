@@ -258,6 +258,18 @@ moved cassette verifies without being re-recorded. Points worth knowing:
 - Unrelated to `boundary-check --session`, which folds a session's egress additions into the allowlist
   the probes test against — same spelling, different job.
 
+> **Known limitation — multi-root hashing is order-dependent.** `skillHash` folds each mounted root's
+> files in **absolute-path sort order**, while deliberately excluding a root's own *name* from the digest.
+> A single root is therefore fully location-independent, but with two or more the excluded name re-enters
+> through the sort: the same two trees under differently-sorting directory names hash differently. The
+> failure direction is **false drift** — a loud, wrong "skill files changed" — never a false green, which
+> is why multi-root cassettes are not refused. A related consequence: two mounts can contribute the same
+> root-relative path (`skills/x/SKILL.md`), and since the per-file manifest is keyed by path, drift
+> ATTRIBUTION for those paths is ambiguous — replay says so explicitly rather than naming a file it cannot
+> identify. Fixing either properly means folding a stable per-root identity into the digest, which changes
+> every multi-root cassette's hash and so needs a hash-format epoch. Pinned by tests in
+> `test/skill-hash.test.ts` so the eventual fix is a deliberate change rather than a surprise.
+
 > **Why the skill hash is what breaks.** The chain is one hop: the cassette resolves its relative
 > `scenario.session` against its own directory, and the skill dirs come from **that session file**.
 > `fingerprint.skillSources` is stored relative to the *session-file* directory and is diagnostics-only

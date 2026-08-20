@@ -1284,7 +1284,7 @@
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics.",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS the default verdict since 2.0.0 — \"could not be checked\" is not \"checked and unchanged\". --strict fails on every class; --fail-on-skill-drift adds skill/shared-root. See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
         "required": [
