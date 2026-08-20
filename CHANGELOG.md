@@ -6,6 +6,65 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
+
+- **A bare `replay` now FAILS when skill staleness cannot be verified** (`unverifiable-skill`), where it
+  previously warned on stderr, recorded the class in `staleness[]`, and exited `0`. "Could not be checked
+  at all" and "checked and unchanged" are different claims and only the second is green — a cassette that
+  had silently stopped proving anything kept passing the lane most people run, and green-against-unverified
+  is worse than a loud red because silence prompts a re-record while green does not. `SPEC.md` treats a
+  change to a per-command exit code as breaking, hence the major.
+
+  **Deliberately narrow.** The content-drift classes (`skill`, `shared-root`) still require
+  `--fail-on-skill-drift`, so that flag keeps its meaning and no inverse escape hatch is needed.
+
+  **Migration.** The commonest cause is a cassette that MOVED — use the new `--session <file>` below
+  rather than re-recording. If you genuinely want the old behaviour for a lane, it was never expressible
+  as a flag and still isn't; fix the resolution instead.
+
+### Added
+
+- **`--session <file>` on `replay` and `verify-cassettes`** — the escape hatch for a relocated cassette. A
+  cassette stores `session:` relative to its own directory, so any move (`git mv`, a repo reorganisation, a
+  copy into another project) made skill staleness permanently unverifiable with no way to say where the
+  tree went; the only remedies were moving the file back or re-recording. It takes a **session**, not skill
+  directories, because `staleness.hash_ignore` is a session-level field that is not stored in the cassette —
+  an override carrying only directories would silently change the hash boundary. Refused for a directory
+  target, for a path that is not a file, and for inline scenarios; the resolved session **and the dirs it
+  produced** are echoed on stderr, since an override that silently pinned the wrong tree would manufacture
+  false greens. An explicit override is trusted: a mismatch under it is reported as real drift rather than
+  downgraded.
+
+- **Duplicate manifest paths are now reported as ambiguous** instead of silently under-reported. Two mounts
+  can each contribute `skills/x/SKILL.md`, and every consumer keys `fileSigs` by path, so duplicates
+  collapsed to the last occurrence and the changed-file list could name the wrong file or none. Drift was
+  always still DETECTED — the hash folds every entry — so this is an attribution fix, not a false-green fix.
+  Exact attribution needs per-root identity in the digest, which is a hash-format epoch change.
+
+### Fixed
+
+- **Skill staleness, session-shape staleness, label provenance and the skill-hash debug dump could
+  disagree about which session they resolved.** The cassette-relative join was duplicated byte-identically
+  in three functions and `sessionFingerprintDrift` accepted an override its only caller never passed, so
+  `--session` would have verified skill content against the override while session shape still resolved the
+  recorded path — reporting "clean" on an axis that hard-fails when used normally. All consumers now share
+  one resolver.
+
+- **An unresolvable session now says WHY** — missing file, unreadable/unparseable YAML, or declared mounts
+  that do not exist — instead of one undifferentiated message. Those point at different fixes, and only the
+  first looks like a relocation, so it also names the remedy.
+
+### Known limitations (documented, not fixed)
+
+- **Multi-root skill hashing is order-dependent.** `hashSkillDirs` folds roots sorted by absolute path
+  while deliberately excluding a root's own name from the digest, so identical content at differently
+  sorting directory names hashes differently. The failure direction is false DRIFT (loud and wrong), never
+  a false green, which is why multi-root cassettes are not refused. Fixing it needs a hash-format epoch.
+  Not scheduled: no multi-root cassette exists in any reachable corpus (32 cassettes on the widest
+  denominator across three repos), and no session declares 2+ plugin/skill roots. Pinned by tests in
+  `test/skill-hash.test.ts` so the eventual fix is a deliberate change.
+
+
 ## [1.25.0] — 2026-08-20
 
 ### Added

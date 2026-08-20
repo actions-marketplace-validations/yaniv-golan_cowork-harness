@@ -338,7 +338,10 @@ describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by con
     );
     write(cwd, "edit.yaml", scenarioYaml({ assert: "  - result: success\n" }));
     const dflt = replay(cwd, ["c.cassette.json", "--output-format", "json"]);
-    expect(dflt.code).toBe(0); // default lane: staleness is warn-only
+    // CHANGED IN 2.0.0: `unverifiable-skill` now fails the DEFAULT verdict too — "could not be checked"
+    // is not "checked and unchanged". The default/opt-in contrast this test was built around still holds
+    // for `skill` / `shared-root`, which continue to require --fail-on-skill-drift.
+    expect(dflt.code).not.toBe(0);
     const r = replay(cwd, ["c.cassette.json", "--assert-from", "edit.yaml", "--output-format", "json"]);
     expect(r.code).not.toBe(0); // opt-in lane: skill drift is a hard fail
     expect(r.json?.ok).toBe(false);

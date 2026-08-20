@@ -253,3 +253,74 @@ describe("NUL separator prevents newline-in-filename hash collisions", () => {
     expect(hashSkillDirs([d1]).hash).not.toBe(hashSkillDirs([d2]).hash);
   });
 });
+
+describe("multi-root identity — a KNOWN, PINNED limitation, not a fixed behaviour", () => {
+  // These tests pin what the hash does TODAY so the eventual fix is a deliberate change rather than a
+  // surprise. Read them as a specification of the limitation, not as an endorsement of it.
+  //
+  // `hashSkillDirs` does `const sorted = [...dirs].sort()` and folds each root's entries in that order.
+  // Entries are ROOT-RELATIVE, so the concatenation order of roots is load-bearing while the roots' own
+  // names are deliberately excluded from the digest. That is an internal inconsistency: a single root is
+  // fully location-independent, but for two or more the excluded name re-enters through the sort.
+  //
+  // FAILURE DIRECTION MATTERS: reordering produces FALSE DRIFT — a loud, wrong "files changed" — never a
+  // false green. That is why the harness does not refuse multi-root cassettes; refusing working input to
+  // prevent a loud false positive would be disproportionate.
+  //
+  // Fixing it means folding a stable per-root identity into the digest, which changes the digest for every
+  // multi-root cassette and therefore needs a hash-format epoch bump. Not scheduled: measured across every
+  // reachable corpus (cowork-harness, founder-skills incl. cowork-tests, creative-problem-solving —
+  // 32 cassettes on the widest denominator) there is not one multi-root cassette, and no session anywhere
+  // declares 2+ plugin/skill roots.
+  function rootWith(name: string, content: string): string {
+    const d = mkdtempSync(join(tmpdir(), "mr-"));
+    const r = join(d, name);
+    mkdirSync(join(r, "skills"), { recursive: true });
+    writeFileSync(join(r, "skills", "SKILL.md"), content);
+    return r;
+  }
+
+  it("a SINGLE root is fully location-independent — the property everything else rests on", () => {
+    // If this ever fails, `--session` and every relocation guarantee are void: the digest would depend on
+    // where the tree happens to sit.
+    const a = rootWith("aaa", "SAME");
+    const b = rootWith("zzz", "SAME");
+    expect(hashSkillDirs([a]).hash).toBe(hashSkillDirs([b]).hash);
+  });
+
+  it("argument order does NOT affect the digest — the internal sort normalises it", () => {
+    // Stated explicitly because it is the test someone naturally reaches for, and it CANNOT FAIL: the
+    // function sorts its arguments, so this proves nothing about path order. It is pinned only so the
+    // next reader does not mistake it for evidence about the limitation below.
+    const a = rootWith("aaa", "A");
+    const b = rootWith("bbb", "B");
+    expect(hashSkillDirs([a, b]).hash).toBe(hashSkillDirs([b, a]).hash);
+  });
+
+  it("KNOWN LIMITATION: identical content at differently-sorting root names hashes differently", () => {
+    // The discriminating test the one above is not. Same two trees; only which directory name each
+    // occupies changes, so the sort folds them in the opposite order.
+    const d1 = mkdtempSync(join(tmpdir(), "l1-"));
+    const d2 = mkdtempSync(join(tmpdir(), "l2-"));
+    const place = (base: string, name: string, content: string) => {
+      const r = join(base, name);
+      mkdirSync(join(r, "skills"), { recursive: true });
+      writeFileSync(join(r, "skills", "SKILL.md"), content);
+      return r;
+    };
+    const layout1 = [place(d1, "aaa", "ALPHA"), place(d1, "zzz", "BETA")];
+    const layout2 = [place(d2, "aaa", "BETA"), place(d2, "zzz", "ALPHA")];
+    expect(hashSkillDirs(layout1).hash).not.toBe(hashSkillDirs(layout2).hash);
+  });
+
+  it("KNOWN LIMITATION: duplicate root-relative paths make drift ATTRIBUTION ambiguous", () => {
+    // Two mounts can emit the same relpath. The digest folds both entries, so drift is still DETECTED —
+    // this is not a false green — but `diffFileSigsPaths` builds `new Map(recorded)`, which keeps only
+    // the last, so the report can name the wrong file or none.
+    const a = rootWith("ra", "FROM-A");
+    const b = rootWith("rb", "FROM-B");
+    const entries = skillHashEntries([a, b]);
+    expect(entries.map((e) => e.path)).toEqual(["skills/SKILL.md", "skills/SKILL.md"]);
+    expect(new Set(entries.map((e) => e.sha)).size, "same path, different content").toBe(2);
+  });
+});

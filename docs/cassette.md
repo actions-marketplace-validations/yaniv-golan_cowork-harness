@@ -61,7 +61,7 @@ harness itself. For "does my script still produce the right numbers", test the s
 [pytest lane](../python/README.md)); for "does the agent still behave this way", re-record or run live.
 Editing a bundled script *does* change the skill hash and stale every cassette recorded against it — that
 tripwire is what keeps the gap above from going unnoticed. Note which command enforces it: `verify-cassettes`
-hard-fails on staleness, while `replay` only warns — so a CI job that runs `replay` alone will not catch a
+hard-fails on staleness, while `replay` warns on the content-drift classes — so a CI job that runs `replay` alone will not catch a
 skill that moved. Run both; the drift note in the "Filesystem assertions" section below has the detail.
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
@@ -224,6 +224,14 @@ reports
 which is exit `3`. This applies to any move — a `git mv` during a repo reorganisation, a copy into
 another project, or recording to one `--out` and committing to a different path — not just to the
 hostloop case below.
+
+> **2.0.0 — `unverifiable-skill` fails a bare `replay`.** "Could not be checked at all" and "checked and
+> unchanged" are different claims, and only the second is green. Before 2.0.0 a bare `replay` warned on
+> stderr, recorded the class in `staleness[]`, and still exited `0` — so a cassette that had silently
+> stopped proving anything kept passing the lane most people run. The change is deliberately narrow: the
+> content-drift classes (`skill`, `shared-root`) still require `--fail-on-skill-drift`, so that flag keeps
+> its meaning and there is no inverse escape hatch to add. The remedy is `--session <file>` below, or a
+> re-record.
 
 **The escape hatch is `--session <file>`**, on both `replay` and `verify-cassettes`:
 
@@ -507,7 +515,8 @@ drift, or `replay --fail-on-skill-drift` fails only on skill-source drift (leavi
 Either way, every replay result also reports the drift in `staleness[]` (class-tagged) for a JSON gate to read.
 
 > **On `replay`, drift WARNS by default — the staleness gate is `verify-cassettes`.** Edit a skill without
-> re-recording and a bare `replay` prints `::warning:: cassette stale … re-record` and still reports
+> re-recording and a bare `replay` prints `::warning:: cassette stale … re-record` and (for the
+> content-drift classes) still reports
 > success (exit 0); `verify-cassettes` on the same tree exits **1**. That split is deliberate: `replay`
 > answers "do the assertions still hold", `verify-cassettes` answers "is this recording still current", and
 > a stale recording is not by itself a wrong answer. **The consequence is that `replay` alone does not gate

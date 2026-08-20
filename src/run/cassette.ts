@@ -1306,6 +1306,27 @@ export interface FileSigDiff {
 
 /** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists.
  *  Exported for the diff engine (artifacts view) — the exact same [path, sha256] shape it needs. */
+/** Root-relative `fileSigs` paths are NOT unique across mounts: two roots can each hold
+ *  `skills/x/SKILL.md`, and the manifest then carries two entries with the same path and different shas.
+ *  Every consumer keys that manifest by path (`diffFileSigsPaths` builds `new Map(recorded)`), so
+ *  duplicates collapse to the last occurrence and the reported file list can name the wrong file or none.
+ *
+ *  This does NOT make drift undetectable — `skillHash` folds every entry, so the gate still fires. What it
+ *  breaks is ATTRIBUTION, and exact attribution is impossible without stored per-root identity: a multiset
+ *  diff cannot say WHICH root a changed `SKILL.md` came from, and swapping two roots' contents leaves the
+ *  sha multiset identical while the digest moves. So the honest report is "attribution unavailable", not a
+ *  guess. A real fix needs framed root IDs and namespaced manifest paths — a hash-format epoch change. */
+export function duplicateManifestPaths(sigs: ReadonlyArray<readonly [string, string]> | undefined): string[] {
+  if (!sigs) return [];
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const [path] of sigs) {
+    if (seen.has(path)) dupes.add(path);
+    else seen.add(path);
+  }
+  return [...dupes].sort();
+}
+
 export function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
   const rec = new Map(recorded);
   const liv = new Map(live);
@@ -1624,6 +1645,12 @@ export function computeStaleness(
         const scopeLabel = scopeArr.map((s) => `skills/${s}`).join(", ") || "skill";
         const scopeSet = new Set(scopeArr);
         const scopeAgents = (live.agentScope ?? "off") === "skill";
+        const dup = [...new Set([...duplicateManifestPaths(fp.fileSigs), ...duplicateManifestPaths(live.fileSigs)])];
+        if (dup.length)
+          findings.push({
+            class: "skill",
+            message: `ambiguous duplicate manifest path(s) across mounts (${dup.join(", ")}) — drift attribution is unavailable for them; the hash difference is still real`,
+          });
         if (fp.fileSigs && live.fileSigs) {
           // Path-accurate: emit a finding per bucket that ACTUALLY changed, so a co-occurring shared change can
           // never mask the skill's own drift (the original bug) and vice-versa.
@@ -1661,6 +1688,12 @@ export function computeStaleness(
       } else {
         // Non-scoped (whole-tree) cassette: name the changed files when the per-file manifest is present,
         // else the generic fallback.
+        const dup = [...new Set([...duplicateManifestPaths(fp.fileSigs), ...duplicateManifestPaths(live.fileSigs)])];
+        if (dup.length)
+          findings.push({
+            class: "skill",
+            message: `ambiguous duplicate manifest path(s) across mounts (${dup.join(", ")}) — drift attribution is unavailable for them; the hash difference is still real`,
+          });
         const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
         if (summary) findings.push({ class: "skill", message: `skill files changed since record — ${summary} — re-record` });
         else findings.push({ class: "skill", message: "local skill/plugin dir contents changed since record — re-record" });
@@ -6164,6 +6197,24 @@ export async function replayCassette(
           assertion: {} as Assertion,
           pass: false,
           message: `skill-source drift (--fail-on-skill-drift): ${s.message}`,
+          source: "staleness",
+        });
+    // BREAKING in 2.0.0: `unverifiable-skill` fails the DEFAULT verdict. "Verified and unchanged" and
+    // "could not be checked at all" are categorically different claims, and only the first should be green.
+    // Before this a bare `replay` warned on stderr, recorded the class in `staleness[]`, and still returned
+    // pass:true / exit 0 — so a cassette that had silently stopped proving anything kept passing the lane
+    // most people run. Green-against-unverified is worse than a loud red: silence prompts a re-record,
+    // green does not.
+    //
+    // Deliberately NARROW. `skill` / `shared-root` — "we checked, and it changed" — still require
+    // `--fail-on-skill-drift`, so that flag keeps its meaning and no inverse escape hatch is needed. The
+    // remedy for the commonest cause is `--session <file>`; re-recording is the other.
+    else
+      for (const s of staleness.filter((s) => s.class === "unverifiable-skill"))
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `skill staleness could not be verified: ${s.message}`,
           source: "staleness",
         });
 

@@ -89,7 +89,8 @@ It takes a session (not skill dirs) so `staleness.hash_ignore` survives, refuses
 and echoes the dirs it resolved. Full contract:
 [docs/cassette.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md).
 
-Both lines matter: `replay` alone **warns** on a stale recording and exits 0, so dropping the
+Both lines matter: for the CONTENT-drift classes (`skill`, `shared-root`) `replay` alone **warns** and
+exits 0, so dropping the
 `verify-cassettes` step means a skill edit silently stops being tested. (One command instead of two:
 `replay --fail-on-skill-drift`.)
 

@@ -287,3 +287,37 @@ describe.skipIf(!CAN)("failure kinds the provenance work claims to distinguish",
     expect(overridden, "override already given → do not repeat it back").not.toMatch(/point at its session with --session/);
   });
 });
+
+describe.skipIf(!CAN)("2.0.0 — unverifiable staleness fails the DEFAULT verdict (Ship E)", () => {
+  it("a bare replay FAILS on a relocated cassette, where it used to warn and exit 0", () => {
+    const r = run(["replay", relocate()]);
+    expect(r.code, "no flags at all — this is the breaking change").not.toBe(0);
+    expect(`${r.out}${r.err}`).toMatch(/skill staleness could not be verified/);
+  });
+
+  it("but an in-place cassette still passes a bare replay", () => {
+    // The control. Without it the assertion above would be satisfied by breaking replay outright.
+    expect(run(["replay", FIXTURE]).code).toBe(0);
+  });
+
+  it("and --session is the remedy, not a re-record", () => {
+    expect(run(["replay", relocate(), "--session", REAL_SESSION]).code).toBe(0);
+  });
+
+  it("stays NARROW: content drift still needs --fail-on-skill-drift", () => {
+    // `skill` / `shared-root` mean "we checked, and it changed" — a different claim from "could not
+    // check", and deliberately still opt-in so the flag keeps its meaning. Same skill tree via an
+    // override, with an ignore that moves the boundary: drift is real, but a bare replay must not fail
+    // on it.
+    const skill = resolve("examples/skills/my-pdf-skill");
+    const d = mkdtempSync(join(tmpdir(), "cwh-narrow-"));
+    const ignoring = join(d, "ignoring.yaml");
+    writeFileSync(
+      ignoring,
+      `permission_mode: default\nplugins:\n  local_plugins:\n    - ${skill}\nstaleness:\n  hash_ignore:\n    - "**/SKILL.md"\n`,
+    );
+    const moved = relocate();
+    expect(run(["replay", moved, "--session", ignoring]).code, "content drift alone must not fail a bare replay").toBe(0);
+    expect(run(["replay", moved, "--session", ignoring, "--fail-on-skill-drift"]).code, "the flag still escalates it").not.toBe(0);
+  });
+});
