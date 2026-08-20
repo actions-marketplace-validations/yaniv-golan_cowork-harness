@@ -435,7 +435,7 @@ describe("checkStaleness — staleness message variants", () => {
     const msgs = checkStaleness(c, root);
     const skillMsg = msgs.find((m) => /hash format|older/.test(m));
     expect(skillMsg).toBeDefined();
-    expect(skillMsg).toMatch(/v1.*v2|older hash format/i);
+    expect(skillMsg).toMatch(/hash format v\d+ \(now v\d+\)/i);
     expect(skillMsg).not.toMatch(/contents changed/);
   });
 

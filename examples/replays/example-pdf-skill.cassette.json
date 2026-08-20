@@ -1,7 +1,7 @@
 {
-  "$schema": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v10.json",
+  "$schema": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v12.json",
   "generator": "cowork-harness",
-  "cassetteVersion": 10,
+  "cassetteVersion": 12,
   "scenario": {
     "name": "example-pdf-skill",
     "baseline": "latest",
@@ -135,7 +135,7 @@
     "baseline": "1.32885.1",
     "skillHash": "b760ea90682777367fbd44d866ea66d316452da1abb18bf8cb61f1cec8e67806",
     "promptAssetsHash": "491afe2862dc67ea",
-    "contentSig": "ddf68cf6d74e0599729589f8be4f0a9eec440093c99c1060cd6f47dd671a0dfd",
+    "contentSig": "22d43c07dc2c8efcd648d280027317e2b586e5bf5bc42c274b19fc28de8ad552",
     "skillSources": [
       "../skills/my-pdf-skill"
     ],
@@ -149,7 +149,8 @@
         "skills/my-pdf-skill/SKILL.md",
         "63a5ad9d86598876d5172651f4d75759efb47bd1ec35d3bd430b8d31b81c8ab3"
       ]
-    ]
+    ],
+    "hashFormat": "jcs1"
   },
   "timeline": [
     {

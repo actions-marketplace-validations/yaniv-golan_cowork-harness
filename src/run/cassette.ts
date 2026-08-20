@@ -95,7 +95,20 @@ import { jsonEnvelope, jsonPayloadEnvelope, fail, isJsonOutput, pkgVersion } fro
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
-import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN, agentSkillName } from "./skill-hash.js";
+import {
+  hashSkillDirs,
+  hashSharedOnly,
+  computeContentSig,
+  skillHashEntries,
+  OS_JUNK_PATTERN,
+  agentSkillName,
+  ACTIVE_HASH_ALGO,
+  foldSnapshot,
+} from "./skill-hash.js";
+
+/** What NEW fingerprints record. Absent on a fingerprint means the legacy transform, so only the post-epoch
+ *  algorithm is ever written out. */
+const ACTIVE_HASH_FORMAT: "jcs1" | undefined = ACTIVE_HASH_ALGO === "jcs1" ? "jcs1" : undefined;
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrubField } from "../secrets.js";
@@ -351,7 +364,7 @@ export interface Cassette {
 //  The only value that currently needs v11 is `lane: "remote"` (changes replay-verdict semantics a
 //  pre-lane reader doesn't know about); `lane: "local"`/omitted — nearly every existing scenario — still
 //  stamps v10, unchanged. No hashing or manifest-shape change; HASH_FORMAT_EPOCH stays at v8.
-export const CASSETTE_VERSION = 11;
+export const CASSETTE_VERSION = 12;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -364,7 +377,7 @@ export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
 // NUL-framed (closes unframed-concatenation collisions). Kept as documentation of which algorithm
 // version is now implicitly guaranteed by the read floor; no code branches on it anymore (the classifier
 // that once compared a per-cassette algorithm version against this constant was deleted with the floor).
-const CONTENTSIG_ALGO = 4;
+const CONTENTSIG_ALGO = 5;
 
 /** The last cassette format version that actually changed HASHING (skillHash/contentSig framing or
  *  algorithm) — v7→v8 bumped CONTENTSIG_ALGO 3→4 to fix the two framing collisions (see CHANGELOG). v9
@@ -374,7 +387,7 @@ const CONTENTSIG_ALGO = 4;
  *  "recorded under an older hash format" classification keys off THIS constant, not CASSETTE_VERSION —
  *  otherwise a correctly-current v9/v10/v11 cassette with genuine skill drift would get a false "older
  *  format" finding and lose its per-bucket drift attribution. */
-const HASH_FORMAT_EPOCH = 8;
+const HASH_FORMAT_EPOCH = 12;
 
 /** Canonical URL of the JSON Schema for a given STAMPED cassette version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers can discover what
@@ -423,7 +436,10 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
  *  schema. */
 export function requiredVersionFor(scenario: unknown): number {
   const s = (scenario ?? {}) as Record<string, unknown>;
-  const BASE = 10;
+  // Derived, never hard-coded: this is what actually gets STAMPED at both write sites, so a hash-format
+  // bump that moved only CASSETTE_VERSION/HASH_FORMAT_EPOCH would write new-algorithm digests into
+  // cassettes stamped with an old version — permanently mislabelled, and unprovable at the next epoch.
+  const BASE = HASH_FORMAT_EPOCH;
   return Math.max(BASE, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
 }
 
@@ -858,6 +874,65 @@ export function checkLabelProvenance(stamp: Fingerprint["labelProvenance"], dirs
   return drift;
 }
 
+/**
+ * Recompute a cassette's digests from ONE walk, under BOTH algorithms.
+ *
+ * The migration proof needs the LEGACY digest (to show a pre-epoch recording is unchanged) and the new
+ * one (to write). Two separate walks would let a concurrent edit pass the proof and then migrate different
+ * content, so both are folded from a single snapshot.
+ *
+ * `contentSig` is deliberately NOT the proof. It is algorithm-DEPENDENT (the manifest transform feeds it)
+ * and, worse, it is blind to `D:` directory markers pre-v5 — an added empty directory moves `skillHash`
+ * and leaves `contentSig` identical, so a contentSig-only proof would vouch for genuinely drifted content.
+ */
+export function recomputeBothAlgos(
+  sessionPath: string,
+  cassetteDir: string | undefined,
+  scopeSkills: string[] | undefined,
+): { legacyHash: string; mode: "git" | "raw"; agentScoped: boolean; readErrors?: string[] } | null {
+  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+  if (dirs.length === 0) return null;
+  const res = hashSkillDirs(dirs, scopeSkills, hashIgnore); // ONE walk
+  return {
+    legacyHash: foldSnapshot(res.snapshot, "legacy"),
+    mode: res.mode,
+    agentScoped: res.agentScoped,
+    ...(res.readErrors ? { readErrors: res.readErrors } : {}),
+  };
+}
+
+/**
+ * Migrate a fingerprint across a hash-format bump: replace ONLY the algorithm-derived values, carry
+ * everything else through from the RECORDING.
+ *
+ * A `{ ...liveFingerprint }` spread looks equivalent and is not. `buildFingerprint` cannot produce
+ * `promptAssetsHash` unless it is handed a baseline object (rehash does not hand it one), and it never
+ * produces `labelProvenance` at all — so the spread silently DELETED both provenance guards on every
+ * migration. Measured: a recorded `promptAssetsHash` of 491afe2862dc67ea became absent.
+ *
+ * `fileSigs` keeps its RECORDED paths and takes only the new digests, index-aligned. Cassette paths are
+ * redacted before writing, so rebuilding the list from a live walk would write unredacted source paths
+ * back into a redacted cassette — a privacy regression. Alignment is validated first (an aggregate digest
+ * proof says nothing about whether the array is well-formed), and absence is preserved rather than
+ * materialised into a fresh live list.
+ */
+export function migrateFingerprint(recorded: Fingerprint, live: Fingerprint): Fingerprint {
+  const out: Fingerprint = { ...recorded };
+  out.skillHash = live.skillHash;
+  out.hashFormat = live.hashFormat;
+  if (live.contentSig !== undefined) out.contentSig = live.contentSig;
+  else delete out.contentSig;
+  if (live.sharedHash !== undefined) out.sharedHash = live.sharedHash;
+  else delete out.sharedHash;
+  out.mode = live.mode;
+  // fileSigs: index-aligned digest swap, or refuse by leaving the recording untouched.
+  if (recorded.fileSigs && live.fileSigs && recorded.fileSigs.length === live.fileSigs.length) {
+    out.fileSigs = recorded.fileSigs.map(([p], i) => [p, live.fileSigs![i][1]] as [string, string]);
+  }
+  // else: recorded had none (or the arrays disagree) → keep exactly what was recorded, including absence.
+  return out;
+}
+
 /** Attach `labelProvenance` to an already-built fingerprint. Separate from `buildFingerprint` because the
  *  labels come from `controlOut`, which exists only after the run — and best-effort throughout: a stamp is
  *  a diagnostic bonus, so any failure to resolve the session or read prose yields no stamp rather than
@@ -885,7 +960,11 @@ export function buildFingerprint(
 ): Fingerprint {
   const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
-  if (dirs.length === 0) return { baseline: baselineAppVersion, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
+  // `hashFormat` is stamped on EVERY return path, including the two early ones. A v12 fingerprint that
+  // omits it violates the load-time invariant and would fail its own validation — so a baseline-only or
+  // read-error recording must carry it just like a full one.
+  if (dirs.length === 0)
+    return { baseline: baselineAppVersion, hashFormat: ACTIVE_HASH_FORMAT, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
@@ -902,6 +981,7 @@ export function buildFingerprint(
   if (hashResult.readErrors && hashResult.readErrors.length > 0) {
     return {
       baseline: baselineAppVersion,
+      hashFormat: ACTIVE_HASH_FORMAT,
       skillSources: dirs.sort().map((d) => relative(baseDir, d)),
       ...(promptAssetsHash ? { promptAssetsHash } : {}),
     };
@@ -910,6 +990,7 @@ export function buildFingerprint(
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
+    hashFormat: ACTIVE_HASH_FORMAT,
     skillHash: hashResult.hash,
     ...(promptAssetsHash ? { promptAssetsHash } : {}),
     contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
@@ -1592,6 +1673,18 @@ export function computeStaleness(
     );
     const recMode = fp.mode ?? "raw";
     const liveMode = live.mode ?? "raw";
+    // EPOCH FIRST — before mode, agent scope and equality. All three of those compare values produced by
+    // two different algorithms, so reaching them first is meaningless. Concretely: a pre-epoch cassette
+    // that ALSO has a git/raw mode flip would take the mode branch, be classed `format` (waivable, warns,
+    // exits 0) and never reach here — a false green across the entire pre-epoch corpus.
+    //
+    // Class is `unverifiable-skill`, NOT `format`. `format` sits outside SKILL_DRIFT_CLASSES and outside
+    // the default replay gate, so it warns while exiting 0 — which on the day of an epoch bump is EVERY
+    // cassette in existence. `unverifiable-skill` already means "these two numbers cannot be compared, so
+    // this is not verified": it fails a bare replay, and it ESCALATES under an explicit `--session` rather
+    // than being quietened by it, which is correct — an override cannot make incomparable digests
+    // comparable.
+    const recordedVersion = cassette.cassetteVersion ?? 0;
     if (live.skillHash === undefined) {
       // Name WHY. Every failure path used to collapse into this one message, so "missing session file",
       // "unparseable YAML" and "the session declares no mounts" were indistinguishable — and the first two
@@ -1614,6 +1707,27 @@ export function computeStaleness(
         class: "unverifiable-skill",
         message: `skill dirs not resolvable ${where}${detail || (why === undefined ? " — the session resolved but declares no skill dirs to hash" : "")} — cannot verify skill staleness (can't verify ⇒ not green)`,
       });
+    } else if (fp.skillHash !== undefined && recordedVersion < HASH_FORMAT_EPOCH) {
+      // EPOCH, ahead of every WAIVABLE branch. Mode and agent-scope compare values produced by two
+      // different algorithms, so reaching them first is meaningless — and worse, both are classed
+      // `format`, which sits outside SKILL_DRIFT_CLASSES and outside the default replay gate. A pre-epoch
+      // cassette that ALSO had a mode flip would warn and exit 0: a false green across the whole
+      // pre-epoch corpus, on the exact day the epoch lands.
+      //
+      // It sits BELOW the unresolvable branch on purpose. That one is already a hard `unverifiable-skill`
+      // too, and "the skill dirs cannot be found" is the more specific, more actionable diagnosis — the
+      // operator's real problem is the session path, not the hash format.
+      //
+      // Class is `unverifiable-skill`, NOT `format`: it already means "these two numbers cannot be
+      // compared, so this is not verified". It fails a bare replay, and it ESCALATES under an explicit
+      // `--session` rather than being quietened by it, which is right — an override cannot make
+      // incomparable digests comparable.
+      findings.push({
+        class: "unverifiable-skill",
+        message:
+          `recorded under hash format v${recordedVersion} (now v${HASH_FORMAT_EPOCH}) — digests are not comparable across the change. ` +
+          `Run \`cowork-harness rehash <dir>\` to migrate, or \`rehash <file> --session <session>\` if the cassette has moved, or re-record`,
+      });
     } else if (recMode !== liveMode)
       // A hash from a different boundary mode is not comparable — re-record, don't emit a misleading
       // content diff. Classed `format` (not skill drift): a mode flip is an env/config mismatch, not source drift.
@@ -1630,16 +1744,7 @@ export function computeStaleness(
       });
     else if (live.skillHash !== fp.skillHash) {
       debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live, sessionOverride); // surface WHICH files drifted
-      const recordedVersion = cassette.cassetteVersion ?? 0;
-      // HASH_FORMAT_EPOCH (not CASSETTE_VERSION): v9/v10/v11 all changed cassette SHAPE, none changed
-      // hashing, so a correctly-current cassette in that range must fall through to the drift-bucket
-      // attribution below, not this branch (P8; see HASH_FORMAT_EPOCH's doc comment).
-      if (recordedVersion < HASH_FORMAT_EPOCH) {
-        findings.push({
-          class: "format",
-          message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
-        });
-      } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
+      if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
         // attribute drift to the shared and/or skill bucket(s). `skillScope` is always
         // non-empty when `sharedHash` is set (single assignment site under the same guard in buildFingerprint);
         // the `?? []` is a defensive guard only — the on-disk cassette shape is not schema-validated.
@@ -5334,6 +5439,19 @@ export function cmdRehash(args: string[]): void {
     // blanket cost P8 exists to avoid via the very command this plan names as the recovery path.
     const requiredVersion = requiredVersionFor(cassette.scenario);
 
+    // INVARIANT BEFORE SKIP. `cassetteVersion` says which reader is required; `fingerprint.hashFormat`
+    // says which transform produced the digests. Nothing ties them together, and the skip below returns
+    // before anything inspects the fingerprint — so a v12 cassette missing `hashFormat` would be waved
+    // through as current while carrying legacy digests, and the "absent means legacy" rule would then
+    // mis-read it forever.
+    if (recordedVersion >= HASH_FORMAT_EPOCH && cassette.fingerprint?.skillHash && cassette.fingerprint.hashFormat !== "jcs1") {
+      results.push({
+        file,
+        action: "error",
+        reason: `v${recordedVersion} cassette is missing fingerprint.hashFormat — inconsistent with its stamped version; re-record`,
+      });
+      continue;
+    }
     // Already at (or above) the version this scenario requires — nothing to do.
     if (recordedVersion >= requiredVersion) {
       results.push({ file, action: "skipped", reason: `already at v${recordedVersion}` });
@@ -5385,11 +5503,39 @@ export function cmdRehash(args: string[]): void {
 
     // The content check: current contentSig must match the recorded one. Every v9+ cassette (the read
     // floor) was recorded under CONTENTSIG_ALGO, so no algorithm-mismatch branch is needed here.
-    if (liveFingerprint.contentSig !== cassette.fingerprint.contentSig) {
+    // THE PROOF: recompute under the LEGACY transform and compare to what was recorded. A new-algorithm
+    // digest compared against a legacy record is an algorithm mismatch, not a content check. And
+    // `contentSig` cannot stand in for `skillHash`: pre-v5 it was blind to `D:` directory markers, so an
+    // added empty directory passes a contentSig proof while the real digest moved.
+    const proof = recomputeBothAlgos(cassette.scenario.session, dirname(file), cassette.scenario.skills);
+    if (!proof) {
+      results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot prove content unchanged" });
+      continue;
+    }
+    if (proof.readErrors?.length) {
+      results.push({ file, action: "error", reason: "unreadable skill sources — cannot prove content unchanged; re-record" });
+      continue;
+    }
+    // `mode` and `agentScope` change the FILE SET, so a matching digest under a different boundary proves
+    // nothing about the same content.
+    const recModeR = cassette.fingerprint.mode ?? "raw";
+    if (recModeR !== proof.mode) {
       results.push({
         file,
         action: "error",
-        reason: "skill content changed since recording (contentSig mismatch) — re-record required",
+        reason: `recorded in '${recModeR}' file-set mode, now '${proof.mode}' — re-record under the same mode`,
+      });
+      continue;
+    }
+    if ((cassette.fingerprint.agentScope ?? "off") !== (proof.agentScoped ? "skill" : "off")) {
+      results.push({ file, action: "error", reason: "agent-scope differs from the recording — re-record under the same setting" });
+      continue;
+    }
+    if (proof.legacyHash !== cassette.fingerprint.skillHash) {
+      results.push({
+        file,
+        action: "error",
+        reason: "skill content changed since recording (legacy skillHash mismatch) — re-record required",
       });
       continue;
     }
@@ -5414,7 +5560,7 @@ export function cmdRehash(args: string[]): void {
         $schema: cassetteSchemaUrl(requiredVersion),
         generator: "cowork-harness",
         cassetteVersion: requiredVersion,
-        fingerprint: { ...liveFingerprint },
+        fingerprint: migrateFingerprint(cassette.fingerprint, liveFingerprint),
       };
       writeFileAtomic(file, JSON.stringify(updated, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }

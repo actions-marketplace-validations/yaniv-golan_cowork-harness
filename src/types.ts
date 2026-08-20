@@ -952,6 +952,10 @@ export interface Fingerprint {
   // looks exactly like corruption — it isn't. To hand-check, apply the same transform: parse, delete `version`,
   // re-serialize, sha256 that. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only
   // fires on a hash MISMATCH — there is no on-demand dump for a cassette that verifies clean.
+  /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. ABSENT means the
+   *  LEGACY (pre-epoch) transform — NOT "raw bytes": every cassette recorded before v12 already carries
+   *  version-stripped manifest digests, so defaulting absence to raw would mislabel all of them. */
+  hashFormat?: "jcs1";
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
   // v11+: gate option labels this run emitted that were found VERBATIM in the skill's own prose, recorded
