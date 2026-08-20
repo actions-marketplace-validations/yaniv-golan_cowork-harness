@@ -1909,6 +1909,10 @@
       ".fingerprint.frozen": {
         "type": "boolean"
       },
+      ".fingerprint.hashFormat": {
+        "type": "string",
+        "enum": ["jcs1"]
+      },
       ".fingerprint.mode": {
         "type": "string",
         "enum": ["git", "raw"]

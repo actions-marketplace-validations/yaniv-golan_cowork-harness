@@ -104,6 +104,8 @@ import {
   agentSkillName,
   ACTIVE_HASH_ALGO,
   foldSnapshot,
+  renderWireEntries,
+  contentSigFromSnapshot,
 } from "./skill-hash.js";
 
 /** What NEW fingerprints record. Absent on a fingerprint means the legacy transform, so only the post-epoch
@@ -889,12 +891,27 @@ export function recomputeBothAlgos(
   sessionPath: string,
   cassetteDir: string | undefined,
   scopeSkills: string[] | undefined,
-): { legacyHash: string; mode: "git" | "raw"; agentScoped: boolean; readErrors?: string[] } | null {
-  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+  baselineAppVersion: string,
+): { legacyHash: string; live: Fingerprint; mode: "git" | "raw"; agentScoped: boolean; readErrors?: string[] } | null {
+  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return null;
-  const res = hashSkillDirs(dirs, scopeSkills, hashIgnore); // ONE walk
+  const res = hashSkillDirs(dirs, scopeSkills, hashIgnore); // ONE walk — everything below folds from res.snapshot
+  const entries = renderWireEntries(res.snapshot);
+  const live: Fingerprint = {
+    baseline: baselineAppVersion,
+    hashFormat: ACTIVE_HASH_FORMAT,
+    skillHash: res.hash,
+    contentSig: contentSigFromSnapshot(res.snapshot),
+    skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+    ...(res.mode === "git" ? { mode: "git" as const } : {}),
+    ...(res.agentScoped ? { agentScope: "skill" as const } : {}),
+    ...(entries.length > MANIFEST_MAX_FILES
+      ? { fileSigsOmitted: true }
+      : { fileSigs: entries.map((e) => [e.path, e.sha] as [string, string]) }),
+  };
   return {
     legacyHash: foldSnapshot(res.snapshot, "legacy"),
+    live,
     mode: res.mode,
     agentScoped: res.agentScoped,
     ...(res.readErrors ? { readErrors: res.readErrors } : {}),
@@ -916,7 +933,28 @@ export function recomputeBothAlgos(
  * proof says nothing about whether the array is well-formed), and absence is preserved rather than
  * materialised into a fresh live list.
  */
-export function migrateFingerprint(recorded: Fingerprint, live: Fingerprint): Fingerprint {
+export function migrateFingerprint(recorded: Fingerprint, live: Fingerprint): { fingerprint: Fingerprint } | { error: string } {
+  // ALIGNMENT IS A PRECONDITION, not a best-effort. An aggregate digest proof says nothing about whether
+  // the recorded manifest array is well-formed, and silently keeping OLD per-file digests beside a NEW
+  // `skillHash` + `hashFormat: jcs1` would stamp a fingerprint that contradicts itself — every later
+  // drift attribution would then name the wrong file while the cassette claimed to be current.
+  if (recorded.fileSigs && live.fileSigs) {
+    if (recorded.fileSigs.length !== live.fileSigs.length)
+      return {
+        error: `fileSigs entry count differs (recorded ${recorded.fileSigs.length}, live ${live.fileSigs.length}) — cannot migrate`,
+      };
+    for (let i = 0; i < recorded.fileSigs.length; i++) {
+      const recIsLink = recorded.fileSigs[i][1].startsWith("lnk:");
+      const liveIsLink = live.fileSigs[i][1].startsWith("lnk:");
+      if (recIsLink !== liveIsLink) return { error: `fileSigs entry ${i} changed kind (file <-> link) — cannot migrate` };
+    }
+  } else if (recorded.fileSigs && !live.fileSigs) {
+    // Recorded a manifest, cannot rebuild one: refuse rather than leave stale per-file digests beside a
+    // new aggregate. The reverse is FINE — a cassette that never recorded `fileSigs` (pre-v5, or
+    // `fileSigsOmitted` above the cap) keeps its absence; materialising a fresh live list would both
+    // invent data the recording never had and write unredacted paths.
+    return { error: "recorded fileSigs cannot be rebuilt from the current tree — cannot migrate" };
+  }
   const out: Fingerprint = { ...recorded };
   out.skillHash = live.skillHash;
   out.hashFormat = live.hashFormat;
@@ -925,12 +963,12 @@ export function migrateFingerprint(recorded: Fingerprint, live: Fingerprint): Fi
   if (live.sharedHash !== undefined) out.sharedHash = live.sharedHash;
   else delete out.sharedHash;
   out.mode = live.mode;
-  // fileSigs: index-aligned digest swap, or refuse by leaving the recording untouched.
-  if (recorded.fileSigs && live.fileSigs && recorded.fileSigs.length === live.fileSigs.length) {
+  // Index-aligned digest swap, RECORDED paths preserved (they are redacted; a live rebuild would write
+  // unredacted source paths back into a redacted cassette). Absence is preserved, never materialised.
+  if (recorded.fileSigs && live.fileSigs) {
     out.fileSigs = recorded.fileSigs.map(([p], i) => [p, live.fileSigs![i][1]] as [string, string]);
   }
-  // else: recorded had none (or the arrays disagree) → keep exactly what was recorded, including absence.
-  return out;
+  return { fingerprint: out };
 }
 
 /** Attach `labelProvenance` to an already-built fingerprint. Separate from `buildFingerprint` because the
@@ -1342,7 +1380,7 @@ function explainSkillHash(
 }
 
 /** Debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
- *  to stderr (flagging OS-junk) plus whether the algorithm-independent contentSig also drifted. When the flag
+ *  to stderr (flagging OS-junk) plus whether contentSig also drifted. When the flag
  *  is OFF, write a one-line hint so the affordance is discoverable. Diagnostics only — never affects the gate. */
 /** The discoverability hint is a CONSTANT string, so repeating it once per drifting cassette is pure
  *  noise (a 16-cassette fleet replay printed it 16x). Once per process is the whole affordance. Only the
@@ -2493,13 +2531,28 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   // Bound to the KNOWN current version only. A future v13/`jcs2` must NOT be rejected here — that belongs
   // to the future-cassette policy just below, which is the surface that already knows how to talk about
   // versions this build does not understand.
-  if (recordedVersion === CASSETTE_VERSION && cassette.fingerprint?.skillHash !== undefined && cassette.fingerprint.hashFormat !== "jcs1") {
-    return {
-      error:
-        `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ` +
-        `${cassette.fingerprint.hashFormat === undefined ? "(absent)" : `'${cassette.fingerprint.hashFormat}'`} — a ` +
-        `v${CASSETTE_VERSION} cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
-    };
+  if (cassette.fingerprint !== undefined) {
+    const fmt = cassette.fingerprint.hashFormat;
+    const shown = fmt === undefined ? "(absent)" : `'${fmt}'`;
+    // KNOWN versions only, both directions. A future v13/`jcs2` is NOT judged here — that belongs to the
+    // future-cassette policy below, which is the surface that knows how to talk about versions this build
+    // does not understand. The check applies to a baseline-only fingerprint too: `hashFormat` is stamped on
+    // every buildFingerprint return path, so its absence at the current version is a genuine inconsistency
+    // rather than a shape this build ever writes.
+    if (recordedVersion === CASSETTE_VERSION && fmt !== "jcs1") {
+      return {
+        error:
+          `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ${shown} — a v${CASSETTE_VERSION} ` +
+          `cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
+      };
+    }
+    if (recordedVersion < HASH_FORMAT_EPOCH && fmt !== undefined) {
+      return {
+        error:
+          `cassette is stamped v${recordedVersion} (pre-epoch) but its fingerprint carries hashFormat ${shown} — a ` +
+          `pre-v${HASH_FORMAT_EPOCH} cassette predates that field entirely, so the stamp and the digests disagree; re-record`,
+      };
+    }
   }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
   const assertErrors: string[] = [];
@@ -5503,7 +5556,7 @@ export function cmdRehash(args: string[]): void {
     // before anything inspects the fingerprint — so a v12 cassette missing `hashFormat` would be waved
     // through as current while carrying legacy digests, and the "absent means legacy" rule would then
     // mis-read it forever.
-    if (recordedVersion >= HASH_FORMAT_EPOCH && cassette.fingerprint?.skillHash && cassette.fingerprint.hashFormat !== "jcs1") {
+    if (recordedVersion === CASSETTE_VERSION && cassette.fingerprint?.skillHash && cassette.fingerprint.hashFormat !== "jcs1") {
       results.push({
         file,
         action: "error",
@@ -5536,26 +5589,52 @@ export function cmdRehash(args: string[]): void {
       // A metadata-only restamp needs POSITIVE proof of the zero-source case: a recorded
       // `sessionFingerprint` that still matches a resolvable session. That says the recording's session
       // shape is intact and genuinely declared nothing to hash. Without it, refuse.
-      const zeroSourceProof =
-        cassette.sessionFingerprint !== undefined &&
-        cassette.sessionFingerprint ===
-          buildSessionFingerprint(sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session, dirname(file));
-      if (!zeroSourceProof) {
+      // A matching sessionFingerprint proves the session SHAPE is intact — it does NOT prove the session
+      // declared nothing to hash. A recording whose hash failed over real, declared roots has a perfectly
+      // matching shape too, and migrating that would bless an unverifiable recording as current-format.
+      // So: shape intact AND the session resolves AND it declares ZERO roots.
+      const zeroSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
+      const shapeIntact =
+        cassette.sessionFingerprint !== undefined && cassette.sessionFingerprint === buildSessionFingerprint(zeroSession, dirname(file));
+      const declaredRoots = (() => {
+        try {
+          return skillSourceDirs(zeroSession, dirname(file)).dirs.length;
+        } catch {
+          return -1; // unresolvable — not evidence of anything
+        }
+      })();
+      if (!shapeIntact || declaredRoots !== 0) {
         results.push({
           file,
           action: "skipped",
           reason:
-            "no skillHash, and no matching sessionFingerprint to prove the recording genuinely had zero skill sources " +
-            "(absence could equally mean unreadable sources) — re-record if this cassette needs to be current",
+            declaredRoots > 0
+              ? `no skillHash, but the session declares ${declaredRoots} skill root(s) — absence means the hash FAILED, not that there was nothing to hash; re-record`
+              : "no skillHash, and no proof the recording genuinely had zero skill sources (a matching session shape that still resolves to zero roots) — re-record if this cassette needs to be current",
+        });
+        continue;
+      }
+      // The v9→v10 link-identity refusal applies to EVERY migration path, including this one: a v9
+      // baseline-only cassette never captured the symlink identity a v10+ stamp promises, and rehash
+      // cannot synthesize it. Without this the metadata branch would stamp it current regardless.
+      if (crossesIntoV10) {
+        results.push({
+          file,
+          action: "error",
+          reason: `v10 records symlink/hardlink identity (#38) the v${recordedVersion} manifest could not capture — \`rehash\` cannot add it; re-record to migrate`,
         });
         continue;
       }
       if (!dryRun) {
-        // Metadata-only: there is no digest to migrate, so stamp the format and version and touch nothing else.
-        writeFileAtomic(
-          file,
-          JSON.stringify({ ...cassette, $schema: cassetteSchemaUrl(requiredVersion), cassetteVersion: requiredVersion }, null, 2),
-        );
+        // Metadata-only: no digest to migrate — but the version/format invariant still applies, so the
+        // fingerprint must declare the current format rather than being left to read as legacy.
+        const stamped: Cassette = {
+          ...cassette,
+          $schema: cassetteSchemaUrl(requiredVersion),
+          cassetteVersion: requiredVersion,
+          ...(cassette.fingerprint ? { fingerprint: { ...cassette.fingerprint, hashFormat: ACTIVE_HASH_FORMAT } } : {}),
+        };
+        writeFileAtomic(file, JSON.stringify(stamped, null, 2));
       }
       results.push({ file, action: "migrated", reason: `v${recordedVersion} → v${requiredVersion} (metadata only — zero skill sources)` });
       continue;
@@ -5571,34 +5650,14 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // Compute current contentSig from skill dirs relative to the cassette location.
-    const liveFingerprint = buildFingerprint(
-      sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session,
-      cassette.fingerprint.baseline,
-      dirname(file),
-      cassette.scenario.skills,
-    );
-
-    if (!liveFingerprint.contentSig) {
-      results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot compute contentSig" });
-      continue;
-    }
-
-    // The content check: current contentSig must match the recorded one. Every v9+ cassette (the read
-    // floor) was recorded under CONTENTSIG_ALGO, so no algorithm-mismatch branch is needed here.
-    // THE PROOF: recompute under the LEGACY transform and compare to what was recorded. A new-algorithm
-    // digest compared against a legacy record is an algorithm mismatch, not a content check. And
-    // `contentSig` cannot stand in for `skillHash`: pre-v5 it was blind to `D:` directory markers, so an
-    // added empty directory passes a contentSig proof while the real digest moved.
-    // With an override, resolve from the GIVEN session instead of the cassette's own directory — and pass
-    // its own dir as the base, so the session's relative mounts resolve from where the session actually is.
-    // An override is resolved to an ABSOLUTE path: `skillSourceDirs` only joins `cassetteDir` for a
-    // RELATIVE session, so passing both a relative override and its own dirname double-joins them.
-    const proof = recomputeBothAlgos(
-      sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session,
-      dirname(file),
-      cassette.scenario.skills,
-    );
+    // ONE resolution, ONE walk: `recomputeBothAlgos` folds BOTH the legacy proof and the replacement
+    // fingerprint from the SAME snapshot. A second independent walk would let a file change in between,
+    // so the proof would validate one tree while the migration wrote digests from another.
+    //
+    // An override is resolved ABSOLUTE: `skillSourceDirs` only joins `cassetteDir` for a RELATIVE session,
+    // so passing both a relative override and its own dirname would double-join them.
+    const migrateSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
+    const proof = recomputeBothAlgos(migrateSession, dirname(file), cassette.scenario.skills, cassette.fingerprint.baseline);
     if (!proof) {
       results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot prove content unchanged" });
       continue;
@@ -5643,15 +5702,22 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // Safe to migrate: content is provably unchanged. Recompute the full fingerprint under the
-    // current algorithm and bump cassetteVersion to what this scenario requires (may be < CASSETTE_VERSION).
+    // Content is provably unchanged. Build the migrated fingerprint — selective, allow-listed, and able to
+    // REFUSE: a manifest that cannot be aligned entry-for-entry must not be stamped `jcs1` while carrying
+    // the old per-file digests, or the cassette would claim to be current while every attribution lied.
+    const migrated = migrateFingerprint(cassette.fingerprint, proof.live);
+    if ("error" in migrated) {
+      results.push({ file, action: "error", reason: `${migrated.error} — re-record required` });
+      continue;
+    }
+
     if (!dryRun) {
       const updated: Cassette = {
         ...cassette,
         $schema: cassetteSchemaUrl(requiredVersion),
         generator: "cowork-harness",
         cassetteVersion: requiredVersion,
-        fingerprint: migrateFingerprint(cassette.fingerprint, liveFingerprint),
+        fingerprint: migrated.fingerprint,
       };
       writeFileAtomic(file, JSON.stringify(updated, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }

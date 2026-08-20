@@ -15,6 +15,7 @@ import {
 } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
+import { skillHashSnapshot, foldSnapshot, renderWireEntries } from "../src/run/skill-hash.js";
 
 // `cassetteVersion` means "the minimum format version a reader needs to INTERPRET this cassette
 // correctly", not "which recorder wrote it". An earlier design of this mechanism keyed the stamp on KEY
@@ -219,8 +220,18 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     writeFileSync(sessionPath, `skills:\n  local:\n    - ${skillDir}\n`);
     // Compute the fingerprint the same way `rehash` will (absolute session path ⇒ cassetteDir irrelevant),
     // so the content-unchanged gate passes and the migration reaches the version-stamp logic under test.
-    const fp = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
-    expect(fp.contentSig).toBeTruthy(); // sanity: skill dir resolved
+    // A FAITHFUL pre-epoch artifact: legacy digests and NO `hashFormat`. Building a CURRENT fingerprint
+    // and stamping an old version is internally inconsistent — the read boundary rejects that pairing,
+    // because the stamp and the digests would be describing different algorithms.
+    const built = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
+    const snap = skillHashSnapshot([skillDir]);
+    const fp = {
+      ...built,
+      hashFormat: undefined,
+      skillHash: foldSnapshot(snap, "legacy"),
+      fileSigs: renderWireEntries(snap, "legacy").map((e) => [e.path, e.sha] as [string, string]),
+    };
+    expect(built.contentSig).toBeTruthy(); // sanity: skill dir resolved
     const scenario: Record<string, unknown> = {
       name: "s",
       baseline: liveBaseline,
@@ -248,12 +259,12 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
   it("migrates a pre-epoch lane-free cassette to the epoch floor — the bump IS necessary now", () => {
     const dir = cassetteFixture(undefined);
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status).toBe(0);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     const out = JSON.parse(r.stdout.trim());
     // P8's rule was "do not re-stamp a cassette whose scenario needs no new reader", to avoid a blanket
     // migration cost. A HASH-FORMAT bump is the case where that cost IS warranted: a pre-epoch cassette's
     // digests came from a different algorithm, so a v10 reader and a v12 reader genuinely disagree about it.
-    expect(out.results[0].action).toBe("migrated");
+    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
     const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
     expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
     expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the version/hashFormat invariant holds after migration
@@ -263,7 +274,7 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     const dir = cassetteFixture("local");
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
     const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action).toBe("migrated");
+    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
     const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
     expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
   });
@@ -271,9 +282,9 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
   it("its partner: a lane: remote cassette lands on the COMPUTED stamp, not a constant", () => {
     const dir = cassetteFixture("remote");
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status).toBe(0);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action).toBe("migrated");
+    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
     expect(out.results[0].reason).toMatch(new RegExp(`v10 → v${HASH_FORMAT_EPOCH_FOR_TEST}`));
     const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
     expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);

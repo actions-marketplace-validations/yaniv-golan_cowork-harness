@@ -123,16 +123,22 @@ describe("migrateFingerprint — selective, never a spread", () => {
     mode: "git",
   };
 
+  /** Unwrap a successful migration; fails loudly if the helper refused. */
+  const ok = (r: ReturnType<typeof migrateFingerprint>) => {
+    if ("error" in r) throw new Error(`expected a migration, got refusal: ${r.error}`);
+    return r.fingerprint;
+  };
+
   it("preserves promptAssetsHash and labelProvenance — a spread DELETED both", () => {
     // `buildFingerprint` cannot produce promptAssetsHash without a baseline object (rehash passes none)
     // and never produces labelProvenance at all, so `{ ...live }` silently dropped the provenance guards.
-    const out = migrateFingerprint(recorded, live);
+    const out = ok(migrateFingerprint(recorded, live));
     expect(out.promptAssetsHash).toBe("491afe2862dc67ea");
     expect(out.labelProvenance).toEqual(recorded.labelProvenance);
   });
 
   it("takes the new digests and the new format", () => {
-    const out = migrateFingerprint(recorded, live);
+    const out = ok(migrateFingerprint(recorded, live));
     expect(out.skillHash).toBe("new");
     expect(out.contentSig).toBe("newsig");
     expect(out.hashFormat).toBe("jcs1");
@@ -141,10 +147,10 @@ describe("migrateFingerprint — selective, never a spread", () => {
   it("keeps the RECORDED (redacted) fileSigs paths, swapping only digests", () => {
     // Cassette paths are redacted before writing; rebuilding from a live walk would put unredacted source
     // paths back into a redacted cassette.
-    expect(migrateFingerprint(recorded, live).fileSigs).toEqual([["redacted/path.md", "newsha"]]);
+    expect(ok(migrateFingerprint(recorded, live)).fileSigs).toEqual([["redacted/path.md", "newsha"]]);
   });
 
-  it("refuses to rewrite fileSigs when the arrays do not align, rather than 'repairing' them", () => {
+  it("REFUSES when the arrays do not align, rather than 'repairing' them", () => {
     const misaligned: Fingerprint = {
       ...live,
       fileSigs: [
@@ -152,13 +158,22 @@ describe("migrateFingerprint — selective, never a spread", () => {
         ["b", "2"],
       ],
     };
-    // An aggregate digest proof says nothing about whether the manifest array is well-formed.
-    expect(migrateFingerprint(recorded, misaligned).fileSigs).toEqual(recorded.fileSigs);
+    // An aggregate digest proof says nothing about whether the manifest array is well-formed — and
+    // silently keeping the OLD per-file digests beside a NEW skillHash would stamp a fingerprint that
+    // contradicts itself. REFUSE instead, so `rehash` reports an error rather than "migrated".
+    const r = migrateFingerprint(recorded, misaligned);
+    expect("error" in r && r.error).toMatch(/entry count differs/);
   });
 
-  it("preserves ABSENCE — never materialises a fresh live list", () => {
+  it("preserves ABSENCE — never materialises a fresh live list; and refuses a one-sided manifest", () => {
+    // A cassette that RECORDED a manifest but whose tree can no longer produce one is inconsistent —
+    // refuse. The reverse is legitimate (pre-v5, or fileSigsOmitted above the cap) and must still migrate.
+    const { fileSigs: _noLive, ...liveWithout } = live;
+    expect("error" in migrateFingerprint(recorded, liveWithout as Fingerprint)).toBe(true);
+    expect("error" in migrateFingerprint({ ...recorded, fileSigs: undefined } as Fingerprint, live)).toBe(false);
     const { fileSigs: _drop, ...noSigs } = recorded;
-    expect(migrateFingerprint(noSigs as Fingerprint, live).fileSigs).toBeUndefined();
+    const { fileSigs: _dropLive, ...liveNoSigs } = live;
+    expect(ok(migrateFingerprint(noSigs as Fingerprint, liveNoSigs as Fingerprint)).fileSigs).toBeUndefined();
   });
 });
 
@@ -199,7 +214,8 @@ describe.skipIf(!existsSync(CLI))("rehash — the migration path the epoch makes
 
   it("migrates a provable pre-epoch cassette and stamps the format", () => {
     const { file } = preEpochCassette();
-    expect(rehash([join(file, "..")]).results[0].action).toBe("migrated");
+    const res0 = rehash([join(file, "..")]).results[0];
+    expect(res0.action, res0.reason).toBe("migrated");
     const onDisk = JSON.parse(readFileSync(file, "utf8"));
     expect(onDisk.cassetteVersion).toBe(EPOCH);
     expect(onDisk.fingerprint.hashFormat).toBe("jcs1");

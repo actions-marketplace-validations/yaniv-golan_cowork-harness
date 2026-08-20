@@ -398,6 +398,22 @@ function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: bo
  *  for an empty/all-missing set. (Used by `rehash` to detect content change across a *format-only* hash bump;
  *  this v6 unification is an algorithm change, so a pre-v6 cassette's contentSig is non-comparable — `rehash`
  *  routes those to a re-record, see cassette.ts.) */
+export function contentSigFromSnapshot(snapshot: HashEntry[]): string | undefined {
+  // Same rendering `computeContentSig` uses, but from an ALREADY-WALKED snapshot — so a caller that has
+  // one (rehash, which must derive its proof and its replacement from identical bytes) never walks twice.
+  const entries = snapshot
+    .map((e) =>
+      e.kind === "dir"
+        ? `D:${e.path}\0`
+        : e.kind === "link"
+          ? `L:${e.path}\0lnk:${e.target}`
+          : `F:${e.path}\0${(ACTIVE_HASH_ALGO === "jcs1" ? e.digests.jcs1 : e.digests.legacy) ?? e.digests.legacy}`,
+    )
+    .sort();
+  if (entries.length === 0) return undefined;
+  return createHash("sha256").update(entries.join("\0")).digest("hex");
+}
+
 export function computeContentSig(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): string | undefined {
   if (dirs.length === 0) return undefined;
   // Type-prefix + NUL-separate path from sha: without them, a file named `a:lnk` with content-sha
@@ -408,17 +424,7 @@ export function computeContentSig(dirs: string[], scopeSkills?: string[], sessio
   // a content fingerprint while missing a change the primary digest caught. Encoding mirrors the walk's
   // framing exactly: `D:<path>\0`, `F:<path>\0<sha>`, `L:<path>\0lnk:<target>`, globally sorted by the
   // rendered string so kind participates in the order and duplicate paths across roots stay distinct.
-  const entries = skillHashSnapshot(dirs, scopeSkills, sessionIgnore)
-    .map((e) =>
-      e.kind === "dir"
-        ? `D:${e.path}\0`
-        : e.kind === "link"
-          ? `L:${e.path}\0lnk:${e.target}`
-          : `F:${e.path}\0${e.digests.jcs1 ?? e.digests.legacy}`,
-    )
-    .sort();
-  if (entries.length === 0) return undefined;
-  return createHash("sha256").update(entries.join("\0")).digest("hex");
+  return contentSigFromSnapshot(skillHashSnapshot(dirs, scopeSkills, sessionIgnore));
 }
 
 /** Diagnostics: OS-junk / non-runtime files that have no business in a skill hash but (today) ARE hashed
@@ -436,18 +442,26 @@ export function skillHashSnapshot(dirs: string[], scopeSkills?: string[], sessio
 /** Render a snapshot to the wire manifest shape (`fileSigs`). Files carry their hashed-content sha;
  *  links carry `lnk:<target>`; **directories are dropped** — the wire manifest has never listed them,
  *  and including them would move `contentSig`, which folds this same rendering. */
-export function renderWireEntries(snapshot: HashEntry[]): { path: string; sha: string }[] {
+export function renderWireEntries(snapshot: HashEntry[], algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO): { path: string; sha: string }[] {
   const out: { path: string; sha: string }[] = [];
   for (const e of snapshot) {
-    if (e.kind === "file") out.push({ path: e.path, sha: e.digests.legacy });
+    // MUST match the algorithm that produced `skillHash`. The per-file manifest exists to name WHICH file
+    // drifted, so publishing a digest of bytes the aggregate never folded makes every attribution a lie —
+    // and `contentSig`, which folds this same rendering, would then disagree with `skillHash` about one tree.
+    if (e.kind === "file") out.push({ path: e.path, sha: (algo === "jcs1" ? e.digests.jcs1 : e.digests.legacy) ?? e.digests.legacy });
     else if (e.kind === "link") out.push({ path: e.path, sha: `lnk:${e.target}` });
   }
   // Code-unit sort (NOT localeCompare) so the dump order matches the hash walk's own `readdirSync().sort()`.
   return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
-export function skillHashEntries(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): { path: string; sha: string }[] {
-  return renderWireEntries(skillHashSnapshot(dirs, scopeSkills, sessionIgnore));
+export function skillHashEntries(
+  dirs: string[],
+  scopeSkills?: string[],
+  sessionIgnore?: string[],
+  algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO,
+): { path: string; sha: string }[] {
+  return renderWireEntries(skillHashSnapshot(dirs, scopeSkills, sessionIgnore), algo);
 }
 
 export interface HashSkillDirsResult {
