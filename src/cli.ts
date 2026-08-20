@@ -199,11 +199,15 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
                                (--assert-from <scenario.yaml> / --reassert: opt-in token-free re-check against on-disk assert:)
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
-      [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
+      [--fail-on-skill-drift]  fail only on skill-source DRIFT (skill/shared-root); baseline drift stays a warning
+                               (staleness that could NOT BE VERIFIED fails a bare replay — no flag needed)
+      [--session <file>]       resolve skill sources from THIS session — the fix for a MOVED cassette, whose
+                               recorded session path no longer resolves. One cassette at a time.
       [--output-format json]
   verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 = verified & failed, exit 2 = usage (incl. an empty dir, unless --allow-empty), exit 3 = could not verify
       [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow-empty]              an EXISTING but cassette-free dir exits 0 (a missing path still fails)
+      [--session <file>]           resolve skill sources from THIS session (a MOVED cassette); one cassette at a time
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
   rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)

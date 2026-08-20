@@ -1650,7 +1650,10 @@ export function computeStaleness(
         const dup = [...new Set([...duplicateManifestPaths(fp.fileSigs), ...duplicateManifestPaths(live.fileSigs)])];
         if (dup.length)
           findings.push({
-            class: "skill",
+            // Bucket it like every other scoped finding: a duplicate under `skills/<x>/` is skill-private,
+            // anything else (a plugin manifest, a shared root file) belongs to the shared bucket. Hard-coding
+            // `skill` told a JSON gate filtering on class that shared-only drift was skill drift.
+            class: dup.every((p) => scopeArr.some((sk) => p.startsWith(`skills/${sk}/`))) ? "skill" : "shared-root",
             message: `ambiguous duplicate manifest path(s) across mounts (${dup.slice(0, 3).join(", ")}${dup.length > 3 ? `, +${dup.length - 3} more` : ""}) — drift attribution is unavailable for them; the hash difference is still real`,
           });
         if (fp.fileSigs && live.fileSigs) {
@@ -4507,22 +4510,6 @@ export async function cmdReplay(args: string[]) {
   }
   // An override must never be silent about where it looked — a wrong one pinning the wrong tree is the
   // failure mode that matters, and it is worse than the honest exit 3 it replaces.
-  if (sessionOverride !== undefined) {
-    // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
-    // override gets wrong. "override in effect: <path>" alone would look right while resolving to
-    // nothing — the silent-false-green shape this flag must never have.
-    const od = skillSourceDirs(sessionOverride, undefined);
-    const where = od.dirs.length
-      ? od.dirs.join(", ")
-      : od.failure?.kind === "declared-dirs-missing"
-        ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
-        : od.failure?.kind === "unreadable"
-          ? "NO skill dirs — this session could not be read or parsed"
-          : od.failure?.kind === "not-found"
-            ? "NO skill dirs — no file at that path"
-            : "NO skill dirs — this session declares none";
-    warn(`::notice:: [replay] --session override in effect: ${sessionOverride} -> ${where}\n`);
-  }
 
   // Footgun guard: one --assert-from file applied to a whole dir asserts the SAME on-disk block against every
   // cassette (the drift gate protects divergent cassettes, but two with identical shaping fields would be
@@ -4580,6 +4567,23 @@ export async function cmdReplay(args: string[]) {
         asJson,
       );
     }
+    if (sessionOverride !== undefined) {
+      // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
+      // override gets wrong. "override in effect: <path>" alone would look right while resolving to
+      // nothing — the silent-false-green shape this flag must never have.
+      const od = skillSourceDirs(sessionOverride, undefined);
+      const where = od.dirs.length
+        ? od.dirs.join(", ")
+        : od.failure?.kind === "declared-dirs-missing"
+          ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
+          : od.failure?.kind === "unreadable"
+            ? "NO skill dirs — this session could not be read or parsed"
+            : od.failure?.kind === "not-found"
+              ? "NO skill dirs — no file at that path"
+              : "NO skill dirs — this session declares none";
+      warn(`::notice:: [replay] --session override in effect: ${sessionOverride} -> ${where}\n`);
+    }
+
     if ("error" in rc) {
       log(`replay: ${f}: ${rc.error}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
@@ -4810,14 +4814,14 @@ const COUNT_BOUND_MARGIN_KEYS: {
 /** Fold the recorded count for each count-bound assert in a cassette's frozen block by replaying it
  *  (token-free). Returns [] when the cassette carries no count-bound asserts, so `--margins` skips a
  *  needless replay for those cassettes. A SINGLE-SAMPLE estimate — one cassette is not a variance. */
-async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): Promise<MarginRow[]> {
+async function computeCassetteMargins(cassette: Cassette, cassetteDir: string, sessionOverride?: string): Promise<MarginRow[]> {
   const present = COUNT_BOUND_MARGIN_KEYS.map((spec) => {
     const entry = (cassette.scenario.assert ?? []).find((a) => (a as Record<string, unknown>)[spec.key as string] !== undefined);
     const budget = entry ? Number((entry as Record<string, unknown>)[spec.key as string]) : undefined;
     return budget !== undefined && Number.isFinite(budget) ? { spec, budget } : undefined;
   }).filter((x): x is { spec: (typeof COUNT_BOUND_MARGIN_KEYS)[number]; budget: number } => x !== undefined);
   if (present.length === 0) return [];
-  const result = await replayCassette(cassette, [], { cassetteDir });
+  const result = await replayCassette(cassette, [], { cassetteDir, sessionOverride });
   const bf = budgetFields(result);
   const hasControlOut = !!cassette.controlOut?.length;
   return present.map(({ spec, budget }) => {
@@ -5034,6 +5038,18 @@ export async function cmdVerifyCassettes(args: string[]) {
   if (vcSessionOverride !== undefined && (!existsSync(vcSessionOverride) || !statSync(vcSessionOverride).isFile())) {
     return fail("verify-cassettes", "usage", `verify-cassettes --session: not a session file: ${vcSessionOverride}`, undefined, json);
   }
+  if (vcSessionOverride !== undefined && skipStaleness) {
+    // `--session` exists only to resolve skill sources for the staleness check. With --skip-staleness
+    // nothing reads it, so accepting it and announcing "override in effect" advertises a resolution that
+    // never happens.
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "verify-cassettes --session has no effect with --skip-staleness — drop one of them",
+      undefined,
+      json,
+    );
+  }
   if (vcSessionOverride !== undefined) {
     // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
     // override gets wrong. "override in effect: <path>" alone would look right while resolving to
@@ -5160,7 +5176,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const rc = readCassette(f);
       if ("error" in rc) continue; // unreadable — already flagged in `results`; skip its margins
       try {
-        const rows = await computeCassetteMargins(rc.cassette, dirname(f));
+        const rows = await computeCassetteMargins(rc.cassette, dirname(f), vcSessionOverride);
         if (rows.length) margins.push({ file: f, rows });
       } catch (e) {
         margins.push({ file: f, rows: [], error: (e as Error)?.message ?? String(e) }); // a diagnostic failure must not red the gate
@@ -6235,8 +6251,14 @@ export async function replayCassette(
     // green-against-nothing this release argues is worse than a red. The operator asserted this tree, so
     // any drift they then see is real and actionable. Escalating here keeps the flag an escape from
     // "cannot verify", never an escape from "verified, and it changed".
+    // `format` is in here deliberately. A mode / agent-scope / hash-epoch mismatch means the recorded and
+    // live hashes are NOT COMPARABLE — the same "could not verify" the default gate reds on, reached by a
+    // different route. Excluding it left a hole with exactly the shape this guard exists to close: pointing
+    // --session at a NON-GIT tree turned the hard `unverifiable-skill` into a `format` warning and exit 0.
+    // An explicit override can never LOWER the verdict, so every class meaning "this tree could not be
+    // checked against the recording" escalates with it.
     else if (opts.sessionOverride !== undefined)
-      for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
+      for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class) || s.class === "format"))
         assertions.push({
           assertion: {} as Assertion,
           pass: false,
