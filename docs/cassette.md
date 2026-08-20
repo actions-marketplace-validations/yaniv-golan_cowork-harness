@@ -221,9 +221,34 @@ reports
 [unverifiable] skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)
 ```
 
-which is exit `3`, permanently, until you re-record at the new location. This applies to any move — a
-`git mv` during a repo reorganisation, a copy into another project, or recording to one `--out` and
-committing to a different path — not just to the hostloop case below.
+which is exit `3`. This applies to any move — a `git mv` during a repo reorganisation, a copy into
+another project, or recording to one `--out` and committing to a different path — not just to the
+hostloop case below.
+
+**The escape hatch is `--session <file>`**, on both `replay` and `verify-cassettes`:
+
+```
+cowork-harness replay        moved/x.cassette.json --session path/to/session.yaml
+cowork-harness verify-cassettes moved/x.cassette.json --session path/to/session.yaml
+```
+
+It resolves the skill sources from that session instead of the recorded cassette-relative path, so a
+moved cassette verifies without being re-recorded. Points worth knowing:
+
+- It takes a **session**, not skill directories, because `staleness.hash_ignore` is a session-level
+  field that is *not* stored in the cassette — an override carrying only directories would silently
+  change the hash boundary and report drift that isn't there.
+- A session's mounts are relative to **its own** directory, so copying or symlinking a session next to
+  the moved cassette does *not* work: it will report that the session declares dirs none of which exist.
+  Point at the session where it actually lives.
+- One cassette at a time. A directory target is refused, because each cassette in it may have been
+  recorded against a different source.
+- The resolved session **and the dirs it produced** are echoed on stderr. An override that silently
+  pinned the wrong tree would manufacture false greens, so it is deliberately never silent.
+- An explicit override is trusted: a hash or session-shape mismatch under `--session` is reported as
+  real drift, not downgraded.
+- Unrelated to `boundary-check --session`, which folds a session's egress additions into the allowlist
+  the probes test against — same spelling, different job.
 
 > **Why the skill hash is what breaks.** The chain is one hop: the cassette resolves its relative
 > `scenario.session` against its own directory, and the skill dirs come from **that session file**.

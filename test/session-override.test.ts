@@ -255,17 +255,35 @@ describe.skipIf(!CAN)("--session refuses what it cannot mean", () => {
     // operator to re-record when the real problem was a misspelt flag.
     for (const cmd of ["replay", "verify-cassettes"]) {
       const r = run([cmd, relocate(), "--session", "/no/such/session.yaml"]);
-      expect(r.code, `${cmd} should refuse a missing session`).not.toBe(0);
+      // Exit 2 (usage), NOT merely non-zero: a relocated cassette already exits 3 under
+      // verify-cassettes, so `.not.toBe(0)` there would pass for the very baseline this flag escapes.
+      expect(r.code, `${cmd} should refuse a missing session as a USAGE error`).toBe(2);
       expect(`${r.out}${r.err}`).toMatch(/not a session file/);
     }
   });
 });
 
-describe("the flag is documented", () => {
-  it("appears in both usage strings", async () => {
-    const { REPLAY_USAGE, VERIFY_CASSETTES_USAGE } = await import("../src/run/cassette.js");
-    // The usage-coverage guard already fails on an undocumented accepted flag; this pins the specific
-    // regression by name, matching how that suite treats --best-effort-future-cassette.
-    for (const usage of [REPLAY_USAGE, VERIFY_CASSETTES_USAGE]) expect(usage).toMatch(/--session <file>/);
+describe.skipIf(!CAN)("failure kinds the provenance work claims to distinguish", () => {
+  it("an UNPARSEABLE session reports the parse error, not 'missing'", () => {
+    // The test file's own comment argues these "point at completely different fixes", but only the
+    // not-found branch had a test — blanking the unreadable detail caused zero failures.
+    const d = mkdtempSync(join(tmpdir(), "cwh-bad-"));
+    const bad = join(d, "bad.yaml");
+    writeFileSync(bad, "plugins: [unclosed\n");
+    const all = (({ out, err }) => `${out}${err}`)(run(["verify-cassettes", relocate(), "--session", bad]));
+    expect(all).toMatch(/could not be read or parsed/);
+    expect(all, "must NOT be reported as a missing file").not.toMatch(/no session file at/);
+  });
+
+  it("the '--session' remedy hint is suppressed once an override was given", () => {
+    // Telling an operator who just passed --session to pass --session is noise that reads as the flag
+    // having been ignored. Making the hint unconditional caused zero failures.
+    const withOverride = mkdtempSync(join(tmpdir(), "cwh-hint-"));
+    const empty = join(withOverride, "empty.yaml");
+    writeFileSync(empty, "permission_mode: default\n");
+    const hinted = (({ out, err }) => `${out}${err}`)(run(["replay", relocate(), "--fail-on-skill-drift"]));
+    const overridden = (({ out, err }) => `${out}${err}`)(run(["replay", relocate(), "--session", empty, "--fail-on-skill-drift"]));
+    expect(hinted, "no override → offer the escape hatch").toMatch(/point at its session with --session/);
+    expect(overridden, "override already given → do not repeat it back").not.toMatch(/point at its session with --session/);
   });
 });

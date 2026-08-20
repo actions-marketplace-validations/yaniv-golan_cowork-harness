@@ -77,6 +77,18 @@ GitHub-hosted runners, no token/Docker/agent:
 - run: cowork-harness replay cassettes/              # token-free content/structure
 ```
 
+If a cassette has MOVED (a `git mv`, a repo reorg, a copy between projects), staleness becomes
+unverifiable — `verify-cassettes` exits 3 and says the skill dirs are not resolvable. Recover with
+`--session <file>` on either command rather than re-recording:
+
+```yaml
+- run: cowork-harness verify-cassettes cassettes/moved.cassette.json --session sessions/default.yaml
+```
+
+It takes a session (not skill dirs) so `staleness.hash_ignore` survives, refuses a directory target,
+and echoes the dirs it resolved. Full contract:
+[docs/cassette.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md).
+
 Both lines matter: `replay` alone **warns** on a stale recording and exits 0, so dropping the
 `verify-cassettes` step means a skill edit silently stops being tested. (One command instead of two:
 `replay --fail-on-skill-drift`.)
