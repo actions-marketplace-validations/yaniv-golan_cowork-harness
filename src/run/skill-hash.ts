@@ -99,6 +99,45 @@ export type HashEntry =
 
 /** Sink for the walk. Emitted for files, links AND directories — directories fold a `D:` structure
  *  marker into `skillHash`, so a snapshot without them cannot detect empty-directory drift. */
+/** Which manifest spelling this path is, if any. Both spellings are LOAD-BEARING — see
+ *  `legacyHashedContent`. */
+export function classifyManifest(relPath: string): ManifestKind {
+  if (relPath.endsWith(".claude-plugin/plugin.json")) return "claude-manifest";
+  if (relPath === "plugin.json") return "root-manifest";
+  return "none";
+}
+
+/**
+ * The LEGACY (`legacy-nover`) manifest transform. **FROZEN — do not modify, do not tidy, do not
+ * "improve".**
+ *
+ * Hash a plugin manifest without its `version`: a pure version bump is metadata with no runtime-behavior
+ * impact, yet it would otherwise re-stale every cassette (it flapped 4/6 in a batch). Every
+ * behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw bytes when
+ * the manifest will not parse — `version` cannot be located, so there is nothing else to do, and that
+ * fallback is part of the algorithm rather than an escape from it.
+ *
+ * WHY FROZEN: at the hash-format epoch this stops being how new digests are computed and becomes the only
+ * way to VERIFY an old one. `rehash` proves a pre-epoch artifact unchanged by recomputing its digest under
+ * exactly this rule; if the rule drifts by a byte, every pre-epoch cassette becomes unprovable and the free
+ * migration path collapses into paid re-records. It stays frozen until the read floor rises past the last
+ * pre-epoch cassette version.
+ *
+ * That includes the root-`plugin.json` arm, which LOOKS like dead code (no root-level manifest exists in
+ * any repo here) and is not: an artifact recorded through it can only be proved by reproducing what was
+ * computed at the time. `test/skill-hash.test.ts` pins both spellings.
+ */
+export function legacyHashedContent(bytes: Buffer, manifestKind: ManifestKind): Buffer | string {
+  if (manifestKind === "none") return bytes;
+  try {
+    const manifest = JSON.parse(bytes.toString("utf8"));
+    delete manifest.version;
+    return JSON.stringify(manifest);
+  } catch {
+    return bytes; // not valid JSON — raw bytes, by definition of the algorithm
+  }
+}
+
 type WalkEntry = HashEntry extends infer T ? (T extends HashEntry ? Omit<T, "rootOrdinal"> : never) : never;
 type OnEntryFn = (entry: WalkEntry) => void;
 
@@ -194,21 +233,8 @@ function hashDir(
       // Every behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw
       // bytes if the manifest isn't valid JSON. `hashedContent` is EXACTLY what folds into the digest — the
       // onFile sink reports its sha so the debug dump reflects what the hash actually saw.
-      let hashedContent: Buffer | string = bytes;
-      const manifestKind: ManifestKind = relPath.endsWith(".claude-plugin/plugin.json")
-        ? "claude-manifest"
-        : relPath === "plugin.json"
-          ? "root-manifest"
-          : "none";
-      if (manifestKind !== "none") {
-        try {
-          const manifest = JSON.parse(bytes.toString("utf8"));
-          delete manifest.version;
-          hashedContent = JSON.stringify(manifest);
-        } catch {
-          /* not valid JSON — fall through to raw-byte hashing */
-        }
-      }
+      const manifestKind = classifyManifest(relPath);
+      const hashedContent = legacyHashedContent(bytes, manifestKind);
       // Fold the fixed-length content SHA, NOT the raw content: raw bytes have no length/terminator, so
       // `F:a\0<A>F:b\0<B>` would collide with a single file `a` whose content is `<A>F:b\0<B>` (a staleness
       // false-negative). A 64-hex sha is self-delimiting and its charset is disjoint from the `F:`/`L:`/`D:`
