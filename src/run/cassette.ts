@@ -867,9 +867,10 @@ export function buildFingerprint(
   scopeSkills?: string[],
   baseline?: PlatformBaseline,
   inlineSession?: SessionConfig,
+  sessionOverride?: string,
 ): Fingerprint {
   const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
-  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession);
+  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
   if (dirs.length === 0) return { baseline: baselineAppVersion, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
@@ -1218,8 +1219,13 @@ const DEBUG_SKILLHASH_ENV = "COWORK_HARNESS_DEBUG_SKILLHASH";
 /** Debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
  *  `buildFingerprint`), so a staleness mismatch shows WHICH files are in the hash — incl. unexpected
  *  OS-junk / run-generated files that are the usual "stale immediately after record" cause. */
-function explainSkillHash(sessionPath: string, cassetteDir: string | undefined, scopeSkills?: string[]): { path: string; sha: string }[] {
-  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+function explainSkillHash(
+  sessionPath: string,
+  cassetteDir: string | undefined,
+  scopeSkills?: string[],
+  sessionOverride?: string,
+): { path: string; sha: string }[] {
+  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, undefined, sessionOverride);
   if (dirs.length === 0) return [];
   return skillHashEntries(dirs, scopeSkills, hashIgnore);
 }
@@ -1494,7 +1500,11 @@ function computeDiscoverySurfaceNote(cassette: Cassette): string[] {
   ];
 }
 
-export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): { findings: StalenessFinding[]; notes: string[] } {
+export function computeStaleness(
+  cassette: Cassette,
+  cassetteDir: string | undefined,
+  sessionOverride?: string,
+): { findings: StalenessFinding[]; notes: string[] } {
   const tier = computeTierStaleness(cassette);
   const findings: StalenessFinding[] = [...tier.findings];
   const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette)];
@@ -1527,7 +1537,16 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
     else findings.push(pa);
   }
   if (fp.skillHash) {
-    const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
+    // positions matter: (sessionPath, baselineAppVersion, cassetteDir, scopeSkills, baseline, inlineSession, sessionOverride)
+    const live = buildFingerprint(
+      cassette.scenario.session,
+      fp.baseline,
+      cassetteDir,
+      cassette.scenario.skills,
+      undefined,
+      undefined,
+      sessionOverride,
+    );
     const recMode = fp.mode ?? "raw";
     const liveMode = live.mode ?? "raw";
     if (live.skillHash === undefined)
@@ -1622,7 +1641,7 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
   // a fourth severity nobody configured. Cassettes recorded before the stamp existed simply skip it.
   if (fp.labelProvenance?.length) {
     try {
-      const { dirs } = skillSourceDirs(cassette.scenario.session, cassetteDir);
+      const { dirs } = skillSourceDirs(cassette.scenario.session, cassetteDir, undefined, sessionOverride);
       for (const d of checkLabelProvenance(fp.labelProvenance, dirs)) findings.push({ class: "skill", message: `${d} — re-record` });
     } catch {
       /* an unresolvable session is already reported by the hash path above; don't double-report it here */
@@ -3993,9 +4012,10 @@ export function sessionFingerprintDrift(
   cassette: Pick<Cassette, "sessionFingerprint" | "scenario">,
   cassetteDir: string | undefined,
   sourceVia?: "persisted" | "name-lookup" | "none",
+  sessionOverride?: string,
 ): { drifted: boolean; note?: string; unverifiable?: boolean } {
   if (cassette.sessionFingerprint === undefined) return { drifted: false }; // pre-v9 — not checked
-  const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir);
+  const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir, sessionOverride);
   if (live === undefined)
     return {
       drifted: false,
@@ -4237,7 +4257,7 @@ export const REPLAY_BOOLEAN_FLAGS = [
   "--quiet",
   "--verbose",
 ] as const;
-export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from", "--mutate-max-per-file", "--mutate-max-total"] as const;
+export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from", "--session", "--mutate-max-per-file", "--mutate-max-total"] as const;
 
 // A SEPARATE axis from REPLAY_VALUE_FLAGS, for the same reason VERIFY_CASSETTES_REPEATED_FLAGS is one:
 // parseArgs collects every occurrence of a repeated flag into p.repeated[], while a value flag keeps only
@@ -4261,7 +4281,8 @@ export const REPLAY_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // one; this one was missing --best-effort-future-cassette entirely, undiscoverable at the exact point
 // (`cassette format too new: …`) that tells a user to pass it — the P9 bug this generalization fixes).
 export const REPLAY_USAGE =
-  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--session <file>] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.\n" +
   "       --mutate: perturb recorded JSON artifact values, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. SAMPLES: max 10 values per file, 50 total (per-file applies first), so `N/N caught by nothing` is N of the sample, not of your corpus; when a cap binds the report names it and the eligible total. Reporting only; never changes the verdict or exit code.\n" +
   "       --mutate-include <glob> / --mutate-exclude <glob>: scope which artifact paths are perturbed (repeatable; exclude wins). `*` stays inside a path segment, `**` crosses them — so `--mutate-exclude 'handoff/**'` drops per-run internals nobody should assert on, and the sample is spent on deliverables instead.\n" +
   "       --mutate-max-per-file <n> / --mutate-max-total <n>: raise the sampling caps (default 10 / 50). Per-file is applied FIRST, so with a handful of artifacts raising only --mutate-max-total changes nothing. Cost is linear — one full assertion re-run per perturbation.\n" +
@@ -4377,6 +4398,27 @@ export async function cmdReplay(args: string[]) {
     color: process.stderr.isTTY === true && !process.env.NO_COLOR,
     compact: false,
   };
+  // `--session` names ONE cassette's session. Over a directory each cassette may have been recorded
+  // against a different source, so a single override cannot be right for all of them — refuse rather than
+  // silently pin the wrong tree, which would manufacture false greens (worse than an honest "cannot
+  // verify"). Same reasoning as `record --out` and the `--assert-from --write` guard below.
+  const sessionOverride = p.options["--session"];
+  if (sessionOverride !== undefined && resolved.files.length > 1) {
+    return fail(
+      "replay",
+      "usage",
+      `replay --session <file> names one cassette's session and is not valid for a directory batch (${resolved.files.length} cassettes) — run it per cassette`,
+      undefined,
+      asJson,
+    );
+  }
+  if (sessionOverride !== undefined && !existsSync(sessionOverride)) {
+    return fail("replay", "usage", `replay --session: no such session file: ${sessionOverride}`, undefined, asJson);
+  }
+  // An override must never be silent about where it looked — a wrong one pinning the wrong tree is the
+  // failure mode that matters, and it is worse than the honest exit 3 it replaces.
+  if (sessionOverride !== undefined) warn(`::notice:: [replay] --session override in effect: ${sessionOverride}\n`);
+
   // Footgun guard: one --assert-from file applied to a whole dir asserts the SAME on-disk block against every
   // cassette (the drift gate protects divergent cassettes, but two with identical shaping fields would be
   // cross-asserted). Use --reassert (per-cassette sibling) for a dir. Warn rather than reject — it's occasionally
@@ -4549,6 +4591,7 @@ export async function cmdReplay(args: string[]) {
         mutateMaxPerFile,
         mutateMaxTotal,
         cassetteDir: dirname(f),
+        sessionOverride,
         bestEffortFutureCassette,
         notesSink: collectNotes,
       });
@@ -4696,7 +4739,7 @@ export const VERIFY_CASSETTES_BOOLEAN_FLAGS = [
   "--quiet",
   "--verbose",
 ] as const;
-export const VERIFY_CASSETTES_VALUE_FLAGS = ["--output-format"] as const;
+export const VERIFY_CASSETTES_VALUE_FLAGS = ["--output-format", "--session"] as const;
 export const VERIFY_CASSETTES_REPEATED_FLAGS = [
   "--allow",
   "--allow-domain",
@@ -4719,10 +4762,11 @@ export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
 // recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
 export const VERIFY_CASSETTES_USAGE =
-  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "usage: verify-cassettes <file|dir> [--session <file>] [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
   "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
-  "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.";
+  "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.\n" +
+  "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.";
 
 // The full flag-coverage guard registry (P9) — see the UsageGuardEntry doc comment above RECORD_ALLOWLIST.
 // Defined here (after all three commands' consts exist) so it can reference them directly.
@@ -4775,6 +4819,11 @@ export async function cmdVerifyCassettes(args: string[]) {
     return fail("verify-cassettes", "usage", String((e as Error).message), undefined, asJson);
   }
   const json = p.options["--output-format"] === "json";
+  // Ship A escape hatch, same contract as `replay --session`: supplies a SESSION (so `staleness.hash_ignore`
+  // and the rest of the boundary survive) for ONE relocated cassette. Refused for a batch — each cassette in a
+  // directory may have been recorded against a different source, and silently pinning the wrong tree would
+  // manufacture false greens, which is strictly worse than this command's honest exit 3.
+  const vcSessionOverride = p.options["--session"];
   const skipPrivacy = p.flags["--skip-privacy"] ?? false;
   const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
@@ -4855,6 +4904,19 @@ export async function cmdVerifyCassettes(args: string[]) {
     return fail("verify-cassettes", "usage", `verify-cassettes: ${resolved.error}`, undefined, asJson);
   }
   const files = resolved.files;
+  if (vcSessionOverride !== undefined && files.length > 1) {
+    return fail(
+      "verify-cassettes",
+      "usage",
+      `verify-cassettes --session <file> names one cassette's session and is not valid for a directory batch (${files.length} cassettes) — run it per cassette`,
+      undefined,
+      json,
+    );
+  }
+  if (vcSessionOverride !== undefined && !existsSync(vcSessionOverride)) {
+    return fail("verify-cassettes", "usage", `verify-cassettes --session: no such session file: ${vcSessionOverride}`, undefined, json);
+  }
+  if (vcSessionOverride !== undefined) warn(`::notice:: [verify-cassettes] --session override in effect: ${vcSessionOverride}\n`);
   const results = files.map((f) => {
     try {
       return verifyOneCassette(f);
@@ -4883,7 +4945,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
     // never dropped, and must never red the gate.
-    const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f)) : { findings: [], notes: [] };
+    const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f), vcSessionOverride) : { findings: [], notes: [] };
     // Class-based split (StalenessFinding.class, src/types.ts): every `unverifiable-*` class means
     // "verification could not run" (exit 3), while every other class is a genuine drift finding
     // (exit 1) — preserve the class instead of collapsing straight to `.message` (that used to drop it,
@@ -5425,6 +5487,9 @@ export async function replayCassette(
     strict?: boolean;
     failOnSkillDrift?: boolean;
     cassetteDir?: string;
+    /** Ship A: explicit `--session` override. Supplies a SESSION (not bare dirs) so the session-level
+     *  `staleness.hash_ignore` and the rest of the hash boundary survive the override. */
+    sessionOverride?: string;
     bestEffortFutureCassette?: boolean;
     /** --mutate: perturb recorded values and report which perturbations no assertion catches. Reporting
      *  only — never changes the verdict (an unguarded field is a gap in the scenario, not a failed run). */
@@ -5500,7 +5565,7 @@ export async function replayCassette(
   // per-branch `warn()`, so a non-strict run never double-warns one cause. Uses the SHARED `computeStaleness`
   // (no longer a forked copy), so it inherits the per-file detail, the `debugSkillHashMismatch` hook, the
   // GITSET/agent-scope flip buckets, and the both-buckets attribution fix for free.
-  const { findings: staleness, notes: stalenessNotes } = computeStaleness(cassette, opts.cassetteDir);
+  const { findings: staleness, notes: stalenessNotes } = computeStaleness(cassette, opts.cassetteDir, opts.sessionOverride);
   for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
   // Notes are the non-failing informational channel — surfaced so they're never a silent drop, but
   // NEVER escalated by --strict. They are emitted at `::notice::`: `warn()` auto-prefixes `::warning::`
