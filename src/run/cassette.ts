@@ -1041,6 +1041,22 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
   const liveMode = live.mode ?? "raw";
   if (recMode !== liveMode) return `recorded in '${recMode}' file-set mode, now '${liveMode}' (COWORK_HARNESS_GITSET)`;
   if ((rec.agentScope ?? "off") !== (live.agentScope ?? "off")) return "agent-scope changed (COWORK_HARNESS_AGENT_SCOPE)";
+  // HASH FORMAT, before the digest comparison. A kept RunResult carries NO version — unlike a cassette,
+  // there is no `cassetteVersion` to route it to the epoch branch — so without this check every run kept
+  // before the epoch reports "the skill/plugin source changed", which is false and gives the operator no
+  // idea what to do. Same shape as the two config discriminators above it: name the real cause instead of
+  // letting an incomparable digest masquerade as drift.
+  //
+  // ABSENT means the LEGACY transform, never "raw" — a pre-epoch run's manifest digests are already
+  // version-stripped. An UNKNOWN id is reported loudly rather than coerced to either format: silently
+  // treating a future `jcs2` as legacy would compare across algorithms and call it source drift again.
+  const recFormat = rec.hashFormat ?? "legacy";
+  const liveFormat = live.hashFormat ?? "legacy";
+  if (recFormat !== liveFormat) {
+    if (recFormat !== "legacy" && recFormat !== "jcs1")
+      return `recorded under an unrecognized hash format '${recFormat}' — this build cannot verify it; re-record`;
+    return `recorded under hash format '${recFormat}', this build hashes '${liveFormat}' — digests are not comparable; re-record`;
+  }
   if (live.skillHash !== rec.skillHash) return "the skill/plugin source changed since this run was recorded";
   return null;
 }
@@ -2413,6 +2429,15 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // The fingerprint was previously unvalidated — it arrived through the loose passthrough as untyped data,
+  // so nothing at the READ boundary enforced the version/format invariant. `looseObject` keeps unknown
+  // members, so this validates the two fields the epoch depends on without freezing the rest.
+  fingerprint: z
+    .looseObject({
+      skillHash: z.string().optional(),
+      hashFormat: z.string().optional(),
+    })
+    .optional(),
   scenario: z.looseObject({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() }),
   // v9 (Finding 23/24) — both optional; absent on any pre-v9 cassette (backward-compat).
   sessionFingerprint: z.string().optional(),
@@ -2459,6 +2484,21 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
         `cassette recorded at v${recordedVersion} is older than the minimum supported version ` +
         `v${MIN_SUPPORTED_CASSETTE_VERSION} — re-record this cassette (pre-1.0, no compatibility is ` +
         `maintained for cassette formats below v${MIN_SUPPORTED_CASSETTE_VERSION})`,
+    };
+  }
+  // VERSION/FORMAT INVARIANT, at the read boundary. `cassetteVersion` says which reader is required;
+  // `fingerprint.hashFormat` says which transform produced the digests. Nothing else ties them together,
+  // and the "absent means legacy" rule would silently mis-read a v12 document that forgot the stamp.
+  //
+  // Bound to the KNOWN current version only. A future v13/`jcs2` must NOT be rejected here — that belongs
+  // to the future-cassette policy just below, which is the surface that already knows how to talk about
+  // versions this build does not understand.
+  if (recordedVersion === CASSETTE_VERSION && cassette.fingerprint?.skillHash !== undefined && cassette.fingerprint.hashFormat !== "jcs1") {
+    return {
+      error:
+        `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ` +
+        `${cassette.fingerprint.hashFormat === undefined ? "(absent)" : `'${cassette.fingerprint.hashFormat}'`} — a ` +
+        `v${CASSETTE_VERSION} cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
     };
   }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
@@ -5389,19 +5429,35 @@ export function cmdRehash(args: string[]): void {
   try {
     p = parseArgs(args, {
       booleans: ["--dry-run"],
-      values: ["--output-format"],
+      values: ["--output-format", "--session"],
       enums: { "--output-format": ["text", "json"] },
     });
   } catch (e) {
     return fail("rehash", "usage", (e as Error).message, undefined, asJson);
   }
+  const USAGE =
+    "usage: rehash <dir/> [--dry-run] [--output-format text|json]   |   rehash <file.cassette.json> --session <session.yaml> [--dry-run]";
   if (p.positionals.length !== 1) {
-    return fail("rehash", "usage", "usage: rehash <dir/> [--dry-run] [--output-format text|json]", undefined, asJson);
+    return fail("rehash", "usage", USAGE, undefined, asJson);
   }
-  const dir = p.positionals[0];
-  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    return fail("rehash", "usage", `rehash: not a directory: ${dir}`, undefined, asJson);
+  const target = p.positionals[0];
+  const sessionOverride = p.options["--session"];
+  // A MOVED cassette cannot resolve its recorded `session:` from its own directory, so it can never be
+  // proved unchanged — and the hash-format epoch makes migration MANDATORY, which would leave it failing
+  // every bare replay with no remedy at all. Mirrors `replay --session`: ONE cassette at a time, because
+  // each may have been recorded against a different tree, so a directory batch cannot share one override.
+  if (sessionOverride !== undefined) {
+    if (!existsSync(target) || statSync(target).isDirectory()) {
+      return fail("rehash", "usage", `rehash --session takes a single cassette FILE, not a directory: ${target}`, undefined, asJson);
+    }
+    if (!existsSync(sessionOverride)) {
+      return fail("rehash", "usage", `rehash: --session file not found: ${sessionOverride}`, undefined, asJson);
+    }
+  } else if (!existsSync(target) || !statSync(target).isDirectory()) {
+    const hint = existsSync(target) ? " — pass a directory, or a single cassette with --session <session.yaml>" : "";
+    return fail("rehash", "usage", `rehash: not a directory: ${target}${hint}`, undefined, asJson);
   }
+  const dir = target;
 
   const dryRun = p.flags["--dry-run"] ?? false;
 
@@ -5412,10 +5468,13 @@ export function cmdRehash(args: string[]): void {
     return fail("rehash", "runtime", `rehash: cannot load latest baseline — ${(e as Error).message}`, undefined, asJson, 1);
   }
 
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith(".cassette.json"))
-    .sort()
-    .map((f) => join(dir, f));
+  const files =
+    sessionOverride !== undefined
+      ? [dir] // single-cassette mode: `dir` is the file itself, guarded above
+      : readdirSync(dir)
+          .filter((f) => f.endsWith(".cassette.json"))
+          .sort()
+          .map((f) => join(dir, f));
 
   if (files.length === 0) {
     if (asJson) out(jsonPayloadEnvelope("rehash", true, { dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
@@ -5470,11 +5529,35 @@ export function cmdRehash(args: string[]): void {
 
     // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
     if (!cassette.fingerprint?.skillHash) {
-      results.push({
-        file,
-        action: "skipped",
-        reason: "no skillHash in fingerprint — only baseline drift is possible; re-record if needed",
-      });
+      // NO skillHash. `buildFingerprint` omits it in TWO different situations — genuinely zero skill
+      // sources, and files that could not be read ("can't verify"). Treating both as "nothing to prove"
+      // would bless an UNVERIFIABLE recording as current-format, so absence alone is not evidence.
+      //
+      // A metadata-only restamp needs POSITIVE proof of the zero-source case: a recorded
+      // `sessionFingerprint` that still matches a resolvable session. That says the recording's session
+      // shape is intact and genuinely declared nothing to hash. Without it, refuse.
+      const zeroSourceProof =
+        cassette.sessionFingerprint !== undefined &&
+        cassette.sessionFingerprint ===
+          buildSessionFingerprint(sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session, dirname(file));
+      if (!zeroSourceProof) {
+        results.push({
+          file,
+          action: "skipped",
+          reason:
+            "no skillHash, and no matching sessionFingerprint to prove the recording genuinely had zero skill sources " +
+            "(absence could equally mean unreadable sources) — re-record if this cassette needs to be current",
+        });
+        continue;
+      }
+      if (!dryRun) {
+        // Metadata-only: there is no digest to migrate, so stamp the format and version and touch nothing else.
+        writeFileAtomic(
+          file,
+          JSON.stringify({ ...cassette, $schema: cassetteSchemaUrl(requiredVersion), cassetteVersion: requiredVersion }, null, 2),
+        );
+      }
+      results.push({ file, action: "migrated", reason: `v${recordedVersion} → v${requiredVersion} (metadata only — zero skill sources)` });
       continue;
     }
 
@@ -5490,7 +5573,7 @@ export function cmdRehash(args: string[]): void {
 
     // Compute current contentSig from skill dirs relative to the cassette location.
     const liveFingerprint = buildFingerprint(
-      cassette.scenario.session,
+      sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session,
       cassette.fingerprint.baseline,
       dirname(file),
       cassette.scenario.skills,
@@ -5507,7 +5590,15 @@ export function cmdRehash(args: string[]): void {
     // digest compared against a legacy record is an algorithm mismatch, not a content check. And
     // `contentSig` cannot stand in for `skillHash`: pre-v5 it was blind to `D:` directory markers, so an
     // added empty directory passes a contentSig proof while the real digest moved.
-    const proof = recomputeBothAlgos(cassette.scenario.session, dirname(file), cassette.scenario.skills);
+    // With an override, resolve from the GIVEN session instead of the cassette's own directory — and pass
+    // its own dir as the base, so the session's relative mounts resolve from where the session actually is.
+    // An override is resolved to an ABSOLUTE path: `skillSourceDirs` only joins `cassetteDir` for a
+    // RELATIVE session, so passing both a relative override and its own dirname double-joins them.
+    const proof = recomputeBothAlgos(
+      sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session,
+      dirname(file),
+      cassette.scenario.skills,
+    );
     if (!proof) {
       results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot prove content unchanged" });
       continue;

@@ -744,7 +744,13 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
 // cmdReplay→replayCassette opt wiring (a real bug caught only at the binary). These spawn the built CLI.
 describe.skipIf(!can)("replay staleness JSON + --fail-on-skill-drift (CLI wiring)", () => {
   const LIVE = loadBaseline("latest").appVersion;
-  const staleCassette = (fingerprint: object) => ({ fingerprint, ...cassette([{ result: "success" }]) });
+  // A cassette stamped at CASSETTE_VERSION must declare the current hash format — the read boundary
+  // rejects a stamp/format mismatch, since the version and the digests would be describing different
+  // algorithms. Fixtures that hand-build a fingerprint have to say so too.
+  const staleCassette = (fingerprint: object) => ({
+    fingerprint: { hashFormat: "jcs1", ...fingerprint },
+    ...cassette([{ result: "success" }]),
+  });
 
   it("default replay surfaces class-tagged staleness[] but stays ok:true (exit 0)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-stale-"));

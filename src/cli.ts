@@ -588,7 +588,14 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       exit codes: 0 identical · 1 differing · 2 usage (e.g. an unresolvable baseline name, or a run/cassette with no matching side).",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check)",
   rehash:
-    "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
+    "usage: rehash <dir/> [--dry-run] [--output-format text|json]\n" +
+    "       rehash <file.cassette.json> --session <session.yaml> [--dry-run]\n" +
+    "       Migrate cassettes across a hash-format bump with no re-record. Each cassette is proved unchanged by\n" +
+    "       recomputing its digest under the ORIGINAL algorithm and comparing it to what was recorded; only on a\n" +
+    "       match are the algorithm-derived values rewritten. Anything unprovable is refused, never migrated.\n" +
+    "       --session <file>: for a MOVED cassette, whose recorded session cannot be resolved from its own\n" +
+    "       directory. One cassette at a time — each may have been recorded against a different tree, so a\n" +
+    "       directory batch cannot share one override.",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "migrate-run-dir":

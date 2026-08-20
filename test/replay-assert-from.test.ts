@@ -63,7 +63,9 @@ function cassetteJson(opts: {
     },
     events: events("hello there", opts.endQuestion ?? false),
     controlOut: [],
-    ...(opts.fingerprint ? { fingerprint: opts.fingerprint } : {}),
+    // Stamped at CASSETTE_VERSION, so a hand-built fingerprint must declare the current hash format —
+    // the read boundary refuses a stamp/format mismatch, because the two would describe different algorithms.
+    ...(opts.fingerprint ? { fingerprint: { hashFormat: "jcs1", ...opts.fingerprint } } : {}),
   });
 }
 
