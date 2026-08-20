@@ -946,6 +946,12 @@ export interface Fingerprint {
   // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
   // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
+  // NOT sha256(file) in every case: each sha is over the bytes that FOLD INTO skillHash, and a
+  // `.claude-plugin/plugin.json` (or root `plugin.json`) folds as the manifest re-serialized with `version`
+  // deleted (see hashDir in run/skill-hash.ts). Hand-checking one of those with `shasum` will mismatch and
+  // looks exactly like corruption — it isn't. To hand-check, apply the same transform: parse, delete `version`,
+  // re-serialize, sha256 that. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only
+  // fires on a hash MISMATCH — there is no on-demand dump for a cassette that verifies clean.
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
   // v11+: gate option labels this run emitted that were found VERBATIM in the skill's own prose, recorded

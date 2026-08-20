@@ -730,7 +730,13 @@ possible.
   time with a re-record error before `verify-cassettes`/`rehash` ever reach this staleness check — see the
   boundary note below. A cassette that carries no `skillHash` is unaffected and keeps replaying.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
-  from the per-file manifest (`fileSigs`). For a scoped cassette the drift is attributed **per bucket** by the
+  from the per-file manifest (`fileSigs`). **A `fileSigs` sha is not always `sha256(file)`** — it is the sha of
+  the bytes that fold into `skillHash`, and a `.claude-plugin/plugin.json` folds with its `version` deleted
+  (see the exclusion list under the `skillHash` description). Hand-checking one with `shasum` mismatches and
+  reads as corruption. To verify by hand, apply the same transform: parse, delete `version`, re-serialize, sha256
+  that. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but fires **only on a hash
+  mismatch** — a cassette that verifies clean has no on-demand dump. For a scoped cassette the drift is
+  attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
   changes and a `skills/x changed since record [N changed (…)]` message for the scoped skill's own files. When
   **both** buckets change you get **both** messages — a co-occurring shared change does not mask the skill's
