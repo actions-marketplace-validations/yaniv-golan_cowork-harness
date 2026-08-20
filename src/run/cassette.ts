@@ -596,12 +596,45 @@ function declaredSkillDirs(cfg: SessionConfig): string[] {
   });
 }
 
+/** Where a cassette's session path came from. Surfaced so an explicit override is never silent — a
+ *  `--session` that pins the wrong tree would manufacture false greens, which is worse than an honest
+ *  "cannot verify". */
+export type SessionPathSource = "override" | "cassette-relative" | "as-given" | "inline";
+
+/** Why a resolution produced no skill dirs. ABSENT means "resolved fine, the session simply declares
+ *  none" — a distinction the call sites below could not previously make, because every failure path
+ *  returned a bare `[]`. An empty `dirs` therefore meant *anything*: missing file, unparseable YAML, or
+ *  a perfectly good session with no mounts. `buildFingerprint` then dropped `skillHash` either way. */
+export type SessionResolutionFailure =
+  { kind: "inline-without-config" } | { kind: "not-found"; path: string } | { kind: "unreadable"; path: string; message: string };
+
+/** THE single cassette-relative join.
+ *
+ *  It was previously duplicated BYTE-IDENTICALLY in three different functions — `skillSourceDirs`,
+ *  `buildSessionFingerprint` and `loadCassetteSessionFolders`. An override landing on only one of them
+ *  produces a split-brain cassette: skill staleness resolves against the override while session-shape or
+ *  folder resolution still resolves against the cassette dir. That failure is QUIET — a green replay with
+ *  a sessionFingerprint note, or skills resolved against unresolved folders, and nothing names the
+ *  inconsistency. Route every consumer through here. */
+export function resolveCassetteSessionPath(
+  sessionPath: string,
+  cassetteDir?: string,
+  override?: string,
+): { path: string; source: SessionPathSource } {
+  // Inline scenarios have no session FILE, so there is nothing an override could point at.
+  if (sessionPath === "(inline)") return { path: sessionPath, source: "inline" };
+  if (override) return { path: override, source: "override" };
+  if (cassetteDir && !isAbsolute(sessionPath)) return { path: join(cassetteDir, sessionPath), source: "cassette-relative" };
+  return { path: sessionPath, source: "as-given" };
+}
+
 function skillSourceDirs(
   sessionPath: string,
   cassetteDir?: string,
   inlineSession?: SessionConfig,
-): { dirs: string[]; baseDir: string; hashIgnore: string[] } {
-  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  override?: string,
+): { dirs: string[]; baseDir: string; hashIgnore: string[]; source: SessionPathSource; failure?: SessionResolutionFailure } {
+  const { path: resolved, source } = resolveCassetteSessionPath(sessionPath, cassetteDir, override);
   const baseDir = dirname(resolved);
   // The `skill`/`probe-dispatch` lanes mount via an in-memory session and pass the "(inline)" sentinel as
   // the path — there is no file to read, but the resolved session object carries the same mounts a session
@@ -609,10 +642,10 @@ function skillSourceDirs(
   // Its paths are already absolute (resolveSessionPaths at the call site), so `skillSources` is stored
   // relative to cwd — the base those paths were resolved against — to avoid leaking an absolute host path.
   if (sessionPath === "(inline)") {
-    if (!inlineSession) return { dirs: [], baseDir, hashIgnore: [] };
-    return { dirs: declaredSkillDirs(inlineSession), baseDir: process.cwd(), hashIgnore: inlineSession.staleness.hash_ignore };
+    if (!inlineSession) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "inline-without-config" } };
+    return { dirs: declaredSkillDirs(inlineSession), baseDir: process.cwd(), hashIgnore: inlineSession.staleness.hash_ignore, source };
   }
-  if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [] };
+  if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "not-found", path: resolved } };
   let cfg;
   try {
     // Mirror loadSessionFromFile (execute.ts): parse the YAML, then RESOLVE its relative skill/plugin
@@ -621,11 +654,19 @@ function skillSourceDirs(
     // string to loadSession() throws (it wants parsed YAML) — the swallowed throw is why skillHash was
     // silently never computed.
     cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), baseDir);
-  } catch {
-    return { dirs: [], baseDir, hashIgnore: [] };
+  } catch (e) {
+    // Previously a bare `return { dirs: [] }` — the swallowed throw is why skillHash was silently never
+    // computed, per the comment above. Keep the same control flow; stop discarding the reason.
+    return {
+      dirs: [],
+      baseDir,
+      hashIgnore: [],
+      source,
+      failure: { kind: "unreadable", path: resolved, message: String((e as Error)?.message ?? e) },
+    };
   }
   // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
-  return { dirs: declaredSkillDirs(cfg), baseDir, hashIgnore: cfg.staleness.hash_ignore };
+  return { dirs: declaredSkillDirs(cfg), baseDir, hashIgnore: cfg.staleness.hash_ignore, source };
 }
 
 /** Best-effort git commit provenance for the skill dirs a session mounts — the human-readable "which
@@ -919,9 +960,11 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
  *  undefined ("can't verify", never a false mismatch) for an inline scenario or when the session file
  *  can't be read/parsed from `sessionPath` (resolved against `cassetteDir` exactly like
  *  `skillSourceDirs`). Arrays are sorted before hashing so authoring order can't spuriously move the hash. */
-export function buildSessionFingerprint(sessionPath: string, cassetteDir?: string): string | undefined {
+export function buildSessionFingerprint(sessionPath: string, cassetteDir?: string, override?: string): string | undefined {
   if (sessionPath === "(inline)") return undefined;
-  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  // Same resolver as skillSourceDirs: an override that reached only ONE of them would verify skill
+  // staleness against the override while hashing session SHAPE from the old location.
+  const { path: resolved } = resolveCassetteSessionPath(sessionPath, cassetteDir, override);
   if (!existsSync(resolved)) return undefined;
   let cfg;
   try {
@@ -5214,9 +5257,11 @@ function buildRecordTimeFolderPrefixMap(scenario: Scenario, recordRoots: string[
  * a v9+ cassette uses its persisted `folderPrefixMap` instead of re-deriving this from whatever the
  * session file looks like AT REPLAY TIME (see `buildFolderPrefixMap`).
  */
-function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): { from: string }[] {
+function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string, override?: string): { from: string }[] {
   if (sessionPath === "(inline)") return [];
-  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  // Third consumer of the same join — see resolveCassetteSessionPath. Folder resolution left behind
+  // would silently disagree with the skill dirs.
+  const { path: resolved } = resolveCassetteSessionPath(sessionPath, cassetteDir, override);
   if (!existsSync(resolved)) return [];
   try {
     return resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved)).folders;
