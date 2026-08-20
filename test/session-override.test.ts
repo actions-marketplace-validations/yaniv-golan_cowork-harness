@@ -117,6 +117,52 @@ describe.skipIf(!CAN)("--session resolves a relocated cassette", () => {
   });
 });
 
+describe.skipIf(!CAN)("failure provenance reaches the operator", () => {
+  it("an unresolvable session NAMES the path it looked for, and the remedy", () => {
+    // Ship B carried a typed failure but nothing read it, so every cause still produced one
+    // undifferentiated message. "Missing session file" and "unparseable YAML" point at completely
+    // different fixes, and only the first is what a relocation looks like.
+    const r = run(["replay", relocate(), "--fail-on-skill-drift"]);
+    const all = `${r.out}${r.err}`;
+    expect(all).toMatch(/no session file at .*sessions[/\\]default\.yaml/);
+    expect(all, "a relocated cassette should be told about the escape hatch").toMatch(/--session <file>/);
+  });
+
+  it("names the DIRS the override resolved to, not just the file", () => {
+    // "override in effect: <path>" alone would look right while resolving to nothing. The dirs are what
+    // feed the hash, and they are what a wrong override gets wrong.
+    const r = run(["replay", relocate(), "--session", REAL_SESSION]);
+    expect(r.err).toMatch(/--session override in effect: .* -> .*my-pdf-skill/);
+  });
+
+  it("says so explicitly when an override mounts NO skill dirs", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-nodirs-"));
+    const empty = join(d, "empty.yaml");
+    writeFileSync(empty, "permission_mode: default\n");
+    expect(run(["replay", relocate(), "--session", empty]).err).toMatch(/NO skill dirs/);
+  });
+
+  it("the skill-hash debug dump enumerates the OVERRIDDEN tree", () => {
+    // The dump resolves its own file list. Without the override threaded it would enumerate the RECORDED
+    // location — which under --session no longer exists — producing an empty or wrong list exactly when
+    // someone is trying to find out which files drifted.
+    const skill = resolve("examples/skills/my-pdf-skill");
+    const d = mkdtempSync(join(tmpdir(), "cwh-dump-"));
+    const ignoring = join(d, "ignoring.yaml");
+    writeFileSync(
+      ignoring,
+      `permission_mode: default\nplugins:\n  local_plugins:\n    - ${skill}\nstaleness:\n  hash_ignore:\n    - "**/SKILL.md"\n`,
+    );
+    const r = spawnSync("node", [CLI, "replay", relocate(), "--session", ignoring, "--fail-on-skill-drift"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_DEBUG_SKILLHASH: "1" },
+    });
+    const all = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    expect(all, "the mismatch should trigger the dump").toMatch(/skill-hash debug/);
+    expect(all, "and it should list files from the overridden tree").toMatch(/plugin\.json/);
+  });
+});
+
 describe.skipIf(!CAN)("--session refuses what it cannot mean", () => {
   it("is refused for a directory batch", () => {
     // Each cassette in a directory may have been recorded against a different source, so ONE session

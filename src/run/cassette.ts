@@ -1239,7 +1239,13 @@ function explainSkillHash(
  *  the entire point of the flag. */
 let skillHashHintShown = false;
 
-function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fingerprint, live: Fingerprint): void {
+function debugSkillHashMismatch(
+  cassette: Cassette,
+  cassetteDir: string,
+  fp: Fingerprint,
+  live: Fingerprint,
+  sessionOverride?: string,
+): void {
   if (process.env[DEBUG_SKILLHASH_ENV] !== "1") {
     if (!skillHashHintShown) {
       skillHashHintShown = true;
@@ -1252,7 +1258,9 @@ function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fin
   const scope = cassette.scenario.skills?.length ? cassette.scenario.skills.join(", ") : "whole-tree";
   let entries: { path: string; sha: string }[] = [];
   try {
-    entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills);
+    // Must carry the override: without it the dump enumerates the RECORDED location, which under
+    // `--session` no longer resolves — an empty or wrong file list exactly when it is most needed.
+    entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills, sessionOverride);
   } catch (e) {
     process.stderr.write(`cowork-harness: skill-hash debug: could not enumerate files: ${String((e as Error)?.message ?? e)}\n`);
     return;
@@ -1549,12 +1557,25 @@ export function computeStaleness(
     );
     const recMode = fp.mode ?? "raw";
     const liveMode = live.mode ?? "raw";
-    if (live.skillHash === undefined)
+    if (live.skillHash === undefined) {
+      // Name WHY. Every failure path used to collapse into this one message, so "missing session file",
+      // "unparseable YAML" and "the session declares no mounts" were indistinguishable — and the first two
+      // point at completely different fixes (`--session <file>` vs repair the file). Re-resolving costs one
+      // YAML parse and only happens on a path that is already failing.
+      const why = skillSourceDirs(cassette.scenario.session, cassetteDir, undefined, sessionOverride).failure;
+      const detail =
+        why === undefined
+          ? ""
+          : why.kind === "not-found"
+            ? ` — no session file at ${why.path}${sessionOverride === undefined ? " (if the cassette moved, point at its session with --session <file>)" : ""}`
+            : why.kind === "unreadable"
+              ? ` — the session at ${why.path} could not be read or parsed: ${why.message}`
+              : " — an inline scenario carries no session file to resolve";
       findings.push({
         class: "unverifiable-skill",
-        message: "skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)",
+        message: `skill dirs not resolvable from the cassette location${detail} — cannot verify skill staleness (can't verify ⇒ not green)`,
       });
-    else if (recMode !== liveMode)
+    } else if (recMode !== liveMode)
       // A hash from a different boundary mode is not comparable — re-record, don't emit a misleading
       // content diff. Classed `format` (not skill drift): a mode flip is an env/config mismatch, not source drift.
       findings.push({
@@ -1569,7 +1590,7 @@ export function computeStaleness(
         message: `recorded with agent-scope '${fp.agentScope ?? "off"}', verifying with '${live.agentScope ?? "off"}' (COWORK_HARNESS_AGENT_SCOPE) — re-record under the same setting`,
       });
     else if (live.skillHash !== fp.skillHash) {
-      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live); // surface WHICH files drifted
+      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live, sessionOverride); // surface WHICH files drifted
       const recordedVersion = cassette.cassetteVersion ?? 0;
       // HASH_FORMAT_EPOCH (not CASSETTE_VERSION): v9/v10/v11 all changed cassette SHAPE, none changed
       // hashing, so a correctly-current cassette in that range must fall through to the drift-bucket
@@ -4417,7 +4438,14 @@ export async function cmdReplay(args: string[]) {
   }
   // An override must never be silent about where it looked — a wrong one pinning the wrong tree is the
   // failure mode that matters, and it is worse than the honest exit 3 it replaces.
-  if (sessionOverride !== undefined) warn(`::notice:: [replay] --session override in effect: ${sessionOverride}\n`);
+  if (sessionOverride !== undefined) {
+    // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
+    // override gets wrong. "override in effect: <path>" alone would look right while resolving to
+    // nothing — the silent-false-green shape this flag must never have.
+    const od = skillSourceDirs(sessionOverride, undefined);
+    const where = od.dirs.length ? od.dirs.join(", ") : "NO skill dirs — this session mounts none";
+    warn(`::notice:: [replay] --session override in effect: ${sessionOverride} -> ${where}\n`);
+  }
 
   // Footgun guard: one --assert-from file applied to a whole dir asserts the SAME on-disk block against every
   // cassette (the drift gate protects divergent cassettes, but two with identical shaping fields would be
@@ -4916,7 +4944,14 @@ export async function cmdVerifyCassettes(args: string[]) {
   if (vcSessionOverride !== undefined && !existsSync(vcSessionOverride)) {
     return fail("verify-cassettes", "usage", `verify-cassettes --session: no such session file: ${vcSessionOverride}`, undefined, json);
   }
-  if (vcSessionOverride !== undefined) warn(`::notice:: [verify-cassettes] --session override in effect: ${vcSessionOverride}\n`);
+  if (vcSessionOverride !== undefined) {
+    // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
+    // override gets wrong. "override in effect: <path>" alone would look right while resolving to
+    // nothing — the silent-false-green shape this flag must never have.
+    const od = skillSourceDirs(vcSessionOverride, undefined);
+    const where = od.dirs.length ? od.dirs.join(", ") : "NO skill dirs — this session mounts none";
+    warn(`::notice:: [verify-cassettes] --session override in effect: ${vcSessionOverride} -> ${where}\n`);
+  }
   const results = files.map((f) => {
     try {
       return verifyOneCassette(f);
@@ -5319,11 +5354,12 @@ function buildRecordTimeFolderPrefixMap(scenario: Scenario, recordRoots: string[
  * a v9+ cassette uses its persisted `folderPrefixMap` instead of re-deriving this from whatever the
  * session file looks like AT REPLAY TIME (see `buildFolderPrefixMap`).
  */
-function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string, override?: string): { from: string }[] {
+function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): { from: string }[] {
   if (sessionPath === "(inline)") return [];
-  // Third consumer of the same join — see resolveCassetteSessionPath. Folder resolution left behind
-  // would silently disagree with the skill dirs.
-  const { path: resolved } = resolveCassetteSessionPath(sessionPath, cassetteDir, override);
+  // Third consumer of the same join — see resolveCassetteSessionPath. NO session override here on
+  // purpose: the only caller is buildRecordTimeFolderPrefixMap, which runs at RECORD time, so a
+  // replay-time `--session` can never reach it. A future replay-time caller must pass one.
+  const { path: resolved } = resolveCassetteSessionPath(sessionPath, cassetteDir);
   if (!existsSync(resolved)) return [];
   try {
     return resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved)).folders;
