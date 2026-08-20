@@ -602,7 +602,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "usage?": { "turns?": number, /* …SDK usage fields (input_tokens, output_tokens, etc.), pass-through */ },
   "cost?": { "usd?": number, "raw?": {...} }, // usd = SDK's total_cost_usd for this invocation; raw = the api_metrics event payload (independent source)
   "durationMs?": number,
-  "fingerprint?": { "baseline", "skillHash?", "skillSources?":[], "skillScope?":[], "sharedHash?", "contentSig?", "fileSigs?":[["relpath","contentSha"]], "fileSigsOmitted?": bool, "mode?": "git|raw", "agentScope?": "skill" }, // skill/plugin staleness fingerprint recorded at run time; lets `verify-run` detect a kept run whose gate snapshot predates a skill change
+  "fingerprint?": { "baseline", "hashFormat?": "jcs1", "skillHash?", "skillSources?":[], "skillScope?":[], "sharedHash?", "contentSig?", "fileSigs?":[["relpath","hashedSha"]], "fileSigsOmitted?": bool, "mode?": "git|raw", "agentScope?": "skill" }, // skill/plugin staleness fingerprint recorded at run time; lets `verify-run` detect a kept run whose gate snapshot predates a skill change. `hashFormat` names the manifest transform that produced the digests — ABSENT means the LEGACY (pre-v12) transform, never raw bytes. A `fileSigs` sha is the sha of the bytes that FOLD INTO skillHash, which for a plugin manifest is not the file's own bytes
   "outDir": "string",
   "workDir?": "string",                          // the agent's working root (mnt/) inside the run dir
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
@@ -806,13 +806,22 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   shape (`results:[]` / `error.category`) it falls back to on a thrown failure; renaming or removing a
   key is breaking, adding one is not. The `checks[].id` set itself is NOT covered — it grows with new
   tiers/checks.
-- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **11**
-  (`schema/cassette.v11.json`) and its verdict-modifier assertion keys. `cassetteVersion` means **the
-  minimum format version a reader needs to interpret this cassette's frozen `scenario` correctly** — not
-  which recorder wrote it: `record` stamps a value-aware minimum per scenario (`requiredVersionFor`), so a
-  scenario whose fields need no post-v10 semantics (nearly all of them, including `lane: "local"`/omitted)
-  stamps **v10** and stays readable by any v9+ install; only a scenario whose actual field VALUES need a
-  newer reader (today: `lane: "remote"`) stamps v11. The minimum supported read version is **v9**
+- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **12**
+  (`schema/cassette.v12.json`) and its verdict-modifier assertion keys.
+
+  `cassetteVersion` means **the minimum reader for the whole cassette**, which covers how its digests are
+  computed as well as which `scenario` keys it uses: a reader older than the cassette's hash format
+  recomputes `skillHash`/`contentSig` under a different algorithm and reports drift that is not there. The
+  stamp therefore floors at the **hash-format epoch** (v12); the scenario-aware differential applies above
+  that floor. A backwards-incompatible change to `fingerprint.skillHash` is a MAJOR bump — every stored
+  value changes, and digests from different formats are not comparable (`replay` reports
+  `unverifiable-skill`; `rehash` migrates without a re-record where it can prove the content unchanged).
+
+  It is not which recorder wrote it: `record` stamps `requiredVersionFor`, the value-aware minimum for that
+  scenario, floored at the hash-format epoch. The value-aware part means the stamp reads a field's actual
+  VALUE rather than its presence — `lane: "local"`/omitted asks for semantics any older reader already
+  gives, so it lifts nothing, while `lane: "remote"` would. Today the epoch floor dominates, so cassettes
+  stamp **v12**; the differential decides anything above it. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; `schema/cassette.v9.json` and `schema/cassette.v10.json` are

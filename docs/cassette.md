@@ -116,7 +116,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 10,                  // the MINIMUM format a reader needs for this scenario (see Cassette versioning below) — most cassettes stay 10; a `lane: "remote"` scenario stamps 11. ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
+  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12. ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
@@ -151,26 +151,46 @@ cassettes replay unchanged.
 
 ### Cassette versioning
 
-`cassetteVersion` is **the minimum format version a reader needs to interpret this cassette's `scenario`
-correctly** — not which recorder wrote it, and not a flat build counter. `record` stamps the *value-aware*
-minimum a given scenario actually needs: a scenario needs v11 only when a field's actual VALUE requires a
-reader that understands it — today, only `lane: "remote"` does (a pre-`lane` reader already treats every
-run as local-delivery semantics, which is exactly what `lane: "local"`/omitted asks for, so those need no
-bump). Nearly every cassette therefore still stamps **v10**, unchanged, and still replays on an old
-install. A stamped version newer than a given build understands is refused loudly by both `replay` and
+`cassetteVersion` is **the minimum format version a reader needs to interpret this cassette** — not which
+recorder wrote it, and not a flat build counter. That covers how its digests are computed as well as its
+`scenario` keys: a reader older than the cassette's hash format recomputes `skillHash`/`contentSig` under a
+different algorithm and reports drift that is not there, so the stamp floors at the **hash-format epoch**
+(v12). Above that floor it is *value-aware*: `record` reads a field's actual VALUE rather than its
+presence, so `lane: "local"`/omitted lifts nothing (a pre-`lane` reader already gives exactly the
+local-delivery semantics it asks for) while `lane: "remote"` would. The epoch floor dominates that
+differential today, so cassettes stamp **v12**. A stamped version newer than a given build understands is refused loudly by both `replay` and
 `verify-cassettes`. **`replay` alone offers an opt-in override, `--best-effort-future-cassette`;
 `verify-cassettes` does not accept that flag** — a verification gate has no "read it anyway" path, and its
 refusal says to upgrade instead. See [Unknown
 keys](./scenario.md#unknown-keys-the-loader-is-strict-lint-is-lenient) for what that refusal does and does
 not cover.
 
-`rehash <dir/>` re-stamps a cassette to the version its scenario actually requires (it skips a cassette
-already at or above that version) — the recovery path for a `lane: remote` cassette recorded by
-1.14.0/1.15.0 (stamped v10 there, since the conditional stamp described above shipped in 1.16.0). Two
-preconditions bound it, so "rehash can migrate it" is conditional, not a guarantee: it **skips** a
-cassette whose recorded baseline has drifted from the live one, and it **errors** on a `contentSig`
-mismatch (a genuine skill-content change) rather than silently re-stamping over one. A cassette that fails
-either check needs a real re-record, not just a re-stamp.
+`rehash <dir/>` migrates a cassette to the version it requires, without a re-record — the recovery path
+for both a scenario-key bump and a **hash-format** difference.
+
+**How the migration is proved.** A cassette is only rewritten when its content can be shown to be
+unchanged: `rehash` recomputes the digest under the **original** algorithm and compares it to what was
+recorded. Comparing a new-algorithm digest against an old record would be an algorithm mismatch, not a
+content check. `contentSig` is deliberately **not** the proof: it is algorithm-dependent, so comparing it across a format
+difference is the same mistake in a different field. `mode` (git/raw) and agent-scope must match too, since both change which files are hashed.
+
+Only the algorithm-derived values are then replaced. Everything else is carried through from the
+recording — including `promptAssetsHash` and `labelProvenance`, which the recompute cannot produce — and
+`fileSigs` keeps its recorded (redacted) paths, taking only new digests position by position.
+
+**It refuses rather than guessing.** `rehash` **skips** a cassette whose recorded baseline has drifted
+from the live one, and **errors** on a content mismatch, on unreadable sources, on a mode or agent-scope
+change, and on a hand-authored digest it cannot recompute. Anything it refuses needs a real re-record.
+
+```bash
+cowork-harness rehash cassettes/                              # a directory
+cowork-harness rehash one.cassette.json --session s.yaml      # a MOVED cassette
+```
+
+**`--session` is for a cassette that moved.** A cassette stores `session:` relative to its own directory,
+so a `git mv`, a repo reorg or a copy into another project leaves its skill sources unresolvable — and
+therefore unprovable. `--session` says where the tree went. One cassette at a time: each may have been
+recorded against a different source, so a directory batch cannot share a single override.
 
 ### Recording provenance (`environment`)
 
@@ -720,15 +740,25 @@ stable across these shifts; prose-level `transcript_matches` is not. Prefer stru
 possible.
 
 `verify-cassettes` reports these staleness causes:
-- **`recorded under an older hash format (vN → vM)`** — the cassette's staleness hash predates a
-  hash-**algorithm** change, not merely an older `cassetteVersion` stamp: this message fires only when the
-  recorded version is below the **hash-format epoch** (v8, the last bump that actually changed how
-  `skillHash`/`contentSig` are computed) — never merely because it is below the current `cassetteVersion`.
-  A correctly-recorded v9/v10/v11 cassette never gets this message for genuine skill drift; it gets the
-  per-bucket `skill files changed …` finding below instead, with the changed-file detail intact. Re-record
-  once and the message goes away. (Any cassette recorded below the **v9** read floor is refused at load
-  time with a re-record error before `verify-cassettes`/`rehash` ever reach this staleness check — see the
-  boundary note below. A cassette that carries no `skillHash` is unaffected and keeps replaying.)
+- **`recorded under hash format vN (now vM)`** — classed **`unverifiable-skill`**, and it means what it
+  says: the recorded digest and the one this build computes came from **different algorithms**, so they
+  cannot be compared at all. That is not the same claim as "your skill changed", and it is why the class is
+  not `format`: `format` is waivable and warns while exiting 0, which on the day of an epoch would be a
+  green run for every cassette in existence. This **fails a bare `replay`**, and an explicit `--session`
+  *escalates* it rather than quietening it — an override cannot make incomparable digests comparable.
+
+  It fires when the recorded version is below the **hash-format epoch** (v12 — the version at which
+  `skillHash`/`contentSig` are computed the way this build computes them), never merely because it is below
+  the current `cassetteVersion`. Note it is checked **before** the git/raw mode and agent-scope comparisons, which
+  would otherwise swallow a pre-epoch cassette that also had a mode flip into a waivable warning.
+
+  **The remedy is `rehash`, not necessarily a re-record.** Where the content can be proved unchanged the
+  migration is free; see the `rehash` section above, including `--session` for a cassette that moved.
+
+  A cassette at the epoch never gets this message for genuine skill drift; it gets the per-bucket
+  `skill files changed …` finding below instead, with the changed-file detail intact. (Any
+  cassette recorded below the **v9** read floor is refused at load time with a re-record error before this
+  staleness check is reached. A cassette that carries no `skillHash` is unaffected and keeps replaying.)
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
   from the per-file manifest (`fileSigs`). **A `fileSigs` sha is not always `sha256(file)`** — it is the sha of
   the bytes that fold into `skillHash`, and a `.claude-plugin/plugin.json` folds with its `version` deleted
@@ -967,6 +997,9 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   by extension, so writing a cassette under the hashed tree doesn't self-invalidate the fingerprint it just
   recorded), VCS/cache dirs (`.git`, `node_modules`, `__pycache__`, …), and the `version` field of a
   `.claude-plugin/plugin.json` manifest (a pure version bump is metadata; mcpServers/hooks/deps still count).
+  The manifest folds through **canonical (JCS-style) serialization**, so reordering its keys — semantically
+  identical, no behavioural change — does not re-stale the cassettes that hash it. `contentSig` folds the
+  same `D:` directory markers `skillHash` does, so an added or removed EMPTY directory is visible to both.
 
   **Scoping the hash to what changed.** Two consumer-declared knobs narrow the hash so an unrelated
   edit doesn't re-stale every cassette in a multi-skill plugin:

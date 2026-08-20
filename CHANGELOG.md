@@ -8,6 +8,39 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
 
+- **HASH-FORMAT EPOCH — `cassetteVersion` 12. Every cassette carrying a `skillHash` fails a bare `replay`
+  until it is migrated.** Read that sentence literally: this is not a warning you can defer.
+
+  **Migrate with one command.** `cowork-harness rehash <dir/>` proves each cassette's content unchanged and
+  relabels it in place — no re-record, no model calls, no cost. For a cassette that has MOVED (a `git mv`, a
+  repo reorg, a copy into another project) its skill sources cannot be resolved from its own directory, so
+  use `cowork-harness rehash <file.cassette.json> --session <session.yaml>`. Anything `rehash` cannot prove
+  is refused rather than migrated, and does need a real re-record.
+
+  **What changed.** A plugin manifest now folds into `skillHash`/`contentSig` through canonical (JCS-style)
+  serialization instead of insertion-order `JSON.stringify`, so **reordering keys in `plugin.json` no longer
+  re-stales every cassette that hashes it** — semantically identical input now produces an identical digest.
+  `contentSig` additionally folds the directory markers `skillHash` has always folded, so an added or removed
+  **empty directory** is finally visible to it; `CONTENTSIG_ALGO` moves 4 → 5 to say so. A new
+  `fingerprint.hashFormat` records which transform produced the digests — **absent means the legacy
+  pre-v12 transform, never raw bytes**, since every cassette already on disk carries version-stripped
+  manifest digests.
+
+  **Why it fails rather than warns.** A pre-epoch digest and a post-epoch digest came from different
+  algorithms; they cannot be compared at all. That is `unverifiable-skill` — "this was not verified" — and
+  not `format`, which is waivable and exits 0. A warning everyone ignores for a release is exactly the
+  green-against-unverified state the strict-replay change below exists to end, and on the day of an epoch it
+  would apply to every cassette in existence.
+
+  **Some cassettes will migrate with an unchanged digest.** A manifest whose keys were already in canonical
+  order, or a tree with no manifest at all, hashes identically under both algorithms. Those are still
+  flagged and migrated, **by recorded version rather than by whether the number moved** — otherwise they
+  would pass unlabelled, and at the next epoch nobody could tell which algorithm produced them.
+
+  `cassetteVersion` now means the minimum reader for the **whole cassette**, not just for its `scenario`
+  keys: a v11 reader handed a v12 cassette would recompute legacy digests and report drift that is not
+  there. The scenario-aware differential still applies above that floor.
+
 - **A bare `replay` now FAILS when skill staleness cannot be verified** (`unverifiable-skill`), where it
   previously warned on stderr, recorded the class in `staleness[]`, and exited `0`. "Could not be checked
   at all" and "checked and unchanged" are different claims and only the second is green — a cassette that

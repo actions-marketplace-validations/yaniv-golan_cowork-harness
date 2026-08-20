@@ -431,9 +431,9 @@ FAILS a bare `replay`. Recover with `--session <file>` rather than re-recording.
 |---|---|---|
 | `baseline` | platform baseline moved since record | low (format-compatible) |
 | `skill` / `shared-root` | the skill source the assertions validate drifted | **high** (assertions may validate dead code) |
-| `format` | recorded under an older hash format | re-record once |
+| `format` | the git/raw file-set mode or agent-scope differs from the recording | re-record under the same setting (waivable) |
 | `unverifiable-baseline` | the latest baseline couldn't be loaded | couldn't verify (env, not skill) |
-| `unverifiable-skill` | skill dirs unresolvable — skill staleness couldn't be checked | couldn't verify the skill |
+| `unverifiable-skill` | skill dirs unresolvable, **or** the cassette predates the hash-format epoch (v12) so its digest is not comparable | couldn't verify the skill. **Fails a bare `replay`.** For the epoch case try `rehash` first — it migrates without a re-record where it can prove the content unchanged (`rehash <file> --session <s.yaml>` if the cassette moved) |
 | `resolved-tier` | a `fidelity: cowork` cassette's recorded `effectiveFidelity` no longer matches what the baseline resolves to today (the host-loop gate flipped) | **high** (the recording exercises the wrong tier) |
 | `unverifiable-tier` | tier check couldn't run for a `fidelity: cowork` cassette (no recorded `effectiveFidelity`, or its pinned baseline failed to load) | couldn't verify the tier — re-record |
 
