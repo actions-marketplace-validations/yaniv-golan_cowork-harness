@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, copyFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, copyFileSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveCassetteSessionPath } from "../src/run/cassette.js";
@@ -87,10 +87,63 @@ describe.skipIf(!CAN)("--session resolves a relocated cassette", () => {
   });
 
   it("a WRONG --session does not produce a false green", () => {
+    // DISCRIMINATING: a relocated cassette is ALREADY non-zero, so `.not.toBe(0)` alone would pass even if
+    // --session were parsed and thrown away. Pair it against a CORRECT override on the same cassette that
+    // does exit 0, and assert the failure names the bogus session rather than any old error.
     const d = mkdtempSync(join(tmpdir(), "cwh-wrong-"));
     const bogus = join(d, "other.yaml");
-    writeFileSync(bogus, "permission_mode: default\n"); // valid session, declares no skill dirs
-    expect(run(["replay", relocate(), "--session", bogus, "--fail-on-skill-drift"]).code).not.toBe(0);
+    writeFileSync(bogus, "permission_mode: default\n"); // parses, mounts nothing
+    const moved = relocate();
+    const wrong = run(["replay", moved, "--session", bogus, "--fail-on-skill-drift"]);
+    expect(wrong.code, "a session mounting nothing cannot verify the skill").not.toBe(0);
+    expect(`${wrong.out}${wrong.err}`, "and it must say so, not fail for some unrelated reason").toMatch(/declares none|not resolvable/);
+    expect(run(["replay", moved, "--session", REAL_SESSION, "--fail-on-skill-drift"]).code, "the control must pass").toBe(0);
+  });
+
+  it("session-SHAPE drift is computed against the OVERRIDDEN session, not the recorded path", () => {
+    // The P1 an adversarial review found and this suite missed: sessionFingerprintDrift accepted an
+    // override parameter its only caller never passed, so skill staleness used the override while session
+    // shape still resolved the recorded cassette-relative path. That produced exit 0 "clean" on a session
+    // whose shape would otherwise hard-fail. Both directions are pinned here.
+    const skill = resolve("examples/skills/my-pdf-skill");
+    const d = mkdtempSync(join(tmpdir(), "cwh-shape-"));
+    const drifted = join(d, "drifted.yaml");
+    writeFileSync(
+      drifted,
+      `permission_mode: default\nplugins:\n  local_plugins:\n    - ${skill}\negress:\n  extra_allow:\n    - evil.example.com\n`,
+    );
+    // Same skill tree (so skillHash matches) but a different session SHAPE — must NOT be reported clean.
+    expect(run(["verify-cassettes", relocate(), "--session", drifted]).code, "shape drift must not be green").not.toBe(0);
+    // Control: the real session has the recorded shape and stays clean, so the assertion above is not
+    // just "any override fails".
+    expect(run(["verify-cassettes", relocate(), "--session", REAL_SESSION]).code).toBe(0);
+  });
+
+  it("refuses --session on a cassette recording an inline scenario", () => {
+    // It has no session file to override. Accepting it, announcing "override in effect", then ignoring it
+    // produced three mutually contradictory lines.
+    const c = JSON.parse(readFileSync(FIXTURE, "utf8"));
+    c.scenario.session = "(inline)";
+    const d = mkdtempSync(join(tmpdir(), "cwh-inline-"));
+    const f = join(d, "inline.cassette.json");
+    writeFileSync(f, JSON.stringify(c));
+    for (const cmd of ["replay", "verify-cassettes"]) {
+      const r = run([cmd, f, "--session", REAL_SESSION]);
+      expect(r.code, `${cmd} should refuse`).not.toBe(0);
+      expect(`${r.out}${r.err}`).toMatch(/inline scenario, which has no session file/);
+    }
+  });
+
+  it("a session whose declared mounts do not resolve says SO, instead of 'declares none'", () => {
+    // The most likely wrong-override shape: mounts are relative to the session's OWN directory, so a
+    // correct session copied elsewhere declares real dirs that resolve to nothing. Reporting "this session
+    // mounts none" for that states the opposite of the truth.
+    const d = mkdtempSync(join(tmpdir(), "cwh-unresolved-"));
+    const copied = join(d, "copied.yaml");
+    writeFileSync(copied, "permission_mode: default\nplugins:\n  local_plugins:\n    - ../skills/my-pdf-skill\n");
+    const r = run(["verify-cassettes", relocate(), "--session", copied]);
+    expect(r.err, "the notice must not claim the session mounts nothing").toMatch(/declares 1 but none exist/);
+    expect(`${r.out}${r.err}`, "and the finding must name the cause").toMatch(/declares 1 skill dir\(s\) and none exist/);
   });
 
   it("session-level staleness.hash_ignore is READ FROM the overriding session", () => {
@@ -171,7 +224,29 @@ describe.skipIf(!CAN)("--session refuses what it cannot mean", () => {
     for (const cmd of ["replay", "verify-cassettes"]) {
       const r = run([cmd, resolve("examples/replays"), "--session", REAL_SESSION]);
       expect(r.code, `${cmd} should refuse a batch`).not.toBe(0);
-      expect(`${r.out}${r.err}`).toMatch(/not valid for a directory batch/);
+      expect(`${r.out}${r.err}`).toMatch(/not valid for a directory target/);
+    }
+  });
+
+  it("refuses a directory TARGET even when it holds exactly one cassette", () => {
+    // Keying on `files.length > 1` accepted a directory holding one cassette — benign until the day a
+    // second one lands, at which point the same command silently changes meaning.
+    const d = mkdtempSync(join(tmpdir(), "cwh-onedir-"));
+    copyFileSync(FIXTURE, join(d, "only.cassette.json"));
+    for (const cmd of ["replay", "verify-cassettes"]) {
+      const r = run([cmd, d, "--session", REAL_SESSION]);
+      expect(r.code, `${cmd} should refuse a directory target`).not.toBe(0);
+      expect(`${r.out}${r.err}`).toMatch(/not valid for a directory target/);
+    }
+  });
+
+  it("refuses a --session that exists but is not a regular file", () => {
+    // A directory passed the existence gate and only surfaced later as an EISDIR parse error, while the
+    // notice meanwhile announced the override as "in effect".
+    for (const cmd of ["replay", "verify-cassettes"]) {
+      const r = run([cmd, relocate(), "--session", resolve("examples/sessions")]);
+      expect(r.code, `${cmd} should refuse a directory as --session`).not.toBe(0);
+      expect(`${r.out}${r.err}`).toMatch(/not a session file/);
     }
   });
 
@@ -181,7 +256,7 @@ describe.skipIf(!CAN)("--session refuses what it cannot mean", () => {
     for (const cmd of ["replay", "verify-cassettes"]) {
       const r = run([cmd, relocate(), "--session", "/no/such/session.yaml"]);
       expect(r.code, `${cmd} should refuse a missing session`).not.toBe(0);
-      expect(`${r.out}${r.err}`).toMatch(/no such session file/);
+      expect(`${r.out}${r.err}`).toMatch(/not a session file/);
     }
   });
 });

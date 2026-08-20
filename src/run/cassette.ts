@@ -606,7 +606,14 @@ export type SessionPathSource = "override" | "cassette-relative" | "as-given" | 
  *  returned a bare `[]`. An empty `dirs` therefore meant *anything*: missing file, unparseable YAML, or
  *  a perfectly good session with no mounts. `buildFingerprint` then dropped `skillHash` either way. */
 export type SessionResolutionFailure =
-  { kind: "inline-without-config" } | { kind: "not-found"; path: string } | { kind: "unreadable"; path: string; message: string };
+  | { kind: "inline-without-config" }
+  | { kind: "not-found"; path: string }
+  | { kind: "unreadable"; path: string; message: string }
+  /** The session parsed, but EVERY declared skill root was filtered as non-existent by
+   *  `declaredSkillDirs`. The most likely outcome of a WRONG `--session`: a session's mounts are relative
+   *  to ITS OWN directory, so a correct session file copied or symlinked elsewhere declares real mounts
+   *  that resolve to nothing. Distinct from "declares no mounts at all", which is not a failure. */
+  | { kind: "declared-dirs-missing"; path: string; declared: number };
 
 /** THE single cassette-relative join.
  *
@@ -666,7 +673,14 @@ function skillSourceDirs(
     };
   }
   // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
-  return { dirs: declaredSkillDirs(cfg), baseDir, hashIgnore: cfg.staleness.hash_ignore, source };
+  const dirs = declaredSkillDirs(cfg);
+  const declared = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces]
+    .length;
+  // Declared > 0 but resolved 0 is a FAILURE, not an empty session — and reporting "this session mounts
+  // none" for it states the opposite of the truth.
+  const failure: SessionResolutionFailure | undefined =
+    dirs.length === 0 && declared > 0 ? { kind: "declared-dirs-missing", path: resolved, declared } : undefined;
+  return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore, source, ...(failure ? { failure } : {}) };
 }
 
 /** Best-effort git commit provenance for the skill dirs a session mounts — the human-readable "which
@@ -1570,7 +1584,9 @@ export function computeStaleness(
             ? ` — no session file at ${why.path}${sessionOverride === undefined ? " (if the cassette moved, point at its session with --session <file>)" : ""}`
             : why.kind === "unreadable"
               ? ` — the session at ${why.path} could not be read or parsed: ${why.message}`
-              : " — an inline scenario carries no session file to resolve";
+              : why.kind === "declared-dirs-missing"
+                ? ` — the session at ${why.path} declares ${why.declared} skill dir(s) and none exist (mounts are relative to the session's OWN directory, so a session copied or symlinked elsewhere resolves to nothing)`
+                : " — an inline scenario carries no session file to resolve";
       findings.push({
         class: "unverifiable-skill",
         message: `skill dirs not resolvable from the cassette location${detail} — cannot verify skill staleness (can't verify ⇒ not green)`,
@@ -4049,7 +4065,12 @@ export function sessionFingerprintDrift(
   // "none" means "nothing to compare the layout against" (mirrors scenarioContentDrift's own `!src.path`
   // early return, which stays silent rather than downgrading) — it is NOT evidence the tree moved, so it
   // must NOT mask a genuine drift; keep the pre-F51 hard-fail for "none" and for an omitted argument.
-  if (sourceVia === "name-lookup")
+  // An explicit `--session` IS the authoritative resolution, so the layout heuristic must not veto it.
+  // Threading the override alone would still mask every genuine drift on a relocated cassette:
+  // `_resolveRerecordSource` resolves the SCENARIO source, which is cassette-relative too, so any
+  // relocation sets `persistedMissing` -> `sourceVia === "name-lookup"` -> downgraded to a note. The
+  // operator named the session; a guess about directory structure cannot outrank that.
+  if (sourceVia === "name-lookup" && sessionOverride === undefined)
     return {
       drifted: false,
       unverifiable: true,
@@ -4424,17 +4445,20 @@ export async function cmdReplay(args: string[]) {
   // silently pin the wrong tree, which would manufacture false greens (worse than an honest "cannot
   // verify"). Same reasoning as `record --out` and the `--assert-from --write` guard below.
   const sessionOverride = p.options["--session"];
-  if (sessionOverride !== undefined && resolved.files.length > 1) {
+  const targetIsDir = existsSync(target) && statSync(target).isDirectory();
+  if (sessionOverride !== undefined && (targetIsDir || resolved.files.length > 1)) {
     return fail(
       "replay",
       "usage",
-      `replay --session <file> names one cassette's session and is not valid for a directory batch (${resolved.files.length} cassettes) — run it per cassette`,
+      `replay --session <file> names one cassette's session and is not valid for a directory target (${resolved.files.length} cassette(s)) — run it per cassette`,
       undefined,
       asJson,
     );
   }
-  if (sessionOverride !== undefined && !existsSync(sessionOverride)) {
-    return fail("replay", "usage", `replay --session: no such session file: ${sessionOverride}`, undefined, asJson);
+  if (sessionOverride !== undefined && (!existsSync(sessionOverride) || !statSync(sessionOverride).isFile())) {
+    // `isFile()` too: a directory passed the existence gate and only surfaced later as an EISDIR parse
+    // error, with the notice meanwhile claiming the override was "in effect".
+    return fail("replay", "usage", `replay --session: not a session file: ${sessionOverride}`, undefined, asJson);
   }
   // An override must never be silent about where it looked — a wrong one pinning the wrong tree is the
   // failure mode that matters, and it is worse than the honest exit 3 it replaces.
@@ -4443,7 +4467,11 @@ export async function cmdReplay(args: string[]) {
     // override gets wrong. "override in effect: <path>" alone would look right while resolving to
     // nothing — the silent-false-green shape this flag must never have.
     const od = skillSourceDirs(sessionOverride, undefined);
-    const where = od.dirs.length ? od.dirs.join(", ") : "NO skill dirs — this session mounts none";
+    const where = od.dirs.length
+      ? od.dirs.join(", ")
+      : od.failure?.kind === "declared-dirs-missing"
+        ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
+        : "NO skill dirs — this session declares none";
     warn(`::notice:: [replay] --session override in effect: ${sessionOverride} -> ${where}\n`);
   }
 
@@ -4491,6 +4519,18 @@ export async function cmdReplay(args: string[]) {
   };
   for (const f of resolved.files) {
     const rc = readCassette(f); // safe parse + lenient Zod — never throws
+    // `--session` names a session FILE, and an inline scenario has none. Refuse rather than accept,
+    // announce "override in effect", and then silently ignore it — three lines that contradict each other,
+    // with the notice being the feature's own anti-false-green guarantee.
+    if (sessionOverride !== undefined && "cassette" in rc && rc.cassette.scenario.session === "(inline)") {
+      return fail(
+        "replay",
+        "usage",
+        `replay --session: this cassette records an inline scenario, which has no session file to override — remove --session (its skill sources, if any, were declared inline at record time)`,
+        undefined,
+        asJson,
+      );
+    }
     if ("error" in rc) {
       log(`replay: ${f}: ${rc.error}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
@@ -4932,24 +4972,29 @@ export async function cmdVerifyCassettes(args: string[]) {
     return fail("verify-cassettes", "usage", `verify-cassettes: ${resolved.error}`, undefined, asJson);
   }
   const files = resolved.files;
-  if (vcSessionOverride !== undefined && files.length > 1) {
+  const vcTargetIsDir = existsSync(target) && statSync(target).isDirectory();
+  if (vcSessionOverride !== undefined && (vcTargetIsDir || files.length > 1)) {
     return fail(
       "verify-cassettes",
       "usage",
-      `verify-cassettes --session <file> names one cassette's session and is not valid for a directory batch (${files.length} cassettes) — run it per cassette`,
+      `verify-cassettes --session <file> names one cassette's session and is not valid for a directory target (${files.length} cassette(s)) — run it per cassette`,
       undefined,
       json,
     );
   }
-  if (vcSessionOverride !== undefined && !existsSync(vcSessionOverride)) {
-    return fail("verify-cassettes", "usage", `verify-cassettes --session: no such session file: ${vcSessionOverride}`, undefined, json);
+  if (vcSessionOverride !== undefined && (!existsSync(vcSessionOverride) || !statSync(vcSessionOverride).isFile())) {
+    return fail("verify-cassettes", "usage", `verify-cassettes --session: not a session file: ${vcSessionOverride}`, undefined, json);
   }
   if (vcSessionOverride !== undefined) {
     // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
     // override gets wrong. "override in effect: <path>" alone would look right while resolving to
     // nothing — the silent-false-green shape this flag must never have.
     const od = skillSourceDirs(vcSessionOverride, undefined);
-    const where = od.dirs.length ? od.dirs.join(", ") : "NO skill dirs — this session mounts none";
+    const where = od.dirs.length
+      ? od.dirs.join(", ")
+      : od.failure?.kind === "declared-dirs-missing"
+        ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
+        : "NO skill dirs — this session declares none";
     warn(`::notice:: [verify-cassettes] --session override in effect: ${vcSessionOverride} -> ${where}\n`);
   }
   const results = files.map((f) => {
@@ -4974,6 +5019,17 @@ export async function cmdVerifyCassettes(args: string[]) {
   });
   function verifyOneCassette(f: string) {
     const rc = readCassette(f);
+    // `--session` names a session FILE, and an inline scenario has none. Refuse rather than accept it,
+    // announce "override in effect", and then silently ignore it.
+    if (vcSessionOverride !== undefined && "cassette" in rc && rc.cassette.scenario.session === "(inline)") {
+      return fail(
+        "verify-cassettes",
+        "usage",
+        `verify-cassettes --session: this cassette records an inline scenario, which has no session file to override — remove --session`,
+        undefined,
+        json,
+      );
+    }
     if ("error" in rc)
       return { file: f, findings: [], staleness: [], unverifiable: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
@@ -5004,7 +5060,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       // programmatic-record cassette would silently downgrade every genuine session drift → false-green).
       const rr = _resolveRerecordSource(f, rc.cassette);
       const sourceVia = rr.persistedMissing ? "name-lookup" : "none";
-      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia);
+      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
           "session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress config changed since record) — re-record",
