@@ -263,9 +263,16 @@ describe("multi-root identity — a KNOWN, PINNED limitation, not a fixed behavi
   // names are deliberately excluded from the digest. That is an internal inconsistency: a single root is
   // fully location-independent, but for two or more the excluded name re-enters through the sort.
   //
-  // FAILURE DIRECTION MATTERS: reordering produces FALSE DRIFT — a loud, wrong "files changed" — never a
-  // false green. That is why the harness does not refuse multi-root cassettes; refusing working input to
-  // prevent a loud false positive would be disproportionate.
+  // TWO SEPARATE AXES, and an earlier version of this comment got the second one WRONG:
+  //   1. ORDER — reordering roots produces FALSE DRIFT: a loud, wrong "files changed". Loud and safe.
+  //   2. CROSS-ROOT AGGREGATION — the roots fold into ONE digest with NO root-boundary marker, and entries
+  //      are root-relative, so the hash is a function of the concatenated stream, not of the per-root
+  //      partition. Moving a file BETWEEN roots is therefore INVISIBLE whenever the concatenation order
+  //      survives. That IS a false green, and it is pinned below.
+  // The earlier claim "never a false green" was false, and it was the stated justification for not
+  // refusing multi-root cassettes. The decision stands on different ground: a cross-root move changes
+  // which plugin root delivers a file, which is rare and deliberate, and no multi-root cassette exists in
+  // any reachable corpus — so a warning at the point of use beats refusing input nobody has.
   //
   // Fixing it means folding a stable per-root identity into the digest, which changes the digest for every
   // multi-root cassette and therefore needs a hash-format epoch bump. Not scheduled: measured across every
@@ -289,9 +296,11 @@ describe("multi-root identity — a KNOWN, PINNED limitation, not a fixed behavi
   });
 
   it("argument order does NOT affect the digest — the internal sort normalises it", () => {
-    // Stated explicitly because it is the test someone naturally reaches for, and it CANNOT FAIL: the
-    // function sorts its arguments, so this proves nothing about path order. It is pinned only so the
-    // next reader does not mistake it for evidence about the limitation below.
+    // Stated explicitly because it is the test someone naturally reaches for and it proves NOTHING about
+    // path order — the function sorts its arguments, so varying only the argument order is a no-op. It is
+    // not literally unfailable (deleting the internal `sort()` reds it, so it is a weak regression guard on
+    // the normalisation); it simply cannot speak to the limitation below. A previous version of this
+    // comment claimed it "CANNOT FAIL", which mutation testing disproved.
     const a = rootWith("aaa", "A");
     const b = rootWith("bbb", "B");
     expect(hashSkillDirs([a, b]).hash).toBe(hashSkillDirs([b, a]).hash);
@@ -311,6 +320,24 @@ describe("multi-root identity — a KNOWN, PINNED limitation, not a fixed behavi
     const layout1 = [place(d1, "aaa", "ALPHA"), place(d1, "zzz", "BETA")];
     const layout2 = [place(d2, "aaa", "BETA"), place(d2, "zzz", "ALPHA")];
     expect(hashSkillDirs(layout1).hash).not.toBe(hashSkillDirs(layout2).hash);
+  });
+
+  it("KNOWN LIMITATION and a REAL FALSE GREEN: a file moved BETWEEN roots is invisible", () => {
+    // The roots fold into one digest with no root-boundary marker, and entries are root-relative, so the
+    // hash is a function of the concatenated stream rather than of the per-root partition. Same files,
+    // different mount ownership, identical digest. This is what makes "never a false green" wrong.
+    const build = (layout: Record<string, string[]>) => {
+      const base = mkdtempSync(join(tmpdir(), "xr-"));
+      return Object.entries(layout).map(([root, files]) => {
+        const r = join(base, root);
+        mkdirSync(r, { recursive: true });
+        for (const f of files) writeFileSync(join(r, f), f.toUpperCase());
+        return r;
+      });
+    };
+    const l1 = build({ r1: ["a.md", "b.md"], r2: ["c.md"] });
+    const l2 = build({ r1: ["a.md"], r2: ["b.md", "c.md"] });
+    expect(hashSkillDirs(l1).hash, "b.md moved to another mount and the digest did not notice").toBe(hashSkillDirs(l2).hash);
   });
 
   it("KNOWN LIMITATION: duplicate root-relative paths make drift ATTRIBUTION ambiguous", () => {

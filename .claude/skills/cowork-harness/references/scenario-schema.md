@@ -107,7 +107,7 @@ form a relocatable bundle. `~` expands to home.
 > references relative to **its own** directory at record time (`scenario.session` and
 > `scenarioSource`), so moving it afterwards — a different `--out`, a
 > `git mv`, a copy into another repo — leaves them unresolvable and `verify-cassettes` reports
-> `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location.
+> `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location, or pass `--session <file>`.
 > Decide where a cassette will live *before* you record it.
 
 ## Session YAML

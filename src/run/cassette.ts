@@ -1608,9 +1608,11 @@ export function computeStaleness(
               : why.kind === "declared-dirs-missing"
                 ? ` — the session at ${why.path} declares ${why.declared} skill dir(s) and none exist (mounts are relative to the session's OWN directory, so a session copied or symlinked elsewhere resolves to nothing)`
                 : " — an inline scenario carries no session file to resolve";
+      const where =
+        sessionOverride === undefined ? "from the cassette location" : `from the session given with --session (${sessionOverride})`;
       findings.push({
         class: "unverifiable-skill",
-        message: `skill dirs not resolvable from the cassette location${detail} — cannot verify skill staleness (can't verify ⇒ not green)`,
+        message: `skill dirs not resolvable ${where}${detail || (why === undefined ? " — the session resolved but declares no skill dirs to hash" : "")} — cannot verify skill staleness (can't verify ⇒ not green)`,
       });
     } else if (recMode !== liveMode)
       // A hash from a different boundary mode is not comparable — re-record, don't emit a misleading
@@ -1649,7 +1651,7 @@ export function computeStaleness(
         if (dup.length)
           findings.push({
             class: "skill",
-            message: `ambiguous duplicate manifest path(s) across mounts (${dup.join(", ")}) — drift attribution is unavailable for them; the hash difference is still real`,
+            message: `ambiguous duplicate manifest path(s) across mounts (${dup.slice(0, 3).join(", ")}${dup.length > 3 ? `, +${dup.length - 3} more` : ""}) — drift attribution is unavailable for them; the hash difference is still real`,
           });
         if (fp.fileSigs && live.fileSigs) {
           // Path-accurate: emit a finding per bucket that ACTUALLY changed, so a co-occurring shared change can
@@ -1692,7 +1694,7 @@ export function computeStaleness(
         if (dup.length)
           findings.push({
             class: "skill",
-            message: `ambiguous duplicate manifest path(s) across mounts (${dup.join(", ")}) — drift attribution is unavailable for them; the hash difference is still real`,
+            message: `ambiguous duplicate manifest path(s) across mounts (${dup.slice(0, 3).join(", ")}${dup.length > 3 ? `, +${dup.length - 3} more` : ""}) — drift attribution is unavailable for them; the hash difference is still real`,
           });
         const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
         if (summary) findings.push({ class: "skill", message: `skill files changed since record — ${summary} — re-record` });
@@ -1717,6 +1719,16 @@ export function computeStaleness(
       /* an unresolvable session is already reported by the hash path above; don't double-report it here */
     }
   }
+  // Multi-root cassettes carry a limitation the digest cannot express: the roots fold into ONE hash with
+  // no root-boundary marker, so a file MOVED BETWEEN roots is invisible (a false green), and the roots'
+  // fold order comes from their absolute paths (false drift on a rename). Keyed on the RECORDED
+  // skillSources count, never on live resolved dirs — `declaredSkillDirs` filters roots that no longer
+  // exist, so a recorded two-root cassette with one root missing would look single-root and slip past.
+  // A NOTE, not a finding: it is a property of the recording's shape, not evidence anything drifted.
+  if ((cassette.fingerprint?.skillSources?.length ?? 0) >= 2)
+    notes.push(
+      `multi-root: cassette records ${cassette.fingerprint?.skillSources?.length} skill roots — skillHash cannot distinguish a file MOVED between roots, and root fold order follows absolute paths — a rename can read as drift. See docs/cassette.md.`,
+    );
   return { findings, notes };
 }
 
@@ -2560,7 +2572,7 @@ export function cassettePortabilityPreflight(
       `  cassette: ${tildeify(cassetteDir)}
 ` +
       `  Consequence: verify-cassettes cannot resolve the skill dirs from it and reports 'unverifiable' ` +
-      `for staleness (can't verify ⇒ not green, exit 3). Only a re-record at the final location fixes it.
+      `for staleness (can't verify ⇒ not green, exit 3), and since 2.0.0 a bare replay fails too. Recover with --session <file>, or re-record at the final location.
 ` +
       `  Fix: record into the same tree as the scenario and its session, and decide that path BEFORE ` +
       `spending the run — a cassette cannot be moved afterwards.
@@ -4504,7 +4516,11 @@ export async function cmdReplay(args: string[]) {
       ? od.dirs.join(", ")
       : od.failure?.kind === "declared-dirs-missing"
         ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
-        : "NO skill dirs — this session declares none";
+        : od.failure?.kind === "unreadable"
+          ? "NO skill dirs — this session could not be read or parsed"
+          : od.failure?.kind === "not-found"
+            ? "NO skill dirs — no file at that path"
+            : "NO skill dirs — this session declares none";
     warn(`::notice:: [replay] --session override in effect: ${sessionOverride} -> ${where}\n`);
   }
 
@@ -5027,7 +5043,11 @@ export async function cmdVerifyCassettes(args: string[]) {
       ? od.dirs.join(", ")
       : od.failure?.kind === "declared-dirs-missing"
         ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
-        : "NO skill dirs — this session declares none";
+        : od.failure?.kind === "unreadable"
+          ? "NO skill dirs — this session could not be read or parsed"
+          : od.failure?.kind === "not-found"
+            ? "NO skill dirs — no file at that path"
+            : "NO skill dirs — this session declares none";
     warn(`::notice:: [verify-cassettes] --session override in effect: ${vcSessionOverride} -> ${where}\n`);
   }
   const results = files.map((f) => {
@@ -6209,6 +6229,20 @@ export async function replayCassette(
     // Deliberately NARROW. `skill` / `shared-root` — "we checked, and it changed" — still require
     // `--fail-on-skill-drift`, so that flag keeps its meaning and no inverse escape hatch is needed. The
     // remedy for the commonest cause is `--session <file>`; re-recording is the other.
+    // An explicit `--session` must never LOWER the verdict. Without it, an unresolvable cassette is a hard
+    // fail (above); resolving it to the WRONG tree turns `unverifiable-skill` into ordinary `skill` drift,
+    // which is warn-only — so the flag would convert a loud red into a green, which is precisely the
+    // green-against-nothing this release argues is worse than a red. The operator asserted this tree, so
+    // any drift they then see is real and actionable. Escalating here keeps the flag an escape from
+    // "cannot verify", never an escape from "verified, and it changed".
+    else if (opts.sessionOverride !== undefined)
+      for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class)))
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `skill-source drift under an explicit --session: ${s.message}`,
+          source: "staleness",
+        });
     else
       for (const s of staleness.filter((s) => s.class === "unverifiable-skill"))
         assertions.push({

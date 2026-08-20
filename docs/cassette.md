@@ -14,9 +14,9 @@ cowork-harness replay  cassettes/my-test.cassette.json # token-free re-evaluatio
 > Without `--out`, this writes to `cassettes/<scenario-name>.cassette.json` — gitignored by default. See
 > [Recording prerequisites](#recording-prerequisites) below for how to commit a cassette instead.
 
-**In CI, run both commands — `replay` alone does not gate staleness.** A recording describes the skill as
+**In CI, run both commands — `replay` alone gates only `unverifiable-skill`, not the drift classes.** A recording describes the skill as
 it was on the day you paid for it; once the skill moves, a bare `replay` prints
-`::warning:: cassette stale` and still **exits 0**. `verify-cassettes` exits **1** on the same tree. The
+`::warning:: cassette stale` and — since 2.0.0 — **exits non-zero** when staleness could not be VERIFIED (`unverifiable-skill`); the drift classes still only warn. `verify-cassettes` exits **1** on the same tree. The
 split is deliberate — `replay` answers *"do the assertions still hold"*, `verify-cassettes` answers *"is
 this recording still current"* — but running only the first means a skill edit silently stops being
 tested:
@@ -221,7 +221,7 @@ reports
 [unverifiable] skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)
 ```
 
-which is exit `3`. This applies to any move — a `git mv` during a repo reorganisation, a copy into
+which is exit `3` (and, since 2.0.0, a non-zero bare `replay`). This applies to any move — a `git mv` during a repo reorganisation, a copy into
 another project, or recording to one `--out` and committing to a different path — not just to the
 hostloop case below.
 
@@ -262,8 +262,11 @@ moved cassette verifies without being re-recorded. Points worth knowing:
 > files in **absolute-path sort order**, while deliberately excluding a root's own *name* from the digest.
 > A single root is therefore fully location-independent, but with two or more the excluded name re-enters
 > through the sort: the same two trees under differently-sorting directory names hash differently. The
-> failure direction is **false drift** — a loud, wrong "skill files changed" — never a false green, which
-> is why multi-root cassettes are not refused. A related consequence: two mounts can contribute the same
+> failure direction there is **false drift** — a loud, wrong "skill files changed". A second, sharper axis:
+> the roots fold into ONE digest with **no root-boundary marker**, so moving a file **between** roots is
+> invisible when the concatenation order survives — that one IS a false green. Multi-root cassettes are
+> not refused (none exists in any reachable corpus, and refusing would break input nobody has), but a
+> bare `replay` emits a note when a cassette records two or more roots. A related consequence: two mounts can contribute the same
 > root-relative path (`skills/x/SKILL.md`), and since the per-file manifest is keyed by path, drift
 > ATTRIBUTION for those paths is ambiguous — replay says so explicitly rather than naming a file it cannot
 > identify. Fixing either properly means folding a stable per-root identity into the digest, which changes

@@ -419,10 +419,12 @@ evaluation), not present-and-passing. A CI script that counts assertions will se
 on replay vs live — compare by assertion identity / pass-fail, not by total count. The count of
 skipped live-only assertions is reported on each replay result as `skippedAssertions: {full, partial}`.
 
-## Staleness does NOT fail a replay by default — read it from the JSON
+## Staleness mostly does NOT fail a replay — read it from the JSON
 
-A plain `replay` **warns** on a stale cassette (skill/baseline drift) but stays `ok:true` — a green replay
-does **not** imply the recording is still valid. Each replay result carries `staleness[]`, an array of
+A plain `replay` **warns** on a DRIFTED cassette (skill/baseline drift) but stays `ok:true` — a green
+replay does **not** imply the recording is still valid. **Since 2.0.0 there is one exception:**
+`unverifiable-skill` — staleness that could not be checked at all, most often a cassette that moved —
+FAILS a bare `replay`. Recover with `--session <file>` rather than re-recording. Each replay result carries `staleness[]`, an array of
 `{class, message}`, so a token-free gate can act on it without `ok` being the whole story:
 
 | `class` | meaning | concern |
@@ -446,7 +448,7 @@ fail it either way.)
 To gate in CI, pick the severity you want:
 
 - `replay --strict` — fail (exit 1) on **any** staleness class.
-- `replay --fail-on-skill-drift` — fail only on skill-source drift (`skill` / `shared-root` / `unverifiable-skill`);
+- `replay --fail-on-skill-drift` — fail on the skill-source DRIFT classes (`skill` / `shared-root`); `unverifiable-skill` needs no flag, it fails the default verdict since 2.0.0;
   baseline / format / `unverifiable-baseline` stay non-failing warnings.
   Note `--allow-failing` waives this gate wholesale, including the copy `--assert-from` turns on for you:
   `replay --assert-from … --write --allow-failing` will persist an assert block validated against a

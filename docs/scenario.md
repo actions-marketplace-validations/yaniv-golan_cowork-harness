@@ -699,7 +699,7 @@ as `outputs/`.
 A green `replay` re-confirms *record-time* artifacts, **not** that the current skill still produces them —
 that needs a live `run` (the cassette's staleness fingerprint warns when the skill/baseline/prompt-assets
 drifted — `baseline`, `skill`/`shared-root`, `format`, `resolved-tier`, `prompt-assets`, plus the
-`unverifiable-*` can't-verify variants of each; `replay --strict` fails on any drift, `--fail-on-skill-drift`
+`unverifiable-*` can't-verify variants of each (`unverifiable-skill` FAILS a bare replay since 2.0.0); `replay --strict` fails on any drift, `--fail-on-skill-drift`
 on skill-source drift only, and every result reports it in `staleness[]` for a JSON gate). `prompt-assets`
 covers a committed prompt-asset FILE (`spawn.promptTemplate`/`subagentAppend`/`subagentAppendHostLoop`)
 edited under the same `appVersion` — a change `baseline`/`skill` drift alone would miss, since prompt

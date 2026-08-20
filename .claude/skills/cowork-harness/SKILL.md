@@ -407,7 +407,7 @@ That choice is permanent: the cassette rewrites `scenario.session` and `scenario
 its own directory** at record time, so moving the file later — a different `--out`, a `git mv`, a copy
 into another repo — leaves those unresolvable and
 `verify-cassettes` reports `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you
-re-record at the new location. **`record` now says so BEFORE it spends:** a pre-flight — at the same
+re-record at the new location — or point `replay`/`verify-cassettes` at the session with `--session <file>`, which resolves it without a re-record. Since 2.0.0 a bare `replay` FAILS on this class rather than warning. **`record` now says so BEFORE it spends:** a pre-flight — at the same
 pre-spend point as the host-inventory refusal, and in `record --dry-run`, so the rehearsal is free —
 warns when the cassette would be written outside the scenario's tree, or when `session:` itself lives
 outside it (an absolute or `~` path: the mirror case, invisible to a check that only looks at where the

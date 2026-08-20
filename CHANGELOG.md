@@ -12,11 +12,20 @@ All notable changes to this project are documented here. The format is based on
   previously warned on stderr, recorded the class in `staleness[]`, and exited `0`. "Could not be checked
   at all" and "checked and unchanged" are different claims and only the second is green — a cassette that
   had silently stopped proving anything kept passing the lane most people run, and green-against-unverified
-  is worse than a loud red because silence prompts a re-record while green does not. `SPEC.md` treats a
-  change to a per-command exit code as breaking, hence the major.
+  is worse than a loud red because silence prompts a re-record while green does not. The major is required because a previously-green
+  input now exits non-zero — `verdict.pass` / `ok` and the per-command exit behaviour are covered surfaces
+  ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)). Note the *meaning* of exit 1 is
+  unchanged (still assertion-or-agent failure), so §11's exit-code table needs no edit; what changed is
+  which inputs reach it.
 
   **Deliberately narrow.** The content-drift classes (`skill`, `shared-root`) still require
   `--fail-on-skill-drift`, so that flag keeps its meaning and no inverse escape hatch is needed.
+
+  **One exception, and it exists to stop a false green:** under an explicit `--session`, the drift classes
+  are escalated too. Without that, pointing `--session` at a WRONG but resolvable tree would turn
+  `unverifiable-skill` (a hard fail) into ordinary `skill` drift (warn-only) — so the flag could be used,
+  accidentally, to silence the very gate it exists to help you escape. `--session` is an escape from
+  "cannot verify", never from "verified, and it changed".
 
   **Migration.** The commonest cause is a cassette that MOVED — use the new `--session <file>` below
   rather than re-recording. If you genuinely want the old behaviour for a lane, it was never expressible
@@ -43,8 +52,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **Skill staleness, session-shape staleness, label provenance and the skill-hash debug dump could
-  disagree about which session they resolved.** The cassette-relative join was duplicated byte-identically
+- **Consumers of 1.25.0 were NOT affected by this** — it is recorded because the shape is worth knowing,
+  not because it shipped. While building `--session`, skill staleness, session-shape staleness, label
+  provenance and the skill-hash debug dump could each have resolved a different session. The cassette-relative join was duplicated byte-identically
   in three functions and `sessionFingerprintDrift` accepted an override its only caller never passed, so
   `--session` would have verified skill content against the override while session shape still resolved the
   recorded path — reporting "clean" on an axis that hard-fails when used normally. All consumers now share
@@ -58,8 +68,11 @@ All notable changes to this project are documented here. The format is based on
 
 - **Multi-root skill hashing is order-dependent.** `hashSkillDirs` folds roots sorted by absolute path
   while deliberately excluding a root's own name from the digest, so identical content at differently
-  sorting directory names hashes differently. The failure direction is false DRIFT (loud and wrong), never
-  a false green, which is why multi-root cassettes are not refused. Fixing it needs a hash-format epoch.
+  sorting directory names hashes differently. One axis (root ORDER) fails loudly as false drift. A second is
+  worse: roots fold into one digest with no root-boundary marker, so moving a file BETWEEN roots is
+  invisible — a genuine false green. Multi-root cassettes are still not refused, because none exists in
+  any reachable corpus and refusing would break input nobody has; instead replay now emits a note when a
+  cassette records two or more roots. Fixing it needs a hash-format epoch.
   Not scheduled: no multi-root cassette exists in any reachable corpus (32 cassettes on the widest
   denominator across three repos), and no session declares 2+ plugin/skill roots. Pinned by tests in
   `test/skill-hash.test.ts` so the eventual fix is a deliberate change.

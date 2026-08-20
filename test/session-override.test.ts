@@ -304,21 +304,49 @@ describe.skipIf(!CAN)("2.0.0 — unverifiable staleness fails the DEFAULT verdic
     expect(run(["replay", relocate(), "--session", REAL_SESSION]).code).toBe(0);
   });
 
-  it("stays NARROW: content drift still needs --fail-on-skill-drift", () => {
-    // `skill` / `shared-root` mean "we checked, and it changed" — a different claim from "could not
-    // check", and deliberately still opt-in so the flag keeps its meaning. Same skill tree via an
-    // override, with an ignore that moves the boundary: drift is real, but a bare replay must not fail
-    // on it.
-    const skill = resolve("examples/skills/my-pdf-skill");
+  it("stays NARROW: content drift alone still does not fail a bare replay", () => {
+    // Tested WITHOUT an override, which is the only honest way: under an explicit --session, drift IS
+    // escalated on purpose (see the false-green test below), so using --session here would have measured
+    // the opposite of narrowness. The cassette points at an absolute session path, so it resolves with no
+    // flag at all; its recorded skillHash cannot match, so the drift is real `skill` class.
     const d = mkdtempSync(join(tmpdir(), "cwh-narrow-"));
-    const ignoring = join(d, "ignoring.yaml");
-    writeFileSync(
-      ignoring,
-      `permission_mode: default\nplugins:\n  local_plugins:\n    - ${skill}\nstaleness:\n  hash_ignore:\n    - "**/SKILL.md"\n`,
-    );
+    mkdirSync(join(d, "tree", "skills"), { recursive: true });
+    writeFileSync(join(d, "tree", "skills", "SKILL.md"), "CONTENT\n");
+    const sess = join(d, "s.yaml");
+    writeFileSync(sess, `permission_mode: default\nplugins:\n  local_plugins:\n    - ${join(d, "tree")}\n`);
+    const c = JSON.parse(readFileSync(FIXTURE, "utf8"));
+    c.scenario.session = sess; // absolute → resolves without --session
+    c.fingerprint.skillHash = "de".repeat(32);
+    delete c.fingerprint.mode; // recorded/live file-set modes must agree or a `format` finding short-circuits
+    const f = join(d, "c.cassette.json");
+    writeFileSync(f, JSON.stringify(c));
+    const bare = spawnSync("node", [CLI, "replay", f], { encoding: "utf8", env: { ...process.env, COWORK_HARNESS_GITSET: "0" } });
+    expect(bare.status, "content drift alone must not fail a bare replay").toBe(0);
+    const gated = spawnSync("node", [CLI, "replay", f, "--fail-on-skill-drift"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_GITSET: "0" },
+    });
+    expect(gated.status, "the flag still escalates it").not.toBe(0);
+  });
+
+  it("an explicit --session must never LOWER the verdict", () => {
+    // A relocated cassette is a hard fail. Pointing --session at a WRONG but resolvable tree converts
+    // `unverifiable-skill` into ordinary `skill` drift, which is warn-only — so without escalation the
+    // flag would turn a loud red into a green: exactly the green-against-nothing this release argues is
+    // worse than a red. The decoy must be a git work tree, or a `git`->`raw` mode flip short-circuits
+    // before the skill comparison and this test measures nothing.
+    const d = mkdtempSync(join(tmpdir(), "cwh-decoy-"));
+    mkdirSync(join(d, "decoy", "skills"), { recursive: true });
+    writeFileSync(join(d, "decoy", "skills", "SKILL.md"), "UNRELATED\n");
+    spawnSync("git", ["init", "-q"], { cwd: join(d, "decoy") });
+    spawnSync("git", ["add", "-A"], { cwd: join(d, "decoy") });
+    spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], { cwd: join(d, "decoy") });
+    const wrong = join(d, "wrong.yaml");
+    writeFileSync(wrong, `permission_mode: default\nplugins:\n  local_plugins:\n    - ${join(d, "decoy")}\n`);
     const moved = relocate();
-    expect(run(["replay", moved, "--session", ignoring]).code, "content drift alone must not fail a bare replay").toBe(0);
-    expect(run(["replay", moved, "--session", ignoring, "--fail-on-skill-drift"]).code, "the flag still escalates it").not.toBe(0);
+    expect(run(["replay", moved]).code, "baseline: unresolvable is a hard fail").not.toBe(0);
+    expect(run(["replay", moved, "--session", wrong]).code, "a wrong tree must not be quieter than no tree").not.toBe(0);
+    expect(run(["replay", moved, "--session", REAL_SESSION]).code, "the right tree still passes").toBe(0);
   });
 });
 

@@ -246,8 +246,9 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 > `scenarioSource`). Move it afterwards — a different `--out`, a `git mv`,
 > a copy into another repo — and those paths fail to resolve from the new location, leaving
 > `verify-cassettes` unable to verify skill staleness: it reports `unverifiable-skill`
-> ("can't verify ⇒ not green"). Decide where a
-> cassette lives *before* you record it. See [cassette.md → Where a cassette lives](./cassette.md#where-a-cassette-lives-and-why-it-cant-move-afterwards).
+> ("can't verify ⇒ not green") — and since 2.0.0 a bare `replay` fails on it too. Recover with
+> `--session <file>` on either command, which resolves the skill sources without a re-record. Better
+> still, decide where a cassette lives *before* you record it. See [cassette.md → Where a cassette lives](./cassette.md#where-a-cassette-lives-and-why-it-cant-move-afterwards).
 
 ## Tips
 
