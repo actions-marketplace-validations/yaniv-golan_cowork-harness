@@ -383,6 +383,11 @@ describe("manifest version exemption — CHARACTERIZATION of today's asymmetry",
   });
 
   it("a ROOT plugin.json is exempt too — the predicate covers both spellings", () => {
+    // DO NOT TIDY THIS BRANCH AWAY. No root-level `plugin.json` exists anywhere in these repos, which
+    // makes `relPath === "plugin.json"` look like dead code — but the planned hash-format epoch requires
+    // the legacy transform to stay frozen byte-for-byte, because a pre-epoch artifact can only be proved
+    // unchanged by reproducing exactly what was computed at the time. Removing this branch as unused would
+    // silently break that proof for any artifact recorded through it.
     const r = manifestRoot(".");
     const before = hashSkillDirs([r]).hash;
     expect(bumped(r, ".")).toBe(before);
