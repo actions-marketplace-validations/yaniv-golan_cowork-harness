@@ -83,11 +83,24 @@ type AcceptFn = (relPath: string, isDirectory: boolean) => boolean;
  *  skipped with a warning (same policy as collectArtifacts in execute.ts).
  * push any read error into `errors` rather than silently continuing — the caller treats a
  *  non-empty errors array as a staleness failure (can't verify ⇒ not green). */
-/** Optional per-file sink (diagnostics): called for every file FOLDED INTO the hash, with its
- *  root-relative path and the sha256 of exactly the content that was hashed (version-stripped for
- *  plugin.json, raw bytes otherwise). Lets `explainSkillHash` dump the file set the hash sees — so an
- *  unexpected drift source (a `.DS_Store`, a run-generated file) is one line instead of a black-box hunt. */
-type OnFileFn = (relPath: string, hashedSha: string) => void;
+/** What KIND of file this is, for the manifest carve-out. Deliberately NOT a transform id: one entry
+ *  can be hashed by more than one algorithm (legacy today, JCS at the next hash-format epoch), so the
+ *  entry records what the file IS and each algorithm decides what to do with it. */
+export type ManifestKind = "none" | "claude-manifest" | "root-manifest";
+
+/** One entry the hash walk folded, in a form that can reproduce EVERY rendering from a single walk.
+ *  `rootOrdinal` is the index of the source root in the sorted root list — required because `skillHash`
+ *  is ROOT-MAJOR while the wire manifest is globally path-sorted, and duplicate root-relative paths
+ *  across roots are legal. Without it a flat list cannot reconstruct the digest's traversal order. */
+export type HashEntry =
+  | { kind: "file"; rootOrdinal: number; path: string; digests: { legacy: string; jcs1?: string }; manifestKind: ManifestKind }
+  | { kind: "link"; rootOrdinal: number; path: string; target: string }
+  | { kind: "dir"; rootOrdinal: number; path: string };
+
+/** Sink for the walk. Emitted for files, links AND directories — directories fold a `D:` structure
+ *  marker into `skillHash`, so a snapshot without them cannot detect empty-directory drift. */
+type WalkEntry = HashEntry extends infer T ? (T extends HashEntry ? Omit<T, "rootOrdinal"> : never) : never;
+type OnEntryFn = (entry: WalkEntry) => void;
 
 function hashDir(
   dir: string,
@@ -95,7 +108,7 @@ function hashDir(
   errors: string[],
   rel = "",
   accept?: AcceptFn,
-  onFile?: OnFileFn,
+  onEntry?: OnEntryFn,
   root = dir,
 ): void {
   let entries: string[];
@@ -145,14 +158,15 @@ function hashDir(
       const targetRel = relative(rootResolved, resolvedTarget).split(sep).join("/");
       hash.update(`L:${relPath}\0${targetRel}\0`); // link structure; a re-point changes the digest. NUL-separate
       // path from target (not ` -> `): otherwise `a`->`b -> c` and `a -> b`->`c` both fold `L:a -> b -> c\0`.
-      if (onFile) onFile(relPath, `lnk:${targetRel}`);
+      if (onEntry) onEntry({ kind: "link", path: relPath, target: targetRel });
       continue;
     }
     if (st.isDirectory()) {
       if (SKILL_HASH_DIR_DENYLIST.has(name) || OS_JUNK_PATTERN.test(relPath)) continue; // skip VCS/cache and OS-junk subtrees entirely
       if (accept && !accept(relPath, true)) continue; // scoped out (an unlisted skill's subtree)
       hash.update(`D:${relPath}\0`); // structure marker — an empty/renamed dir registers too
-      hashDir(abs, hash, errors, relPath, accept, onFile, root);
+      if (onEntry) onEntry({ kind: "dir", path: relPath }); // the digest has always folded these; the SNAPSHOT now sees them too
+      hashDir(abs, hash, errors, relPath, accept, onEntry, root);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
       if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
@@ -181,7 +195,12 @@ function hashDir(
       // bytes if the manifest isn't valid JSON. `hashedContent` is EXACTLY what folds into the digest — the
       // onFile sink reports its sha so the debug dump reflects what the hash actually saw.
       let hashedContent: Buffer | string = bytes;
-      if (relPath.endsWith(".claude-plugin/plugin.json") || relPath === "plugin.json") {
+      const manifestKind: ManifestKind = relPath.endsWith(".claude-plugin/plugin.json")
+        ? "claude-manifest"
+        : relPath === "plugin.json"
+          ? "root-manifest"
+          : "none";
+      if (manifestKind !== "none") {
         try {
           const manifest = JSON.parse(bytes.toString("utf8"));
           delete manifest.version;
@@ -197,7 +216,7 @@ function hashDir(
       // always folded (the no-sink path must fold the same bytes).
       const contentSha = createHash("sha256").update(hashedContent).digest("hex");
       hash.update(contentSha);
-      if (onFile) onFile(relPath, contentSha);
+      if (onEntry) onEntry({ kind: "file", path: relPath, digests: { legacy: contentSha }, manifestKind });
     }
   }
 }
@@ -326,11 +345,27 @@ export const OS_JUNK_PATTERN = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|\.Appl
 /** Diagnostics: the per-file entries the skill hash currently folds in — same walk/scope/ignore as
  *  `hashSkillDirs`, but emitting `{ path, sha }` instead of one digest. Sorted by path. Lets a caller dump
  *  exactly what the hash sees so an unexpected drift source is visible at a glance. */
-export function skillHashEntries(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): { path: string; sha: string }[] {
-  const entries: { path: string; sha: string }[] = [];
-  hashSkillDirs(dirs, scopeSkills, sessionIgnore, (path, sha) => entries.push({ path, sha }));
+export function skillHashSnapshot(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): HashEntry[] {
+  const entries: HashEntry[] = [];
+  hashSkillDirs(dirs, scopeSkills, sessionIgnore, (e) => entries.push(e as HashEntry));
+  return entries; // WALK order (root-major), deliberately unsorted — this is what reproduces `skillHash`
+}
+
+/** Render a snapshot to the wire manifest shape (`fileSigs`). Files carry their hashed-content sha;
+ *  links carry `lnk:<target>`; **directories are dropped** — the wire manifest has never listed them,
+ *  and including them would move `contentSig`, which folds this same rendering. */
+export function renderWireEntries(snapshot: HashEntry[]): { path: string; sha: string }[] {
+  const out: { path: string; sha: string }[] = [];
+  for (const e of snapshot) {
+    if (e.kind === "file") out.push({ path: e.path, sha: e.digests.legacy });
+    else if (e.kind === "link") out.push({ path: e.path, sha: `lnk:${e.target}` });
+  }
   // Code-unit sort (NOT localeCompare) so the dump order matches the hash walk's own `readdirSync().sort()`.
-  return entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+export function skillHashEntries(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): { path: string; sha: string }[] {
+  return renderWireEntries(skillHashSnapshot(dirs, scopeSkills, sessionIgnore));
 }
 
 export interface HashSkillDirsResult {
@@ -370,7 +405,7 @@ export interface HashSkillDirsResult {
  * also returns `readErrors` when any input was unreadable — callers must treat this as a
  * staleness failure.
  */
-export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[], onFile?: OnFileFn): HashSkillDirsResult {
+export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[], onEntry?: OnEntryFn): HashSkillDirsResult {
   const hash = createHash("sha256");
   const sorted = [...dirs].sort();
   // Resolve skill scoping fail-closed: only narrow to `keep` when every named skill exists under some
@@ -393,7 +428,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
   const gitOn = gitModeEnabled();
   const scopeAgents = agentScopeEnabled();
   let allGit = gitOn && sorted.length > 0;
-  for (const d of sorted) {
+  for (const [rootOrdinal, d] of sorted.entries()) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
     // Per-root skill names so a skill-named agent under THIS root scopes to THIS root's skill.
@@ -408,7 +443,9 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
         ? (rel: string, isDir: boolean) =>
             (scopeFn ? scopeFn(rel, isDir) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
         : undefined;
-    hashDir(d, hash, allErrors, "", accept, onFile);
+    // Stamp the root index here rather than threading it through hashDir's recursion: `skillHash` is
+    // root-major, so an entry's root is the only thing a flat list cannot otherwise recover.
+    hashDir(d, hash, allErrors, "", accept, onEntry ? (e) => onEntry({ ...e, rootOrdinal } as HashEntry) : undefined);
   }
   const scoped = keep !== null;
   // Agent scoping is applied only when env-on AND the hash was skill-scoped (it refines `skills:` scoping).

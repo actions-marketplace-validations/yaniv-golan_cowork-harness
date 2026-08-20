@@ -2,7 +2,15 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashSkillDirs, skillHashEntries, OS_JUNK_PATTERN, compileIgnore, agentSkillName } from "../src/run/skill-hash.js";
+import {
+  hashSkillDirs,
+  skillHashEntries,
+  skillHashSnapshot,
+  renderWireEntries,
+  OS_JUNK_PATTERN,
+  compileIgnore,
+  agentSkillName,
+} from "../src/run/skill-hash.js";
 import { createHash } from "node:crypto";
 
 function skillDir(): string {
@@ -407,5 +415,59 @@ describe("manifest version exemption — CHARACTERIZATION of today's asymmetry",
     const before = hashSkillDirs([r]).hash;
     writeFileSync(join(r, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1","mcpServers":{"x":{}}}');
     expect(hashSkillDirs([r]).hash).not.toBe(before);
+  });
+});
+
+describe("skillHashSnapshot — one walk must reproduce every rendering", () => {
+  // Ship 3 of the hash-format epoch. The walk used to emit only `(path, sha)` pairs for files and links,
+  // which is strictly less than `skillHash` folds: directories contribute a `D:` structure marker, and the
+  // digest is ROOT-MAJOR while the wire manifest is globally path-sorted. A flat path-sorted pair list
+  // therefore cannot reconstruct the digest's traversal, cannot see an empty-directory change, and cannot
+  // tell two roots apart when they share a root-relative path (which is legal, and measured). The snapshot
+  // carries all three; `renderWireEntries` collapses it back to exactly the old shape.
+
+  function twoRoots(): { a: string; b: string } {
+    const base = mkdtempSync(join(tmpdir(), "snap-"));
+    const a = join(base, "a");
+    const b = join(base, "b");
+    for (const r of [a, b]) mkdirSync(join(r, "skills", "s"), { recursive: true });
+    writeFileSync(join(a, "skills", "s", "SKILL.md"), "A\n");
+    writeFileSync(join(b, "skills", "s", "SKILL.md"), "B\n");
+    return { a, b };
+  }
+
+  it("emits directory entries — including an EMPTY one the wire manifest never showed", () => {
+    const d = skillDir();
+    mkdirSync(join(d, "emptydir"));
+    const snap = skillHashSnapshot([d]);
+    expect(snap.some((e) => e.kind === "dir" && e.path === "emptydir")).toBe(true);
+    // ...and the wire rendering still does NOT show it, because `contentSig` folds that same rendering
+    // and listing directories there would move it. Dropping them here is what keeps Ship 3 hash-neutral.
+    expect(renderWireEntries(snap).some((e) => e.path === "emptydir")).toBe(false);
+  });
+
+  it("stamps rootOrdinal, so two roots sharing a relative path stay distinguishable", () => {
+    const { a, b } = twoRoots();
+    const files = skillHashSnapshot([a, b]).filter((e) => e.kind === "file" && e.path === "skills/s/SKILL.md");
+    expect(files).toHaveLength(2); // duplicate root-relative paths are legal
+    expect(new Set(files.map((e) => e.rootOrdinal)).size).toBe(2); // and now separable
+  });
+
+  it("classifies manifests without deciding how to hash them", () => {
+    const d = skillDir();
+    mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1"}');
+    const snap = skillHashSnapshot([d]);
+    const manifest = snap.find((e) => e.kind === "file" && e.path === ".claude-plugin/plugin.json");
+    expect(manifest && manifest.kind === "file" && manifest.manifestKind).toBe("claude-manifest");
+    const skill = snap.find((e) => e.kind === "file" && e.path === "skills/SKILL.md");
+    expect(skill && skill.kind === "file" && skill.manifestKind).toBe("none");
+  });
+
+  it("renderWireEntries is byte-identical to skillHashEntries — the adapter is the ONLY wire producer", () => {
+    const { a, b } = twoRoots();
+    mkdirSync(join(a, "nested", "deep"), { recursive: true });
+    writeFileSync(join(a, "nested", "deep", "x.md"), "x\n");
+    expect(JSON.stringify(renderWireEntries(skillHashSnapshot([a, b])))).toBe(JSON.stringify(skillHashEntries([a, b])));
   });
 });
