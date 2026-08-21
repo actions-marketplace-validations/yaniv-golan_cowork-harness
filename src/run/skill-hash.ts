@@ -441,13 +441,17 @@ export function skillHashSnapshot(dirs: string[], scopeSkills?: string[], sessio
 
 /** Render a snapshot to the wire manifest shape (`fileSigs`). Files carry their hashed-content sha;
  *  links carry `lnk:<target>`; **directories are dropped** — the wire manifest has never listed them,
- *  and including them would move `contentSig`, which folds this same rendering. */
+ *  and adding them would break the index-aligned migration proof and a covered wire surface.
+ *
+ *  NOTE: `contentSig` does NOT share this rendering. It folds `D:` markers itself (CONTENTSIG_ALGO 5) via
+ *  `contentSigFromSnapshot`. Do not add directories here "to keep contentSig in sync" — they are separate
+ *  renderings of the same snapshot, deliberately. */
 export function renderWireEntries(snapshot: HashEntry[], algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO): { path: string; sha: string }[] {
   const out: { path: string; sha: string }[] = [];
   for (const e of snapshot) {
     // MUST match the algorithm that produced `skillHash`. The per-file manifest exists to name WHICH file
     // drifted, so publishing a digest of bytes the aggregate never folded makes every attribution a lie —
-    // and `contentSig`, which folds this same rendering, would then disagree with `skillHash` about one tree.
+    // and the aggregate would then disagree with the per-file manifest about the same tree.
     if (e.kind === "file") out.push({ path: e.path, sha: (algo === "jcs1" ? e.digests.jcs1 : e.digests.legacy) ?? e.digests.legacy });
     else if (e.kind === "link") out.push({ path: e.path, sha: `lnk:${e.target}` });
   }

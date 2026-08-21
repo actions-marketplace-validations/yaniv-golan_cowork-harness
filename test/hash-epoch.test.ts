@@ -13,7 +13,7 @@ import {
   requiredVersionFor,
 } from "../src/run/cassette.js";
 import { skillHashSnapshot, foldSnapshot, renderWireEntries, jcs1HashedContent, legacyHashedContent } from "../src/run/skill-hash.js";
-import { checkStaleness } from "../src/run/cassette.js";
+import { computeStaleness } from "../src/run/cassette.js";
 import type { Fingerprint } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
 
@@ -498,6 +498,13 @@ describe("computeStaleness behaviour the epoch depends on", () => {
     };
   }
 
+  // These assert the CLASS, not just the message. `checkStaleness` maps findings to `.message` and drops
+  // the class — so a test written against it stays green if the epoch is reclassed from
+  // `unverifiable-skill` (fails a bare replay) to `format` (warns, exits 0), which is the single decision
+  // that keeps this epoch from being a day-one false green across the whole corpus.
+  const classesFor = (cassette: unknown, dir: string) => computeStaleness(cassette as never, dir).findings.map((f) => f.class);
+  const messagesFor = (cassette: unknown, dir: string) => computeStaleness(cassette as never, dir).findings.map((f) => f.message);
+
   it("D1: a pre-epoch cassette whose digest is IDENTICAL under jcs1 is STILL flagged", () => {
     // The whole justification for flagging by recorded version. An already-canonical manifest hashes the
     // same either way, so an outcome-based check would let it pass unlabelled — and at the next epoch
@@ -505,23 +512,63 @@ describe("computeStaleness behaviour the epoch depends on", () => {
     const { cassette, dir } = preEpoch({ sorted: true });
     const fp = cassette.fingerprint as { skillHash: string };
     expect(foldSnapshot(skillHashSnapshot([dir]), "jcs1")).toBe(fp.skillHash); // digest genuinely unchanged
-    const msgs = checkStaleness(cassette as never, dir);
-    expect(msgs.join(" ")).toMatch(/hash format/);
+    expect(messagesFor(cassette, dir).join(" ")).toMatch(/hash format/);
+    expect(classesFor(cassette, dir)).toContain("unverifiable-skill"); // NOT `format` — see D2
   });
 
   it("X4: a pre-epoch cassette that ALSO has a mode flip reports the EPOCH, not the waivable format class", () => {
     // `format` is outside SKILL_DRIFT_CLASSES and outside the default replay gate, so if the mode branch
     // won this would warn and exit 0 — a green run for every pre-epoch cassette with a dirty worktree.
-    const { cassette, dir } = preEpoch({ sorted: false, mode: "raw" });
-    const msgs = checkStaleness(cassette as never, dir);
-    expect(msgs.join(" ")).toMatch(/hash format/);
-    expect(msgs.join(" ")).not.toMatch(/file-set mode/);
+    // A REAL flip: the recording says `git`, and the live tree is a bare tmpdir so `gitTrackedSet` falls
+    // back to `raw`. Recording "raw" here would have matched live and produced no flip at all — the
+    // assertion could not have failed, which is exactly the shape this suite exists to avoid.
+    const { cassette, dir } = preEpoch({ sorted: false, mode: "git" });
+    expect(computeStaleness(cassette as never, dir).findings.some((f) => f.message.includes("file-set mode"))).toBe(false);
+    expect(messagesFor(cassette, dir).join(" ")).toMatch(/hash format/);
+    expect(classesFor(cassette, dir)).toContain("unverifiable-skill");
+    expect(classesFor(cassette, dir)).not.toContain("format"); // the waivable class must NOT win
   });
 
   it("W5: an epoch mismatch produces NO per-file drift dump", () => {
     // The dump compares digests across two algorithms — noise that reads as evidence.
     const { cassette, dir } = preEpoch({ sorted: false });
-    const msgs = checkStaleness(cassette as never, dir);
-    expect(msgs.join(" ")).not.toMatch(/skill files changed/);
+    expect(messagesFor(cassette, dir).join(" ")).not.toMatch(/skill files changed/);
+  });
+});
+
+describe.skipIf(!existsSync(CLI))("rehash --session honours the same contract as replay --session", () => {
+  const rehashRaw = (args: string[]) => spawnSync("node", [CLI, "rehash", "--output-format", "json", ...args], { encoding: "utf8" });
+
+  it("REFUSES an inline scenario — there is no session file to override", () => {
+    // `resolveCassetteSessionPath` short-circuits on the sentinel BEFORE any override, which is how replay
+    // and verify-cassettes get this for free. Substituting the override AS the session path bypasses that:
+    // an override tree that happened to match the recorded digest would report "migrated" and stamp
+    // v12/jcs1 while the cassette still said `(inline)` — bare replay then fails `inline-without-config`,
+    // `replay --session` is refused, and the operator has been told the cassette is current.
+    const dir = mkdtempSync(join(tmpdir(), "epoch-inline-"));
+    const file = join(dir, "c.cassette.json");
+    const sessionPath = join(dir, "s.yaml");
+    writeFileSync(sessionPath, "skills:\n  local: []\n");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cassetteVersion: EPOCH - 1,
+        scenario: { name: "c", baseline: LIVE_BASELINE, session: "(inline)", fidelity: "container", prompt: "hi", answers: [] },
+        events: [],
+        fingerprint: { baseline: LIVE_BASELINE, skillHash: "abc" },
+      }),
+    );
+    const out = JSON.parse(rehashRaw([file, "--session", sessionPath]).stdout.trim());
+    expect(out.results[0].action).toBe("error");
+    expect(out.results[0].reason).toMatch(/inline/i);
+  });
+
+  it("REJECTS a directory passed as --session, like replay does", () => {
+    const dir = mkdtempSync(join(tmpdir(), "epoch-dirsession-"));
+    const file = join(dir, "c.cassette.json");
+    writeFileSync(file, "{}");
+    const r = rehashRaw([file, "--session", dir]);
+    expect(r.status).not.toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toMatch(/not a session file/);
   });
 });

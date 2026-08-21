@@ -443,7 +443,9 @@ describe("skillHashSnapshot — one walk must reproduce every rendering", () => 
     mkdirSync(join(d, "emptydir"));
     const snap = skillHashSnapshot([d]);
     expect(snap.some((e) => e.kind === "dir" && e.path === "emptydir")).toBe(true);
-    // ...and the wire rendering still does NOT show it, because `contentSig` folds that same rendering
+    // ...and the wire rendering still does NOT show it: `fileSigs` has never listed directories, and the
+    // index-aligned migration proof pairs recorded entries with live ones positionally. (`contentSig` folds
+    // `D:` markers separately, via contentSigFromSnapshot — it does NOT consume this rendering.)
     // and listing directories there would move it. Dropping them here is what keeps Ship 3 hash-neutral.
     expect(renderWireEntries(snap).some((e) => e.path === "emptydir")).toBe(false);
   });

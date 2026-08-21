@@ -5565,8 +5565,11 @@ export function cmdRehash(args: string[]): void {
     if (!existsSync(target) || statSync(target).isDirectory()) {
       return fail("rehash", "usage", `rehash --session takes a single cassette FILE, not a directory: ${target}`, undefined, asJson);
     }
-    if (!existsSync(sessionOverride)) {
-      return fail("rehash", "usage", `rehash: --session file not found: ${sessionOverride}`, undefined, asJson);
+    // `isFile()` too, matching `replay --session`: a directory otherwise passes the existence gate and only
+    // surfaces much later as "skill dirs not resolvable", which reads as a cassette problem rather than a
+    // typo in the flag. One flag, one contract.
+    if (!existsSync(sessionOverride) || !statSync(sessionOverride).isFile()) {
+      return fail("rehash", "usage", `rehash --session: not a session file: ${sessionOverride}`, undefined, asJson);
     }
   } else if (!existsSync(target) || !statSync(target).isDirectory()) {
     const hint = existsSync(target) ? " — pass a directory, or a single cassette with --session <session.yaml>" : "";
@@ -5730,6 +5733,21 @@ export function cmdRehash(args: string[]): void {
     //
     // An override is resolved ABSOLUTE: `skillSourceDirs` only joins `cassetteDir` for a RELATIVE session,
     // so passing both a relative override and its own dirname would double-join them.
+    // An INLINE cassette has no session file, so there is nothing an override can point at. `replay` and
+    // `verify-cassettes` get this for free because `resolveCassetteSessionPath` short-circuits on the
+    // sentinel BEFORE considering an override — but substituting the override AS the session path here
+    // bypasses that. Without this guard, an override tree that happened to match the recorded digest would
+    // report "migrated" and stamp v12/jcs1 while the cassette still says `(inline)`: a bare `replay` then
+    // fails with `inline-without-config`, `replay --session` is refused, and the operator has been told the
+    // cassette is current with no recovery path left.
+    if (sessionOverride !== undefined && cassette.scenario.session === "(inline)") {
+      results.push({
+        file,
+        action: "error",
+        reason: "--session cannot apply to an INLINE scenario (it has no session file to override) — re-record",
+      });
+      continue;
+    }
     const migrateSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
     const proof = recomputeBothAlgos(migrateSession, dirname(file), cassette.scenario.skills, cassette.fingerprint.baseline);
     if (!proof) {
