@@ -180,9 +180,25 @@ recording — including `promptAssetsHash` and `labelProvenance`, which the reco
 
 **A drifted baseline does NOT stop the migration.** `fingerprint.baseline` is the recorded Cowork app
 version — metadata, never an input to `skillHash` — so it says nothing about whether the content is
-unchanged. `rehash` migrates the hashes, keeps the recorded baseline, and notes the drift on the row;
-clearing that separately is a re-record. (This matters after `sync`, or for any cassette older than the
-current `baselines/`, which is otherwise every file you own.)
+unchanged. `rehash` migrates the hashes, keeps the recorded baseline, and notes the drift on the row.
+(This matters after `sync`, or for any cassette older than the current `baselines/`, which is otherwise
+every file you own.)
+
+**Clearing a drifted baseline: re-record, or re-stamp.** `replay` only warns on a `baseline` finding and
+still exits 0, but `verify-cassettes` treats any staleness as not-green, so a drifted baseline reds the CI
+gate until you do one of two things:
+
+- **Re-record**, which is always correct and always costs a paid run.
+- **Re-stamp** `fingerprint.baseline` to the new version by hand — one line per cassette, no run. This is
+  a sanctioned path with precedent (`9eaba8d` re-stamped the committed example cassettes across a baseline
+  bump), and it is what you want when a baseline moved without changing anything the recording depends on.
+
+  **It is an assertion, not a check.** Re-stamping says "the platform moved, and nothing this recording
+  exercises moved with it" — the tool cannot verify that for you. Re-stamp only when the baseline delta
+  leaves the spawn contract, the emulated system prompt, the egress policy and the tool surface alone; if
+  any of those changed, the recording was made against different behaviour and only a re-record is honest.
+  `promptAssetsHash` is the one piece of record-time evidence here, and `rehash` does not recompute it, so
+  a re-stamp does not and cannot confirm it.
 
 **It refuses rather than guessing.** `rehash` **errors** on a content mismatch, on unreadable sources, on
 a mode or agent-scope change, on `fileSigs` it cannot align entry-for-entry, and on a hand-authored digest

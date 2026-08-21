@@ -26,6 +26,14 @@ All notable changes to this project are documented here. The format is based on
   deliberately wrong `fingerprint.baseline` replays `pass: true`, exit 0, with a non-failing `[baseline]`
   finding.)
 
+  **`verify-cassettes` is stricter than `replay`, and that is not new.** It treats ANY staleness finding as
+  not-green, so a migrated cassette that still carries baseline drift replays green and reds the
+  verification gate — as it did before this release, for the same reason. Clear it by re-recording, or by
+  re-stamping `fingerprint.baseline` where the baseline moved without changing anything the recording
+  exercises; [docs/cassette.md](./docs/cassette.md#cassette-versioning) covers when that re-stamp is honest
+  and when it is not. This release also ships a new platform baseline, so expect that drift on cassettes
+  recorded against the previous one.
+
   **What changed.** A plugin manifest now folds into `skillHash`/`contentSig` through canonical (JCS-style)
   serialization instead of insertion-order `JSON.stringify`, so **reordering keys in `plugin.json` no longer
   re-stales every cassette that hashes it** — semantically identical input now produces an identical digest.
