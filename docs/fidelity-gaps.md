@@ -653,9 +653,28 @@ and the session this harness models carries no `sessionType` at all — the base
 `CLAUDE_CODE_TAGS: "lam_session_type:chat"` is a `??` default, and the frame-artifacts predicate the
 harness models requires `sessionType === undefined` — so that term does not exclude it.
 
-What does is simpler and stronger: **the harness never constructs `settings.autoMode` on any tier.** The spawn passes `--permission-mode` and `--setting-sources`, never an autoMode payload, and
-the rubric-merging code is Desktop-side and never runs here. The rubric is *structurally unreachable*,
-not excluded by session type.
+Nor is it "the harness never constructs `settings.autoMode`". That much is true — the spawn passes
+`--permission-mode` and `--setting-sources`, never an autoMode payload — but it is not sufficient on its
+own: auto-mode's `AUTO_MODE_TRUSTED_SOURCES` is `["userSettings","flagSettings","policySettings"]`, so
+**`userSettings` is a trusted source**, and the harness passes `--setting-sources user`. At
+`protocol`/`hostloop` under OAuth the agent also reads the operator's REAL `CLAUDE_CONFIG_DIR`. An
+operator's own settings are therefore a trusted source for auto-mode's `allow` / `soft_deny` /
+`hard_deny` / `environment` rules.
+
+What actually closes it is the activation predicate. Binary-verified in agent **2.1.237**, auto-mode is
+entered on the permission mode alone:
+
+```js
+if (e.permissionMode === "auto") r = fme(r)
+```
+
+Trusted sources therefore govern only *where the rules would be read from*, never *whether the mode is on*.
+Two structural guards keep the harness out of it, both pinned by `test/auto-mode-unreachable.test.ts`:
+the session schema's `permission_mode` enum has no `"auto"` member, so no scenario can request it; and the
+argv builder's only sources for the flag are that session value and the baseline's sentinel-pinned
+`spawn.permissionMode` (`"default"`). The rubric is *structurally unreachable*, not excluded by session
+type — and the test fails the day either guard is relaxed, which is when this gap needs re-triage rather
+than after.
 
 So the residual is: in a real VM-loop, non-chat Cowork session the rubric is now a second, host-side
 judgement layer over every tool call in auto-mode, and its observable effect is that the PreToolUse hook
