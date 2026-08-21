@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, copyFileSync, writeFileSync, readFileSync, mkd
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveCassetteSessionPath } from "../src/run/cassette.js";
+import { loadBaseline } from "../src/baseline.js";
 
 /**
  * `--session` — the relocation escape hatch.
@@ -25,11 +26,24 @@ const FIXTURE = resolve("examples/replays/example-pdf-skill.cassette.json");
 const REAL_SESSION = resolve("examples/sessions/default.yaml");
 const CAN = existsSync(CLI) && existsSync(FIXTURE);
 
-/** Copy the committed fixture somewhere its recorded `../sessions/default.yaml` cannot resolve. */
+/** The baseline `latest` resolves to right now. Used to normalise the fixture — see `relocate()`. */
+const LIVE_BASELINE = loadBaseline("latest").appVersion;
+
+/** Copy the committed fixture somewhere its recorded `../sessions/default.yaml` cannot resolve.
+ *
+ *  ALSO normalises `fingerprint.baseline` to whatever `latest` resolves to today. That is not cosmetic:
+ *  these tests are about SESSION RESOLUTION and staleness CLASSING, and baseline freshness is a different
+ *  axis covered elsewhere. When a parity sync lands a new baseline, the committed fixture's recorded
+ *  baseline goes stale, `[stale] baseline moved X → Y` fires FIRST, and the exit code changes from 3 to 1
+ *  — which silently re-points assertions here at a condition they were never written to measure.
+ *  Measured: pinning the fixture to an older real baseline reds two cases in this file that have nothing
+ *  to do with baselines. Normalising the irrelevant variable is what keeps them honest. */
 function relocate(): string {
   const d = mkdtempSync(join(tmpdir(), "cwh-reloc-"));
   const dest = join(d, "example-pdf-skill.cassette.json");
-  copyFileSync(FIXTURE, dest);
+  const c = JSON.parse(readFileSync(FIXTURE, "utf8"));
+  if (c.fingerprint?.baseline) c.fingerprint.baseline = LIVE_BASELINE;
+  writeFileSync(dest, JSON.stringify(c));
   return dest;
 }
 
@@ -37,6 +51,17 @@ function run(args: string[]) {
   const r = spawnSync("node", [CLI, ...args], { encoding: "utf8" });
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
+
+describe.skipIf(!CAN)("fixture precondition", () => {
+  it("the committed fixture's baseline matches `latest` — re-record after a parity sync", () => {
+    // The cases below that use the fixture IN PLACE cannot normalise it the way `relocate()` does, so a
+    // stale fixture reds several of them at once with unrelated-looking messages. This turns that into one
+    // legible failure that names the remedy. If it fires, the fixture needs re-recording against the new
+    // baseline — it is not a defect in `--session`.
+    const recorded = JSON.parse(readFileSync(FIXTURE, "utf8")).fingerprint?.baseline;
+    expect(recorded, `fixture pins ${recorded}, latest is ${LIVE_BASELINE} — re-record the cassette`).toBe(LIVE_BASELINE);
+  });
+});
 
 describe("resolveCassetteSessionPath — the single join every consumer shares", () => {
   // It was duplicated byte-identically in skillSourceDirs, buildSessionFingerprint and
@@ -71,7 +96,19 @@ describe.skipIf(!CAN)("--session resolves a relocated cassette", () => {
 
     // Baseline: unverifiable, and the drift gate fails on it. This is the state the flag exists to escape.
     expect(run(["replay", moved, "--fail-on-skill-drift"]).code, "a relocated cassette should be unverifiable without help").not.toBe(0);
-    expect(run(["verify-cassettes", moved]).code, "verify-cassettes exits 3 on unverifiable").toBe(3);
+    // Assert the FINDING, not the exit code. `toBe(3)` was coupled to whatever `baseline: latest`
+    // resolves to: when a newer baseline lands, this same fixture hits `[stale] baseline moved …` first,
+    // which exits 1, and the assertion breaks on every parity sync until the cassettes are re-recorded.
+    // Reproduced by pinning the fixture to an older real baseline — exit 3 becomes exit 1 with the
+    // `[unverifiable]` finding still present and still correct. `.not.toBe(0)` would survive that too, but
+    // it passes for ANY failure including a usage error or a crash, which is the weak-assertion shape this
+    // file removes elsewhere. The finding is the thing under test; the exit code is an implementation
+    // detail of which staleness class happens to sort first.
+    const vc = run(["verify-cassettes", moved]);
+    expect(vc.code, "verify-cassettes must not pass an unverifiable cassette").not.toBe(0);
+    expect(`${vc.out}${vc.err}`, "and the reason must be the unresolvable skill dirs").toMatch(
+      /\[unverifiable\][^\n]*skill dirs not resolvable/,
+    );
 
     // With the override both commands resolve the real tree and verify it fresh.
     expect(run(["replay", moved, "--session", REAL_SESSION, "--fail-on-skill-drift"]).code).toBe(0);
