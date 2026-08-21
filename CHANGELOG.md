@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-08-21
+
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
 
 - **HASH-FORMAT EPOCH — `cassetteVersion` 12. Every cassette carrying a `skillHash` fails a bare `replay`
