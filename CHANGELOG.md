@@ -17,6 +17,15 @@ All notable changes to this project are documented here. The format is based on
   use `cowork-harness rehash <file.cassette.json> --session <session.yaml>`. Anything `rehash` cannot prove
   is refused rather than migrated, and does need a real re-record.
 
+  **After a successful `rehash`, the epoch is cleared and you are done with it.** Migration does not touch
+  the other staleness classes, and it does not need to: `baseline`, `format` and `prompt-assets` behave
+  exactly as before — they surface in `staleness[]`, print a `::warning::`, and **exit 0**. Only
+  `unverifiable-skill` fails a bare `replay`, which is what the epoch produces and what `rehash` clears. So
+  a cassette that also carries, say, baseline drift migrates cleanly and then goes green with that drift
+  still reported as a warning, exactly as before this release. (Measured, not inferred: a cassette with a
+  deliberately wrong `fingerprint.baseline` replays `pass: true`, exit 0, with a non-failing `[baseline]`
+  finding.)
+
   **What changed.** A plugin manifest now folds into `skillHash`/`contentSig` through canonical (JCS-style)
   serialization instead of insertion-order `JSON.stringify`, so **reordering keys in `plugin.json` no longer
   re-stales every cassette that hashes it** — semantically identical input now produces an identical digest.
