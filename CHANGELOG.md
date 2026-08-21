@@ -94,6 +94,27 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`sync` derived the enforced egress allowlist from a bundle-wide regex, and Desktop 1.34493.1 made that
+  wrong.** `network.allowDomains` is the allowlist the harness ENFORCES (`boundaryAllowList` plus the
+  session egress plan), but it was built by matching every `*.anthropic.com` / `*.claude.ai` literal in the
+  whole app bundle. 1.34493.1 added a webview first-party-origin classifier — a navigation-trust tier naming
+  `www.claude.ai` and `staging.claude.ai` — and the sweep pulled both into the enforced list, which would
+  have permitted egress Cowork denies.
+
+  Narrowing the sweep was investigated and rejected: on the first-party deployment there is nothing to
+  narrow to. The 1p class returns `vmEgressPolicy(){return null}`, so `resolveVmAllowedDomains` falls
+  through to the session's **server-delivered** `egressAllowedDomains`, and the only host the bundle
+  contributes is the OTLP endpoint. `vmAllowedDomains`/`firewallAlso` are the 3p path and Desktop's own
+  renderer endpoints — neither is the VM allowlist. Any bundle scan is unsound both ways: blind to
+  server-delivered hosts, open to hosts that are not egress.
+
+  `network.allowDomains` is therefore a **pinned, hand-curated list carried forward** from the newest
+  committed baseline, and a new fail-closed `checkEgressContractFacts` guards the three constructions that
+  justify pinning (the 1p null policy, the resolver's fall-through to its caller-supplied argument, and the
+  OTLP-only augmentation) — so a real change in how Cowork computes egress hard-fails `sync` instead of
+  silently rewriting the list. The baseline's `network.$comment` now records that provenance and names the
+  entries that are unverified as VM egress; `network` became a `looseObject` so that note survives loading.
+
 - **Consumers of 1.25.0 were NOT affected by this** — it is recorded because the shape is worth knowing,
   not because it shipped. While building `--session`, skill staleness, session-shape staleness, label
   provenance and the skill-hash debug dump could each have resolved a different session. The cassette-relative join was duplicated byte-identically
