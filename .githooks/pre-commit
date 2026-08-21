@@ -118,11 +118,22 @@ if [ -n "$baseline_files" ]; then
     # privacy scan NEVER RAN — no evidence either way about host inventory — and waving those through
     # inverts this repo's own `can't verify ⇒ not green` doctrine on the one gate that runs before a push.
     if [ "$hook_status" = "3" ]; then
+      # Read the CAUSE out of the JSON envelope. Two things make this fiddly, both learned the hard way:
+      #
+      #  1. `verify-cassettes --output-format json` EXITS 3 here by construction — that is why we are in
+      #     this branch. So the JSON must be captured with `|| true`, or `set -e`/`pipefail` aborts the
+      #     hook. Piping it straight into the probe and appending `|| echo true` produced the string
+      #     "truetrue" (the probe's own answer, plus the fallback fired by the pipeline's exit 3), which
+      #     then failed an `= "true"` comparison and waved an UNSCANNABLE cassette through as staleness.
+      #  2. The polarity is therefore fail-CLOSED: only an explicit "false" clears the file. Empty output,
+      #     a doubled string, or anything unexpected blocks. A guard whose safe answer depends on an exact
+      #     string match is one typo away from the fail-open it exists to prevent.
       unscanned=false
       for c in examples/replays/ $staged_cassettes; do
-        u=$(node dist/cli.js verify-cassettes "$c" --output-format json 2>/dev/null |
-          node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(!j||!Array.isArray(j.results))throw 0;process.stdout.write(String(j.results.some(r=>r.error||((r.version||[]).length>0))))}catch(e){process.stdout.write("true")}})' 2>/dev/null || echo true)
-        [ "$u" = "true" ] && unscanned=true
+        [ -e "$c" ] || continue
+        probe_json=$(node dist/cli.js verify-cassettes "$c" --output-format json 2>/dev/null || true)
+        u=$(printf '%s' "$probe_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(!j||!Array.isArray(j.results))throw 0;process.stdout.write(String(j.results.some(r=>r.error||((r.version||[]).length>0))))}catch(e){process.stdout.write("true")}})' 2>/dev/null || true)
+        if [ "$u" != "false" ]; then unscanned=true; fi
       done
       if [ "$unscanned" = "true" ]; then
         cat "$tmp"; rm -f "$tmp"
@@ -135,7 +146,6 @@ if [ -n "$baseline_files" ]; then
         exit 1
       fi
       echo "⚠ pre-commit: unverifiable STALENESS on a staged cassette (exit 3 — not a privacy finding):"
-      cat "$tmp"
       hook_status=0
     fi
 

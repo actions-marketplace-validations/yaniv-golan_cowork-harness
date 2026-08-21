@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync, cpSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync, cpSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
@@ -56,10 +56,16 @@ function scratchRepo(opts: {
     writeFileSync(
       join(dir, "dist", "cli.js"),
       [
+        // The JSON probe branch MUST exit with the same code as the human branch. The real CLI does:
+        // `verify-cassettes --output-format json` on an unscannable cassette exits 3, which is the whole
+        // reason the hook is in that branch. A stub that exited 0 here hid a live fail-open — the hook
+        // appended a second "true" from `|| echo true` and the resulting "truetrue" failed an `= "true"`
+        // comparison, waving the unscannable cassette through. Stub fidelity on the EXIT CODE, not just
+        // the payload, is what makes these tests evidence.
         `const argv = process.argv.slice(2);`,
         `if (argv.includes("--output-format") && argv.includes("json")) {`,
         `  process.stdout.write(${JSON.stringify(json)});`,
-        `  process.exit(0);`,
+        `  process.exit(${opts.stubExit ?? 0});`,
         `}`,
         `process.stdout.write("stub verify-cassettes ran: " + argv.join(" ") + "\\n");`,
         `process.exit(${opts.stubExit ?? 0});`,
@@ -298,6 +304,60 @@ describe("CI scans every tracked cassette", () => {
     const c = JSON.parse(readFileSync(p, "utf8")) as { scenario?: { session?: string }; fingerprint?: { skillHash?: string } };
     expect(c.scenario?.session, "report-check.cassette.json became a valid cassette — drop the ci.yml exclusion").toBeUndefined();
     expect(c.fingerprint?.skillHash).toBe("sha256:synthetic-eval-fixture");
+  });
+});
+
+describe("END TO END: the real hook, the real CLI, the real unscannable cassette", () => {
+  // THE test that matters, and the one that was missing. Everything above drives a stub, so it can only
+  // ever prove the hook handles what the stub DOES — and a stub is a claim about the CLI, not the CLI. The
+  // first version of this suite was 22 green while the hook had a live fail-open: the real
+  // `verify-cassettes --output-format json` exits 3 on an unscannable cassette (that is why the hook is in
+  // that branch at all), `pipefail` lifted that out of the probe pipeline, `|| echo true` appended a SECOND
+  // "true", and the resulting "truetrue" failed the `= "true"` comparison — so the cassette the privacy
+  // scan never ran on was waved through as ordinary staleness. The stub exited 0 on that branch, so no
+  // amount of stub-based coverage could see it.
+  //
+  // This case wires the actual repo hook to the actual built CLI against test/evals/files/report-check.cassette.json,
+  // which is genuinely unscannable (no `scenario.session` ⇒ `readCassette` rejects the shape ⇒ `scanCassette`
+  // never runs). If the hook stops blocking it, the gate has a hole.
+  const built = existsSync(REAL_CLI);
+  beforeAll(() => {
+    if (!built) throw new Error("dist/cli.js missing — run `npm run build`; this case must not silently skip");
+  });
+
+  it("blocks a commit that stages a cassette the privacy scan cannot run on", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-hook-e2e-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "T");
+
+    // The REAL hook and the REAL CLI — symlinked so this tracks the tree rather than a copy of it.
+    mkdirSync(join(dir, ".githooks"), { recursive: true });
+    cpSync(HOOK, join(dir, ".githooks", "pre-commit"));
+    symlinkSync(resolve("dist"), join(dir, "dist"));
+    symlinkSync(resolve("node_modules"), join(dir, "node_modules"));
+
+    // A clean fixture so the DIRECTORY scan passes; the unscannable one staged alongside it, so the only
+    // thing that can block is the per-file check.
+    mkdirSync(join(dir, "examples", "replays"), { recursive: true });
+    cpSync(resolve("examples/replays/example-multiselect-gate.cassette.json"), join(dir, "examples/replays/clean.cassette.json"));
+    mkdirSync(join(dir, "evals"), { recursive: true });
+    cpSync(resolve("test/evals/files/report-check.cassette.json"), join(dir, "evals", "unscannable.cassette.json"));
+    git("add", "evals/unscannable.cassette.json");
+
+    let code = 0;
+    let out = "";
+    try {
+      out = execFileSync("bash", [join(dir, ".githooks", "pre-commit")], { cwd: dir, encoding: "utf8", stdio: "pipe" });
+    } catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      code = err.status ?? -1;
+      out = `${err.stdout ?? ""}${err.stderr ?? ""}`;
+    }
+    expect(code, `the hook allowed an unscannable cassette through:\n${out}`).not.toBe(0);
+    expect(out).toMatch(/could NOT BE SCANNED/);
+    expect(out).not.toMatch(/scan passed/);
   });
 });
 
