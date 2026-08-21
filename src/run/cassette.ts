@@ -15,6 +15,7 @@ import {
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { runsWriteRoot } from "./trace-view.js";
 import { join, dirname, relative, isAbsolute, resolve, sep, extname } from "node:path";
 import {
   type Scenario,
@@ -2674,6 +2675,80 @@ export function readCassetteForScan(path: string): { scannable: ScannableCassett
   };
 }
 
+/** The finding classes that mean "this recording carries the RECORDING MACHINE's identity" — as opposed to
+ *  the content classes (`email`, `currency`, `domain`, `path`), which are frequently legitimate scenario
+ *  content: a cap-table fixture is SUPPOSED to contain currency figures and customer domains. Quarantining
+ *  on those would make `record` unusable and train the operator to pass the escape flag by reflex, which is
+ *  how a safety gate becomes decoration. These two are never legitimate output of a scenario. */
+const QUARANTINE_CLASSES: ReadonlySet<string> = new Set(["host-inventory", "machine-inventory"]);
+
+/** Where a leaking recording goes instead of the path the operator asked for.
+ *
+ *  Inside the runs root, which already exists to keep sensitive run output OUT of the working tree and
+ *  already honours `--run-dir`/`COWORK_HARNESS_RUNS_DIR`. NOT a gitignored directory inside the repo: a
+ *  `.gitignore` entry is one `git add -f` from being defeated and, worse, makes the file invisible to
+ *  `git status`, so the operator cannot see what they are carrying.
+ *
+ *  If the runs root is itself repo-visible (someone pointed `--run-dir` inside the working tree), fall back
+ *  to the OS temp dir and SAY SO — quarantining a leak into another committable location would be theatre. */
+function quarantineDir(): { dir: string; fellBack: boolean } {
+  const preferred = join(runsWriteRoot(), "quarantine");
+  if (isRepoVisiblePath(preferred)) return { dir: join(tmpdir(), "cowork-harness-quarantine"), fellBack: true };
+  return { dir: preferred, fellBack: false };
+}
+
+/** RECORD-TIME verdict on a finished recording — evidence, where `hostInventoryPreflight` is a PREDICTION.
+ *
+ *  The preflight reads the tier and the destination path and refuses before the paid spawn. It is the right
+ *  check and this does not replace it, but it never reads the resulting bytes and can be wrong in both
+ *  directions. Until this existed, `scanCassette` had a single production call site — `verify-cassettes` —
+ *  which runs at COMMIT time at the earliest.
+ *
+ *  Pure and exported so the policy is testable without a paid run. The caller executes the verdict; every
+ *  branch here is a decision, not an effect.
+ */
+export function classifyRecordLeak(
+  cassette: ScannableCassette,
+  cassettePath: string,
+  allowOverride: boolean,
+): { kind: "ok" } | { kind: "override" | "outside-repo" | "quarantine"; detail: string } {
+  const leaks = scanCassette(cassette, []).filter((f) => QUARANTINE_CLASSES.has(f.cls));
+  if (leaks.length === 0) return { kind: "ok" };
+  const detail = leaks.map((f) => `  [${f.cls}] ${f.where} — ${f.sample ?? "(no sample)"}`).join("\n");
+  // The operator already asserted this fixture is deliberate (the same flag the preflight honours). Still
+  // reported by the caller — an override must never be quiet about what it overrode.
+  if (allowOverride) return { kind: "override", detail };
+  // Outside a repo nothing publishes this by accident, so quarantining would be obstruction rather than
+  // protection. Still worth saying loudly: the operator may be about to copy it somewhere.
+  if (!isRepoVisiblePath(cassettePath)) return { kind: "outside-repo", detail };
+  return { kind: "quarantine", detail };
+}
+
+/** Write a leaking recording somewhere it cannot be committed, plus a sibling explaining why.
+ *
+ *  Quarantine rather than discard: the tokens are already spent, so throwing the recording away is the most
+ *  expensive possible answer and the one most likely to end in "just commit it anyway". Exported for tests.
+ */
+export function quarantineCassette(
+  cassette: unknown,
+  scenarioName: string,
+  intendedPath: string,
+  tier: string | undefined,
+  detail: string,
+  now: string,
+): { path: string; fellBack: boolean } {
+  const { dir, fellBack } = quarantineDir();
+  mkdirSync(dir, { recursive: true });
+  const stamp = now.replace(/[:.]/g, "-");
+  const qPath = join(dir, `${slugForPath(scenarioName)}-${stamp}.cassette.json`);
+  writeFileAtomic(qPath, JSON.stringify(cassette, null, 2));
+  writeFileAtomic(
+    `${qPath}.findings.txt`,
+    `cowork-harness record — quarantined ${now}\nintended path: ${intendedPath}\ntier: ${tier ?? "(unknown)"}\n\n${detail}\n`,
+  );
+  return { path: qPath, fellBack };
+}
+
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
  *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort).
  *  Exported for tests (the validate-and-warn-on-assert behavior). */
@@ -4201,6 +4276,37 @@ async function recordScenarioObject(
   // record has no prior to compare. Best-effort: an unreadable prior is simply no delta, never an error —
   // this is a reporting nicety appended to a successful record, and must not turn one into a failure.
   const priorSummary = existsSync(cassettePath) ? behaviourSummaryOfFile(cassettePath) : undefined;
+
+  // RECORD-TIME PRIVACY SCAN. Scanned AFTER redaction, deliberately: redaction is the mechanism that is
+  // supposed to remove this, so scanning the pre-redaction bytes would quarantine recordings that are clean.
+  // The policy itself lives in `classifyRecordLeak` so it is testable without a paid run.
+  const leak = classifyRecordLeak(cassette, cassettePath, opts.allowHostInventoryFixture === true);
+  if (leak.kind === "override") {
+    warn(
+      `::warning:: [record] host inventory PRESENT in the recording, written anyway because ` +
+        `--allow-host-inventory-fixture was passed:\n${leak.detail}`,
+    );
+  } else if (leak.kind === "outside-repo") {
+    warn(
+      `::warning:: [record] this recording carries THIS MACHINE's inventory. Its path is not repo-visible, ` +
+        `so it is not quarantined — but do NOT copy it into a repo:\n${leak.detail}`,
+    );
+  } else if (leak.kind === "quarantine") {
+    const q = quarantineCassette(cassette, scenario.name, cassettePath, scenario.fidelity, leak.detail, new Date().toISOString());
+    throw new Error(
+      `refusing to write ${cassettePath}: this recording carries THIS MACHINE's inventory, and that path is ` +
+        `inside a git repo — committing it would publish your own tool stack.\n${leak.detail}\n` +
+        `The recording was NOT discarded (you paid for it). It is quarantined at:\n  ${q.path}\n  ${q.path}.findings.txt\n` +
+        (q.fellBack
+          ? `  (the runs root is inside a git repo, so this fell back to the OS temp dir — quarantining into ` +
+            `another committable location would be pointless.)\n`
+          : "") +
+        `Fix it by re-recording at a SEALED tier (--fidelity container), or from an environment without your ` +
+        `personal MCP servers/agents configured. If this inventory is genuinely part of the fixture, re-run ` +
+        `with --allow-host-inventory-fixture.`,
+    );
+  }
+
   writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // atomic — no partial cassette on a mid-write crash
   const delta = priorSummary ? describeBehaviourDelta(priorSummary, behaviourSummary(cassette)) : undefined;
   return { result, cassettePath, artifacts: artifacts.length, delta };

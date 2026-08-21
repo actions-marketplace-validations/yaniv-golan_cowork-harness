@@ -1005,6 +1005,20 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
   anyway; it is distinct from `verify-cassettes`' `--allow-host-inventory <regex>` above (a per-finding
   suppressor, not a record-time consent) and is appropriate only when the session has no personal MCP
   servers or plugins.
+  **The preflight is a PREDICTION; `record` now also checks the EVIDENCE.** The preflight reads the tier
+  and the destination path before the paid spawn, which is the right place for it — but it never looks at
+  the resulting bytes, so it can be wrong in both directions. After redaction and before the write, the
+  finished recording is scanned, and a `host-inventory` or `machine-inventory` finding on a repo-visible
+  path is **quarantined**: the cassette is written under `<runs-root>/quarantine/` (honouring `--run-dir`)
+  with a `.findings.txt` sibling naming what leaked, and the command fails without writing the path you
+  asked for. It is not discarded — you paid for that run — and it is not left where it could be committed.
+  Only the machine-identity classes trigger this; `email`/`currency`/`domain`/`path` findings are often
+  legitimate scenario content (a cap-table fixture is *supposed* to contain currency figures), and a gate
+  that fires on those teaches you to pass the escape flag by reflex. Outside a git repo nothing publishes
+  the file by accident, so there you get a loud warning instead of a quarantine. If the runs root is itself
+  inside a working tree, quarantine falls back to the OS temp dir and says so — moving a leak into another
+  committable location would be theatre.
+
   **The right way out is usually `fidelity: container`**, which is sealed (`HOME=/tmp`) and has nothing
   to leak. Redirecting the *output* elsewhere is not equivalent: a cassette recorded outside the repo
   and moved in afterwards is [permanently unverifiable for staleness](#where-a-cassette-lives-and-why-it-cant-move-afterwards),

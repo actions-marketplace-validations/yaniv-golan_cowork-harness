@@ -83,6 +83,34 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`record` now scans what it wrote, and quarantines a leaking recording instead of publishing it.**
+  `scanCassette` had exactly one production call site — `verify-cassettes` — which runs at commit time at
+  the earliest. `hostInventoryPreflight` does fire before the paid spawn, but it reads the tier and the
+  destination path, never the resulting bytes: it is a prediction, and it can be wrong in both directions.
+
+  After redaction and before the write, the finished cassette is scanned. A `host-inventory` or
+  `machine-inventory` finding on a repo-visible path writes the recording to `<runs-root>/quarantine/`
+  (honouring `--run-dir` / `COWORK_HARNESS_RUNS_DIR`) alongside a `.findings.txt` naming exactly what
+  leaked, then fails without writing the requested path.
+
+  Three things about that policy are deliberate. **Quarantine, not discard** — the tokens are already
+  spent, and throwing the recording away is both the most expensive answer and the one most likely to end
+  in "just commit it anyway". **Only the machine-identity classes trigger it** — `email` / `currency` /
+  `domain` / `path` findings are frequently legitimate scenario content, and a gate that fires on those
+  teaches the operator to pass the escape flag by reflex, which is how a safety gate becomes decoration.
+  **Outside a git repo it warns instead of quarantining** — nothing there publishes the file by accident,
+  so quarantining would be obstruction rather than protection. If the runs root is itself inside a working
+  tree, quarantine falls back to the OS temp dir and says so; moving a leak into another committable
+  location would be theatre.
+
+  `--allow-host-inventory-fixture` (the flag the preflight already honours) still writes the file, and now
+  reports what it is publishing rather than going quiet.
+
+  Coverage is labelled honestly: the policy (`classifyRecordLeak`) and the effect (`quarantineCassette`)
+  are pure, exported and mutation-tested; the *wiring* inside `recordScenarioObject` needs a live spawn to
+  reach, so it is guarded structurally — the same split this repo already uses for `buildCassette`.
+
+
 - **Platform baseline `desktop-1.34493.1` (agent `2.1.237`).** The Cowork system prompt, both sub-agent
   append branches, all 28 pinned gate states, the VM egress policy and the 22-key spawn env are all
   unchanged — re-derived from the new bundle rather than inferred from an absent diff row (only the
