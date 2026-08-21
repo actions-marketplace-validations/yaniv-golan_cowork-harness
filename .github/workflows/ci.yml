@@ -106,6 +106,61 @@ jobs:
         # scrubbed fields (see its git history) don't collide with any default pattern. A NEW/different
         # finding of any class still fails the gate.
         run: node dist/cli.js verify-cassettes examples/replays/
+      - name: Cassette scan covers every TRACKED cassette, not just examples/replays/
+        # The step above scans one DIRECTORY. Nothing enforced that the directory is where the tracked
+        # cassettes actually are, so a cassette committed anywhere else was gated by nothing at all — not
+        # by CI (out of scope) and not by .githooks/pre-commit. This step closes that by deriving the set
+        # from git rather than from a hard-coded path.
+        #
+        # Two ways the naive one-liner goes vacuously green, both avoided below:
+        #   - `git ls-files … | xargs -r verify-cassettes` exits 0 on ZERO matches, so the day the pathspec
+        #     stops matching this reports success while scanning nothing. Hence the explicit total count.
+        #   - `--out` takes an arbitrary path with no suffix validation, so a `.json` recording is invisible
+        #     to a `*.cassette.json` pathspec. Hence the CONTENT-derived denominator (`generator` field),
+        #     cross-checked against the suffix-derived one.
+        run: |
+          set -euo pipefail
+          # EXCLUSION, one entry, with its reason. test/evals/files/report-check.cassette.json is not a
+          # recording: it is an eval ATTACHMENT, uploaded to the model under test by eval 7 to ask which
+          # tier a cassette recorded at. It carries a hand-written `skillHash: sha256:synthetic-eval-fixture`
+          # and a pinned old baseline ON PURPOSE, and it has no `scenario.session`, so `readCassette`
+          # rejects its shape before the privacy scan can run. Measured, not assumed: adding a `session`
+          # field does NOT make it verifiable — it converts the exit 3 into an exit 1 on `[stale] baseline
+          # moved desktop-1.18286.0 -> current`, i.e. it would red this job on a fixture that is never
+          # re-recorded. `--skip-staleness` does not help either; the shape gate runs first.
+          # RESIDUAL, stated rather than papered over: this file is therefore NOT privacy-scanned by
+          # anything. It is 1.2KB and hand-authored, but that is a property of today's content, not a
+          # guarantee — if it is ever regenerated from a real recording it must be re-scanned by hand or
+          # given a `scenario.session` and a re-record.
+          EXCLUDE='^test/evals/files/report-check\.cassette\.json$'
+
+          by_suffix=$(git ls-files '*.cassette.json' | sort)
+          by_content=$(git grep -l '"generator": *"cowork-harness"' -- '*.json' | sort)
+          if [ "$by_suffix" != "$by_content" ]; then
+            echo "✖ tracked cassettes disagree by suffix vs by content — a recording was written to a path"
+            echo "  the *.cassette.json pathspec cannot see (record --out does not validate the suffix)."
+            diff <(printf '%s\n' "$by_suffix") <(printf '%s\n' "$by_content") || true
+            exit 1
+          fi
+
+          total=$(printf '%s\n' "$by_suffix" | grep -c . || true)
+          if [ "$total" -eq 0 ]; then
+            echo "✖ zero tracked cassettes found — the pathspec stopped matching; this job would have"
+            echo "  passed while scanning nothing. Fix the pathspec, do not delete this check."
+            exit 1
+          fi
+          echo "tracked cassettes: $total"
+
+          residual=$(printf '%s\n' "$by_suffix" | grep -v '^examples/replays/' | grep -Ev "$EXCLUDE" || true)
+          if [ -z "$residual" ]; then
+            echo "no tracked cassettes outside examples/replays/ (beyond the documented exclusion)"
+            exit 0
+          fi
+          echo "$residual" | while read -r c; do
+            [ -n "$c" ] || continue
+            echo "scanning $c"
+            node dist/cli.js verify-cassettes "$c"
+          done
       - name: Lint example scenarios (no-silent-false-green invariants)
         # --strict makes a finding FAIL; --min-severity WARN scopes that to ERROR+WARN so the
         # advisory INFO class stays advisory. Without the pair, every WARN-class rule was decoration:

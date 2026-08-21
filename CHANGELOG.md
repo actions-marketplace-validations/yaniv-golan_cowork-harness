@@ -102,6 +102,49 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The pre-commit cassette gate now fails CLOSED.** `.githooks/pre-commit` tested `hook_status` for `1`
+  (block) and `3` (warn) and let every other outcome through to a successful commit, so the guard switched
+  itself off — silently — on outcomes that ordinary refactors produce: exit `2` (`examples/replays/` renamed
+  or emptied, or any CLI flag renamed), exit `127` (`node` off `PATH`), and a missing `dist/cli.js`, which is
+  the state of a fresh clone, a `git clean -xdf`, a branch switch, and any tree with a failing typecheck
+  (`npm run build` does `rm -rf dist` first). None of those fail a test elsewhere. Anything that is not a
+  proven clean `0` now blocks.
+
+  This matters more than a local convenience: `ci.yml` triggers on `push: [main]` and `pull_request`, but the
+  documented workflow lands with `merge --ff-only` into `main` and pushes afterwards — so on that path the
+  hook is not one layer of two, it is the only gate, and what it waves through is already public when CI
+  reds.
+
+- **An unscannable cassette no longer commits unscanned.** Exit 3 folds together unverifiable *staleness*,
+  an unsupported `cassetteVersion`, and a per-file read error. Only the first means "we looked and could not
+  conclude"; the other two mean the privacy scan never ran, so there is no evidence either way about host
+  inventory — and a cassette recorded by a newer CLI than the committer's `dist/` committed with nothing
+  having checked it. The hook now splits exit 3 by cause (`--output-format json`) and blocks on the two that
+  are not staleness, in line with the `can't verify ⇒ not green` rule the CLI states everywhere else. A
+  payload it cannot interpret is treated as undetermined, not as staleness.
+
+- **The gate no longer misses cassettes by filename.** `record --out` accepts an arbitrary path and does not
+  validate the suffix, so a recording written to e.g. `notes/run.json` was invisible to the hook's trigger,
+  to CI's pathspec, and to `git ls-files '*.cassette.json'`. The hook trigger is now content-derived (any
+  staged `.json` whose staged blob carries the `"generator": "cowork-harness"` marker), and CI cross-checks
+  the suffix-derived set against the content-derived one. Separately, `resolveInputs` does not recurse, so
+  `examples/replays/sub/x.cassette.json` was reachable by neither the directory scan nor the per-file loop
+  (which excluded all of `examples/replays/`); the exclusion is now scoped to files *directly* in that
+  directory.
+
+- **CI scans every tracked cassette, not just one directory.** The sweep is derived from `git ls-files`
+  rather than a hard-coded path, fails loudly if the pathspec ever matches zero files (an `xargs -r` sweep
+  exits 0 on no matches and reads as success), and carries exactly one exclusion with its reason recorded:
+  `test/evals/files/report-check.cassette.json` is an eval *attachment*, not a recording — it has no
+  `scenario.session`, so `readCassette` rejects its shape before the scan can run. Measured rather than
+  assumed: adding a `session` field does not make it verifiable, it converts the exit 3 into an exit 1 on
+  baseline drift for a fixture that is never re-recorded.
+
+- **The local gate is no longer laxer than the CI gate on the same directory.** The hook passed
+  `--allow-email`/`--allow-domain` suppressions that `ci.yml` does not; the committed fixtures verify clean
+  without them, so they are gone. Its scratch file also moved from a predictable `/tmp` path to `mktemp`, and
+  a clean run now says so instead of passing in silence.
+
 - **`sync` derived the enforced egress allowlist from a bundle-wide regex, and Desktop 1.34493.1 made that
   wrong.** `network.allowDomains` is the allowlist the harness ENFORCES (`boundaryAllowList` plus the
   session egress plan), but it was built by matching every `*.anthropic.com` / `*.claude.ai` literal in the
