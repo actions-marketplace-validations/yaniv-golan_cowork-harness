@@ -210,7 +210,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--session <file>]           resolve skill sources from THIS session (a MOVED cassette); one cassette at a time
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
-  rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
+  rehash <dir/>|<file> --session  migrate cassette fingerprints (incl. across a hash-format epoch) when content is provably unchanged
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]

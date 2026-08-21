@@ -131,6 +131,10 @@ describe("migrateFingerprint — selective, never a spread", () => {
     mode: "git",
   };
 
+  /** What a legacy recompute of `recorded`'s tree yields — the alignment proof is MANDATORY, so every
+   *  successful migration must supply one. A caller that omits it gets a refusal, not a weaker check. */
+  const legacyOf = (fp: Fingerprint) => (fp.fileSigs ?? []).map(([p, sha]) => [p, sha] as [string, string]);
+
   /** Unwrap a successful migration; fails loudly if the helper refused. */
   const ok = (r: ReturnType<typeof migrateFingerprint>) => {
     if ("error" in r) throw new Error(`expected a migration, got refusal: ${r.error}`);
@@ -140,13 +144,13 @@ describe("migrateFingerprint — selective, never a spread", () => {
   it("preserves promptAssetsHash and labelProvenance — a spread DELETED both", () => {
     // `buildFingerprint` cannot produce promptAssetsHash without a baseline object (rehash passes none)
     // and never produces labelProvenance at all, so `{ ...live }` silently dropped the provenance guards.
-    const out = ok(migrateFingerprint(recorded, live));
+    const out = ok(migrateFingerprint(recorded, live, legacyOf(recorded)));
     expect(out.promptAssetsHash).toBe("491afe2862dc67ea");
     expect(out.labelProvenance).toEqual(recorded.labelProvenance);
   });
 
   it("takes the new digests and the new format", () => {
-    const out = ok(migrateFingerprint(recorded, live));
+    const out = ok(migrateFingerprint(recorded, live, legacyOf(recorded)));
     expect(out.skillHash).toBe("new");
     expect(out.contentSig).toBe("newsig");
     expect(out.hashFormat).toBe("jcs1");
@@ -155,7 +159,7 @@ describe("migrateFingerprint — selective, never a spread", () => {
   it("keeps the RECORDED (redacted) fileSigs paths, swapping only digests", () => {
     // Cassette paths are redacted before writing; rebuilding from a live walk would put unredacted source
     // paths back into a redacted cassette.
-    expect(ok(migrateFingerprint(recorded, live)).fileSigs).toEqual([["redacted/path.md", "newsha"]]);
+    expect(ok(migrateFingerprint(recorded, live, legacyOf(recorded))).fileSigs).toEqual([["redacted/path.md", "newsha"]]);
   });
 
   it("REFUSES when the arrays do not align, rather than 'repairing' them", () => {
@@ -169,7 +173,7 @@ describe("migrateFingerprint — selective, never a spread", () => {
     // An aggregate digest proof says nothing about whether the manifest array is well-formed — and
     // silently keeping the OLD per-file digests beside a NEW skillHash would stamp a fingerprint that
     // contradicts itself. REFUSE instead, so `rehash` reports an error rather than "migrated".
-    const r = migrateFingerprint(recorded, misaligned);
+    const r = migrateFingerprint(recorded, misaligned, legacyOf(recorded));
     expect("error" in r && r.error).toMatch(/entry count differs/);
   });
 
@@ -177,11 +181,11 @@ describe("migrateFingerprint — selective, never a spread", () => {
     // A cassette that RECORDED a manifest but whose tree can no longer produce one is inconsistent —
     // refuse. The reverse is legitimate (pre-v5, or fileSigsOmitted above the cap) and must still migrate.
     const { fileSigs: _noLive, ...liveWithout } = live;
-    expect("error" in migrateFingerprint(recorded, liveWithout as Fingerprint)).toBe(true);
-    expect("error" in migrateFingerprint({ ...recorded, fileSigs: undefined } as Fingerprint, live)).toBe(false);
+    expect("error" in migrateFingerprint(recorded, liveWithout as Fingerprint, legacyOf(recorded))).toBe(true);
+    expect("error" in migrateFingerprint({ ...recorded, fileSigs: undefined } as Fingerprint, live, undefined)).toBe(false);
     const { fileSigs: _drop, ...noSigs } = recorded;
     const { fileSigs: _dropLive, ...liveNoSigs } = live;
-    expect(ok(migrateFingerprint(noSigs as Fingerprint, liveNoSigs as Fingerprint)).fileSigs).toBeUndefined();
+    expect(ok(migrateFingerprint(noSigs as Fingerprint, liveNoSigs as Fingerprint, undefined)).fileSigs).toBeUndefined();
   });
 });
 
@@ -369,5 +373,55 @@ describe("migrateFingerprint compares the legacy digest SEQUENCE", () => {
       ["a.md", "sha-a"],
     ]);
     expect("error" in r && r.error).toMatch(/does not match the legacy recompute/);
+  });
+});
+
+describe("sharedHash must be the number LIVE VERIFY recomputes", () => {
+  // The migration and `buildFingerprint` must agree exactly. `computeStaleness` consults `sharedHash` only
+  // once `skillHash` already differs AND `fileSigs` show no path change — an empty directory, a symlink
+  // re-point, an omitted manifest — which is precisely when bucket attribution is the whole answer. A
+  // migrated value that live verify will not reproduce turns that into a permanent false `shared-root`.
+  //
+  // Two ways a reimplementation diverges, and neither is visible in a plain tmpdir: `hashSharedOnly` does a
+  // RAW walk while the hash snapshot is git-tracked-filtered, and it drops skill-named agents under
+  // COWORK_HARNESS_AGENT_SCOPE=skill while a snapshot filter keeps them. Both are pinned here.
+  function scopedRoot(): string {
+    const d = mkdtempSync(join(tmpdir(), "shared-"));
+    mkdirSync(join(d, "skills", "s"), { recursive: true });
+    mkdirSync(join(d, "agents"), { recursive: true });
+    mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(d, "skills", "s", "SKILL.md"), "# s\n");
+    writeFileSync(join(d, "agents", "s.md"), "# skill-named agent\n");
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"skills":"./skills","name":"p","version":"1"}');
+    writeFileSync(join(d, "session.yaml"), `skills:\n  local:\n    - ${d}\n`);
+    return d;
+  }
+
+  it("agrees with buildFingerprint — agent-scope OFF", () => {
+    const d = scopedRoot();
+    const built = buildFingerprint(join(d, "session.yaml"), LIVE_BASELINE, d, ["s"]);
+    const proof = recomputeBothAlgos(join(d, "session.yaml"), d, ["s"], LIVE_BASELINE);
+    expect(built.sharedHash).toBeTruthy();
+    expect(proof?.live.sharedHash).toBe(built.sharedHash);
+  });
+
+  it("agrees with buildFingerprint — agent-scope ON, where a snapshot filter would diverge", () => {
+    const prev = process.env.COWORK_HARNESS_AGENT_SCOPE;
+    process.env.COWORK_HARNESS_AGENT_SCOPE = "skill";
+    try {
+      const d = scopedRoot();
+      const built = buildFingerprint(join(d, "session.yaml"), LIVE_BASELINE, d, ["s"]);
+      const proof = recomputeBothAlgos(join(d, "session.yaml"), d, ["s"], LIVE_BASELINE);
+      expect(built.sharedHash).toBeTruthy();
+      expect(proof?.live.sharedHash).toBe(built.sharedHash);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_AGENT_SCOPE;
+      else process.env.COWORK_HARNESS_AGENT_SCOPE = prev;
+    }
+  });
+
+  it("is OMITTED for an unscoped cassette, and when the dirs are not all plugin-roots", () => {
+    const d = scopedRoot();
+    expect(recomputeBothAlgos(join(d, "session.yaml"), d, undefined, LIVE_BASELINE)?.live.sharedHash).toBeUndefined();
   });
 });

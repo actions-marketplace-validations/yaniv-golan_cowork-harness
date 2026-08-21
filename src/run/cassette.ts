@@ -106,7 +106,6 @@ import {
   foldSnapshot,
   renderWireEntries,
   contentSigFromSnapshot,
-  sharedHashFromSnapshot,
 } from "./skill-hash.js";
 
 /** What NEW fingerprints record. Absent on a fingerprint means the legacy transform, so only the post-epoch
@@ -911,11 +910,18 @@ export function recomputeBothAlgos(
     skillHash: res.hash,
     contentSig: contentSigFromSnapshot(res.snapshot),
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
-    // Scoped cassettes carry `sharedHash` so `computeStaleness` can name WHICH bucket drifted. It must be
-    // RECOMPUTED, not carried over: `.claude-plugin/plugin.json` lives in the shared root, so its digest
-    // moves under jcs1 for any unsorted manifest. And it must not be dropped — `computeStaleness` only
-    // splits buckets when BOTH sides have it, so losing it silently costs attribution forever.
-    ...(scopeSkills && scopeSkills.length ? { sharedHash: sharedHashFromSnapshot(res.snapshot) } : {}),
+    // Scoped cassettes carry `sharedHash` so `computeStaleness` can name WHICH bucket drifted. Three
+    // constraints, and only one implementation satisfies all of them:
+    //   - it must be RECOMPUTED, not carried over — `.claude-plugin/plugin.json` lives in the shared root,
+    //     so its digest moves under jcs1 for any unsorted manifest;
+    //   - it must not be DROPPED — `computeStaleness` splits buckets only when BOTH sides carry it, so
+    //     losing it silently costs attribution forever;
+    //   - it must be the value LIVE VERIFY will recompute. That rules out folding a filtered snapshot: the
+    //     snapshot is git-tracked-filtered and agent-scope-blind, while `hashSharedOnly` does a raw walk and
+    //     drops skill-named agents under COWORK_HARNESS_AGENT_SCOPE=skill. Either divergence produces a
+    //     migrated value that can never match, so every later bucket split would report a false
+    //     `shared-root`. Call the SAME function `buildFingerprint` calls, guard included.
+    ...sharedHashFor(dirs, hashIgnore, scopeSkills),
     ...(res.mode === "git" ? { mode: "git" as const } : {}),
     ...(res.agentScoped ? { agentScope: "skill" as const } : {}),
     ...(entries.length > MANIFEST_MAX_FILES
@@ -973,7 +979,12 @@ export function migrateFingerprint(
     // file's digest while `rehash` still reported "migrated". Compare against the LEGACY manifest
     // recomputed from the proof snapshot — `live.fileSigs` is already jcs1 and cannot be compared to what
     // a pre-epoch cassette recorded.
-    if (legacySigs) {
+    // MANDATORY, not opportunistic. Absence of the legacy recompute is a REFUSAL, not a skip: without it
+    // count and kind would stamp `hashFormat: "jcs1"` beside index-aligned swaps that were never shown to
+    // pair the same files. `migrateFingerprint` is exported, so a caller that omits it must not get a
+    // weaker guarantee than `rehash` does.
+    if (!legacySigs) return { error: "no legacy manifest to compare against — cannot prove fileSigs alignment; cannot migrate" };
+    {
       if (legacySigs.length !== recorded.fileSigs.length)
         return {
           error: `fileSigs count differs from the legacy recompute (recorded ${recorded.fileSigs.length}, legacy ${legacySigs.length}) — cannot migrate`,
@@ -1004,6 +1015,24 @@ export function migrateFingerprint(
     out.fileSigs = recorded.fileSigs.map(([p], i) => [p, live.fileSigs![i][1]] as [string, string]);
   }
   return { fingerprint: out };
+}
+
+/** The `sharedHash` rule, in ONE place. Both `buildFingerprint` and the migration must produce the same
+ *  number or bucket attribution reports drift that is not there — so neither may reimplement the filter.
+ *  Only set when every dir is a plugin-root: a mix including individual-skill mounts makes the split
+ *  unreliable, since those dirs feed `skillHash` but not `sharedHash`. */
+function sharedHashFor(dirs: string[], hashIgnore: string[], scopeSkills: string[] | undefined): { sharedHash?: string } {
+  if (!scopeSkills || scopeSkills.length === 0) return {};
+  const allPluginRoots = dirs.every((d) => {
+    try {
+      return statSync(join(d, "skills")).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (!allPluginRoots) return {};
+  const sh = hashSharedOnly(dirs, hashIgnore);
+  return sh !== null ? { sharedHash: sh } : {};
 }
 
 /** Attach `labelProvenance` to an already-built fingerprint. Separate from `buildFingerprint` because the
@@ -1081,24 +1110,10 @@ export function buildFingerprint(
   if (entries.length > MANIFEST_MAX_FILES) fp.fileSigsOmitted = true;
   else fp.fileSigs = entries.map((e) => [e.path, e.sha] as [string, string]);
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
-  // for scoped cassettes, store the shared-root hash separately so checkStaleness can name
-  // the changed bucket (skill vs shared root) at verify time.
-  if (scopeSkills && scopeSkills.length) {
-    // Only store sharedHash when ALL dirs are plugin-roots; a mix that includes individual-skill-mount dirs
-    // (dirs without a top-level skills/) makes bucket diagnosis unreliable — those dirs contribute to
-    // skillHash but not to sharedHash, so a change there would be mis-attributed to the scoped skill.
-    const allPluginRoots = dirs.every((d) => {
-      try {
-        return statSync(join(d, "skills")).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-    if (allPluginRoots) {
-      const sh = hashSharedOnly(dirs, hashIgnore);
-      if (sh !== null) fp.sharedHash = sh;
-    }
-  }
+  // Scoped cassettes carry the shared-root hash so checkStaleness can name the changed bucket. The
+  // rule lives in `sharedHashFor` because the MIGRATION must produce the identical number — two
+  // implementations of this filter is how a scoped rehash starts reporting a false `shared-root`.
+  Object.assign(fp, sharedHashFor(dirs, hashIgnore, scopeSkills));
   return fp;
 }
 
@@ -5649,7 +5664,10 @@ export function cmdRehash(args: string[]): void {
       if (!shapeIntact || !genuinelyZero) {
         results.push({
           file,
-          action: "skipped",
+          // ERROR, not "skipped": a pre-epoch cassette still fails every bare replay, so reporting it as
+          // "nothing to migrate" lets a batch exit 0 while leaving it unlabelled and broken. A failed proof
+          // is a failure, exactly like a content mismatch.
+          action: "error",
           reason:
             zeroRes.failure?.kind === "declared-dirs-missing"
               ? `no skillHash, and the session declares ${zeroRes.failure.declared} skill root(s) that do not resolve — absence means the hash FAILED, not that there was nothing to hash; re-record`

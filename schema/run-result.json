@@ -835,7 +835,7 @@
         },
         "contentSig": {
           "type": "string",
-          "description": "content fingerprint over the same file set as skillHash; used by `rehash` to prove content unchanged across a format bump. It follows the SAME manifest transform as skillHash, so it is NOT comparable across a hash-format epoch"
+          "description": "content fingerprint over the same file set as skillHash. NOT the rehash proof: it follows the SAME manifest transform skillHash does, so it is not comparable across a hash-format epoch either, and it is blind to directory markers. The migration proof recomputes the LEGACY skillHash instead."
         },
         "fileSigs": {
           "type": "array",
