@@ -2932,6 +2932,13 @@ async function cmdSync(args: string[]) {
       // so "captured on 2026-08-05" cannot distinguish two materially different reads. Carried forward
       // from `baseProvenance` when the fcache is unreadable, so an offline sync never blanks it.
       ...(res.fcache ? { fcache: res.fcache } : {}),
+      // Gate ids this release's BUNDLE references — a pure function of the shipped asar, so unlike the
+      // fcache block above it is reproducible by anyone, stable across the fcache's own refetch schedule,
+      // and attributable to the Desktop release rather than to days of server rollout. This is what makes
+      // a membership change nameable: diff two baselines' lists and the new ids fall out directly.
+      // Carried forward when extraction yields nothing (asar missing / extract failed), so an offline
+      // sync never blanks it into a false "every gate reference disappeared".
+      asarGateIds: res.asarGateIds.length > 0 ? res.asarGateIds : (baseProvenance.asarGateIds ?? []),
     },
   };
   const diffFlag = !!syncParsed.flags["--diff"];

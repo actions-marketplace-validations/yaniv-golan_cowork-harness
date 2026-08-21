@@ -41,6 +41,7 @@ export interface SyncResult {
   // between the two reads takes tens of seconds, so a second read can label snapshot N's gates with
   // snapshot N+1's identity -- exactly the misattribution this field exists to prevent.
   fcache: FcacheProvenance | null;
+  asarGateIds: string[]; // gate ids referenced by THIS release's bundle (see extractAsarGateIds)
   spawnEnv: Record<string, string> | null; // derived spawn.env; null = a hard-fail flag blocked it (carry base env forward)
   spawnEnvKeys: string[]; // WI-6: the sorted SET of constructed spawn-env keys — committed as provenance.spawnEnvKeys (regex-rot oracle)
   spawnEnvSpreadCount: number; // WI-5: count of `...`-spread sites across the spawn windows — committed as provenance.spawnEnvSpreadCount
@@ -317,6 +318,48 @@ export function decodeFcacheProvenance(path = join(SUPPORT, "fcache")): FcachePr
   }
 }
 
+/** Gate ids referenced as string literals by a release's own bundle, sorted numerically.
+ *
+ *  WHY THIS EXISTS. `provenance.fcache` records `{content16, embeddedTimestamp, featureCount}` — two
+ *  aggregates and a timestamp, never MEMBERSHIP. So `featureCount: 271 → 278` says seven arrived and
+ *  nothing says which, a count-NEUTRAL swap is invisible (observed: one gate absent→force while another
+ *  went present→absent, count pinned at 241), and `content16`'s own diff line has to say "membership
+ *  and/or values moved". Worse, the fcache is server-refreshed on its own schedule (3.7–20.8 min
+ *  observed), so a count delta between two baselines is a net over DAYS of rollout, not a fact about the
+ *  Desktop release — and the previous payload is overwritten in place, so the question is unanswerable
+ *  the moment you think to ask it.
+ *
+ *  This field answers a different, ANSWERABLE question: which gate ids does *this build's binary*
+ *  reference? That is a pure function of the shipped asar, so unlike an fcache-derived set it is
+ *  reproducible by anyone, stable across refetches, and attributable to the release. Its diff between two
+ *  baselines is directly readable (measured 1.32885.1 → 1.34493.1: **+14 / -1**).
+ *
+ *  DELIBERATELY NOT INTERSECTED WITH THE LIVE FCACHE. That would silently make the committed list
+ *  account-shaped: gate membership varies by segment (see `4074604942`, recorded in the baselines as
+ *  absent from a standard fcache, later served, and "another account may still see it absent"). Filtering
+ *  through this machine would both leak which gates this operator is served and drop DARK gates —
+ *  measured, 51 of the ids here are absent from the live fcache, including `1129419822`
+ *  (`enableToolSearchAuto`), which is dark by design.
+ *
+ *  THE FILTER IS THE ID SPACE, NOT A GUESS: every one of the 278 live fcache ids is 8-10 digits with no
+ *  leading zero and below 2^32 (min 17519066, max 4293378213). Quoting matters too — gate ids are passed
+ *  as STRING literals, and scanning bare numbers instead drops the signal into 2205 unrelated numeric
+ *  tokens (of which only 8 are gate ids). Some numeric noise still survives; that is fine and deliberate,
+ *  because a constant is invisible in the DELTA, which is what this field is read for. */
+export function extractAsarGateIds(files: Map<string, string>): string[] {
+  const re = /["'`](\d{5,13})["'`]/g;
+  const out = new Set<string>();
+  for (const text of files.values())
+    for (const m of text.matchAll(re)) {
+      const id = m[1];
+      if (id.startsWith("0") || id.length < 8 || id.length > 10 || Number(id) >= 2 ** 32) continue;
+      out.add(id);
+    }
+  // Numeric sort: these are ids, and a lexical sort would order "9..." before "10...". Sorting also keeps
+  // the committed array diffable line-by-line rather than re-ordering on every extraction.
+  return [...out].sort((a, b) => Number(a) - Number(b));
+}
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
@@ -441,10 +484,8 @@ export function sync(): SyncResult {
   // first-party deployment the harness models, the VM allowlist is server-delivered per session and
   // absent from the asar (checkEgressContractFacts, run inside extractFromAsar, guards that fact and
   // hard-fails if it stops holding).
-  const { fingerprint, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } = extractFromAsar(
-    unknown,
-    gates,
-  );
+  const { fingerprint, asarGateIds, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } =
+    extractFromAsar(unknown, gates);
 
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
@@ -476,6 +517,7 @@ export function sync(): SyncResult {
     asarFingerprint: fingerprint,
     gates,
     fcache: fcacheProv,
+    asarGateIds,
     spawnEnv,
     spawnEnvKeys,
     spawnEnvSpreadCount,
@@ -1023,6 +1065,7 @@ function extractFromAsar(
   gates: Record<string, GateState> | null,
 ): {
   fingerprint: string;
+  asarGateIds: string[];
   spawnEnv: Record<string, string> | null;
   spawnEnvKeys: string[];
   spawnEnvSpreadCount: number;
@@ -1034,6 +1077,7 @@ function extractFromAsar(
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
     return {
       fingerprint: "",
+      asarGateIds: [],
       spawnEnv: null,
       spawnEnvKeys: [],
       spawnEnvSpreadCount: 0,
@@ -1093,6 +1137,7 @@ function extractFromAsar(
     for (const d of promptDrift.unknownDeltas) flag(unknown, d);
     return {
       fingerprint,
+      asarGateIds: extractAsarGateIds(bundleFiles),
       spawnEnv: spawn.env,
       spawnEnvKeys: spawn.keys,
       spawnEnvSpreadCount: spawn.spreadCount,
@@ -1104,6 +1149,7 @@ function extractFromAsar(
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
     return {
       fingerprint: "",
+      asarGateIds: [],
       spawnEnv: null,
       spawnEnvKeys: [],
       spawnEnvSpreadCount: 0,

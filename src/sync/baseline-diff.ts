@@ -99,6 +99,16 @@ export function renderChangelog(entries: BaselineDiffEntry[]): string {
     "provenance.fcache.embeddedTimestamp": (e) =>
       e.kind === "scalar" ? `- fcache refetched (timestamp only; see content16 for whether it mattered)` : undefined,
     "provenance.fcache.featureCount": (e) => (e.kind === "scalar" ? `- fcache feature count: \`${e.from}\` → \`${e.to}\`` : undefined),
+    // Gate ids referenced by the release's own bundle. Unlike the fcache leaves above this is a set, so
+    // the delta names the ids outright — which is the whole point of recording it. `added` is reachable:
+    // `provenance` already exists in every base, so the differ recurses and emits a per-LEAF `added` on
+    // first introduction rather than one whole-object `added` (verified by executing diffBaselines).
+    "provenance.asarGateIds": (e) =>
+      e.kind === "array"
+        ? `- gate ids referenced by the bundle: ${e.added.length} added${e.added.length ? ` (\`${e.added.join("`, `")}\`)` : ""}, ${e.removed.length} removed${e.removed.length ? ` (\`${e.removed.join("`, `")}\`)` : ""}`
+        : e.kind === "added"
+          ? `- gate ids referenced by the bundle: now recorded (${Array.isArray(e.to) ? e.to.length : 0} ids)`
+          : undefined,
   };
 
   for (const e of notable) {

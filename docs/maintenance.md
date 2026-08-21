@@ -252,6 +252,21 @@ committed baseline and say why in that baseline's `$comment`.
    content does; verified across four reads, where the content hash held while the file hash moved every
    time. `featureCount` alone is not sufficient either: membership churns **count-neutrally** (one gate
    observed going absent → force while another went present → absent, count pinned at 241 both times).
+   **`provenance.asarGateIds` → which gate ids the release's own bundle references.** The fcache fields
+   above cannot name a membership change: `featureCount` moves by a net, `content16` says "membership
+   and/or values", and neither survives the fact that the payload is server-refreshed *between* two
+   baselines (the 1.32885.1 and 1.34493.1 samples are 2.35 days apart, so their count delta is a net over
+   hundreds of refetches rather than a fact about the Desktop release). This field is instead a pure
+   function of the shipped asar — reproducible by anyone, stable across refetches, attributable to the
+   release — so diffing two baselines' lists names the ids outright (measured 1.32885.1 → 1.34493.1:
+   **+14 / -1**). It is deliberately NOT intersected with the local fcache: gate membership varies by
+   account segment, so filtering through this machine would both leak which gates this operator is served
+   and drop DARK gates (51 of the recorded ids are absent from the live fcache, `enableToolSearchAuto`
+   among them). To go from an id to a name, grep the id as a quoted literal in the extracted bundle — the
+   call site names it (`BS(\`17519066\`)` sits in `isCoworkBrowserEnabled`); that literal-occurrence route
+   is how `PINNED_GATES` was built, and it resolves 157 of the 278 live ids. Some numeric noise survives
+   the filter by design: a constant is invisible in the delta, which is what the field is read for.
+
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
    key silently falls back to a code default that need not match production.

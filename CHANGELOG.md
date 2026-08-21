@@ -96,6 +96,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`provenance.asarGateIds` — a gate-membership change is now nameable.** A baseline recorded
+  `provenance.fcache` as two aggregates and a timestamp, so when a sync moved `featureCount` **271 → 278**
+  nothing could say *which* seven arrived, a count-neutral membership swap was invisible entirely, and
+  `content16`'s diff line had to hedge "membership **and/or** values moved". The fcache is also
+  server-refreshed on its own schedule (3.7–20.8 min observed), so a count delta between two baselines is
+  a net over days of rollout rather than a fact about the Desktop release — and the previous payload is
+  overwritten in place, so the question goes unanswerable the moment you think to ask it.
+
+  Baselines now additionally record the gate ids **this release's own bundle references**, sorted. That is
+  a pure function of the shipped asar: reproducible by anyone, stable across the fcache's refetches, and
+  attributable to the release. Diffing two baselines names the delta outright (1.32885.1 → 1.34493.1:
+  **+14 / −1**), and `sync --diff` prints the ids rather than a count.
+
+  It is deliberately **not** intersected with the syncing machine's fcache. Gate membership varies by
+  account segment, so filtering through one machine would both leak which gates that operator is served
+  and drop DARK gates — 51 of the recorded ids are absent from the live fcache, `enableToolSearchAuto`
+  among them. To turn an id into a name, grep it as a quoted literal in the extracted bundle; the call
+  site names it, which is how `PINNED_GATES` was built in the first place.
+
 - **`record` now scans what it wrote, and quarantines a leaking recording instead of publishing it.**
   `scanCassette` had exactly one production call site — `verify-cassettes` — which runs at commit time at
   the earliest. `hostInventoryPreflight` does fire before the paid spawn, but it reads the tier and the
