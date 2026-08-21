@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -361,6 +361,45 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
   ];
 }
 
+/** Read `network.allowDomains` from the NEWEST committed baseline — the pinned, hand-curated egress
+ *  allowlist that `sync` carries forward instead of re-deriving (see `checkEgressContractFacts`).
+ *
+ *  Every failure path returns `[]` and records an unknown delta, so a missing/corrupt/malformed prior
+ *  baseline surfaces as a refusal to write rather than a silently emptied allowlist. */
+export function readPinnedAllowDomains(unknown: string[], dir = BASELINES_DIR): string[] {
+  let newest: { version: string; file: string } | null = null;
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.startsWith("desktop-") || !f.endsWith(".json")) continue;
+      const version = f.slice("desktop-".length, -".json".length);
+      if (!newest || cmpVersionStrings(version, newest.version) > 0) newest = { version, file: f };
+    }
+  } catch {
+    flag(unknown, `egress.allowDomains: baselines directory ${dir} is unreadable — cannot carry the pinned allowlist forward`);
+    return [];
+  }
+  if (!newest) {
+    flag(unknown, `egress.allowDomains: no committed desktop-*.json in ${dir} to carry the pinned allowlist forward from`);
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(dir, newest.file), "utf8"));
+  } catch (e) {
+    flag(
+      unknown,
+      `egress.allowDomains: ${newest.file} is unreadable/unparseable (${(e as Error).message}) — cannot carry the pinned allowlist forward`,
+    );
+    return [];
+  }
+  const domains = (parsed as { network?: { allowDomains?: unknown } } | null)?.network?.allowDomains;
+  if (!Array.isArray(domains) || !domains.every((d) => typeof d === "string")) {
+    flag(unknown, `egress.allowDomains: ${newest.file} has no usable network.allowDomains[] to carry forward`);
+    return [];
+  }
+  return domains as string[];
+}
+
 export function sync(): SyncResult {
   // defensive platform guard. The paths above (SUPPORT/ASAR/Info.plist) are macOS-only; on
   // Windows/Linux they don't exist, so the extractor would return EMPTY version/allowlist/gate fields
@@ -398,11 +437,22 @@ export function sync(): SyncResult {
   const gates = decodeFcacheGates();
   const fcacheProv = decodeFcacheProvenance();
 
-  // 5. Egress allowlist + spawn contract from the asar (vmAllowedDomains + firewallAlso + spawn.env),
-  // merged with user hosts.
-  const { domains, fingerprint, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } =
-    extractFromAsar(unknown, gates);
-  const allowDomains = dedupe([...domains, ...userAllow]);
+  // 5. Spawn contract + fingerprints from the asar. The egress allowlist is NOT among them: on the
+  // first-party deployment the harness models, the VM allowlist is server-delivered per session and
+  // absent from the asar (checkEgressContractFacts, run inside extractFromAsar, guards that fact and
+  // hard-fails if it stops holding).
+  const { fingerprint, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } = extractFromAsar(
+    unknown,
+    gates,
+  );
+
+  // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
+  // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
+  // unsound in both directions. The operator's own coworkEgressAllowedHosts are still merged, matching
+  // the previous behaviour. A missing/unreadable prior baseline yields an empty list, which the CLI
+  // then refuses to write (fail closed) rather than silently shipping a default-deny allowlist.
+  const priorAllow = readPinnedAllowDomains(unknown);
+  const allowDomains = dedupe([...priorAllow, ...userAllow]);
 
   if (!gates) {
     flag(unknown, "gates: fcache missing/unreadable — provenance.gates NOT re-synced");
@@ -963,13 +1013,15 @@ export function extractCanUseToolChain(text: string): { orig: string; operands: 
   return null; // unbalanced — fail loud rather than guess
 }
 
-/** Extract domains + fingerprint + spawn.env + model-effort-config from the asar main bundle without
- *  keeping it unpacked. */
+/** Extract fingerprint + spawn.env + model-effort-config from the asar main bundle without
+ *  keeping it unpacked.
+ *
+ *  NOTE: this deliberately does NOT derive the egress allowlist. The 1p allowlist is server-delivered
+ *  and absent from the asar — see `checkEgressContractFacts`, which guards the pinned list instead. */
 function extractFromAsar(
   unknown: string[],
   gates: Record<string, GateState> | null,
 ): {
-  domains: string[];
   fingerprint: string;
   spawnEnv: Record<string, string> | null;
   spawnEnvKeys: string[];
@@ -981,7 +1033,6 @@ function extractFromAsar(
   if (!existsSync(ASAR)) {
     flag(unknown, `asar not found at ${ASAR} — install/open Claude Desktop once, or fix ASAR in cowork-sync.ts`);
     return {
-      domains: [],
       fingerprint: "",
       spawnEnv: null,
       spawnEnvKeys: [],
@@ -999,14 +1050,10 @@ function extractFromAsar(
     const bundle = [...bundleFiles.values()].join("");
     // FIRST: everything below reads normalized text, so a desync here invalidates all of it.
     for (const f of checkNormalizationSanity(rawFiles, bundleFiles)) flag(unknown, f);
-    // Domains: anthropic.com / claude.ai / sentry.io / statsig hosts referenced in the bundle.
-    const re = /[a-z0-9.-]+\.(?:anthropic\.com|claude\.ai)|sentry\.io|statsig[a-z.]*\.[a-z]+/g;
-    const domains = dedupe([...bundle.matchAll(re)].map((m) => m[0]));
-    if (domains.length === 0)
-      flag(
-        unknown,
-        "egress.allowDomains: the domain regex in extractFromAsar() matched nothing — the asar layout moved, so the synced allowlist is EMPTY. Fix the regex (maintainer), or hand-edit network.allowDomains in the written baseline (bridge)",
-      );
+    // Egress: the allowlist is NOT derived here. On 1p it is server-delivered and absent from the
+    // asar, so `network.allowDomains` is a pinned, hand-curated list carried forward by sync(). These
+    // checks fail CLOSED if the construction that justifies pinning moves.
+    for (const f of checkEgressContractFacts(bundle)) flag(unknown, f);
     // drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
@@ -1045,7 +1092,6 @@ function extractFromAsar(
     );
     for (const d of promptDrift.unknownDeltas) flag(unknown, d);
     return {
-      domains,
       fingerprint,
       spawnEnv: spawn.env,
       spawnEnvKeys: spawn.keys,
@@ -1057,7 +1103,6 @@ function extractFromAsar(
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
     return {
-      domains: [],
       fingerprint: "",
       spawnEnv: null,
       spawnEnvKeys: [],
@@ -1178,6 +1223,73 @@ export function checkWebFetchFacts(bundle: string): string[] {
       flags.push(
         `web_fetch: ${what} is gone from the asar — Cowork's web_fetch mechanism may have changed; re-verify the two-path port (see webfetch-high-fidelity-plan)`,
       );
+  return flags;
+}
+
+/**
+ * Egress-contract drift guard — the sentinel that replaced the old bundle-wide domain sweep.
+ *
+ * WHY `network.allowDomains` IS PINNED, NOT DERIVED. On the FIRST-PARTY deployment the harness
+ * models, the VM egress allowlist is **not in the asar at all**. Binary-verified (1.34493.1):
+ *
+ *   1p class:  vmEgressPolicy(){return null}
+ *   3p class:  vmEgressPolicy(){let e=<cfg>().workspace.allowedEgressHosts??[]; …
+ *                                  domains:[...this.provider.vmAllowedDomains(),...e]}
+ *   resolver:  async resolveVmAllowedDomains(e,n){let r=<dm>().vmEgressPolicy(),
+ *                                                     i=r?<toDomains>(r):e; return <otlp>(i,n)}
+ *
+ * So on 1p the resolver falls through to `e` — the session's SERVER-DELIVERED
+ * `options.egressAllowedDomains` — and the only asar contribution is the OTLP endpoint host appended
+ * by the augmenter. There is nothing authoritative to extract.
+ *
+ * The predecessor derived the allowlist by regexing every `*.anthropic.com` / `*.claude.ai` literal
+ * out of the whole bundle. That is unsound in BOTH directions: it cannot see a server-delivered host,
+ * and it sweeps in hosts that are not egress at all. It shipped a false positive at 1.34493.1, when a
+ * new Desktop webview first-party-origin classifier (`www.claude.ai`, `staging.claude.ai` — a
+ * navigation-trust tier, not egress) would have WIDENED the enforced allowlist. `allowDomains` is
+ * consumed as the real allowlist by `boundaryAllowList` and the session egress plan, so a spurious
+ * entry is a false-green: the harness would permit egress Cowork denies.
+ *
+ * The list is therefore carried forward as a curated pin (it had been stable for 8+ releases anyway),
+ * and THESE checks are what make that pin safe: they fail CLOSED if the construction that justifies
+ * pinning moves. A flag here means "re-derive how Cowork computes egress before trusting the pin".
+ */
+export function checkEgressContractFacts(bundle: string): string[] {
+  const flags: string[] = [];
+  const miss = (what: string, why: string) =>
+    flags.push(
+      `egress: ${what} — ${why}. network.allowDomains is a PINNED, hand-curated list that is only sound while this holds; re-verify how Cowork computes the VM allowlist (see checkEgressContractFacts).`,
+    );
+
+  // E1 — the first-party deployment contributes NO allowlist from the asar. If this branch stops
+  // returning null, 1p egress may have become asar-derivable (or moved to the 3p shape), which would
+  // change what the pin is standing in for.
+  if (!/vmEgressPolicy\(\)\s*\{\s*return null\s*\}/.test(bundle))
+    miss("the 1p `vmEgressPolicy(){return null}` branch is gone", "first-party egress may no longer be server-delivered");
+
+  // E2 — the resolver's fall-through is the load-bearing fact: when the deployment policy is falsy
+  // (i.e. 1p), the allowlist is the CALLER-SUPPLIED argument (the server-delivered session list).
+  // Backreferences bind the ternary to the same identifiers, so a reordered/rewritten resolver cannot
+  // satisfy this by accident. Callee slots admit `$` (minifiers emit `$`-initial names — 1.32885.1 S14b).
+  const resolver =
+    /resolveVmAllowedDomains\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)\s*\{\s*let\s+([\w$]+)\s*=\s*[\w$.]+\(\)\s*\.vmEgressPolicy\(\)\s*,\s*([\w$]+)\s*=\s*\3\s*\?\s*[\w$.]+\(\s*\3\s*\)\s*:\s*\1\s*;\s*return\s+[\w$.]+\(\s*\4\s*,\s*\2\s*\)\s*\}/;
+  if (!resolver.test(bundle))
+    miss(
+      "`resolveVmAllowedDomains` no longer falls through to its first argument when the deployment policy is null",
+      "the 1p allowlist may no longer be the server-delivered session list",
+    );
+
+  // E3 — the augmenter appends the OTLP endpoint host and NOTHING else, and short-circuits when the
+  // list is already unrestricted. A second append here would be an asar-side allowlist contribution
+  // the pin does not model.
+  const otlpAppend =
+    /\(\s*!\s*([\w$]+)\s*\?\.endpoint\s*\|\|\s*!\s*([\w$]+)\s*\|\|\s*\2\s*\.includes\(\s*"\*"\s*\)\s*\)\s*return\s+\2\s*;[\s\S]{0,320}?\[\s*\.\.\.\s*\2\s*,\s*([\w$]+)\s*\]/;
+  if (!otlpAppend.test(bundle))
+    miss(
+      "the OTLP-endpoint augmenter no longer appends exactly one host onto an unmodified allowlist",
+      "the asar may now contribute egress hosts the pinned list does not model",
+    );
+
   return flags;
 }
 

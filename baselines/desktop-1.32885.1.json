@@ -238,6 +238,7 @@
     ]
   },
   "network": {
+    "$comment": "network.allowDomains is a PINNED, hand-curated list — `sync` carries it forward and never re-derives it. On the first-party deployment this harness models, the VM egress allowlist is NOT in the app bundle: the 1p deployment class returns `vmEgressPolicy(){return null}`, so `resolveVmAllowedDomains` falls through to the session's SERVER-DELIVERED `egressAllowedDomains`, and the only host the bundle contributes is the OTLP endpoint appended by the augmenter. The entries below are therefore a curated RECONSTRUCTION, not an extraction — and this field is the allowlist the harness ENFORCES (boundaryAllowList + the session egress plan). UNVERIFIED as VM egress, retained deliberately rather than pruned on a guess because the true 1p list cannot be read from the asar: www.anthropic.com, console.anthropic.com, support.anthropic.com, docs.anthropic.com — these read as Desktop UI/help links swept in by the predecessor's bundle-wide domain regex. Removing one is a deliberate, reviewed act. checkEgressContractFacts in src/sync/cowork-sync.ts fails closed if the construction that justifies pinning moves.",
     "mode": "gvisor",
     "allowKind": "allowlist",
     "allowDomains": [

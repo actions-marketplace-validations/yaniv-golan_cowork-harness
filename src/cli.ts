@@ -2658,13 +2658,17 @@ async function cmdSync(args: string[]) {
 
   // refuse to write a baseline with an empty allowlist unless --allow-empty is passed.
   // An empty allowDomains = default-deny on ALL egress, which silently breaks every scenario.
+  // allowDomains is PINNED (carried forward from the newest committed baseline), so empty here means
+  // that baseline was missing/corrupt or carried no allowlist — never "the asar moved".
   if (res.allowDomains.length === 0) {
-    log("WARNING: sync produced an empty allowDomains list (asar domain regex matched nothing — asar layout moved).");
+    log(
+      "WARNING: sync produced an empty allowDomains list (the pinned allowlist could not be carried forward from the newest committed baseline).",
+    );
     if (!allowEmpty) {
       fail(
         "sync",
         "runtime",
-        "Refusing to write baseline with allowDomains: []. Fix the regex in cowork-sync.ts,\nor hand-edit network.allowDomains in an existing baseline, then re-run.",
+        "Refusing to write baseline with allowDomains: []. network.allowDomains is a hand-curated pin:\nrestore it in the newest committed baseline (it is not re-derivable from the asar — the 1p\nallowlist is server-delivered), then re-run.",
         "Pass --allow-empty to force-write anyway (use only if you understand the egress impact).",
         isJsonOutput(normalizedArgs),
         1,

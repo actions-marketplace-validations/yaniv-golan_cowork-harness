@@ -125,7 +125,10 @@ export const PlatformBaseline = z.looseObject({
     mntRoot: z.string().optional(),
     mounts: z.array(MountSpec),
   }),
-  network: z.object({
+  // looseObject (like the top level and `spawn`): `allowDomains` is a PINNED, hand-curated list that
+  // documents its own provenance in a `$comment` sibling. A strict z.object silently strips that note
+  // on every load, so the explanation for why the list is not derived would evaporate at the next sync.
+  network: z.looseObject({
     mode: z.string(),
     allowKind: z.enum(["allowlist", "unrestricted"]),
     allowDomains: z.array(z.string()),
