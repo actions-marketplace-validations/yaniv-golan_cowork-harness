@@ -83,6 +83,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Platform baseline `desktop-1.34493.1` (agent `2.1.237`).** The Cowork system prompt, both sub-agent
+  append branches, all 28 pinned gate states, the VM egress policy and the 22-key spawn env are all
+  unchanged — re-derived from the new bundle rather than inferred from an absent diff row (only the
+  minified prompt constant id rotated). `sync` reports no unknown deltas.
+
+  The substantive change is in the **agent**, and an asar-only pass cannot see it: `2.1.237` adds six
+  Cowork-specific risk categories to the auto-mode permission rubric's vocabulary —
+  `cowork_delete_grant`, `cowork_folder_access`, `cowork_run_routine_now`,
+  `cowork_scheduled_task_delete`, `cowork_scheduled_task_write`, `cowork_skill_persistence` — in both the
+  native binary and the VM ELF. They are **inert for this harness**: the rubric is entered only on
+  `permissionMode === "auto"`, which no scenario can request and no baseline pins (now pinned by
+  `test/auto-mode-unreachable.test.ts`). They matter because the rubric's reach now names operations the
+  harness does model, so the existing "auto-mode permission rubric is not modeled" gap has moved from
+  generic infrastructure risk into Cowork territory. The agent's env-flag export table also moves
+  524 → 533; none of the additions are set by the Cowork spawn.
+
+  All three committed example cassettes are re-recorded against this baseline and stamp v12 /
+  `hashFormat: "jcs1"`.
+
 - **`--session <file>` on `replay` and `verify-cassettes`** — the escape hatch for a relocated cassette. A
   cassette stores `session:` relative to its own directory, so any move (`git mv`, a repo reorganisation, a
   copy into another project) made skill staleness permanently unverifiable with no way to say where the
