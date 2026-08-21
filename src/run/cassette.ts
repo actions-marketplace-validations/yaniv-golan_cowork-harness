@@ -5640,7 +5640,7 @@ export function cmdRehash(args: string[]): void {
     // promises. A silent version-stamp would mint a v10-labeled cassette that never actually captured its
     // links. Route a v9→v10 bump to a re-record. Placed AFTER the "already current" skip but this only
     // needs to block the eventual STAMP — the content/baseline gates below still run and their own
-    // skip/error reasons (baseline drift) take precedence, so this fires only when a cassette would
+    // error reasons (content mismatch, unreadable sources, mode/agent-scope change) fire first, so this is reached only when a cassette would
     // otherwise have migrated cleanly.
     const crossesIntoV10 = recordedVersion < 10 && requiredVersion >= 10;
 

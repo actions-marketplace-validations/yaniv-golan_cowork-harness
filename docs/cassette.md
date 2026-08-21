@@ -178,9 +178,15 @@ Only the algorithm-derived values are then replaced. Everything else is carried 
 recording — including `promptAssetsHash` and `labelProvenance`, which the recompute cannot produce — and
 `fileSigs` keeps its recorded (redacted) paths, taking only new digests position by position.
 
-**It refuses rather than guessing.** `rehash` **skips** a cassette whose recorded baseline has drifted
-from the live one, and **errors** on a content mismatch, on unreadable sources, on a mode or agent-scope
-change, and on a hand-authored digest it cannot recompute. Anything it refuses needs a real re-record.
+**A drifted baseline does NOT stop the migration.** `fingerprint.baseline` is the recorded Cowork app
+version — metadata, never an input to `skillHash` — so it says nothing about whether the content is
+unchanged. `rehash` migrates the hashes, keeps the recorded baseline, and notes the drift on the row;
+clearing that separately is a re-record. (This matters after `sync`, or for any cassette older than the
+current `baselines/`, which is otherwise every file you own.)
+
+**It refuses rather than guessing.** `rehash` **errors** on a content mismatch, on unreadable sources, on
+a mode or agent-scope change, on `fileSigs` it cannot align entry-for-entry, and on a hand-authored digest
+it cannot recompute. Anything it refuses needs a real re-record.
 
 ```bash
 cowork-harness rehash cassettes/                              # a directory

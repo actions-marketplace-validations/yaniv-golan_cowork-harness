@@ -13,6 +13,7 @@ import {
   requiredVersionFor,
 } from "../src/run/cassette.js";
 import { skillHashSnapshot, foldSnapshot, renderWireEntries, jcs1HashedContent, legacyHashedContent } from "../src/run/skill-hash.js";
+import { checkStaleness } from "../src/run/cassette.js";
 import type { Fingerprint } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
 
@@ -461,5 +462,66 @@ describe.skipIf(!existsSync(CLI))("a baseline-drifted pre-epoch cassette still m
     expect(onDisk.cassetteVersion).toBe(EPOCH);
     expect(onDisk.fingerprint.hashFormat).toBe("jcs1");
     expect(onDisk.fingerprint.baseline).toBe("1.11847.5"); // the recorded baseline is KEPT, not rewritten
+  });
+});
+
+describe("computeStaleness behaviour the epoch depends on", () => {
+  /** Build an on-disk pre-epoch cassette; `sorted` picks a manifest whose keys are already canonical
+   *  (so both algorithms agree) or not (so they differ). */
+  function preEpoch(opts: { sorted: boolean; mode?: "git" | "raw" }): { cassette: Record<string, unknown>; dir: string } {
+    const d = mkdtempSync(join(tmpdir(), "stale-"));
+    mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+    mkdirSync(join(d, "skills", "s"), { recursive: true });
+    writeFileSync(
+      join(d, ".claude-plugin", "plugin.json"),
+      opts.sorted ? '{"name":"p","skills":"./skills","version":"1"}' : '{"skills":"./skills","name":"p","version":"1"}',
+    );
+    writeFileSync(join(d, "skills", "s", "SKILL.md"), "# s\n");
+    const sessionPath = join(d, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ${d}\n`);
+    const snap = skillHashSnapshot([d]);
+    const built = buildFingerprint(sessionPath, LIVE_BASELINE, d);
+    return {
+      dir: d,
+      cassette: {
+        cassetteVersion: EPOCH - 1,
+        scenario: { name: "c", baseline: LIVE_BASELINE, session: sessionPath, fidelity: "container", prompt: "hi", answers: [] },
+        events: [],
+        fingerprint: {
+          ...built,
+          hashFormat: undefined,
+          skillHash: foldSnapshot(snap, "legacy"),
+          fileSigs: renderWireEntries(snap, "legacy").map((e) => [e.path, e.sha] as [string, string]),
+          ...(opts.mode ? { mode: opts.mode } : {}),
+        },
+      },
+    };
+  }
+
+  it("D1: a pre-epoch cassette whose digest is IDENTICAL under jcs1 is STILL flagged", () => {
+    // The whole justification for flagging by recorded version. An already-canonical manifest hashes the
+    // same either way, so an outcome-based check would let it pass unlabelled — and at the next epoch
+    // nobody could tell which algorithm produced it.
+    const { cassette, dir } = preEpoch({ sorted: true });
+    const fp = cassette.fingerprint as { skillHash: string };
+    expect(foldSnapshot(skillHashSnapshot([dir]), "jcs1")).toBe(fp.skillHash); // digest genuinely unchanged
+    const msgs = checkStaleness(cassette as never, dir);
+    expect(msgs.join(" ")).toMatch(/hash format/);
+  });
+
+  it("X4: a pre-epoch cassette that ALSO has a mode flip reports the EPOCH, not the waivable format class", () => {
+    // `format` is outside SKILL_DRIFT_CLASSES and outside the default replay gate, so if the mode branch
+    // won this would warn and exit 0 — a green run for every pre-epoch cassette with a dirty worktree.
+    const { cassette, dir } = preEpoch({ sorted: false, mode: "raw" });
+    const msgs = checkStaleness(cassette as never, dir);
+    expect(msgs.join(" ")).toMatch(/hash format/);
+    expect(msgs.join(" ")).not.toMatch(/file-set mode/);
+  });
+
+  it("W5: an epoch mismatch produces NO per-file drift dump", () => {
+    // The dump compares digests across two algorithms — noise that reads as evidence.
+    const { cassette, dir } = preEpoch({ sorted: false });
+    const msgs = checkStaleness(cassette as never, dir);
+    expect(msgs.join(" ")).not.toMatch(/skill files changed/);
   });
 });

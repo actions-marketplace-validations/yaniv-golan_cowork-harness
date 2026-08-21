@@ -835,11 +835,11 @@
         },
         "contentSig": {
           "type": "string",
-          "description": "content fingerprint over the same file set as skillHash. NOT the rehash proof: it follows the SAME manifest transform skillHash does, so it is not comparable across a hash-format epoch either, and it is blind to directory markers. The migration proof recomputes the LEGACY skillHash instead."
+          "description": "content fingerprint over the same file set as skillHash. NOT the rehash proof: it follows the SAME manifest transform skillHash does, so it is not comparable across a hash-format epoch. Since CONTENTSIG_ALGO 5 it also folds directory markers, so an added or removed EMPTY directory moves it. The migration proof recomputes the LEGACY skillHash instead."
         },
         "fileSigs": {
           "type": "array",
-          "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash",
+          "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash A manifest entry's sha depends on `hashFormat`: absent/legacy = JSON.parse -> delete `version` -> JSON.stringify -> sha256; `jcs1` = canonical (JCS-style) serialization instead. The legacy recipe will not match a jcs1 cassette for any unsorted manifest.",
           "items": {
             "type": "array",
             "items": {
