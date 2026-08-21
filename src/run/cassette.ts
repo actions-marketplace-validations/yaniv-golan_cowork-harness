@@ -1809,7 +1809,7 @@ export function computeStaleness(
         sessionOverride === undefined ? "from the cassette location" : `from the session given with --session (${sessionOverride})`;
       findings.push({
         class: "unverifiable-skill",
-        message: `skill dirs not resolvable ${where}${detail || (why === undefined ? " — the session resolved but declares no skill dirs to hash" : "")} — cannot verify skill staleness (can't verify ⇒ not green)`,
+        message: `skill dirs not resolvable ${where}${detail || (why === undefined ? (fp.skillHash !== undefined ? " — the session resolved and its dirs exist, but some could not be READ, so the hash was dropped as unreliable" : " — the session resolved but declares no skill dirs to hash") : "")} — cannot verify skill staleness (can't verify ⇒ not green)`,
       });
     } else if (fp.skillHash !== undefined && recordedVersion < HASH_FORMAT_EPOCH) {
       // EPOCH, ahead of every WAIVABLE branch. Mode and agent-scope compare values produced by two
@@ -5269,7 +5269,11 @@ export async function cmdVerifyCassettes(args: string[]) {
     // both would exit 0 on a typo'd or moved path — silently reporting "verified" for a directory that
     // does not exist. That is the vacuous pass this command's loud default exists to prevent, and the
     // caller most likely to hit it is the scripted CI job the flag is FOR.
-    if (resolved.kind === "empty-dir" && (p.flags["--allow-empty"] ?? false)) {
+    // An override must never be silently unconsumed. `--skip-staleness --session` is refused for exactly
+    // this reason, and an empty directory is still a DIRECTORY target, which `--session` refuses anyway.
+    // Returning ok:true here would skip the directory refusal, the "not a session file" check and the
+    // announcement in one go.
+    if (resolved.kind === "empty-dir" && (p.flags["--allow-empty"] ?? false) && vcSessionOverride === undefined) {
       const empty = { command: "verify-cassettes", ok: true, coverage: { privacy: doPrivacy, staleness: doStaleness }, results: [] };
       if (json) out(JSON.stringify(empty));
       else if (!p.flags["--quiet"]) log(`✓ verify-cassettes: no cassettes under ${target} — nothing to verify (--allow-empty)`);
@@ -5302,6 +5306,22 @@ export async function cmdVerifyCassettes(args: string[]) {
       undefined,
       json,
     );
+  }
+  // An inline scenario has no session file, so an override can never apply. Refuse BEFORE announcing:
+  // announcing first prints "override in effect: … -> <dirs>" directly above "this cassette records an
+  // inline scenario, which has no session file to override" — a self-contradiction, and the exact shape
+  // both commands are meant to avoid. (The per-cassette refusal below still covers a directory batch.)
+  if (vcSessionOverride !== undefined && files.length === 1) {
+    const only = readCassette(files[0]);
+    if (!("error" in only) && only.cassette.scenario.session === "(inline)") {
+      return fail(
+        "verify-cassettes",
+        "usage",
+        "verify-cassettes --session: this cassette records an inline scenario, which has no session file to override — remove --session",
+        undefined,
+        asJson,
+      );
+    }
   }
   if (vcSessionOverride !== undefined) {
     // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong

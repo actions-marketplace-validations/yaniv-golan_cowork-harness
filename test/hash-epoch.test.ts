@@ -572,3 +572,39 @@ describe.skipIf(!existsSync(CLI))("rehash --session honours the same contract as
     expect(`${r.stdout}${r.stderr}`).toMatch(/not a session file/);
   });
 });
+
+describe.skipIf(!existsSync(CLI))("an unconsumed --session must never look successful", () => {
+  const vc = (args: string[]) => spawnSync("node", [CLI, "verify-cassettes", ...args], { encoding: "utf8" });
+
+  it("--allow-empty does not swallow a bad --session", () => {
+    // `--allow-empty` returned ok:true before any --session check, skipping the directory refusal, the
+    // "not a session file" gate and the announcement together. `--skip-staleness --session` is refused for
+    // exactly this reason: an override that is never consumed must not report success.
+    const empty = mkdtempSync(join(tmpdir(), "vc-empty-"));
+    const r = vc([empty, "--session", "/no/such.yaml", "--allow-empty"]);
+    expect(r.status).not.toBe(0);
+  });
+
+  it("refusing an inline cassette emits NO success notice first", () => {
+    // Announcing before the refusal printed "override in effect: … -> <dirs>" directly above "this cassette
+    // records an inline scenario, which has no session file to override" — a self-contradiction in two
+    // consecutive lines.
+    const dir = mkdtempSync(join(tmpdir(), "vc-inline-"));
+    const sessionPath = join(dir, "s.yaml");
+    writeFileSync(sessionPath, "skills:\n  local: []\n");
+    const file = join(dir, "c.cassette.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cassetteVersion: EPOCH,
+        scenario: { name: "c", baseline: LIVE_BASELINE, session: "(inline)", fidelity: "container", prompt: "hi", answers: [] },
+        events: [],
+        fingerprint: { baseline: LIVE_BASELINE, hashFormat: "jcs1", skillHash: "abc" },
+      }),
+    );
+    const r = vc([file, "--session", sessionPath]);
+    const all = `${r.stdout}${r.stderr}`;
+    expect(all).toMatch(/inline scenario/);
+    expect(all).not.toMatch(/override in effect/); // the contradiction
+  });
+});

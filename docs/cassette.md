@@ -267,7 +267,15 @@ cowork-harness verify-cassettes moved/x.cassette.json --session path/to/session.
 ```
 
 It resolves the skill sources from that session instead of the recorded cassette-relative path, so a
-moved cassette verifies without being re-recorded. Points worth knowing:
+moved cassette verifies without being re-recorded.
+
+**If the cassette also predates the hash-format epoch, migrate it first.** Relocation and the epoch are
+independent problems, and `--session` only solves the first: a pre-v12 cassette still reports
+`unverifiable-skill` because its digests are not comparable, whatever tree you point it at. Run
+`cowork-harness rehash <file.cassette.json> --session <session.yaml>` — that migrates *and* resolves in
+one step — then verify.
+
+Points worth knowing:
 
 - It takes a **session**, not skill directories, because `staleness.hash_ignore` is a session-level
   field that is *not* stored in the cassette — an override carrying only directories would silently
