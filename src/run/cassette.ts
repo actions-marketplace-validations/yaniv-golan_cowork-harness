@@ -2589,10 +2589,15 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
     // does not understand. The check applies to a baseline-only fingerprint too: `hashFormat` is stamped on
     // every buildFingerprint return path, so its absence at the current version is a genuine inconsistency
     // rather than a shape this build ever writes.
-    if (recordedVersion === CASSETTE_VERSION && fmt !== "jcs1") {
+    // Bound to HASH_FORMAT_EPOCH, not CASSETTE_VERSION. They are equal today and will not stay so: the
+    // next SHAPE-only bump moves CASSETTE_VERSION to 13 and leaves the epoch at 12. Keyed on the shape
+    // version, a v12 fingerprint missing `hashFormat` would start loading again, D7's "absent ⇒ legacy"
+    // would apply to an epoch-stamped document, and live `jcs1` digests would be compared as though they
+    // were the same algorithm. `requiredVersionFor` derives its BASE from the epoch for this same reason.
+    if (recordedVersion === HASH_FORMAT_EPOCH && fmt !== "jcs1") {
       return {
         error:
-          `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ${shown} — a v${CASSETTE_VERSION} ` +
+          `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ${shown} — a v${HASH_FORMAT_EPOCH} ` +
           `cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
       };
     }
@@ -5613,7 +5618,9 @@ export function cmdRehash(args: string[]): void {
     // before anything inspects the fingerprint — so a v12 cassette missing `hashFormat` would be waved
     // through as current while carrying legacy digests, and the "absent means legacy" rule would then
     // mis-read it forever.
-    if (recordedVersion === CASSETTE_VERSION && cassette.fingerprint?.skillHash && cassette.fingerprint.hashFormat !== "jcs1") {
+    // Same binding as the read boundary, and deliberately NOT gated on `skillHash`: a baseline-only v12
+    // fingerprint without `hashFormat` is just as inconsistent, and gating would skip it as "current".
+    if (recordedVersion === HASH_FORMAT_EPOCH && cassette.fingerprint !== undefined && cassette.fingerprint.hashFormat !== "jcs1") {
       results.push({
         file,
         action: "error",
@@ -5703,15 +5710,19 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // Baseline drifted — a re-record is required regardless of skill content.
-    if (cassette.fingerprint.baseline !== liveBaseline) {
-      results.push({
-        file,
-        action: "skipped",
-        reason: `baseline drifted (${cassette.fingerprint.baseline} → ${liveBaseline}) — re-record required`,
-      });
-      continue;
-    }
+    // BASELINE DRIFT DOES NOT BLOCK A FORMAT MIGRATION. `fingerprint.baseline` is the resolved Cowork app
+    // version at record time — recorded metadata, never an input to `skillHash` — so it says nothing about
+    // whether the content is provably unchanged.
+    //
+    // Skipping on it used to be harmless: an un-migrated cassette still replayed. After the epoch it is a
+    // TRAP. A pre-epoch cassette fails a bare `replay` until it is restamped, so "skip" leaves it unplayable
+    // while `rehash` exits 0 and prints "nothing to migrate" — and anyone who has run `sync`, or whose
+    // committed cassettes predate the current `baselines/`, hits that on every file. The release notes sell
+    // `rehash` as the one-command fix; a silent no-op reporting success is the opposite of that.
+    //
+    // So: migrate the hashes, KEEP the recorded baseline, and let baseline drift stay what it already is —
+    // its own staleness finding at verify time, which a re-record (not a rehash) resolves.
+    const baselineDrifted = cassette.fingerprint.baseline !== liveBaseline;
 
     // ONE resolution, ONE walk: `recomputeBothAlgos` folds BOTH the legacy proof and the replacement
     // fingerprint from the SAME snapshot. A second independent walk would let a file change in between,
@@ -5787,7 +5798,11 @@ export function cmdRehash(args: string[]): void {
     results.push({
       file,
       action: "migrated",
-      reason: `v${recordedVersion} → v${requiredVersion}${dryRun ? " (dry-run)" : ""}`,
+      reason:
+        `v${recordedVersion} → v${requiredVersion}${dryRun ? " (dry-run)" : ""}` +
+        (baselineDrifted
+          ? ` — NOTE: baseline still reads ${cassette.fingerprint.baseline} (live ${liveBaseline}); re-record to clear that separately`
+          : ""),
     });
   }
 

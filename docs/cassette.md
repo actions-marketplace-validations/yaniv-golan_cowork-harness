@@ -763,9 +763,17 @@ possible.
   from the per-file manifest (`fileSigs`). **A `fileSigs` sha is not always `sha256(file)`** — it is the sha of
   the bytes that fold into `skillHash`, and a `.claude-plugin/plugin.json` folds with its `version` deleted
   (see the exclusion list under the `skillHash` description). Hand-checking one with `shasum` mismatches and
-  reads as corruption. To verify by hand, apply the same transform: parse, delete `version`, re-serialize, sha256
-  that. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but fires **only on a hash
-  mismatch** — a cassette that verifies clean has no on-demand dump. For a scoped cassette the drift is
+  reads as corruption. **The hand-check depends on `fingerprint.hashFormat`, so read that first:**
+
+  | `hashFormat` | reproduce the sha with |
+  |---|---|
+  | absent (legacy) | `JSON.parse` → delete `version` → `JSON.stringify` → sha256 |
+  | `"jcs1"` | `JSON.parse` → delete `version` → canonical (JCS-style) serialization → sha256 |
+
+  Using the legacy recipe on a `jcs1` cassette will not match for any manifest whose keys are not already
+  in canonical order — which reads as corruption and is the exact confusion this field's caveat exists to
+  prevent. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but fires **only on a
+  hash mismatch** — a cassette that verifies clean has no on-demand dump. For a scoped cassette the drift is
   attributed **per bucket** by the
   actual changed paths: a `shared root changed (scope: skills/x) [N changed (…)]` message for shared-dependency
   changes and a `skills/x changed since record [N changed (…)]` message for the scoped skill's own files. When

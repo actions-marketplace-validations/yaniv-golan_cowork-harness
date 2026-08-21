@@ -134,7 +134,7 @@
         },
         "contentSig": {
           "type": "string",
-          "description": "v3+: Algorithm-independent SHA-256 over sorted relpath:content-sha256 pairs. Used by `rehash` to verify content is unchanged when the staleness algorithm changes."
+          "description": "content fingerprint over the same file set as skillHash. NOT algorithm-independent and NOT the rehash proof: it follows the SAME manifest transform skillHash does and (v12+) also folds `D:` directory markers, so it is not comparable across a hash-format epoch. The migration proof recomputes the LEGACY skillHash instead."
         },
         "skillSources": {
           "type": "array",

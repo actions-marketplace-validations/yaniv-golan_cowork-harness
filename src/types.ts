@@ -950,11 +950,17 @@ export interface Fingerprint {
   // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
   // NOT sha256(file) in every case: each sha is over the bytes that FOLD INTO skillHash, and a
-  // `.claude-plugin/plugin.json` (or root `plugin.json`) folds as the manifest re-serialized with `version`
-  // deleted (see hashDir in run/skill-hash.ts). Hand-checking one of those with `shasum` will mismatch and
-  // looks exactly like corruption — it isn't. To hand-check, apply the same transform: parse, delete `version`,
-  // re-serialize, sha256 that. `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only
-  // fires on a hash MISMATCH — there is no on-demand dump for a cassette that verifies clean.
+  // `.claude-plugin/plugin.json` (or root `plugin.json`) folds with `version` deleted. Hand-checking one of
+  // those with `shasum` mismatches and looks exactly like corruption — it isn't.
+  //
+  // The hand-check depends on `hashFormat`, so read that FIRST:
+  //   absent / legacy → JSON.parse, delete `version`, JSON.stringify, sha256
+  //   "jcs1"          → JSON.parse, delete `version`, jcsSerialize (run/jcs.ts), sha256
+  // Using the legacy recipe on a jcs1 cassette reproduces the original confusion exactly: for any manifest
+  // whose keys are not already sorted it will not match, and it will read as corruption.
+  //
+  // `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only fires on a hash
+  // MISMATCH — there is no on-demand dump for a cassette that verifies clean.
   /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. ABSENT means the
    *  LEGACY (pre-epoch) transform — NOT "raw bytes": every cassette recorded before v12 already carries
    *  version-stripped manifest digests, so defaulting absence to raw would mislabel all of them. */

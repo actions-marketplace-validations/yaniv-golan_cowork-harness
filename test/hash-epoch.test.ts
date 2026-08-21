@@ -425,3 +425,41 @@ describe("sharedHash must be the number LIVE VERIFY recomputes", () => {
     expect(recomputeBothAlgos(join(d, "session.yaml"), d, undefined, LIVE_BASELINE)?.live.sharedHash).toBeUndefined();
   });
 });
+
+describe.skipIf(!existsSync(CLI))("a baseline-drifted pre-epoch cassette still migrates", () => {
+  it("migrates the hashes, keeps the recorded baseline, and reports the drift separately", () => {
+    // `fingerprint.baseline` is the resolved app version at record time — recorded metadata, never an input
+    // to `skillHash`. Skipping on it was harmless while an un-migrated cassette still replayed; after the
+    // epoch it strands the cassette unplayable while `rehash` exits 0 and prints "nothing to migrate".
+    // Anyone who has run `sync` has a drifted baseline on every committed cassette.
+    const root = unsortedRoot();
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ${root}\n`);
+    const built = buildFingerprint(sessionPath, "1.11847.5", root); // deliberately an OLD baseline
+    const snap = skillHashSnapshot([root]);
+    const file = join(root, "c.cassette.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cassetteVersion: EPOCH - 1,
+        scenario: { name: "c", baseline: "1.11847.5", session: sessionPath, fidelity: "container", prompt: "hi", answers: [] },
+        events: [],
+        fingerprint: {
+          ...built,
+          hashFormat: undefined,
+          skillHash: foldSnapshot(snap, "legacy"),
+          fileSigs: renderWireEntries(snap, "legacy").map((e) => [e.path, e.sha] as [string, string]),
+        },
+      }),
+    );
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", root], { encoding: "utf8" });
+    const res = JSON.parse(r.stdout.trim()).results[0];
+    expect(res.action, res.reason).toBe("migrated");
+    expect(res.reason).toMatch(/baseline still reads 1\.11847\.5/); // surfaced, not swallowed
+
+    const onDisk = JSON.parse(readFileSync(file, "utf8"));
+    expect(onDisk.cassetteVersion).toBe(EPOCH);
+    expect(onDisk.fingerprint.hashFormat).toBe("jcs1");
+    expect(onDisk.fingerprint.baseline).toBe("1.11847.5"); // the recorded baseline is KEPT, not rewritten
+  });
+});
