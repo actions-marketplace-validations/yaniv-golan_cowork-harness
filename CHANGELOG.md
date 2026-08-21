@@ -110,6 +110,12 @@ All notable changes to this project are documented here. The format is based on
   are pure, exported and mutation-tested; the *wiring* inside `recordScenarioObject` needs a live spawn to
   reach, so it is guarded structurally — the same split this repo already uses for `buildCassette`.
 
+- **Corrected a standing inaccuracy in the record-consent docs.** `SKILL.md` and `ci-recipe.md` both said
+  the host-inventory preflight "refuses outright rather than warn". It refuses for a **new** cassette path
+  but **warns** for one that already exists — deliberately, since refusing there would fire on every
+  `--rerecord-stale` pass and make the escape flag reflexive. That warn path was the gap the record-time
+  quarantine above now covers, so both documents now say which is which.
+
 
 - **Platform baseline `desktop-1.34493.1` (agent `2.1.237`).** The Cowork system prompt, both sub-agent
   append branches, all 28 pinned gate states, the VM egress policy and the 22-key spawn env are all

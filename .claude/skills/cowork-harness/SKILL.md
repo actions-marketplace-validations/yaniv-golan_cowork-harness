@@ -1028,8 +1028,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 25. **Two distinct host-inventory consent flags — a record-time one and a verify-time one.** `record
     --allow-host-inventory-fixture` is the boolean consent to proceed recording a host-inheriting
     (`protocol`/`hostloop`/`cowork`-resolving-to-hostloop) cassette into a repo-visible path — otherwise
-    `record` refuses (freezing this machine's MCP servers/agents/account into a committed fixture is the
-    risk). `verify-cassettes --allow-host-inventory <regex>` is unrelated: a per-finding suppressor for the
+    `record` refuses before it spends (freezing this machine's MCP servers/agents/account into a committed
+    fixture is the risk). That pre-spend check **warns rather than refuses when the cassette already
+    exists** — refusing would fire on every `--rerecord-stale` pass — and it reads the tier and the
+    destination path, never the bytes. So `record` also scans the FINISHED recording, after redaction and
+    before the write: a `host-inventory`/`machine-inventory` finding on a repo-visible path is
+    **quarantined** to `<runs-root>/quarantine/` with a `.findings.txt` naming what leaked, and the command
+    fails without writing the path you asked for (the recording is not discarded — you paid for it).
+    `verify-cassettes --allow-host-inventory <regex>` is unrelated: a per-finding suppressor for the
     scanner's `host-inventory` class on an already-committed cassette. Passing one where the other command
     wants it fails as an unrecognized flag — they don't interchange. Depth: `references/ci-recipe.md`.
 

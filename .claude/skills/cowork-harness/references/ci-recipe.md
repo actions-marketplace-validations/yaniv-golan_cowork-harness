@@ -223,9 +223,23 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
 - **Host-inheriting record refused by default — `--allow-host-inventory-fixture` is the consent.** A
   `protocol`/`hostloop`/`cowork`-resolving-to-hostloop record into a repo-visible cassette path would
   freeze THIS machine's MCP server names, agents, and account metadata into a committed fixture, so
-  `record` refuses outright rather than warn. Pass `--allow-host-inventory-fixture` only when the
+  `record` refuses **before the paid spawn**. Pass `--allow-host-inventory-fixture` only when the
   recording session genuinely has no personal MCP servers or plugins to leak — it is a per-record
   boolean consent, not a pattern.
+
+  Two details that matter for a re-record loop. The pre-spend check **warns rather than refuses when the
+  cassette already exists**, deliberately: refusing there would fire on every `--rerecord-stale` pass and
+  make the escape flag reflexive. And it is a **prediction** — it reads the tier and the destination path,
+  never the resulting bytes, so it can be wrong in both directions.
+
+  So `record` also checks the **evidence**. After redaction and before the write, the finished cassette is
+  scanned; a `host-inventory` or `machine-inventory` finding on a repo-visible path is **quarantined** —
+  written to `<runs-root>/quarantine/` (honouring `--run-dir`/`COWORK_HARNESS_RUNS_DIR`) with a
+  `.findings.txt` sibling naming what leaked, and the command fails without writing the path you asked for.
+  The recording is not discarded; you paid for it. Only the machine-identity classes trigger this —
+  `email`/`currency`/`domain`/`path` are frequently legitimate scenario content, and a gate that fires on
+  those just teaches you to pass the escape flag. Outside a git repo it warns instead: nothing there
+  publishes the file by accident.
 - **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path /
   machine-inventory matches it finds in the committed cassettes and **exits non-zero**, so "no leak" is
   a gate, not discipline. Non-zero is not one thing, though: exit `1` means verification RAN and found a
@@ -235,6 +249,13 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   $? -ne 0 ]` tripwire treats both the same — if you need to tell "the gate caught something" apart from
   "the gate couldn't run", branch on the exit code (or parse `--output-format json`'s per-file
   `findings`/`staleness` vs `unverifiable`/`version`/`error` buckets).
+
+  **Do not read `error` as "this file was never scanned".** The privacy scan needs a readable *transcript*
+  (an `events` array of strings), not a *valid* cassette — so a file that fails shape validation is still
+  scanned, and reports its findings **and** its `error`. Each result carries **`privacyScanned`**, which
+  answers that question directly. A gate that must not treat "could not verify" as "verified clean" should
+  key on `privacyScanned === false`, where `findings: []` is an absence of evidence rather than evidence of
+  absence. `--skip-privacy` also reports `false`, for the same reason.
   Suppress synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word
   proper names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus
   needs it.)
