@@ -15,6 +15,7 @@ import {
 } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
+import { skillHashSnapshot, foldSnapshot, renderWireEntries } from "../src/run/skill-hash.js";
 
 // `cassetteVersion` means "the minimum format version a reader needs to INTERPRET this cassette
 // correctly", not "which recorder wrote it". An earlier design of this mechanism keyed the stamp on KEY
@@ -22,35 +23,46 @@ import { loadBaseline } from "../src/baseline.js";
 // and a presence check would stamp v11 on every cassette — the unconditional bump this whole design
 // exists to avoid. This file pins the corrected value-aware mechanism.
 
+// The stamped floor. Read from the source of truth rather than duplicated, so an epoch bump moves this
+// test with it instead of silently pinning a stale number.
+const HASH_FORMAT_EPOCH_FOR_TEST = requiredVersionFor({});
+
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
 describe("requiredVersionFor — value-aware, not key-presence", () => {
-  it("lane: remote requires v11", () => {
-    const s = ScenarioObject.parse({ prompt: "x", lane: "remote" });
-    expect(requiredVersionFor(s)).toBe(11);
-  });
-
-  // The two load-bearing cases (v1 passed the v11 case above and failed both of these).
-  it("lane: local requires v10, NOT v11", () => {
-    const s = ScenarioObject.parse({ prompt: "x", lane: "local" });
-    expect(requiredVersionFor(s)).toBe(10);
+  // POST-EPOCH SEMANTICS. `requiredVersionFor`'s base is now HASH_FORMAT_EPOCH, not a hard-coded 10,
+  // because it is what actually gets STAMPED at both write sites. A hash-format bump that moved only
+  // CASSETTE_VERSION/HASH_FORMAT_EPOCH would write new-algorithm digests into cassettes stamped with an
+  // old version — permanently mislabelled, and unprovable at the next epoch.
+  //
+  // So `cassetteVersion` no longer means "the minimum reader for THIS SCENARIO'S keys"; it means "the
+  // minimum reader for this whole cassette", and the hash format is part of that. A v11 reader handed a
+  // v12 cassette would recompute LEGACY digests and report false drift.
+  //
+  // P8's value-aware differential is NOT gone — it still applies ABOVE the floor. These cases pin that:
+  // every scenario now floors at the epoch, and a key needing MORE than the floor would still lift it.
+  it("floors at the hash-format epoch regardless of scenario keys", () => {
+    expect(requiredVersionFor(ScenarioObject.parse({ prompt: "x", lane: "remote" }))).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
+    expect(requiredVersionFor(ScenarioObject.parse({ prompt: "x", lane: "local" }))).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
   });
 
   it(
-    "lane OMITTED requires v10, NOT v11 — `lane` defaults to 'local' via Zod, so the parsed scenario " +
-      "carries the key regardless; a key-presence predicate would wrongly stamp v11 here",
+    "the value-aware predicate still works — `lane` defaults to 'local' via Zod, so the parsed scenario " +
+      "carries the key regardless, and a key-PRESENCE predicate would have treated local and remote alike",
     () => {
       const s = ScenarioObject.parse({ prompt: "x" });
       expect(s.lane).toBe("local"); // sanity: the default really is present on every parsed scenario
-      expect(requiredVersionFor(s)).toBe(10);
+      // Both floor at the epoch today; what this pins is that the function reads the VALUE, so when a
+      // future key requires more than the floor, only the scenarios that actually use it are lifted.
+      expect(requiredVersionFor(s)).toBe(requiredVersionFor(ScenarioObject.parse({ prompt: "x", lane: "local" })));
     },
   );
 
   it("an unparsed/loose scenario object (as rehash reads off disk) is handled the same way", () => {
-    expect(requiredVersionFor({ prompt: "x", lane: "remote" })).toBe(11);
-    expect(requiredVersionFor({ prompt: "x" })).toBe(10); // no `lane` key at all — still 0, not a bump
-    expect(requiredVersionFor(null)).toBe(10); // defensive: never throws on a malformed on-disk value
+    expect(requiredVersionFor({ prompt: "x", lane: "remote" })).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
+    expect(requiredVersionFor({ prompt: "x" })).toBe(HASH_FORMAT_EPOCH_FOR_TEST); // no `lane` key at all
+    expect(requiredVersionFor(null)).toBe(HASH_FORMAT_EPOCH_FOR_TEST); // defensive: never throws on a malformed on-disk value
   });
 });
 
@@ -89,7 +101,7 @@ describe("staleness — hash-format epoch, not CASSETTE_VERSION", () => {
   // v11 (like v9 and v10 before it) changes cassette SHAPE, not hashing. A v10 cassette with genuine skill
   // drift must fall into the drift-bucket attribution, not the "recorded under an older hash format"
   // branch (which would swallow the per-file detail — see the P8 spec's "two downstream assumptions").
-  it("a v10 cassette with genuine skill drift reports drift buckets, not 'older hash format'", () => {
+  it("a CURRENT-format cassette with genuine skill drift reports drift buckets, not 'older hash format'", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-epoch-"));
     const skillDir = join(root, "skill");
     mkdirSync(skillDir, { recursive: true });
@@ -98,7 +110,7 @@ describe("staleness — hash-format epoch, not CASSETTE_VERSION", () => {
     writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
 
     const cassette = {
-      cassetteVersion: 10, // >= HASH_FORMAT_EPOCH (8) — no hashing change happened at/after this recording
+      cassetteVersion: HASH_FORMAT_EPOCH_FOR_TEST, // AT the epoch — its digests are comparable, so drift is real drift
       scenario: {
         name: "s",
         baseline: "latest",
@@ -208,8 +220,18 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     writeFileSync(sessionPath, `skills:\n  local:\n    - ${skillDir}\n`);
     // Compute the fingerprint the same way `rehash` will (absolute session path ⇒ cassetteDir irrelevant),
     // so the content-unchanged gate passes and the migration reaches the version-stamp logic under test.
-    const fp = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
-    expect(fp.contentSig).toBeTruthy(); // sanity: skill dir resolved
+    // A FAITHFUL pre-epoch artifact: legacy digests and NO `hashFormat`. Building a CURRENT fingerprint
+    // and stamping an old version is internally inconsistent — the read boundary rejects that pairing,
+    // because the stamp and the digests would be describing different algorithms.
+    const built = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
+    const snap = skillHashSnapshot([skillDir]);
+    const fp = {
+      ...built,
+      hashFormat: undefined,
+      skillHash: foldSnapshot(snap, "legacy"),
+      fileSigs: renderWireEntries(snap, "legacy").map((e) => [e.path, e.sha] as [string, string]),
+    };
+    expect(built.contentSig).toBeTruthy(); // sanity: skill dir resolved
     const scenario: Record<string, unknown> = {
       name: "s",
       baseline: liveBaseline,
@@ -234,35 +256,38 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     return dir;
   }
 
-  it("leaves a lane-free v10 cassette at v10 — does NOT bump to v11", () => {
+  it("migrates a pre-epoch lane-free cassette to the epoch floor — the bump IS necessary now", () => {
     const dir = cassetteFixture(undefined);
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status).toBe(0);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action).toBe("skipped");
-    expect(out.results[0].reason).toMatch(/already at v10/);
+    // P8's rule was "do not re-stamp a cassette whose scenario needs no new reader", to avoid a blanket
+    // migration cost. A HASH-FORMAT bump is the case where that cost IS warranted: a pre-epoch cassette's
+    // digests came from a different algorithm, so a v10 reader and a v12 reader genuinely disagree about it.
+    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
     const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.cassetteVersion).toBe(10);
-    expect(onDisk.$schema).toBeUndefined(); // untouched (skipped ⇒ file not rewritten at all)
+    expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
+    expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the version/hashFormat invariant holds after migration
   });
 
-  it("lane: local (explicit) also leaves a v10 cassette at v10", () => {
+  it("lane: local (explicit) migrates the same way — the floor does not depend on scenario keys", () => {
     const dir = cassetteFixture("local");
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
     const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action).toBe("skipped");
-    expect(out.results[0].reason).toMatch(/already at v10/);
+    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
+    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
+    expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
   });
 
-  it("its partner: re-stamps a lane: remote v10 cassette to v11", () => {
+  it("its partner: a lane: remote cassette lands on the COMPUTED stamp, not a constant", () => {
     const dir = cassetteFixture("remote");
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status).toBe(0);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action).toBe("migrated");
-    expect(out.results[0].reason).toMatch(/v10 → v11/);
+    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
+    expect(out.results[0].reason).toMatch(new RegExp(`v10 → v${HASH_FORMAT_EPOCH_FOR_TEST}`));
     const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.cassetteVersion).toBe(11);
-    expect(onDisk.$schema).toMatch(/cassette\.v11\.json$/);
+    expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
+    expect(onDisk.$schema).toMatch(new RegExp(`cassette\\.v${HASH_FORMAT_EPOCH_FOR_TEST}\\.json$`));
   });
 });

@@ -199,14 +199,18 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   replay <file|dir>            deterministic protocol-replay of a cassette or a dir of them (no token, no Docker)
                                (--assert-from <scenario.yaml> / --reassert: opt-in token-free re-check against on-disk assert:)
       [--strict]               fail (exit 1) on ANY stale cassette instead of warning
-      [--fail-on-skill-drift]  fail only on skill-source drift (skill/shared-root); baseline drift stays a warning
+      [--fail-on-skill-drift]  fail only on skill-source DRIFT (skill/shared-root); baseline drift stays a warning
+                               (staleness that could NOT BE VERIFIED fails a bare replay — no flag needed)
+      [--session <file>]       resolve skill sources from THIS session — the fix for a MOVED cassette, whose
+                               recorded session path no longer resolves. One cassette at a time.
       [--output-format json]
   verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 = verified & failed, exit 2 = usage (incl. an empty dir, unless --allow-empty), exit 3 = could not verify
       [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow-empty]              an EXISTING but cassette-free dir exits 0 (a missing path still fails)
+      [--session <file>]           resolve skill sources from THIS session (a MOVED cassette); one cassette at a time
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
-  rehash <dir/>                migrate cassette fingerprints to current version when content is provably unchanged (requires contentSig from v3+)
+  rehash <dir/>|<file> --session  migrate cassette fingerprints (incl. across a hash-format epoch) when content is provably unchanged
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
@@ -584,7 +588,14 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       exit codes: 0 identical · 1 differing · 2 usage (e.g. an unresolvable baseline name, or a run/cassette with no matching side).",
   doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check)",
   rehash:
-    "usage: rehash <dir/> [--dry-run] [--output-format text|json]   (migrate cassettes across format bumps using contentSig verification; no re-record needed)",
+    "usage: rehash <dir/> [--dry-run] [--output-format text|json]\n" +
+    "       rehash <file.cassette.json> --session <session.yaml> [--dry-run]\n" +
+    "       Migrate cassettes across a hash-format bump with no re-record. Each cassette is proved unchanged by\n" +
+    "       recomputing its digest under the ORIGINAL algorithm and comparing it to what was recorded; only on a\n" +
+    "       match are the algorithm-derived values rewritten. Anything unprovable is refused, never migrated.\n" +
+    "       --session <file>: for a MOVED cassette, whose recorded session cannot be resolved from its own\n" +
+    "       directory. One cassette at a time — each may have been recorded against a different tree, so a\n" +
+    "       directory batch cannot share one override.",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
   "migrate-run-dir":
@@ -2647,13 +2658,17 @@ async function cmdSync(args: string[]) {
 
   // refuse to write a baseline with an empty allowlist unless --allow-empty is passed.
   // An empty allowDomains = default-deny on ALL egress, which silently breaks every scenario.
+  // allowDomains is PINNED (carried forward from the newest committed baseline), so empty here means
+  // that baseline was missing/corrupt or carried no allowlist — never "the asar moved".
   if (res.allowDomains.length === 0) {
-    log("WARNING: sync produced an empty allowDomains list (asar domain regex matched nothing — asar layout moved).");
+    log(
+      "WARNING: sync produced an empty allowDomains list (the pinned allowlist could not be carried forward from the newest committed baseline).",
+    );
     if (!allowEmpty) {
       fail(
         "sync",
         "runtime",
-        "Refusing to write baseline with allowDomains: []. Fix the regex in cowork-sync.ts,\nor hand-edit network.allowDomains in an existing baseline, then re-run.",
+        "Refusing to write baseline with allowDomains: []. network.allowDomains is a hand-curated pin:\nrestore it in the newest committed baseline (it is not re-derivable from the asar — the 1p\nallowlist is server-delivered), then re-run.",
         "Pass --allow-empty to force-write anyway (use only if you understand the egress impact).",
         isJsonOutput(normalizedArgs),
         1,
@@ -2917,6 +2932,13 @@ async function cmdSync(args: string[]) {
       // so "captured on 2026-08-05" cannot distinguish two materially different reads. Carried forward
       // from `baseProvenance` when the fcache is unreadable, so an offline sync never blanks it.
       ...(res.fcache ? { fcache: res.fcache } : {}),
+      // Gate ids this release's BUNDLE references — a pure function of the shipped asar, so unlike the
+      // fcache block above it is reproducible by anyone, stable across the fcache's own refetch schedule,
+      // and attributable to the Desktop release rather than to days of server rollout. This is what makes
+      // a membership change nameable: diff two baselines' lists and the new ids fall out directly.
+      // Carried forward when extraction yields nothing (asar missing / extract failed), so an offline
+      // sync never blanks it into a false "every gate reference disappeared".
+      asarGateIds: res.asarGateIds.length > 0 ? res.asarGateIds : (baseProvenance.asarGateIds ?? []),
     },
   };
   const diffFlag = !!syncParsed.flags["--diff"];

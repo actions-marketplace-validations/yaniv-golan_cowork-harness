@@ -7,7 +7,7 @@ A core design goal is that keeping up with Claude Desktop is **cheap and visible
 ```
 STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerated per release)
   - stream-json control protocol          - agentVersion (+ agentBinary paths & sha256)
-  - scenario / session schemas            - network.allowDomains + network.mode
+  - scenario / session schemas            - network.mode
   - runtime selector, egress proxy        - gates (provenance.gates)
                                           - asarFingerprint (drift tripwire)
                                           - spawn.env
@@ -16,6 +16,7 @@ STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerate
 HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
 forward from the previous baseline untouched)
   - mountLayout (mount modes)
+  - network.allowDomains (see "Why the egress allowlist is pinned" below)
   - bg-env-strip list
   - spawn.tools / spawn.allowedTools, the spawn scalars (configDirInGuest, settingSources,
     permissionMode, maxThinkingTokens, effortDefault), the prompt-asset pointers, and every $comment*
@@ -94,7 +95,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.234   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.237   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"
@@ -107,7 +108,7 @@ For the `hostloop` tier's separate **native macOS** binary (`claude-code/<ver>/c
 
 At `hostloop`, the staged **Linux/arm64 ELF** gets the same patch tolerance: there it is bind-mounted into the bash sidecar only for parity and is not run by any harness-spawned process, so a same-major.minor patch-newer sibling is auto-accepted (loud stderr note, advisory sha) via `resolveAgentBinary(baseline, { parityMount: true })` — matching the native binary's policy above. `cowork` gets this same tolerance **only when the synced baseline gate resolves it to host-loop** (`decideLoopFromBaseline(baseline) === "host"`, mirroring `execute.ts`'s dispatch); `doctor --tier cowork` checks that resolution before deciding whether to ask for the tolerant or strict form, so it never reports the ELF `ok` when the real run would hard-fail. On a `cowork` baseline that resolves to **VM-loop**, the ELF is executed directly — same as `container`/`microvm`, which always keep the strict sha-pinned exact-version requirement described earlier in this section, because the ELF is the executed agent there. By the same resolved-loop logic, `doctor --tier cowork` requires the separate **native macOS** binary only when `cowork` resolves to host-loop (where it's the executed agent); a VM-loop-resolving `cowork` runs the ELF instead, so a missing native binary no longer blocks that rig (the mirror of the ELF case — doctor neither false-greens nor false-not-readies on either resolution).
 
-`sync` refuses to write a baseline in **two** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set); and (b) `⚠ unknown deltas` (see below). `--allow-empty` (alias `--force`) overrides **both** refusals and force-writes the baseline anyway — use it only when you understand the impact:
+`sync` refuses to write a baseline in **two** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Since `allowDomains` is **pinned** (carried forward from the newest committed baseline, never re-derived), empty here means that baseline was missing, unparseable, or carried no allowlist; and (b) `⚠ unknown deltas` (see below). `--allow-empty` (alias `--force`) overrides **both** refusals and force-writes the baseline anyway — use it only when you understand the impact:
 
 ```bash
 cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
@@ -115,17 +116,55 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
 
 **Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including (a) a missing required version field in the Desktop install it derives from, (b) a refused empty allowlist, and (c) a `⚠ unknown deltas` refusal. (b) and (c) are overridable with `--allow-empty`.
 
+## Why the egress allowlist is pinned
+
+`network.allowDomains` is **hand-curated and carried forward** by `sync`, not derived from the asar.
+It is not an oversight — on the first-party deployment this harness models, the VM egress allowlist
+is **not in the app bundle at all**. Binary-verified:
+
+```js
+// first-party deployment class
+vmEgressPolicy(){ return null }
+
+// the resolver every session goes through
+async resolveVmAllowedDomains(e, n) {
+  let r = <deploymentMode>().vmEgressPolicy(),
+      i = r ? <toDomains>(r) : e;      // 1p: policy is null -> fall through to `e`
+  return <appendOtlpHost>(i, n);
+}
+```
+
+`e` is the session's **server-delivered** `egressAllowedDomains`. The only host the bundle itself
+contributes is the OTLP endpoint, appended by the augmenter. So there is nothing authoritative to
+extract, and any bundle scan is unsound in both directions: it cannot see a server-delivered host,
+and it sweeps in hosts that are not egress.
+
+That second failure mode is not hypothetical. An earlier `sync` derived the allowlist by regexing
+every `*.anthropic.com` / `*.claude.ai` literal out of the whole bundle. When Desktop added a webview
+first-party-origin classifier (a navigation-trust tier naming `www.claude.ai` and `staging.claude.ai`),
+those two hosts were swept into the allowlist. `network.allowDomains` is consumed as the **enforced**
+allowlist (`boundaryAllowList`, and the session's egress plan), so the harness would have permitted
+egress that Cowork denies — a false-green in exactly the direction the harness exists to prevent.
+
+**What keeps the pin honest:** `checkEgressContractFacts` (`src/sync/cowork-sync.ts`) fails **closed**
+on the three constructions that justify pinning — the 1p `null` policy, the resolver's fall-through to
+its caller-supplied argument, and the OTLP-only augmentation. If any of them moves, `sync` reports an
+unknown delta and refuses to write, which is the signal to re-derive how Cowork computes egress before
+trusting the list again. Editing the list is a deliberate, reviewed act: change it in the newest
+committed baseline and say why in that baseline's `$comment`.
+
 ## Drift detection — two independent signals
 
-1. **Extractor failures → `⚠ unknown deltas`.** When `sync` can't find what it expects in the asar — the
-   domain regex matches nothing, the asar is missing, or extraction throws — it reports each as an unknown
+1. **Extractor failures → `⚠ unknown deltas`.** When `sync` can't find what it expects in the asar — a
+   pinned anchor moves, the asar is missing, or extraction throws — it reports each as an unknown
    delta and the affected field is left empty/stale rather than silently wrong:
 
    ```
    ⚠ unknown deltas (extend src/sync/cowork-sync.ts):
-      - egress.allowDomains: the domain regex in extractFromAsar() matched nothing — the asar layout
-        moved, so the synced allowlist is EMPTY. Fix the regex (maintainer), or hand-edit
-        network.allowDomains in the written baseline (bridge)
+      - egress: the 1p `vmEgressPolicy(){return null}` branch is gone — first-party egress may no
+        longer be server-delivered. network.allowDomains is a PINNED, hand-curated list that is only
+        sound while this holds; re-verify how Cowork computes the VM allowlist
+        (see checkEgressContractFacts).
    ```
 
    **Includes the Cowork system-prompt drift guard.** Alongside the asar-structure checks above, `sync`
@@ -213,6 +252,21 @@ cowork-harness sync --allow-empty   # force-write past an empty allowlist or unk
    content does; verified across four reads, where the content hash held while the file hash moved every
    time. `featureCount` alone is not sufficient either: membership churns **count-neutrally** (one gate
    observed going absent → force while another went present → absent, count pinned at 241 both times).
+   **`provenance.asarGateIds` → which gate ids the release's own bundle references.** The fcache fields
+   above cannot name a membership change: `featureCount` moves by a net, `content16` says "membership
+   and/or values", and neither survives the fact that the payload is server-refreshed *between* two
+   baselines (the 1.32885.1 and 1.34493.1 samples are 2.35 days apart, so their count delta is a net over
+   hundreds of refetches rather than a fact about the Desktop release). This field is instead a pure
+   function of the shipped asar — reproducible by anyone, stable across refetches, attributable to the
+   release — so diffing two baselines' lists names the ids outright (measured 1.32885.1 → 1.34493.1:
+   **+14 / -1**). It is deliberately NOT intersected with the local fcache: gate membership varies by
+   account segment, so filtering through this machine would both leak which gates this operator is served
+   and drop DARK gates (51 of the recorded ids are absent from the live fcache, `enableToolSearchAuto`
+   among them). To go from an id to a name, grep the id as a quoted literal in the extracted bundle — the
+   call site names it (`BS(\`17519066\`)` sits in `isCoworkBrowserEnabled`); that literal-occurrence route
+   is how `PINNED_GATES` was built, and it resolves 157 of the 278 live ids. Some numeric noise survives
+   the filter by design: a constant is invisible in the delta, which is what the field is read for.
+
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
    key silently falls back to a code default that need not match production.

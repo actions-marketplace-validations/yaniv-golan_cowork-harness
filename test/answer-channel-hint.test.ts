@@ -182,6 +182,17 @@ function accepts(command: string, positionals: string[], flag: string, value?: s
   const args = [command, ...positionals, flag, ...(value ? [value] : []), "--zzz-unknown-probe"];
   const r = spawnSync("node", [CLI, ...args], { encoding: "utf8" });
   const out = (r.stdout ?? "") + (r.stderr ?? "");
+  // FAIL LOUD rather than open. This probe decides acceptance by the ABSENCE of a rejection message, so
+  // anything that yields no output reads as "accepted" — a spawn error, a killed child, a missing CLI all
+  // returned `true` for every flag, turning the matrix uniformly permissive instead of partly wrong. That
+  // is the direction that manufactures a green, and it is silent. The probe always appends an invalid
+  // flag, so a healthy run ALWAYS produces a rejection on one of the two streams; empty output means we
+  // learned nothing and must say so.
+  if (r.error) throw new Error(`accepts(): spawn failed for \`${command} ${flag}\`: ${r.error.message}`);
+  if (r.status === null)
+    throw new Error(`accepts(): probe for \`${command} ${flag}\` was killed by ${r.signal ?? "a signal"} — no verdict`);
+  if (!out.trim())
+    throw new Error(`accepts(): probe for \`${command} ${flag}\` produced NO output — cannot distinguish acceptance from a failed spawn`);
   const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return !new RegExp(`(?:unknown flag|unexpected argument\\(s\\)):[^\\n]*${escaped}`).test(out);
 }

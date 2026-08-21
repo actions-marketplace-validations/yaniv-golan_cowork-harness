@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 1.25.0` (baseline `desktop-1.32885.1`).
+Self-contained reference. Tracks `cowork-harness 2.0.0` (baseline `desktop-1.34493.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -13,7 +13,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 ```
 
 The Action's `version` input defaults to `latest` — intentional so a copy-pasted recipe tracks the current
-release; pin an exact version (e.g. `version: "1.25.0"`) for reproducible CI.
+release; pin an exact version (e.g. `version: "2.0.0"`) for reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md)
         run: |
-          V=2.1.234   # match your scenario's pinned baseline's agentVersion
+          V=2.1.237   # match your scenario's pinned baseline's agentVersion
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
@@ -58,7 +58,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@>=1.25.0"
+- run: npm i -g "cowork-harness@>=2.0.0"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
@@ -77,7 +77,20 @@ GitHub-hosted runners, no token/Docker/agent:
 - run: cowork-harness replay cassettes/              # token-free content/structure
 ```
 
-Both lines matter: `replay` alone **warns** on a stale recording and exits 0, so dropping the
+If a cassette has MOVED (a `git mv`, a repo reorg, a copy between projects), staleness becomes
+unverifiable — `verify-cassettes` exits 3 and says the skill dirs are not resolvable. Recover with
+`--session <file>` on either command rather than re-recording:
+
+```yaml
+- run: cowork-harness verify-cassettes cassettes/moved.cassette.json --session sessions/default.yaml
+```
+
+It takes a session (not skill dirs) so `staleness.hash_ignore` survives, refuses a directory target,
+and echoes the dirs it resolved. Full contract:
+[docs/cassette.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md).
+
+Both lines matter: for the CONTENT-drift classes (`skill`, `shared-root`) `replay` alone **warns** and
+exits 0, so dropping the
 `verify-cassettes` step means a skill edit silently stops being tested. (One command instead of two:
 `replay --fail-on-skill-drift`.)
 
@@ -210,9 +223,23 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
 - **Host-inheriting record refused by default — `--allow-host-inventory-fixture` is the consent.** A
   `protocol`/`hostloop`/`cowork`-resolving-to-hostloop record into a repo-visible cassette path would
   freeze THIS machine's MCP server names, agents, and account metadata into a committed fixture, so
-  `record` refuses outright rather than warn. Pass `--allow-host-inventory-fixture` only when the
+  `record` refuses **before the paid spawn**. Pass `--allow-host-inventory-fixture` only when the
   recording session genuinely has no personal MCP servers or plugins to leak — it is a per-record
   boolean consent, not a pattern.
+
+  Two details that matter for a re-record loop. The pre-spend check **warns rather than refuses when the
+  cassette already exists**, deliberately: refusing there would fire on every `--rerecord-stale` pass and
+  make the escape flag reflexive. And it is a **prediction** — it reads the tier and the destination path,
+  never the resulting bytes, so it can be wrong in both directions.
+
+  So `record` also checks the **evidence**. After redaction and before the write, the finished cassette is
+  scanned; a `host-inventory` or `machine-inventory` finding on a repo-visible path is **quarantined** —
+  written to `<runs-root>/quarantine/` (honouring `--run-dir`/`COWORK_HARNESS_RUNS_DIR`) with a
+  `.findings.txt` sibling naming what leaked, and the command fails without writing the path you asked for.
+  The recording is not discarded; you paid for it. Only the machine-identity classes trigger this —
+  `email`/`currency`/`domain`/`path` are frequently legitimate scenario content, and a gate that fires on
+  those just teaches you to pass the escape flag. Outside a git repo it warns instead: nothing there
+  publishes the file by accident.
 - **Always-on scan gate** — `verify-cassettes` flags email / currency / bare-domain / local-path /
   machine-inventory matches it finds in the committed cassettes and **exits non-zero**, so "no leak" is
   a gate, not discipline. Non-zero is not one thing, though: exit `1` means verification RAN and found a
@@ -222,6 +249,13 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   $? -ne 0 ]` tripwire treats both the same — if you need to tell "the gate caught something" apart from
   "the gate couldn't run", branch on the exit code (or parse `--output-format json`'s per-file
   `findings`/`staleness` vs `unverifiable`/`version`/`error` buckets).
+
+  **Do not read `error` as "this file was never scanned".** The privacy scan needs a readable *transcript*
+  (an `events` array of strings), not a *valid* cassette — so a file that fails shape validation is still
+  scanned, and reports its findings **and** its `error`. Each result carries **`privacyScanned`**, which
+  answers that question directly. A gate that must not treat "could not verify" as "verified clean" should
+  key on `privacyScanned === false`, where `findings: []` is an absence of evidence rather than evidence of
+  absence. `--skip-privacy` also reports `false`, for the same reason.
   Suppress synthetic / public reference names (NVCA, Cooley GO, …) with `--allow <regex>`. (Multi-word
   proper names are NOT a default class — too noisy to gate on; add a pattern via config if your corpus
   needs it.)
@@ -289,7 +323,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@>=1.25.0"
+      - run: npm i -g "cowork-harness@>=2.0.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -318,7 +352,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@>=1.25.0"
+        run: npm i -g "cowork-harness@>=2.0.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:
@@ -406,19 +440,21 @@ evaluation), not present-and-passing. A CI script that counts assertions will se
 on replay vs live — compare by assertion identity / pass-fail, not by total count. The count of
 skipped live-only assertions is reported on each replay result as `skippedAssertions: {full, partial}`.
 
-## Staleness does NOT fail a replay by default — read it from the JSON
+## Staleness mostly does NOT fail a replay — read it from the JSON
 
-A plain `replay` **warns** on a stale cassette (skill/baseline drift) but stays `ok:true` — a green replay
-does **not** imply the recording is still valid. Each replay result carries `staleness[]`, an array of
+A plain `replay` **warns** on a DRIFTED cassette (skill/baseline drift) but stays `ok:true` — a green
+replay does **not** imply the recording is still valid. **Since 2.0.0 there is one exception:**
+`unverifiable-skill` — staleness that could not be checked at all, most often a cassette that moved —
+FAILS a bare `replay`. Recover with `--session <file>` rather than re-recording. Each replay result carries `staleness[]`, an array of
 `{class, message}`, so a token-free gate can act on it without `ok` being the whole story:
 
 | `class` | meaning | concern |
 |---|---|---|
 | `baseline` | platform baseline moved since record | low (format-compatible) |
 | `skill` / `shared-root` | the skill source the assertions validate drifted | **high** (assertions may validate dead code) |
-| `format` | recorded under an older hash format | re-record once |
+| `format` | the git/raw file-set mode or agent-scope differs from the recording | re-record under the same setting (waivable) |
 | `unverifiable-baseline` | the latest baseline couldn't be loaded | couldn't verify (env, not skill) |
-| `unverifiable-skill` | skill dirs unresolvable — skill staleness couldn't be checked | couldn't verify the skill |
+| `unverifiable-skill` | skill dirs unresolvable, **or** the cassette predates the hash-format epoch (v12) so its digest is not comparable | couldn't verify the skill. **Fails a bare `replay`.** For the epoch case try `rehash` first — it migrates without a re-record where it can prove the content unchanged (`rehash <file> --session <s.yaml>` if the cassette moved) |
 | `resolved-tier` | a `fidelity: cowork` cassette's recorded `effectiveFidelity` no longer matches what the baseline resolves to today (the host-loop gate flipped) | **high** (the recording exercises the wrong tier) |
 | `unverifiable-tier` | tier check couldn't run for a `fidelity: cowork` cassette (no recorded `effectiveFidelity`, or its pinned baseline failed to load) | couldn't verify the tier — re-record |
 
@@ -433,7 +469,7 @@ fail it either way.)
 To gate in CI, pick the severity you want:
 
 - `replay --strict` — fail (exit 1) on **any** staleness class.
-- `replay --fail-on-skill-drift` — fail only on skill-source drift (`skill` / `shared-root` / `unverifiable-skill`);
+- `replay --fail-on-skill-drift` — fail on the skill-source DRIFT classes (`skill` / `shared-root`); `unverifiable-skill` needs no flag, it fails the default verdict since 2.0.0;
   baseline / format / `unverifiable-baseline` stay non-failing warnings.
   Note `--allow-failing` waives this gate wholesale, including the copy `--assert-from` turns on for you:
   `replay --assert-from … --write --allow-failing` will persist an assert block validated against a

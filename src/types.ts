@@ -125,7 +125,10 @@ export const PlatformBaseline = z.looseObject({
     mntRoot: z.string().optional(),
     mounts: z.array(MountSpec),
   }),
-  network: z.object({
+  // looseObject (like the top level and `spawn`): `allowDomains` is a PINNED, hand-curated list that
+  // documents its own provenance in a `$comment` sibling. A strict z.object silently strips that note
+  // on every load, so the explanation for why the list is not derived would evaporate at the next sync.
+  network: z.looseObject({
     mode: z.string(),
     allowKind: z.enum(["allowlist", "unrestricted"]),
     allowDomains: z.array(z.string()),
@@ -942,10 +945,29 @@ export interface Fingerprint {
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
   sharedHash?: string; // shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
-  contentSig?: string; // v3+: algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps
+  // Content fingerprint over the same file set as skillHash, used by `rehash` to prove content unchanged
+  // across a format bump. NOT algorithm-independent: it follows the same manifest transform skillHash does,
+  // so it cannot be compared across a hash-format epoch — the proof recomputes the LEGACY skillHash instead.
+  contentSig?: string;
   // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
   // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
   // scanned/redacted like skillSources (privacy). Omitted (with fileSigsOmitted:true) above MANIFEST_MAX_FILES.
+  // NOT sha256(file) in every case: each sha is over the bytes that FOLD INTO skillHash, and a
+  // `.claude-plugin/plugin.json` (or root `plugin.json`) folds with `version` deleted. Hand-checking one of
+  // those with `shasum` mismatches and looks exactly like corruption — it isn't.
+  //
+  // The hand-check depends on `hashFormat`, so read that FIRST:
+  //   absent / legacy → JSON.parse, delete `version`, JSON.stringify, sha256
+  //   "jcs1"          → JSON.parse, delete `version`, jcsSerialize (run/jcs.ts), sha256
+  // Using the legacy recipe on a jcs1 cassette reproduces the original confusion exactly: for any manifest
+  // whose keys are not already sorted it will not match, and it will read as corruption.
+  //
+  // `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only fires on a hash
+  // MISMATCH — there is no on-demand dump for a cassette that verifies clean.
+  /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. ABSENT means the
+   *  LEGACY (pre-epoch) transform — NOT "raw bytes": every cassette recorded before v12 already carries
+   *  version-stripped manifest digests, so defaulting absence to raw would mislabel all of them. */
+  hashFormat?: "jcs1";
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
   // v11+: gate option labels this run emitted that were found VERBATIM in the skill's own prose, recorded

@@ -118,11 +118,13 @@ describe("every pseudo-assertion injection site stamps `source`", () => {
     });
 
   it("finds the sites at all (guards against a refactor that changes the shape)", () => {
-    // Counted, not inherited: 10 in cassette.ts (--strict staleness, --fail-on-skill-drift,
+    // Counted, not inherited: 12 in cassette.ts (--strict staleness, --fail-on-skill-drift, the
+    // explicit-override escalation, the 2.0.0
+    // DEFAULT unverifiable-skill escalation,
     // future-version, and SEVEN replay_protocol_fidelity corruption paths) + 3 in cli.ts (all
     // answer-coverage). The previous comment here said "2 in cli.ts"; it was 3. A refactor that moves
     // or renames the call reds here rather than silently scanning nothing.
-    expect(injectionSites().length).toBe(13);
+    expect(injectionSites().length).toBe(15);
   });
 
   it("each one stamps a `source:` within its object literal", () => {

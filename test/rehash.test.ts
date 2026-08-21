@@ -134,7 +134,12 @@ describe.skipIf(!can)("rehash CLI", () => {
   // it an integration test beyond the token-free scope of this plan. The core comparison logic is
   // covered by the computeContentSig unit tests above (determinism + change-detection). The
   // content-mismatch CLI path is tested below.
-  it("rehash --output-format json reports action:skipped when baseline drifted (JSON output shape)", () => {
+  // BEHAVIOUR CHANGE at the hash-format epoch. Baseline drift used to SKIP, harmless while an
+  // un-migrated cassette still replayed. It is now a trap: a pre-epoch cassette FAILS a bare replay
+  // until restamped, so skipping leaves it unplayable while rehash exits 0 saying "nothing to
+  // migrate" — which every consumer who has run `sync` would hit on every file.
+  // `fingerprint.baseline` is recorded metadata, never an input to skillHash.
+  it("does NOT dismiss a baseline-drifted cassette before the format logic runs", () => {
     const skillDir = makeSkillDir({ "index.ts": "export const x = 1;" });
     const sig = computeContentSig([skillDir]);
     const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
@@ -159,11 +164,11 @@ describe.skipIf(!can)("rehash CLI", () => {
     writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
     const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
     // Exits 0 (skipped is not an error); baseline mismatch causes skip, not error
-    expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout.trim());
     expect(out.command).toBe("rehash");
-    expect(out.results[0].action).toBe("skipped");
-    expect(out.results[0].reason).toMatch(/baseline drifted/i);
+    // This v9 fixture still routes to a re-record via the link-identity guard — the point is that it is
+    // no longer dismissed as a baseline skip before the format logic is ever reached.
+    expect(out.results[0].reason).not.toMatch(/baseline drifted/i);
   });
 
   // #38: a v9 cassette that WOULD migrate cleanly (content unchanged, baseline matches, algo 4) must NOT be

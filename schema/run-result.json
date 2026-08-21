@@ -4,16 +4,7 @@
   "title": "RunResult",
   "description": "Structured output written to runs/<scenario>/<runId>/turns/<N>/result.json by cowork-harness executeScenario",
   "type": "object",
-  "required": [
-    "scenario",
-    "fidelity",
-    "baseline",
-    "result",
-    "decisions",
-    "egress",
-    "assertions",
-    "outDir"
-  ],
+  "required": ["scenario", "fidelity", "baseline", "result", "decisions", "egress", "assertions", "outDir"],
   "properties": {
     "$schema": {
       "type": "string"
@@ -70,11 +61,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "tool",
-          "paths",
-          "origin"
-        ],
+        "required": ["tool", "paths", "origin"],
         "properties": {
           "tool": {
             "type": "string"
@@ -94,11 +81,7 @@
             "type": "string"
           },
           "origin": {
-            "enum": [
-              "main",
-              "subagent",
-              "unknown"
-            ]
+            "enum": ["main", "subagent", "unknown"]
           },
           "parentToolUseId": {
             "type": "string"
@@ -114,18 +97,10 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "source",
-          "tool",
-          "decision"
-        ],
+        "required": ["source", "tool", "decision"],
         "properties": {
           "source": {
-            "enum": [
-              "pretooluse",
-              "can_use_tool",
-              "permission_denied"
-            ]
+            "enum": ["pretooluse", "can_use_tool", "permission_denied"]
           },
           "tool": {
             "type": "string"
@@ -143,9 +118,7 @@
             "type": "string"
           },
           "decision": {
-            "enum": [
-              "deny"
-            ]
+            "enum": ["deny"]
           },
           "reason": {
             "type": "string"
@@ -166,21 +139,12 @@
     },
     "mode": {
       "type": "string",
-      "enum": [
-        "run",
-        "chat"
-      ],
+      "enum": ["run", "chat"],
       "description": "Which lane produced this result. 'run' = an asserted run/skill/record/replay (carries a verdict); 'chat' = an interactive exploratory session (no assertions, no verdict). Absent on results written before this field existed \u2014 treat absent as 'run'."
     },
     "command": {
       "type": "string",
-      "enum": [
-        "run",
-        "skill",
-        "record",
-        "chat",
-        "replay"
-      ],
+      "enum": ["run", "skill", "record", "chat", "replay"],
       "description": "The CLI command that produced this result \u2014 finer than 'mode' (skill/record both have mode:'run'). The run index prefers it during a reindex so a skill/record row isn't relabeled 'run' (#48). Absent on pre-field results."
     },
     "scenario": {
@@ -197,10 +161,7 @@
     },
     "result": {
       "type": "string",
-      "enum": [
-        "success",
-        "error"
-      ]
+      "enum": ["success", "error"]
     },
     "scratchpadEvidenceComplete": {
       "type": "boolean",
@@ -208,10 +169,7 @@
     },
     "lane": {
       "type": "string",
-      "enum": [
-        "local",
-        "remote"
-      ],
+      "enum": ["local", "remote"],
       "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because Cowork's lane is a per-session human choice that leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
     },
     "execution": {
@@ -219,47 +177,27 @@
       "properties": {
         "location": {
           "type": "string",
-          "enum": [
-            "local",
-            "cloud"
-          ]
+          "enum": ["local", "cloud"]
         },
         "environmentId": {
           "type": "string"
         },
         "taskKind": {
           "type": "string",
-          "enum": [
-            "interactive",
-            "scheduled"
-          ]
+          "enum": ["interactive", "scheduled"]
         }
       },
-      "required": [
-        "location"
-      ],
+      "required": ["location"],
       "description": "Execution location taxonomy \u2014 orthogonal to fidelity (a privilege/sandbox tier, all local). Stamped location:'local' on every locally-executed run so a future cloud-run artifact's differing/absent stamp is a detectable signal, never a silent mislabel. environmentId is the cloud environment_id (bridge sessions); taskKind distinguishes an interactive run from a scheduled-trigger run. ABSENCE IS NOT A POSITIVE 'local' SIGNAL: absent means either a pre-taxonomy result or the error-replay lane (no environment recoverable)."
     },
     "resultErrorKind": {
       "type": "string",
-      "enum": [
-        "transport",
-        "agent",
-        "usage_limit"
-      ],
+      "enum": ["transport", "agent", "usage_limit"],
       "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted \u2014 an is_error result with HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)"
     },
     "errorSource": {
       "type": "string",
-      "enum": [
-        "spawn",
-        "protocol",
-        "exit",
-        "agent",
-        "result",
-        "no_result",
-        "timeout"
-      ],
+      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout"],
       "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), or 'timeout' when the harness wall-clock limit killed the run. Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
@@ -276,11 +214,7 @@
     },
     "capabilityProbe": {
       "type": "string",
-      "enum": [
-        "definitive",
-        "unverified",
-        "skipped"
-      ],
+      "enum": ["definitive", "unverified", "skipped"],
       "description": "Fix 6h: capability-probe outcome \u2014 definitive (ran, omitted-set known), unverified (probe failed), or skipped (protocol/replay/skip-env). Drives the guard roster's ran-clean vs not-run distinction."
     },
     "requiresCapabilityUnmet": {
@@ -295,11 +229,7 @@
         },
         "reason": {
           "type": "string",
-          "enum": [
-            "omitted",
-            "unverifiable",
-            "unknown"
-          ],
+          "enum": ["omitted", "unverifiable", "unknown"],
           "description": "omitted = the image lacks the capabilities; unverifiable = the tier couldn't probe (protocol/replay/skip); unknown = requires_capabilities named a capability family the harness does not recognize. computeVerdict handles all three."
         }
       }
@@ -308,11 +238,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "kind",
-          "name",
-          "decision"
-        ],
+        "required": ["kind", "name", "decision"],
         "properties": {
           "kind": {
             "type": "string"
@@ -342,10 +268,7 @@
             "description": "Full AskUserQuestion option set as originally offered \u2014 present only on kind:'question' decisions.",
             "items": {
               "type": "object",
-              "required": [
-                "question",
-                "options"
-              ],
+              "required": ["question", "options"],
               "properties": {
                 "question": {
                   "type": "string"
@@ -357,9 +280,7 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": [
-                      "label"
-                    ],
+                    "required": ["label"],
                     "properties": {
                       "label": {
                         "type": "string"
@@ -391,18 +312,11 @@
       "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'hostloop-exec' is a single failed container exec: the tool call failed, the run did not, so it only warns.",
       "items": {
         "type": "object",
-        "required": [
-          "source",
-          "message"
-        ],
+        "required": ["source", "message"],
         "properties": {
           "source": {
             "type": "string",
-            "enum": [
-              "hostloop-sidecar",
-              "hostloop-exec",
-              "egress-sidecar"
-            ]
+            "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar"]
           },
           "message": {
             "type": "string"
@@ -455,18 +369,12 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "title",
-                "url"
-              ],
+              "required": ["title", "url"],
               "additionalProperties": false
             }
           }
         },
-        "required": [
-          "query",
-          "results"
-        ],
+        "required": ["query", "results"],
         "additionalProperties": false
       }
     },
@@ -485,11 +393,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "calls",
-          "totalMs",
-          "maxMs"
-        ],
+        "required": ["calls", "totalMs", "maxMs"],
         "additionalProperties": false
       }
     },
@@ -514,9 +418,7 @@
             "description": "present and true ONLY when the model reasoned but returned empty thinking text (empty thinking + present signature) because the display mode was 'omitted'. Omitted (not false) on blocks with text."
           }
         },
-        "required": [
-          "text"
-        ]
+        "required": ["text"]
       }
     },
     "thinkingElided": {
@@ -534,10 +436,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "calls",
-          "errors"
-        ],
+        "required": ["calls", "errors"],
         "additionalProperties": false
       }
     },
@@ -590,11 +489,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "name",
-          "argHash",
-          "count"
-        ],
+        "required": ["name", "argHash", "count"],
         "additionalProperties": false
       }
     },
@@ -625,13 +520,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "skillId",
-          "invocationSeq",
-          "toolCounts",
-          "toolCallCount",
-          "dispatchCount"
-        ],
+        "required": ["skillId", "invocationSeq", "toolCounts", "toolCallCount", "dispatchCount"],
         "additionalProperties": false
       }
     },
@@ -646,12 +535,7 @@
     },
     "outcome": {
       "type": "string",
-      "enum": [
-        "errored",
-        "no_deliverable",
-        "delivered_with_verdict_fail",
-        "delivered_clean"
-      ],
+      "enum": ["errored", "no_deliverable", "delivered_with_verdict_fail", "delivered_clean"],
       "description": "One-field rollup of the result x verdict.pass x exit-code matrix, for consumers driving an iterative loop. A pure function of `result` and `verdict` (see deriveOutcome, src/run/outcome.ts) - adds no judgement and cannot disagree with them. `errored` dominates; then the no-deliverable signals (stalled/ended_with_question); then the verdict. ABSENT whenever `verdict` is absent (chat, or a pre-existing kept run) - treat absence as unknown, never as a pass. NOTE: 'delivered_*' means no stall/question signal fired, NOT positive evidence a deliverable exists - check artifacts/workspaceFiles for that. `no_deliverable` is reachable only on open-ended scenarios on the live lane, and is warn-severity, so it can coexist with verdict.pass true and exit 0 - do not infer the exit code from this field."
     },
     "verdict": {
@@ -663,21 +547,14 @@
         },
         "exitCode": {
           "type": "integer",
-          "enum": [
-            0,
-            1
-          ]
+          "enum": [0, 1]
         },
         "signals": {
           "type": "array",
           "description": "the raw verdict signals computeVerdict evaluated (assertion failures + guard-fired reasons + warn-only signals like non_determinism); [] on a clean pass.",
           "items": {
             "type": "object",
-            "required": [
-              "code",
-              "severity",
-              "message"
-            ],
+            "required": ["code", "severity", "message"],
             "properties": {
               "code": {
                 "type": "string",
@@ -705,10 +582,7 @@
               },
               "severity": {
                 "type": "string",
-                "enum": [
-                  "fail",
-                  "warn"
-                ]
+                "enum": ["fail", "warn"]
               },
               "message": {
                 "type": "string"
@@ -721,22 +595,14 @@
           "description": "the \"guards active this run\" roster \u2014 one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
           "items": {
             "type": "object",
-            "required": [
-              "name",
-              "status"
-            ],
+            "required": ["name", "status"],
             "properties": {
               "name": {
                 "type": "string"
               },
               "status": {
                 "type": "string",
-                "enum": [
-                  "ok",
-                  "fired",
-                  "na",
-                  "unverified"
-                ]
+                "enum": ["ok", "fired", "na", "unverified"]
               }
             }
           }
@@ -745,10 +611,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "message",
-              "kind"
-            ],
+            "required": ["message", "kind"],
             "properties": {
               "assertion": {
                 "type": "string",
@@ -756,13 +619,7 @@
               },
               "kind": {
                 "type": "string",
-                "enum": [
-                  "assertion",
-                  "guard",
-                  "staleness",
-                  "cassette-format",
-                  "coverage"
-                ],
+                "enum": ["assertion", "guard", "staleness", "cassette-format", "coverage"],
                 "description": "what produced this failure. \"assertion\" = one of your own assert: items; \"guard\" = a hard-verdict signal you did not write (infra error, stall, host-path leak, unanswered gate, \u2026); \"staleness\" = skill/baseline drift escalated by --strict / --fail-on-skill-drift; \"cassette-format\" = the cassette cannot be interpreted (too new a version, or corrupt: duplicate/malformed control frames, a truncated recording); \"coverage\" = a verify-run answer-coverage miss. This is the field that separates \"did my assertions pass?\" from \"is the cassette stale?\" \u2014 both land on exit 1, so the exit code cannot."
               },
               "message": {
@@ -772,24 +629,13 @@
           }
         }
       },
-      "required": [
-        "pass",
-        "exitCode",
-        "signals",
-        "guards",
-        "failures"
-      ]
+      "required": ["pass", "exitCode", "signals", "guards", "failures"]
     },
     "subagents": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "toolUseId",
-          "dispatchAgentType",
-          "declaredTools",
-          "toolsUsed"
-        ],
+        "required": ["toolUseId", "dispatchAgentType", "declaredTools", "toolsUsed"],
         "properties": {
           "toolUseId": {
             "type": "string"
@@ -820,10 +666,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": [
-                "name",
-                "count"
-              ],
+              "required": ["name", "count"],
               "properties": {
                 "name": {
                   "type": "string"
@@ -870,17 +713,11 @@
             "description": "the sub-agent's own THINKING and TEXT turns, in transcript order (tool_use/tool_result excluded \u2014 already covered by toolsUsed/referencesRead). Read from the on-disk child session transcript (LIVE/record lane only \u2014 undefined on replay, never embedded in a cassette). [] = a child transcript was found but captured no thinking/text turns; undefined = no child transcript joined to this dispatch. NOTE: sub-agent thinking TEXT is empty by default \u2014 the harness's non-interactive spawn forces the API's thinking.display to 'omitted' for sub-agent turns, so the model returns empty thinking blocks (signature-only) that the transcript records; a thinking turn is surfaced as {kind:'thinking', text:'', redacted:true}. `redacted:true` means the sub-agent reasoned here but the text was omitted by request \u2014 do NOT read empty text as 'no reasoning.' TEXT turns are never redacted (they persist verbatim). An opt-in --thinking-display summarized lever could surface summarized (never raw) sub-agent thinking, but the 'omitted' default is real-Cowork-faithful.",
             "items": {
               "type": "object",
-              "required": [
-                "kind",
-                "text"
-              ],
+              "required": ["kind", "text"],
               "properties": {
                 "kind": {
                   "type": "string",
-                  "enum": [
-                    "thinking",
-                    "text"
-                  ]
+                  "enum": ["thinking", "text"]
                 },
                 "text": {
                   "type": "string"
@@ -901,10 +738,7 @@
             "description": "the sub-agent's WebSearch calls (query + the paired tool_result's text, bounded), read from the same child session transcript as `reasoning` (LIVE/record lane only \u2014 undefined on replay). Sub-agent searches never enter the top-level webSearches[] (main-agent/fork-scoped) or toolCounts, so this is the only place a sub-agent's research is grounded. RAW bounded text rather than the top-level field's parsed {title,url} shape: grounding needs the content the sub-agent actually saw. Absent = never captured OR the dispatch made no searches; a present array is 1+ captured searches. Entries tagged `viaAgentId` were made by a DESCENDANT dispatch (a sub-agent's own sub-agent, which the parent stream never surfaced as its own subagents[] entry) and are attributed to the nearest ancestor that has one \u2014 without them an empty array read as 'no research' when a descendant had researched.",
             "items": {
               "type": "object",
-              "required": [
-                "query",
-                "resultText"
-              ],
+              "required": ["query", "resultText"],
               "properties": {
                 "query": {
                   "type": "string"
@@ -964,9 +798,7 @@
     "fingerprint": {
       "type": "object",
       "description": "Skill/plugin staleness fingerprint recorded at run time; persisted so `verify-run` can detect a kept run that predates a skill change and refuse to vouch for answer-coverage against stale gate labels.",
-      "required": [
-        "baseline"
-      ],
+      "required": ["baseline"],
       "properties": {
         "baseline": {
           "type": "string",
@@ -975,6 +807,11 @@
         "frozen": {
           "type": "boolean",
           "description": "true when surfaced from a cassette's record-time fingerprint on the replay lane (not a fresh run-time recompute) (#46)"
+        },
+        "hashFormat": {
+          "type": "string",
+          "enum": ["jcs1"],
+          "description": "which manifest-transform algorithm produced these digests. ABSENT means the LEGACY (pre-epoch) transform \u2014 not raw bytes. `verify-run` compares this BEFORE comparing skillHash, so an algorithm change is reported as a format difference rather than as source drift."
         },
         "skillHash": {
           "type": "string",
@@ -998,11 +835,11 @@
         },
         "contentSig": {
           "type": "string",
-          "description": "algorithm-independent content fingerprint; used by `rehash` to verify content is unchanged across format bumps"
+          "description": "content fingerprint over the same file set as skillHash. NOT the rehash proof: it follows the SAME manifest transform skillHash does, so it is not comparable across a hash-format epoch. Since CONTENTSIG_ALGO 5 it also folds directory markers, so an added or removed EMPTY directory moves it. The migration proof recomputes the LEGACY skillHash instead."
         },
         "fileSigs": {
           "type": "array",
-          "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash",
+          "description": "per-file manifest [relpath, contentSha] of the exact files feeding skillHash A manifest entry's sha depends on `hashFormat`: absent/legacy = JSON.parse -> delete `version` -> JSON.stringify -> sha256; `jcs1` = canonical (JCS-style) serialization instead. The legacy recipe will not match a jcs1 cassette for any unsorted manifest.",
           "items": {
             "type": "array",
             "items": {
@@ -1017,17 +854,12 @@
         },
         "mode": {
           "type": "string",
-          "enum": [
-            "git",
-            "raw"
-          ],
+          "enum": ["git", "raw"],
           "description": "the file-set boundary used for skillHash \u2014 \"git\" (git-tracked set \u2014 the DEFAULT for a git work tree unless COWORK_HARNESS_GITSET=0) or \"raw\" (filesystem walk; used when GITSET=0 or the dir is not a git work tree)"
         },
         "agentScope": {
           "type": "string",
-          "enum": [
-            "skill"
-          ]
+          "enum": ["skill"]
         },
         "promptAssetsHash": {
           "type": "string",
@@ -1062,10 +894,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "path",
-          "bytes"
-        ],
+        "required": ["path", "bytes"],
         "properties": {
           "path": {
             "type": "string"
@@ -1081,11 +910,7 @@
       "description": "Working folder panel's canonical file model (\u00a76.3, M6) \u2014 every file under the user-visible roots, classified output|mount|input and sha256-fingerprinted. The Scratch pad's \"scratchpad\" class is deliberately not implemented (no host-materialization mechanism exists for it).",
       "items": {
         "type": "object",
-        "required": [
-          "path",
-          "bytes",
-          "class"
-        ],
+        "required": ["path", "bytes", "class"],
         "properties": {
           "path": {
             "type": "string"
@@ -1101,12 +926,7 @@
           },
           "class": {
             "type": "string",
-            "enum": [
-              "output",
-              "mount",
-              "input",
-              "scratchpad"
-            ],
+            "enum": ["output", "mount", "input", "scratchpad"],
             "description": "output/mount/input = under a user-visible root. scratchpad = written OUTSIDE every user-visible root, i.e. produced but not delivered by location. Scratchpad entries are absent on tiers where that walk cannot run, which is evidence-unavailable rather than 'none existed'."
           }
         }
@@ -1126,20 +946,13 @@
     "preRunHashes": {
       "type": "object",
       "additionalProperties": {
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "description": "Per-path sha256 of the user-visible tree BEFORE the agent ran (null = over the pre-run hash cap). Powers `input_unmodified`. Absent when the tier didn't capture it (microvm) or the run predates the seam."
     },
     "preRunOrigin": {
       "type": "string",
-      "enum": [
-        "local-walk",
-        "remote-unavailable",
-        "local-unreadable"
-      ],
+      "enum": ["local-walk", "remote-unavailable", "local-unreadable"],
       "description": "Provenance of the pre-run baseline. local-walk = complete local walk; local-unreadable = a connected-folder source could not be walked so the baseline is partial (no_unexpected_files / input_unmodified then fail evidence-unavailable); remote-unavailable is reserved for a future cloud producer. Absent on an older run predating the field."
     },
     "partial": {
@@ -1190,10 +1003,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "mount",
-              "command"
-            ]
+            "required": ["mount", "command"]
           }
         }
       }
@@ -1207,10 +1017,7 @@
       "description": "User --label generation tag (iterate-across-fixes loop); ergonomics only, authoritative version key is fingerprint.skillHash"
     },
     "skillCommit": {
-      "type": [
-        "string",
-        "null"
-      ],
+      "type": ["string", "null"],
       "description": "Best-effort git HEAD shared by the session's skill source dirs \u2014 commit provenance, not a grouping key; null if dirs span >1 repo / non-git / unresolved"
     },
     "fidelityWarnings": {
@@ -1248,11 +1055,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "question",
-              "answeredBy",
-              "answer"
-            ],
+            "required": ["question", "answeredBy", "answer"],
             "properties": {
               "question": {
                 "type": "string"
@@ -1284,13 +1087,10 @@
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Non-failing by default (a stale but passing replay stays ok:true); --strict fails on every class, --fail-on-skill-drift on skill/shared-root/unverifiable-skill only. See SPEC \u00a711 for per-class semantics.",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS the default verdict since 2.0.0 — \"could not be checked\" is not \"checked and unchanged\". --strict fails on every class; --fail-on-skill-drift adds skill/shared-root. See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
-        "required": [
-          "class",
-          "message"
-        ],
+        "required": ["class", "message"],
         "properties": {
           "class": {
             "type": "string",
@@ -1330,10 +1130,7 @@
       "description": "Tool-result text at assertion-fidelity cap (10 KB per result). Used by tool_result_contains / tool_result_not_contains. `assertText` is preferred when present; falls back to `text` (500-char display cap) for cassettes recorded before this field was added.",
       "items": {
         "type": "object",
-        "required": [
-          "isError",
-          "text"
-        ],
+        "required": ["isError", "text"],
         "properties": {
           "toolUseId": {
             "type": "string"
@@ -1359,11 +1156,7 @@
       "description": "Progress panel (\u00a76.1, M6): TaskCreate/TaskUpdate tool calls folded into structured tasks. Deleted tasks are omitted (never appear here). `status` is a plain string, not a narrow enum \u2014 this milestone's live verification only observed pending/in_progress/completed + no delete/cancel path.",
       "items": {
         "type": "object",
-        "required": [
-          "id",
-          "subject",
-          "status"
-        ],
+        "required": ["id", "subject", "status"],
         "properties": {
           "id": {
             "type": "string"
@@ -1405,9 +1198,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "id"
-            ],
+            "required": ["id"],
             "properties": {
               "id": {
                 "type": "string"
@@ -1431,15 +1222,8 @@
           "type": "number"
         },
         "truncatedBy": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "enum": [
-            "per-file",
-            "total",
-            null
-          ]
+          "type": ["string", "null"],
+          "enum": ["per-file", "total", null]
         },
         "caps": {
           "type": "object",

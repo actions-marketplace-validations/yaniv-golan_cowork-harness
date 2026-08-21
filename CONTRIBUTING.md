@@ -88,6 +88,18 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 
 ## Commit & PR
 
+- **A pre-commit hook gates cassettes, and it fails CLOSED.** `npm install` points `core.hooksPath` at
+  `.githooks/`. Staging a `baselines/desktop-*.json`, any `*.cassette.json`, or any `.json` whose staged
+  content carries the `"generator": "cowork-harness"` marker runs `verify-cassettes` — and **anything that
+  is not a proven clean exit `0` blocks the commit**, including a missing `dist/cli.js`. That last one
+  catches people out: `npm run build` does `rm -rf dist` first, so a tree with a failing typecheck has no
+  built CLI at all. Run `npm run build` and re-commit. The check is scoped to commits that stage one of
+  those files, so an ordinary source commit is unaffected.
+
+  It is deliberately strict because for a maintainer it is the *only* pre-publication gate: CI triggers on
+  `push: [main]` and `pull_request`, but the local flow lands with `merge --ff-only` and pushes afterwards,
+  so by the time CI reds, a leaked recording is already in public history. `git commit --no-verify`
+  bypasses it — if you need that for anything other than a broken hook, say so in the PR.
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
 - Open PRs against `main`. CI runs a nine-stage pipeline (`build`, `test`, `action-self-test`, `python`, `image-recipe`, `boundary`, `scenarios`, `parity-drift`, `floor` — see `ci.yml`) on every PR including forks (no secrets needed) except `scenarios`; live scenarios only run on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
 - **Which stages actually block a merge is narrower than the pipeline.** The branch ruleset requires status *contexts*, not jobs, and the `ci-green` aggregator that carries the `typecheck · test · build` context declares `needs: [build, test, floor, image-recipe]` — so `action-self-test`, `boundary`, `scenarios`, and `parity-drift` run and report but do **not** gate. (`python` **does** gate: its job name is the second required context, `pytest helper lane (-m 'not cowork')` — this line previously listed it as non-gating, which was wrong.) Read a red one as a real signal anyway: `boundary` in particular is the secrets-free proof that the sandbox enforces Cowork's limits. `ci.yml`'s comment above `ci-green` is the authority on the current wiring.

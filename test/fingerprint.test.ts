@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, dirname } from "node:path";
 import { buildFingerprint } from "../src/run/cassette.js";
 
 /** Build a session dir with a relative-path local skill, returns the session-file path. */
@@ -52,5 +52,25 @@ describe("buildFingerprint skillHash", () => {
     expect(fp.skillSources).toBeDefined();
     expect(fp.skillSources!.length).toBeGreaterThan(0);
     for (const s of fp.skillSources!) expect(isAbsolute(s)).toBe(false);
+  });
+
+  it("anchors skillSources to the SESSION-FILE dir, not the cassette dir", () => {
+    // "Relative" alone does not say relative to WHAT, and the difference is load-bearing: `session:` and
+    // `scenarioSource` are stored relative to the CASSETTE dir, while `skillSources` is relative to the
+    // SESSION-FILE dir. Nothing pinned that, and the ambiguity has real cost — a wrong version of the
+    // sentence shipped into five docs at once, and it was then re-derived wrongly twice more in one day,
+    // including by someone who had just corrected it. Prose everyone has read is not a guard; this is.
+    const { sessionPath, root } = sessionWithSkill();
+    // A cassette dir deliberately DIFFERENT from the session dir, so the two anchors cannot coincide.
+    const cassetteDir = mkdtempSync(join(tmpdir(), "cwh-cass-"));
+    const fp = buildFingerprint(sessionPath, "1.0.0", cassetteDir);
+    const rel = fp.skillSources![0];
+
+    // Resolving against the SESSION dir finds the real tree...
+    expect(existsSync(join(dirname(sessionPath), rel)), `${rel} must resolve from the session dir`).toBe(true);
+    // ...and resolving against the CASSETTE dir does not. If this ever passes, the anchor has changed and
+    // every doc sentence describing the resolution chain is wrong.
+    expect(existsSync(join(cassetteDir, rel)), `${rel} must NOT resolve from the cassette dir`).toBe(false);
+    expect(join(dirname(sessionPath), rel)).toBe(join(root, "myskill"));
   });
 });

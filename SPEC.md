@@ -433,11 +433,15 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
   everything.
 
-**Staleness (replay):** a stale cassette (skill/baseline drift) WARNS but stays `ok:true` by default — a
-green replay does not imply the recording is still valid. Each finding is surfaced class-tagged in
-`RunResult.staleness[]` for a token-free gate to act on. `replay --strict` fails on any class;
-`replay --fail-on-skill-drift` fails only on skill-source classes (`skill` / `shared-root` /
-`unverifiable-skill`). Both realize the gate as failing `assertions[]` entries (so `ok`/exit stay consistent).
+**Staleness (replay):** a cassette whose skill sources have DRIFTED (`skill` / `shared-root`, and the
+baseline classes) WARNS but stays `ok:true` by default — a green replay does not imply the recording is
+still valid. **`unverifiable-skill` is the exception and FAILS by default (since 2.0.0):** "the check could
+not run at all" is a different claim from "the check ran and nothing changed", and only the second is a
+green. Each finding is surfaced class-tagged in `RunResult.staleness[]` for a token-free gate to act on.
+`replay --strict` fails on any class; `replay --fail-on-skill-drift` additionally fails the skill-source
+drift classes (`skill` / `shared-root`). All realize the gate as failing `assertions[]` entries (so
+`ok`/exit stay consistent). A cassette carrying no `fingerprint.skillHash` is unaffected — there was
+nothing to verify — and keeps replaying green.
 - **`question_asked` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min` /
   `hook_blocked` / `no_hook_blocked`** additionally require `controlOut`. Without it, a loud
   `::warning::` fires and these keys are excluded (not vacuously passed). The hook keys need
@@ -598,7 +602,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "usage?": { "turns?": number, /* …SDK usage fields (input_tokens, output_tokens, etc.), pass-through */ },
   "cost?": { "usd?": number, "raw?": {...} }, // usd = SDK's total_cost_usd for this invocation; raw = the api_metrics event payload (independent source)
   "durationMs?": number,
-  "fingerprint?": { "baseline", "skillHash?", "skillSources?":[], "skillScope?":[], "sharedHash?", "contentSig?", "fileSigs?":[["relpath","contentSha"]], "fileSigsOmitted?": bool, "mode?": "git|raw", "agentScope?": "skill" }, // skill/plugin staleness fingerprint recorded at run time; lets `verify-run` detect a kept run whose gate snapshot predates a skill change
+  "fingerprint?": { "baseline", "hashFormat?": "jcs1", "skillHash?", "skillSources?":[], "skillScope?":[], "sharedHash?", "contentSig?", "fileSigs?":[["relpath","hashedSha"]], "fileSigsOmitted?": bool, "mode?": "git|raw", "agentScope?": "skill" }, // skill/plugin staleness fingerprint recorded at run time; lets `verify-run` detect a kept run whose gate snapshot predates a skill change. `hashFormat` names the manifest transform that produced the digests — ABSENT means the LEGACY (pre-v12) transform, never raw bytes. A `fileSigs` sha is the sha of the bytes that FOLD INTO skillHash, which for a plugin manifest is not the file's own bytes
   "outDir": "string",
   "workDir?": "string",                          // the agent's working root (mnt/) inside the run dir
   "outputsDir?": "string",                       // the user-visible deliverable mount (mnt/outputs)
@@ -610,7 +614,7 @@ and a fail observed) always fails that batch, regardless of the numeric rate.
   "nonDeterministic?": bool,                      // true if any decision came from a non-deterministic source → not reproducible
   "gateProvenance?": { "total": number, "bySource": {…}, "gates": [{ "question","answeredBy","answer","model?" }] }, // how each AskUserQuestion gate was answered; informational (never fails the verdict); live/partial lane only (absent on replay)
   "permissiveAutoAllow?": ["string"],             // tools auto-allowed by cowork parity that real Cowork BLOCKS → green is NOT faithful
-  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier|prompt-assets|unverifiable-prompt-assets", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Non-failing by default (a stale but passing replay stays ok:true); `--strict` fails on every class, `--fail-on-skill-drift` on skill/shared-root/unverifiable-skill only. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines. `prompt-assets` = the baseline's committed prompt-asset files (spawn.promptTemplate/subagentAppend/subagentAppendHostLoop) changed since record under the SAME appVersion — warn by default, `--strict` fails, re-record; `unverifiable-prompt-assets` = a recorded `fingerprint.promptAssetsHash` exists but the live baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green.
+  "staleness?": [{ "class": "baseline|skill|shared-root|format|unverifiable-baseline|unverifiable-skill|resolved-tier|unverifiable-tier|prompt-assets|unverifiable-prompt-assets", "message" }], // replay only; cassette-staleness findings, surfaced for a JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS by default since 2.0.0. `--strict` fails on every class, `--fail-on-skill-drift` adds skill/shared-root. `resolved-tier` = a `fidelity: cowork` cassette's recorded effectiveFidelity no longer matches the tier the scenario's baseline (pinned `baseline:` or `latest`) resolves to today — the recording exercises the wrong tier; `unverifiable-tier` = the tier check couldn't run for a baseline-dependent (`fidelity: cowork`) cassette (no recorded effectiveFidelity, or its pinned baseline failed to load). Tier resolution is baseline-only (the CLAUDE_FORCE_HOST_LOOP env override is suppressed) so verify results can't differ across machines. `prompt-assets` = the baseline's committed prompt-asset files (spawn.promptTemplate/subagentAppend/subagentAppendHostLoop) changed since record under the SAME appVersion — warn by default, `--strict` fails, re-record; `unverifiable-prompt-assets` = a recorded `fingerprint.promptAssetsHash` exists but the live baseline's prompt assets can't be hashed (a moved/dangling pointer) — can't verify ⇒ not green.
   "skippedAssertions?": { "full": number, "partial": number }, // replay only; count of live-only assertions NOT evaluated (full = whole assertion skipped; partial = content half ran, fs/egress half dropped). The skipped ones are absent from `assertions[]`.
   "toolResults?": [{ "toolUseId?","isError","text","assertText?" }], // tool-result text at assertion-fidelity cap (10 KB); backs tool_result_contains/tool_result_not_contains and their regex siblings tool_result_matches/tool_result_not_matches
   "skillsInvoked?": ["string"],                  // Wave 1: skill/plugin ids invoked via the Skill tool_use event, call order, duplicates kept. Backs skill_triggered/no_skill_triggered.
@@ -690,7 +694,13 @@ verdict logic a finding doesn't have) — it emits its own, published as
                  "unverifiable": [ "string" ],// a StalenessFinding whose class IS `unverifiable-*` — could not verify (exit 3, unless the SAME run also has a `staleness`/`findings`/`scenarioDrift` entry, which wins exit 1)
                  "notes": [ "string" ],       // NON-failing informational channel (never affects ok/exit) — e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output: a `·`-prefixed row.
                  "version": [ "string" ],     // cassette written by a NEWER harness than this one understands — always a could-not-verify failure (exit 3), independent of --skip-staleness
-                 "error?": "string" } ] }     // a malformed/unreadable cassette (or a per-file crash) is TALLIED here, never crashes the batch — a could-not-verify failure (exit 3)
+                 "error?": "string",          // a malformed/unreadable cassette (or a per-file crash) is TALLIED here, never crashes the batch — a could-not-verify failure (exit 3)
+                 "privacyScanned": true } ] }  // did the privacy scan actually RUN on this file? It needs a readable TRANSCRIPT (an `events` array of
+                                              // strings), NOT a valid cassette — so a file that fails shape validation still reports findings AND an
+                                              // `error`, and `error` alone cannot answer "was this checked". `false` = the scan could not run (unreadable
+                                              // JSON, no `events`, a crash) or was disabled with `--skip-privacy`; there, `findings: []` is an absence of
+                                              // evidence, not evidence of absence. A gate that must not treat "could not verify" as "verified clean"
+                                              // keys on THIS, never on `error`.
 ```
 
 The full net (email/currency/domain/path/machine-inventory) runs over the WHOLE cassette (deliverable
@@ -802,13 +812,22 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   shape (`results:[]` / `error.category`) it falls back to on a thrown failure; renaming or removing a
   key is breaking, adding one is not. The `checks[].id` set itself is NOT covered — it grows with new
   tiers/checks.
-- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **11**
-  (`schema/cassette.v11.json`) and its verdict-modifier assertion keys. `cassetteVersion` means **the
-  minimum format version a reader needs to interpret this cassette's frozen `scenario` correctly** — not
-  which recorder wrote it: `record` stamps a value-aware minimum per scenario (`requiredVersionFor`), so a
-  scenario whose fields need no post-v10 semantics (nearly all of them, including `lane: "local"`/omitted)
-  stamps **v10** and stays readable by any v9+ install; only a scenario whose actual field VALUES need a
-  newer reader (today: `lane: "remote"`) stamps v11. The minimum supported read version is **v9**
+- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **12**
+  (`schema/cassette.v12.json`) and its verdict-modifier assertion keys.
+
+  `cassetteVersion` means **the minimum reader for the whole cassette**, which covers how its digests are
+  computed as well as which `scenario` keys it uses: a reader older than the cassette's hash format
+  recomputes `skillHash`/`contentSig` under a different algorithm and reports drift that is not there. The
+  stamp therefore floors at the **hash-format epoch** (v12); the scenario-aware differential applies above
+  that floor. A backwards-incompatible change to `fingerprint.skillHash` is a MAJOR bump — every stored
+  value changes, and digests from different formats are not comparable (`replay` reports
+  `unverifiable-skill`; `rehash` migrates without a re-record where it can prove the content unchanged).
+
+  It is not which recorder wrote it: `record` stamps `requiredVersionFor`, the value-aware minimum for that
+  scenario, floored at the hash-format epoch. The value-aware part means the stamp reads a field's actual
+  VALUE rather than its presence — `lane: "local"`/omitted asks for semantics any older reader already
+  gives, so it lifts nothing, while `lane: "remote"` would. Today the epoch floor dominates, so cassettes
+  stamp **v12**; the differential decides anything above it. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; `schema/cassette.v9.json` and `schema/cassette.v10.json` are

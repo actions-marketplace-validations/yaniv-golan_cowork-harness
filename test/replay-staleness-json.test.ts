@@ -60,7 +60,11 @@ describe("replay surfaces class-tagged staleness in the JSON RunResult", () => {
     // finding: unverifiable-skill (the skill check couldn't run; baseline is fine).
     const r = await replayCassette(cassette({ baseline: LIVE, skillHash: "deadbeef" }));
     expect(r.staleness).toEqual([expect.objectContaining({ class: "unverifiable-skill" })]);
-    expect(ok(r)).toBe(true);
+    // CHANGED IN 2.0.0: this used to assert `ok(r) === true` — the class was recorded and the verdict
+    // stayed green, so a cassette that had silently stopped proving anything kept passing. "Could not be
+    // checked" is not "checked and unchanged". The CLASS is still exactly one and still distinct from
+    // `unverifiable-baseline`, which is what this test is really about.
+    expect(ok(r)).toBe(false);
   });
 
   it("reports skippedAssertions for live-only assertions absent from assertions[]", async () => {

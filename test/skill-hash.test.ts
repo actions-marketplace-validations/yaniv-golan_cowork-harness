@@ -2,7 +2,17 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashSkillDirs, skillHashEntries, OS_JUNK_PATTERN, compileIgnore, agentSkillName } from "../src/run/skill-hash.js";
+import {
+  hashSkillDirs,
+  skillHashEntries,
+  skillHashSnapshot,
+  renderWireEntries,
+  legacyHashedContent,
+  classifyManifest,
+  OS_JUNK_PATTERN,
+  compileIgnore,
+  agentSkillName,
+} from "../src/run/skill-hash.js";
 import { createHash } from "node:crypto";
 
 function skillDir(): string {
@@ -251,5 +261,260 @@ describe("NUL separator prevents newline-in-filename hash collisions", () => {
     writeFileSync(join(d2, "a"), "hello");
     writeFileSync(join(d2, "b"), "");
     expect(hashSkillDirs([d1]).hash).not.toBe(hashSkillDirs([d2]).hash);
+  });
+});
+
+describe("multi-root identity — a KNOWN, PINNED limitation, not a fixed behaviour", () => {
+  // These tests pin what the hash does TODAY so the eventual fix is a deliberate change rather than a
+  // surprise. Read them as a specification of the limitation, not as an endorsement of it.
+  //
+  // `hashSkillDirs` does `const sorted = [...dirs].sort()` and folds each root's entries in that order.
+  // Entries are ROOT-RELATIVE, so the concatenation order of roots is load-bearing while the roots' own
+  // names are deliberately excluded from the digest. That is an internal inconsistency: a single root is
+  // fully location-independent, but for two or more the excluded name re-enters through the sort.
+  //
+  // TWO SEPARATE AXES, and an earlier version of this comment got the second one WRONG:
+  //   1. ORDER — reordering roots produces FALSE DRIFT: a loud, wrong "files changed". Loud and safe.
+  //   2. CROSS-ROOT AGGREGATION — the roots fold into ONE digest with NO root-boundary marker, and entries
+  //      are root-relative, so the hash is a function of the concatenated stream, not of the per-root
+  //      partition. Moving a file BETWEEN roots is therefore INVISIBLE whenever the concatenation order
+  //      survives. That IS a false green, and it is pinned below.
+  // The earlier claim "never a false green" was false, and it was the stated justification for not
+  // refusing multi-root cassettes. The decision stands on different ground: a cross-root move changes
+  // which plugin root delivers a file, which is rare and deliberate, and no multi-root cassette exists in
+  // any reachable corpus — so a warning at the point of use beats refusing input nobody has.
+  //
+  // Fixing it means folding a stable per-root identity into the digest, which changes the digest for every
+  // multi-root cassette and therefore needs a hash-format epoch bump. Not scheduled: measured across every
+  // reachable corpus (cowork-harness, founder-skills incl. cowork-tests, creative-problem-solving —
+  // 32 cassettes on the widest denominator) there is not one multi-root cassette, and no session anywhere
+  // declares 2+ plugin/skill roots.
+  function rootWith(name: string, content: string): string {
+    const d = mkdtempSync(join(tmpdir(), "mr-"));
+    const r = join(d, name);
+    mkdirSync(join(r, "skills"), { recursive: true });
+    writeFileSync(join(r, "skills", "SKILL.md"), content);
+    return r;
+  }
+
+  it("a SINGLE root is fully location-independent — the property everything else rests on", () => {
+    // If this ever fails, `--session` and every relocation guarantee are void: the digest would depend on
+    // where the tree happens to sit.
+    const a = rootWith("aaa", "SAME");
+    const b = rootWith("zzz", "SAME");
+    expect(hashSkillDirs([a]).hash).toBe(hashSkillDirs([b]).hash);
+  });
+
+  it("argument order does NOT affect the digest — the internal sort normalises it", () => {
+    // Stated explicitly because it is the test someone naturally reaches for and it proves NOTHING about
+    // path order — the function sorts its arguments, so varying only the argument order is a no-op. It is
+    // not literally unfailable (deleting the internal `sort()` reds it, so it is a weak regression guard on
+    // the normalisation); it simply cannot speak to the limitation below. A previous version of this
+    // comment claimed it "CANNOT FAIL", which mutation testing disproved.
+    const a = rootWith("aaa", "A");
+    const b = rootWith("bbb", "B");
+    expect(hashSkillDirs([a, b]).hash).toBe(hashSkillDirs([b, a]).hash);
+  });
+
+  it("KNOWN LIMITATION: identical content at differently-sorting root names hashes differently", () => {
+    // The discriminating test the one above is not. Same two trees; only which directory name each
+    // occupies changes, so the sort folds them in the opposite order.
+    const d1 = mkdtempSync(join(tmpdir(), "l1-"));
+    const d2 = mkdtempSync(join(tmpdir(), "l2-"));
+    const place = (base: string, name: string, content: string) => {
+      const r = join(base, name);
+      mkdirSync(join(r, "skills"), { recursive: true });
+      writeFileSync(join(r, "skills", "SKILL.md"), content);
+      return r;
+    };
+    const layout1 = [place(d1, "aaa", "ALPHA"), place(d1, "zzz", "BETA")];
+    const layout2 = [place(d2, "aaa", "BETA"), place(d2, "zzz", "ALPHA")];
+    expect(hashSkillDirs(layout1).hash).not.toBe(hashSkillDirs(layout2).hash);
+  });
+
+  it("KNOWN LIMITATION and a REAL FALSE GREEN: a file moved BETWEEN roots is invisible", () => {
+    // The roots fold into one digest with no root-boundary marker, and entries are root-relative, so the
+    // hash is a function of the concatenated stream rather than of the per-root partition. Same files,
+    // different mount ownership, identical digest. This is what makes "never a false green" wrong.
+    const build = (layout: Record<string, string[]>) => {
+      const base = mkdtempSync(join(tmpdir(), "xr-"));
+      return Object.entries(layout).map(([root, files]) => {
+        const r = join(base, root);
+        mkdirSync(r, { recursive: true });
+        for (const f of files) writeFileSync(join(r, f), f.toUpperCase());
+        return r;
+      });
+    };
+    const l1 = build({ r1: ["a.md", "b.md"], r2: ["c.md"] });
+    const l2 = build({ r1: ["a.md"], r2: ["b.md", "c.md"] });
+    expect(hashSkillDirs(l1).hash, "b.md moved to another mount and the digest did not notice").toBe(hashSkillDirs(l2).hash);
+  });
+
+  it("KNOWN LIMITATION: duplicate root-relative paths make drift ATTRIBUTION ambiguous", () => {
+    // Two mounts can emit the same relpath. The digest folds both entries, so drift is still DETECTED —
+    // this is not a false green — but `diffFileSigsPaths` builds `new Map(recorded)`, which keeps only
+    // the last, so the report can name the wrong file or none.
+    const a = rootWith("ra", "FROM-A");
+    const b = rootWith("rb", "FROM-B");
+    const entries = skillHashEntries([a, b]);
+    expect(entries.map((e) => e.path)).toEqual(["skills/SKILL.md", "skills/SKILL.md"]);
+    expect(new Set(entries.map((e) => e.sha)).size, "same path, different content").toBe(2);
+  });
+});
+
+describe("manifest version exemption — CHARACTERIZATION of today's asymmetry", () => {
+  // `hashDir` strips `version` before hashing a manifest, but only for paths matching
+  // `.claude-plugin/plugin.json` or a bare root `plugin.json` (skill-hash.ts:184). Any other manifest
+  // location — `.cursor-plugin/plugin.json` is the live example — falls through to raw-byte hashing, so a
+  // pure version bump there DOES re-stale every cassette that mounts it.
+  //
+  // This is a CHARACTERIZATION test: it pins what the code does today, not what it should do. The
+  // asymmetry was completely uncovered — `grep -rl cursor-plugin test/` found nothing — so either half
+  // could have been "fixed" or broken with nothing going red.
+  //
+  // If a future change makes the exemption path-agnostic (the canonicalisation work is the likely
+  // occasion), THIS TEST FLIPS, and the flip is the evidence that the behaviour changed on purpose rather
+  // than the asymmetry quietly reversing inside a large diff. Update it deliberately; do not delete it.
+  function manifestRoot(dir: string): string {
+    const d = mkdtempSync(join(tmpdir(), "mani-"));
+    mkdirSync(join(d, dir), { recursive: true });
+    writeFileSync(join(d, dir, "plugin.json"), '{"name":"p","version":"1"}');
+    return d;
+  }
+  const bumped = (root: string, dir: string) => {
+    writeFileSync(join(root, dir, "plugin.json"), '{"name":"p","version":"9.9.9"}');
+    return hashSkillDirs([root]).hash;
+  };
+
+  it(".claude-plugin/plugin.json: a version bump is EXEMPT — the hash does not move", () => {
+    const r = manifestRoot(".claude-plugin");
+    const before = hashSkillDirs([r]).hash;
+    expect(bumped(r, ".claude-plugin")).toBe(before);
+  });
+
+  it("a ROOT plugin.json is exempt too — the predicate covers both spellings", () => {
+    // DO NOT TIDY THIS BRANCH AWAY. No root-level `plugin.json` exists anywhere in these repos, which
+    // makes `relPath === "plugin.json"` look like dead code — but the planned hash-format epoch requires
+    // the legacy transform to stay frozen byte-for-byte, because a pre-epoch artifact can only be proved
+    // unchanged by reproducing exactly what was computed at the time. Removing this branch as unused would
+    // silently break that proof for any artifact recorded through it.
+    const r = manifestRoot(".");
+    const before = hashSkillDirs([r]).hash;
+    expect(bumped(r, ".")).toBe(before);
+  });
+
+  it(".cursor-plugin/plugin.json: a version bump is NOT exempt — the hash DOES move", () => {
+    // The asymmetry, stated as a fact about today rather than an endorsement of it.
+    const r = manifestRoot(".cursor-plugin");
+    const before = hashSkillDirs([r]).hash;
+    expect(bumped(r, ".cursor-plugin")).not.toBe(before);
+  });
+
+  it("the exemption is version-ONLY, wherever it applies", () => {
+    // Guards the other direction: a behaviour-bearing field must still re-stale, or the carve-out would be
+    // silently hiding real drift rather than metadata churn.
+    const r = manifestRoot(".claude-plugin");
+    const before = hashSkillDirs([r]).hash;
+    writeFileSync(join(r, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1","mcpServers":{"x":{}}}');
+    expect(hashSkillDirs([r]).hash).not.toBe(before);
+  });
+});
+
+describe("skillHashSnapshot — one walk must reproduce every rendering", () => {
+  // Ship 3 of the hash-format epoch. The walk used to emit only `(path, sha)` pairs for files and links,
+  // which is strictly less than `skillHash` folds: directories contribute a `D:` structure marker, and the
+  // digest is ROOT-MAJOR while the wire manifest is globally path-sorted. A flat path-sorted pair list
+  // therefore cannot reconstruct the digest's traversal, cannot see an empty-directory change, and cannot
+  // tell two roots apart when they share a root-relative path (which is legal, and measured). The snapshot
+  // carries all three; `renderWireEntries` collapses it back to exactly the old shape.
+
+  function twoRoots(): { a: string; b: string } {
+    const base = mkdtempSync(join(tmpdir(), "snap-"));
+    const a = join(base, "a");
+    const b = join(base, "b");
+    for (const r of [a, b]) mkdirSync(join(r, "skills", "s"), { recursive: true });
+    writeFileSync(join(a, "skills", "s", "SKILL.md"), "A\n");
+    writeFileSync(join(b, "skills", "s", "SKILL.md"), "B\n");
+    return { a, b };
+  }
+
+  it("emits directory entries — including an EMPTY one the wire manifest never showed", () => {
+    const d = skillDir();
+    mkdirSync(join(d, "emptydir"));
+    const snap = skillHashSnapshot([d]);
+    expect(snap.some((e) => e.kind === "dir" && e.path === "emptydir")).toBe(true);
+    // ...and the wire rendering still does NOT show it: `fileSigs` has never listed directories, and the
+    // index-aligned migration proof pairs recorded entries with live ones positionally. (`contentSig` folds
+    // `D:` markers separately, via contentSigFromSnapshot — it does NOT consume this rendering.)
+    // and listing directories there would move it. Dropping them here is what keeps Ship 3 hash-neutral.
+    expect(renderWireEntries(snap).some((e) => e.path === "emptydir")).toBe(false);
+  });
+
+  it("stamps rootOrdinal, so two roots sharing a relative path stay distinguishable", () => {
+    const { a, b } = twoRoots();
+    const files = skillHashSnapshot([a, b]).filter((e) => e.kind === "file" && e.path === "skills/s/SKILL.md");
+    expect(files).toHaveLength(2); // duplicate root-relative paths are legal
+    expect(new Set(files.map((e) => e.rootOrdinal)).size).toBe(2); // and now separable
+  });
+
+  it("classifies manifests without deciding how to hash them", () => {
+    const d = skillDir();
+    mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), '{"name":"p","version":"1"}');
+    const snap = skillHashSnapshot([d]);
+    const manifest = snap.find((e) => e.kind === "file" && e.path === ".claude-plugin/plugin.json");
+    expect(manifest && manifest.kind === "file" && manifest.manifestKind).toBe("claude-manifest");
+    const skill = snap.find((e) => e.kind === "file" && e.path === "skills/SKILL.md");
+    expect(skill && skill.kind === "file" && skill.manifestKind).toBe("none");
+  });
+
+  it("renderWireEntries is byte-identical to skillHashEntries — the adapter is the ONLY wire producer", () => {
+    const { a, b } = twoRoots();
+    mkdirSync(join(a, "nested", "deep"), { recursive: true });
+    writeFileSync(join(a, "nested", "deep", "x.md"), "x\n");
+    expect(JSON.stringify(renderWireEntries(skillHashSnapshot([a, b])))).toBe(JSON.stringify(skillHashEntries([a, b])));
+  });
+});
+
+describe("legacy-nover is FROZEN — the migration proof depends on it byte-for-byte", () => {
+  // At the epoch this stops being how digests are made and becomes the only way to VERIFY an old one:
+  // `rehash` proves a pre-epoch cassette unchanged by recomputing under exactly this rule. Drift of a
+  // single byte makes every pre-epoch artifact unprovable and turns the free migration into paid
+  // re-records. These are golden vectors, not examples — update them only alongside a read-floor raise.
+  const sha = (v: Buffer | string) => createHash("sha256").update(v).digest("hex");
+
+  it("strips ONLY `version`, and normalizes nothing else", () => {
+    const bytes = Buffer.from('{ "name": "p", "version": "0.0.1", "skills": "./skills" }');
+    // Whitespace IS normalized (JSON round-trip) but key ORDER is not — that non-normalization is the
+    // defect jcs1 fixes, and it is exactly what must be preserved here to reproduce old digests.
+    expect(legacyHashedContent(bytes, "claude-manifest")).toBe('{"name":"p","skills":"./skills"}');
+    expect(legacyHashedContent(Buffer.from('{"skills":"./skills","name":"p","version":"1"}'), "claude-manifest")).toBe(
+      '{"skills":"./skills","name":"p"}',
+    );
+  });
+
+  it("reproduces the digest recorded in the committed cassette", () => {
+    // The real fixture's manifest, and the sha its cassette has carried since it was recorded.
+    const bytes = Buffer.from('{ "name": "my-pdf-skill", "version": "0.0.1", "skills": "./skills" }');
+    expect(sha(legacyHashedContent(bytes, "claude-manifest"))).toBe("d7e743622f41cee7a6089bbc989193868849501bfe9a905b40f9c62c16b22b2a");
+  });
+
+  it("falls back to RAW BYTES on unparseable JSON — part of the algorithm, not an escape", () => {
+    const broken = Buffer.from("{not json");
+    expect(legacyHashedContent(broken, "claude-manifest")).toBe(broken);
+  });
+
+  it("classifies BOTH spellings — the root arm is frozen history, not dead code", () => {
+    expect(classifyManifest("a/.claude-plugin/plugin.json")).toBe("claude-manifest");
+    expect(classifyManifest("plugin.json")).toBe("root-manifest");
+    expect(classifyManifest(".cursor-plugin/plugin.json")).toBe("none");
+    expect(classifyManifest("skills/x/SKILL.md")).toBe("none");
+    // A root manifest gets the exemption too, and must keep getting it.
+    expect(legacyHashedContent(Buffer.from('{"name":"p","version":"9"}'), "root-manifest")).toBe('{"name":"p"}');
+  });
+
+  it("non-manifests are passed through untouched", () => {
+    const b = Buffer.from('{"name":"p","version":"1"}');
+    expect(legacyHashedContent(b, "none")).toBe(b);
   });
 });

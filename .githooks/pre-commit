@@ -55,36 +55,108 @@ fi
 # committed fixtures — that's why this started here — but the commit that ADDS or re-records a cassette is
 # the one that can introduce a host-inventory leak, and it stages no baseline at all, so it used to skip
 # this check entirely (the host-inventory warning below was unreachable on exactly that commit).
+#
+# The trigger is CONTENT-derived, not name-derived. `record --out` takes an arbitrary path and does NOT
+# validate the suffix, so `--out notes/run.json` produces a real recording — with a real host inventory in
+# it — that a `*.cassette.json` regex cannot see. Any staged `.json` whose STAGED BLOB (`git show :path`,
+# not the worktree copy, which may differ from what is being committed) carries the generator marker is
+# treated as a cassette. The name-based arm stays for baselines and for a cassette too large to scan twice.
 baseline_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(baselines/desktop-.*|.*\.cassette)\.json$' || true)
+recorded_json=$(
+  git diff --cached --name-only --diff-filter=ACMR | grep -E '\.json$' | while read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in *.cassette.json|baselines/desktop-*.json) continue ;; esac
+    if git show ":$f" 2>/dev/null | grep -q '"generator": *"cowork-harness"'; then echo "$f"; fi
+  # `|| true` is LOAD-BEARING and binds to the whole pipeline, not just the loop. Under `set -euo
+  # pipefail` a `grep` that matches nothing exits 1, pipefail lifts that out of the command substitution,
+  # and the assignment then kills the hook — so without this, EVERY commit staging no `.json` (i.e. almost
+  # all of them) died with no output at all. Pinned by 'the hook must not abort on the ordinary paths'.
+  done || true
+)
+if [ -n "$recorded_json" ]; then
+  baseline_files=$(printf '%s\n%s' "$baseline_files" "$recorded_json" | grep -v '^$' || true)
+fi
 if [ -n "$baseline_files" ]; then
   if [ ! -f dist/cli.js ]; then
-    echo "⚠ pre-commit: dist/cli.js not built (run 'npm run build') — skipping cassette staleness check."
+    # FAIL CLOSED. This used to echo a warning and fall through, so the guard was OFF in exactly the states
+    # easiest to be in: a fresh clone, after `git clean -xdf`, after a branch switch, and — because
+    # `npm run build` does `rm -rf dist` FIRST — any time a typecheck is failing mid-refactor. A guard that
+    # stops guarding without saying so is worse than none: the warning scrolls past and the commit succeeds.
+    echo "✖ pre-commit: dist/cli.js not built, so staged cassettes cannot be verified."
+    echo "  Run 'npm run build' and re-commit. (Bypass with 'git commit --no-verify' if you must.)"
+    exit 1
   else
-    # Verify the example dir (a staged BASELINE stales those) PLUS any staged cassette that lives elsewhere
-    # — otherwise widening the trigger above to `*.cassette.json` would fire the hook on a file it then
-    # never looks at, checking a different directory than the one that changed.
-    staged_cassettes=$(printf '%s\n' "$baseline_files" | grep -E '\.cassette\.json$' | grep -v '^examples/replays/' || true)
-    # Exit 3 is "could not verify" (an unreadable/hand-authored fixture), NOT a finding — the CLI documents
-    # that as a bug to report, not a signal to re-record. Only exit 1 (verified & failed) blocks a commit;
-    # a 3 is surfaced as a warning so a minimal eval fixture can't wedge every commit that touches it.
+    # Verify the example dir (a staged BASELINE stales those) PLUS any staged cassette that lives elsewhere.
+    # Exclude only files DIRECTLY in examples/replays/ — the directory invocation above covers exactly
+    # those. `resolveInputs` does not recurse, so `examples/replays/sub/x.cassette.json` is invisible to it;
+    # a blanket `grep -v '^examples/replays/'` here meant such a file was seen by NEITHER check. (Not
+    # hypothetical: `isRepoVisiblePath`'s own docstring uses that path as its worked example.)
+    staged_cassettes=$(printf '%s\n' "$baseline_files" | grep -vE '^baselines/desktop-' |
+      grep -vE '^examples/replays/[^/]+$' || true)
+
+    # ALLOWLIST, not a denylist. This used to test `= 1` (block) and `= 3` (warn) and let EVERYTHING else
+    # through, so the guard silently switched itself off on any other exit. Two are ordinary refactors:
+    #   exit 2   — examples/replays/ renamed or emptied, or any CLI flag renamed
+    #   exit 127 — node not on PATH
+    # Neither fails a test anywhere. Now anything that is not a proven clean 0 blocks; exit 3 is the one
+    # exception, narrowed by CAUSE below.
+    #
+    # No --allow-* flags: the fixtures verify clean without them (CI runs this bare and passes), and
+    # carrying suppressions here made the local gate LAXER than the CI gate it exists to pre-empt.
+    # PORTABLE template, not `-t`. BSD `mktemp -t PREFIX` treats the argument as a prefix and appends
+    # its own X's; GNU requires the TEMPLATE to carry at least three X's and errors with
+    # "mktemp: too few X's in template" otherwise. `-t` therefore works on macOS and fails on Linux —
+    # which is what CI caught the first time this hook's tests ran on a Linux runner. A positional
+    # template with an explicit directory is accepted by both.
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cwh-verify-cassettes.XXXXXX") || exit 1
     hook_status=0
-    node dist/cli.js verify-cassettes examples/replays/ --allow-email 'synthetic-user@example\.com' --allow-domain 'claude\.com' >/tmp/cwh-verify-cassettes.$$ 2>&1 || hook_status=$?
+    node dist/cli.js verify-cassettes examples/replays/ >"$tmp" 2>&1 || hook_status=$?
     for c in $staged_cassettes; do
       [ -f "$c" ] || continue
-      node dist/cli.js verify-cassettes "$c" >>/tmp/cwh-verify-cassettes.$$ 2>&1 || s=$?
-      if [ "${s:-0}" = "1" ]; then hook_status=1; fi
-      if [ "${s:-0}" = "3" ] && [ "$hook_status" = "0" ]; then hook_status=3; fi
       s=0
+      node dist/cli.js verify-cassettes "$c" >>"$tmp" 2>&1 || s=$?
+      if [ "$s" != "0" ] && { [ "$hook_status" = "0" ] || [ "$s" = "1" ]; }; then hook_status=$s; fi
     done
+
+    # Exit 3 still folds several outcomes together, but the JSON envelope now answers the only question
+    # that matters here directly: `privacyScanned`. The privacy scan needs a READABLE TRANSCRIPT, not a
+    # valid document, so a cassette that fails SHAPE validation is still scanned for host inventory — and
+    # this gate must block only when the scan genuinely could not run (unreadable JSON, no `events` array,
+    # or a crash mid-verify). The first version keyed on `error` instead, which blocked commits touching a
+    # perfectly scannable eval fixture and would have taught the operator to reach for --no-verify.
+    #
+    # A MISSING field counts as not scanned: an older CLI on PATH cannot vouch for a file it never checked.
     if [ "$hook_status" = "3" ]; then
-      echo "⚠ pre-commit: a staged cassette could not be verified (exit 3 — not a finding):"
-      cat /tmp/cwh-verify-cassettes.$$
+      unscanned=false
+      for c in examples/replays/ $staged_cassettes; do
+        [ -e "$c" ] || continue
+        probe_json=$(node dist/cli.js verify-cassettes "$c" --output-format json 2>/dev/null || true)
+        u=$(printf '%s' "$probe_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(!j||!Array.isArray(j.results))throw 0;process.stdout.write(String(j.results.some(r=>r.privacyScanned!==true)))}catch(e){process.stdout.write("true")}})' 2>/dev/null || true)
+        # Fail CLOSED: only an explicit "false" clears. Empty output, or a doubled string (how the first
+        # version broke — `pipefail` lifted the CLI's own exit 3 out of the pipeline and `|| echo true`
+        # appended a SECOND "true", yielding "truetrue"), or anything unexpected all block.
+        if [ "$u" != "false" ]; then unscanned=true; fi
+      done
+      if [ "$unscanned" = "true" ]; then
+        cat "$tmp"; rm -f "$tmp"
+        echo ""
+        echo "✖ pre-commit: a staged cassette could NOT BE SCANNED — its JSON is unreadable, it carries no"
+        echo "  \`events\` array, or verification crashed. The privacy scan never ran, so nothing has checked"
+        echo "  it for a [host-inventory] leak. 'Could not verify' is not 'verified clean'."
+        echo "  (A cassette that merely fails SHAPE validation is still scanned, and does not land here.)"
+        echo "  Fix the cassette, or rebuild against the CLI that recorded it, then re-stage."
+        echo "  (Bypass with 'git commit --no-verify' if you must.)"
+        exit 1
+      fi
+      echo "⚠ pre-commit: unverifiable STALENESS on a staged cassette (exit 3 — not a privacy finding):"
+      hook_status=0
     fi
-    if [ "$hook_status" = "1" ]; then
-      cat /tmp/cwh-verify-cassettes.$$
-      rm -f /tmp/cwh-verify-cassettes.$$
+
+    if [ "$hook_status" != "0" ]; then
+      cat "$tmp"
+      rm -f "$tmp"
       echo ""
-      echo "✖ pre-commit: a staged cassette FAILED verification (privacy or staleness) — see above."
+      echo "✖ pre-commit: cassette verification did not pass cleanly (exit $hook_status)."
       echo "  A [host-inventory] finding means the recording carries THIS machine's MCP servers/agents/"
       echo "  account metadata; committing it publishes them. Re-record at 'container' tier (sealed)."
       echo "  A [stale] finding after a baseline change:"
@@ -94,9 +166,13 @@ if [ -n "$baseline_files" ]; then
       echo "  (needs Docker + a live token — and DO NOT run this from an ambient dev session with"
       echo "  its own MCP servers/skills configured, at protocol/hostloop tier that inherits the host"
       echo "  environment: it bakes your personal tool/skill/MCP list into the committed fixture)."
+      echo "  An exit 2 usually means this hook's own target moved (examples/replays/ renamed, or a CLI"
+      echo "  flag renamed) — fix the hook rather than bypassing it."
       echo "  Then re-stage and commit. (Bypass with 'git commit --no-verify' if you must.)"
       exit 1
     fi
-    rm -f /tmp/cwh-verify-cassettes.$$
+    cat "$tmp"
+    rm -f "$tmp"
+    echo "✓ pre-commit: cassette privacy + staleness scan passed."
   fi
 fi

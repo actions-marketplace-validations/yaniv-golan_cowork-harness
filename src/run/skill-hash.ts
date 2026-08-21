@@ -1,4 +1,10 @@
 import { createHash } from "node:crypto";
+import { jcsSerialize, JcsCanonicalizationError } from "./jcs.js";
+
+/** Which manifest transform NEW digests use. Flipping this to "jcs1" IS the hash-format epoch — it must
+ *  move together with HASH_FORMAT_EPOCH/CASSETTE_VERSION in cassette.ts, or artifacts get stamped with a
+ *  version that does not describe how they were hashed. */
+export const ACTIVE_HASH_ALGO: "legacy" | "jcs1" = "jcs1";
 import { readdirSync, statSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join, resolve, dirname, sep, relative } from "node:path";
 import { gitModeEnabled, gitTrackedSet, gitAccept } from "./skill-files.js";
@@ -83,21 +89,105 @@ type AcceptFn = (relPath: string, isDirectory: boolean) => boolean;
  *  skipped with a warning (same policy as collectArtifacts in execute.ts).
  * push any read error into `errors` rather than silently continuing — the caller treats a
  *  non-empty errors array as a staleness failure (can't verify ⇒ not green). */
-/** Optional per-file sink (diagnostics): called for every file FOLDED INTO the hash, with its
- *  root-relative path and the sha256 of exactly the content that was hashed (version-stripped for
- *  plugin.json, raw bytes otherwise). Lets `explainSkillHash` dump the file set the hash sees — so an
- *  unexpected drift source (a `.DS_Store`, a run-generated file) is one line instead of a black-box hunt. */
-type OnFileFn = (relPath: string, hashedSha: string) => void;
+/** What KIND of file this is, for the manifest carve-out. Deliberately NOT a transform id: one entry
+ *  can be hashed by more than one algorithm (legacy today, JCS at the next hash-format epoch), so the
+ *  entry records what the file IS and each algorithm decides what to do with it. */
+export type ManifestKind = "none" | "claude-manifest" | "root-manifest";
 
-function hashDir(
-  dir: string,
-  hash: ReturnType<typeof createHash>,
-  errors: string[],
-  rel = "",
-  accept?: AcceptFn,
-  onFile?: OnFileFn,
-  root = dir,
-): void {
+/** One entry the hash walk folded, in a form that can reproduce EVERY rendering from a single walk.
+ *  `rootOrdinal` is the index of the source root in the sorted root list — required because `skillHash`
+ *  is ROOT-MAJOR while the wire manifest is globally path-sorted, and duplicate root-relative paths
+ *  across roots are legal. Without it a flat list cannot reconstruct the digest's traversal order. */
+export type HashEntry =
+  | { kind: "file"; rootOrdinal: number; path: string; digests: { legacy: string; jcs1?: string }; manifestKind: ManifestKind }
+  | { kind: "link"; rootOrdinal: number; path: string; target: string }
+  | { kind: "dir"; rootOrdinal: number; path: string };
+
+/** Sink for the walk. Emitted for files, links AND directories — directories fold a `D:` structure
+ *  marker into `skillHash`, so a snapshot without them cannot detect empty-directory drift. */
+/** Which manifest spelling this path is, if any. Both spellings are LOAD-BEARING — see
+ *  `legacyHashedContent`. */
+export function classifyManifest(relPath: string): ManifestKind {
+  if (relPath.endsWith(".claude-plugin/plugin.json")) return "claude-manifest";
+  if (relPath === "plugin.json") return "root-manifest";
+  return "none";
+}
+
+/**
+ * The LEGACY (`legacy-nover`) manifest transform. **FROZEN — do not modify, do not tidy, do not
+ * "improve".**
+ *
+ * Hash a plugin manifest without its `version`: a pure version bump is metadata with no runtime-behavior
+ * impact, yet it would otherwise re-stale every cassette (it flapped 4/6 in a batch). Every
+ * behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw bytes when
+ * the manifest will not parse — `version` cannot be located, so there is nothing else to do, and that
+ * fallback is part of the algorithm rather than an escape from it.
+ *
+ * WHY FROZEN: at the hash-format epoch this stops being how new digests are computed and becomes the only
+ * way to VERIFY an old one. `rehash` proves a pre-epoch artifact unchanged by recomputing its digest under
+ * exactly this rule; if the rule drifts by a byte, every pre-epoch cassette becomes unprovable and the free
+ * migration path collapses into paid re-records. It stays frozen until the read floor rises past the last
+ * pre-epoch cassette version.
+ *
+ * That includes the root-`plugin.json` arm, which LOOKS like dead code (no root-level manifest exists in
+ * any repo here) and is not: an artifact recorded through it can only be proved by reproducing what was
+ * computed at the time. `test/skill-hash.test.ts` pins both spellings.
+ */
+export function legacyHashedContent(bytes: Buffer, manifestKind: ManifestKind): Buffer | string {
+  if (manifestKind === "none") return bytes;
+  try {
+    const manifest = JSON.parse(bytes.toString("utf8"));
+    delete manifest.version;
+    return JSON.stringify(manifest);
+  } catch {
+    return bytes; // not valid JSON — raw bytes, by definition of the algorithm
+  }
+}
+
+/**
+ * The `jcs1` manifest transform — the epoch's replacement for `legacyHashedContent`.
+ *
+ * Same semantic projection (drop `version`), canonical serialization instead of insertion-order
+ * `JSON.stringify`. Two failure modes that must NOT be conflated:
+ *   - unparseable JSON  → raw bytes, exactly as legacy. Deterministic and re-derivable from the file, so
+ *     it needs no stored marker.
+ *   - parseable but not canonicalizable (a non-finite number) → THROWS. Never falls back to raw bytes: a
+ *     parseable manifest still has a `version` field, and raw hashing would silently restore it.
+ */
+export function jcs1HashedContent(bytes: Buffer, manifestKind: ManifestKind): Buffer | string {
+  if (manifestKind === "none") return bytes;
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return bytes; // not JSON — same rule as legacy
+  }
+  if (manifest && typeof manifest === "object" && !Array.isArray(manifest)) delete (manifest as Record<string, unknown>).version;
+  return jcsSerialize(manifest); // may throw JcsCanonicalizationError — the caller turns that into a read error
+}
+
+/** Fold a snapshot into a digest under one algorithm. The byte stream is IDENTICAL to the streaming walk
+ *  it replaced — `D:`/`L:`/`F:` framing in walk order, folding the fixed-length content sha — which is
+ *  what lets `rehash` recompute a pre-epoch digest from the same snapshot that produces the new one. */
+export function foldSnapshot(entries: HashEntry[], algo: "legacy" | "jcs1"): string {
+  const hash = createHash("sha256");
+  for (const e of entries) {
+    if (e.kind === "dir") hash.update(`D:${e.path}\0`);
+    else if (e.kind === "link") hash.update(`L:${e.path}\0${e.target}\0`);
+    else {
+      hash.update(`F:${e.path}\0`);
+      const d = algo === "legacy" ? e.digests.legacy : e.digests.jcs1;
+      if (d === undefined) throw new Error(`cowork-harness: skill-hash: entry ${e.path} has no ${algo} digest`);
+      hash.update(d);
+    }
+  }
+  return hash.digest("hex");
+}
+
+type WalkEntry = HashEntry extends infer T ? (T extends HashEntry ? Omit<T, "rootOrdinal"> : never) : never;
+type OnEntryFn = (entry: WalkEntry) => void;
+
+function hashDir(dir: string, errors: string[], rel = "", accept?: AcceptFn, onEntry?: OnEntryFn, root = dir): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
@@ -143,16 +233,15 @@ function hashDir(
         continue;
       }
       const targetRel = relative(rootResolved, resolvedTarget).split(sep).join("/");
-      hash.update(`L:${relPath}\0${targetRel}\0`); // link structure; a re-point changes the digest. NUL-separate
-      // path from target (not ` -> `): otherwise `a`->`b -> c` and `a -> b`->`c` both fold `L:a -> b -> c\0`.
-      if (onFile) onFile(relPath, `lnk:${targetRel}`);
+      // NUL-separates path from target (not ` -> `): otherwise `a`->`b -> c` and `a -> b`->`c` collide.
+      if (onEntry) onEntry({ kind: "link", path: relPath, target: targetRel });
       continue;
     }
     if (st.isDirectory()) {
       if (SKILL_HASH_DIR_DENYLIST.has(name) || OS_JUNK_PATTERN.test(relPath)) continue; // skip VCS/cache and OS-junk subtrees entirely
       if (accept && !accept(relPath, true)) continue; // scoped out (an unlisted skill's subtree)
-      hash.update(`D:${relPath}\0`); // structure marker — an empty/renamed dir registers too
-      hashDir(abs, hash, errors, relPath, accept, onFile, root);
+      if (onEntry) onEntry({ kind: "dir", path: relPath }); // `D:` structure marker — an empty/renamed dir registers // the digest has always folded these; the SNAPSHOT now sees them too
+      hashDir(abs, errors, relPath, accept, onEntry, root);
     } else if (st.isFile()) {
       if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
       if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
@@ -162,7 +251,8 @@ function hashDir(
       // version bumped so existing cassettes get a graceful "older format — re-record once" (not "changed").
       if (OS_JUNK_PATTERN.test(relPath)) continue;
       if (accept && !accept(relPath, false)) continue; // scoped/ignored out
-      hash.update(`F:${relPath}\0`); // relative path, not basename — a move changes the digest
+      // NOTE: the digest is no longer folded here — `foldSnapshot` folds the emitted entries, so ONE walk
+      // yields both algorithms from the same bytes (re-reading for the second would reopen a TOCTOU hole).
       let bytes: Buffer;
       try {
         bytes = readFileSync(abs);
@@ -180,24 +270,26 @@ function hashDir(
       // Every behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw
       // bytes if the manifest isn't valid JSON. `hashedContent` is EXACTLY what folds into the digest — the
       // onFile sink reports its sha so the debug dump reflects what the hash actually saw.
-      let hashedContent: Buffer | string = bytes;
-      if (relPath.endsWith(".claude-plugin/plugin.json") || relPath === "plugin.json") {
-        try {
-          const manifest = JSON.parse(bytes.toString("utf8"));
-          delete manifest.version;
-          hashedContent = JSON.stringify(manifest);
-        } catch {
-          /* not valid JSON — fall through to raw-byte hashing */
-        }
+      const manifestKind = classifyManifest(relPath);
+      const legacySha = createHash("sha256").update(legacyHashedContent(bytes, manifestKind)).digest("hex");
+      let jcs1Sha: string;
+      try {
+        jcs1Sha = createHash("sha256").update(jcs1HashedContent(bytes, manifestKind)).digest("hex");
+      } catch (e) {
+        // Parseable but not canonicalizable. A read error, NEVER a raw-byte fallback — see jcs1HashedContent.
+        const msg =
+          e instanceof JcsCanonicalizationError
+            ? `cowork-harness: skill-hash: cannot canonicalize ${abs}: ${e.message}`
+            : `cowork-harness: skill-hash: ${String((e as Error)?.message ?? e)} (${abs})`;
+        process.stderr.write(`${msg} — skipping\n`);
+        errors.push(msg);
+        continue;
       }
-      // Fold the fixed-length content SHA, NOT the raw content: raw bytes have no length/terminator, so
-      // `F:a\0<A>F:b\0<B>` would collide with a single file `a` whose content is `<A>F:b\0<B>` (a staleness
-      // false-negative). A 64-hex sha is self-delimiting and its charset is disjoint from the `F:`/`L:`/`D:`
-      // prefixes, closing the unframed-concatenation hole. Hoisted out of `if (onFile)` so the digest is
-      // always folded (the no-sink path must fold the same bytes).
-      const contentSha = createHash("sha256").update(hashedContent).digest("hex");
-      hash.update(contentSha);
-      if (onFile) onFile(relPath, contentSha);
+      // The entry carries the fixed-length content SHA, NOT raw content: raw bytes have no
+      // length/terminator, so `F:a\0<A>F:b\0<B>` would collide with a single file `a` whose content is
+      // `<A>F:b\0<B>` (a staleness false-negative). A 64-hex sha is self-delimiting and its charset is
+      // disjoint from the `F:`/`L:`/`D:` prefixes, closing the unframed-concatenation hole.
+      if (onEntry) onEntry({ kind: "file", path: relPath, digests: { legacy: legacySha, jcs1: jcs1Sha }, manifestKind });
     }
   }
 }
@@ -257,13 +349,13 @@ function sharedOnlyAccept(dirSkills: Set<string>, scopeAgents: boolean): AcceptF
  * marketplaces) — in that case there's no shared/skill split to report.
  * Used by `checkStaleness` to name the changed bucket in scoped cassettes.
  */
-export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string | null {
+export function hashSharedOnly(dirs: string[], sessionIgnore?: string[], algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO): string | null {
   const sorted = [...dirs].sort();
   const pluginRoots = sorted.filter((d) => isDir(join(d, "skills")));
   if (pluginRoots.length === 0) return null;
   const scopeAgents = agentScopeEnabled();
-  const hash = createHash("sha256");
-  for (const d of pluginRoots) {
+  const snapshot: HashEntry[] = [];
+  for (const [rootOrdinal, d] of pluginRoots.entries()) {
     // Per-root skill names so a skill-named agent under THIS root leaves THIS root's shared bucket.
     const accept = sharedOnlyAccept(scopeAgents ? new Set(skillDirNames(d)) : new Set(), scopeAgents);
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
@@ -271,11 +363,11 @@ export function hashSharedOnly(dirs: string[], sessionIgnore?: string[]): string
       ? (rel, isDir) => accept(rel, isDir) && !ignoreRes.some((re) => re.test(rel))
       : accept;
     const errors: string[] = [];
-    hashDir(d, hash, errors, "", combinedAccept);
+    hashDir(d, errors, "", combinedAccept, (e) => snapshot.push({ ...e, rootOrdinal } as HashEntry));
     // hashSharedOnly is used only for bucket-level diagnostics; errors are already logged to stderr.
     // The primary staleness check goes through hashSkillDirs which surfaces errors to callers.
   }
-  return hash.digest("hex");
+  return foldSnapshot(snapshot, algo);
 }
 
 /** Structural accept: under a plugin-root, include everything NOT under `skills/`, plus only the
@@ -306,16 +398,33 @@ function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: bo
  *  for an empty/all-missing set. (Used by `rehash` to detect content change across a *format-only* hash bump;
  *  this v6 unification is an algorithm change, so a pre-v6 cassette's contentSig is non-comparable — `rehash`
  *  routes those to a re-record, see cassette.ts.) */
+export function contentSigFromSnapshot(snapshot: HashEntry[]): string | undefined {
+  // Same rendering `computeContentSig` uses, but from an ALREADY-WALKED snapshot — so a caller that has
+  // one (rehash, which must derive its proof and its replacement from identical bytes) never walks twice.
+  const entries = snapshot
+    .map((e) =>
+      e.kind === "dir"
+        ? `D:${e.path}\0`
+        : e.kind === "link"
+          ? `L:${e.path}\0lnk:${e.target}`
+          : `F:${e.path}\0${(ACTIVE_HASH_ALGO === "jcs1" ? e.digests.jcs1 : e.digests.legacy) ?? e.digests.legacy}`,
+    )
+    .sort();
+  if (entries.length === 0) return undefined;
+  return createHash("sha256").update(entries.join("\0")).digest("hex");
+}
+
 export function computeContentSig(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): string | undefined {
   if (dirs.length === 0) return undefined;
   // Type-prefix + NUL-separate path from sha: without them, a file named `a:lnk` with content-sha
   // `<64hex>` collides with a symlink `a` -> target `<64hex>` (both `a:lnk:<64hex>`). `e.sha` starts with
   // `lnk:` only for links (a 64-hex file sha cannot — l/n/k/: are non-hex), so it disambiguates the kind.
-  const entries = skillHashEntries(dirs, scopeSkills, sessionIgnore).map((e) =>
-    e.sha.startsWith("lnk:") ? `L:${e.path}\0${e.sha}` : `F:${e.path}\0${e.sha}`,
-  );
-  if (entries.length === 0) return undefined;
-  return createHash("sha256").update(entries.join("\0")).digest("hex");
+  // v5 (CONTENTSIG_ALGO): DIRECTORY entries fold too. `skillHash` has always folded a `D:` structure
+  // marker, so without them `contentSig` was blind to an added/removed EMPTY directory — it called itself
+  // a content fingerprint while missing a change the primary digest caught. Encoding mirrors the walk's
+  // framing exactly: `D:<path>\0`, `F:<path>\0<sha>`, `L:<path>\0lnk:<target>`, globally sorted by the
+  // rendered string so kind participates in the order and duplicate paths across roots stay distinct.
+  return contentSigFromSnapshot(skillHashSnapshot(dirs, scopeSkills, sessionIgnore));
 }
 
 /** Diagnostics: OS-junk / non-runtime files that have no business in a skill hash but (today) ARE hashed
@@ -326,16 +435,46 @@ export const OS_JUNK_PATTERN = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|\.Appl
 /** Diagnostics: the per-file entries the skill hash currently folds in — same walk/scope/ignore as
  *  `hashSkillDirs`, but emitting `{ path, sha }` instead of one digest. Sorted by path. Lets a caller dump
  *  exactly what the hash sees so an unexpected drift source is visible at a glance. */
-export function skillHashEntries(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): { path: string; sha: string }[] {
-  const entries: { path: string; sha: string }[] = [];
-  hashSkillDirs(dirs, scopeSkills, sessionIgnore, (path, sha) => entries.push({ path, sha }));
+export function skillHashSnapshot(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[]): HashEntry[] {
+  return hashSkillDirs(dirs, scopeSkills, sessionIgnore).snapshot; // WALK order — what reproduces `skillHash`
+}
+
+/** Render a snapshot to the wire manifest shape (`fileSigs`). Files carry their hashed-content sha;
+ *  links carry `lnk:<target>`; **directories are dropped** — the wire manifest has never listed them,
+ *  and adding them would break the index-aligned migration proof and a covered wire surface.
+ *
+ *  NOTE: `contentSig` does NOT share this rendering. It folds `D:` markers itself (CONTENTSIG_ALGO 5) via
+ *  `contentSigFromSnapshot`. Do not add directories here "to keep contentSig in sync" — they are separate
+ *  renderings of the same snapshot, deliberately. */
+export function renderWireEntries(snapshot: HashEntry[], algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO): { path: string; sha: string }[] {
+  const out: { path: string; sha: string }[] = [];
+  for (const e of snapshot) {
+    // MUST match the algorithm that produced `skillHash`. The per-file manifest exists to name WHICH file
+    // drifted, so publishing a digest of bytes the aggregate never folded makes every attribution a lie —
+    // and the aggregate would then disagree with the per-file manifest about the same tree.
+    if (e.kind === "file") out.push({ path: e.path, sha: (algo === "jcs1" ? e.digests.jcs1 : e.digests.legacy) ?? e.digests.legacy });
+    else if (e.kind === "link") out.push({ path: e.path, sha: `lnk:${e.target}` });
+  }
   // Code-unit sort (NOT localeCompare) so the dump order matches the hash walk's own `readdirSync().sort()`.
-  return entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+export function skillHashEntries(
+  dirs: string[],
+  scopeSkills?: string[],
+  sessionIgnore?: string[],
+  algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO,
+): { path: string; sha: string }[] {
+  return renderWireEntries(skillHashSnapshot(dirs, scopeSkills, sessionIgnore), algo);
 }
 
 export interface HashSkillDirsResult {
   /** The sha256 hex digest. */
   hash: string;
+  /** Every entry the walk folded, in WALK order, each carrying both algorithms' digests. Returned rather
+   *  than streamed through a sink so there is exactly one source of truth: a sink that forgot to stamp
+   *  `rootOrdinal` silently produced a snapshot that could not reproduce the digest. */
+  snapshot: HashEntry[];
   /** true when `scopeSkills` was given and every named skill was found under a plugin-root (scope applied);
    *  false when the whole-tree fallback was used (scope not applied). */
   scoped: boolean;
@@ -370,8 +509,15 @@ export interface HashSkillDirsResult {
  * also returns `readErrors` when any input was unreadable — callers must treat this as a
  * staleness failure.
  */
-export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgnore?: string[], onFile?: OnFileFn): HashSkillDirsResult {
-  const hash = createHash("sha256");
+export function hashSkillDirs(
+  dirs: string[],
+  scopeSkills?: string[],
+  sessionIgnore?: string[],
+  algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO,
+): HashSkillDirsResult {
+  // ONE walk builds the snapshot; the digest is folded FROM it. That is what lets `rehash` recompute a
+  // pre-epoch digest and the new one from the same bytes, instead of re-reading the tree for the second.
+  const snapshot: HashEntry[] = [];
   const sorted = [...dirs].sort();
   // Resolve skill scoping fail-closed: only narrow to `keep` when every named skill exists under some
   // plugin-root; otherwise `keep` stays null → whole-tree (a typo can't silently narrow the gate).
@@ -393,7 +539,7 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
   const gitOn = gitModeEnabled();
   const scopeAgents = agentScopeEnabled();
   let allGit = gitOn && sorted.length > 0;
-  for (const d of sorted) {
+  for (const [rootOrdinal, d] of sorted.entries()) {
     // Consumer-declared ignore for THIS root = the plugin-local .cowork-hashignore + the session-level globs.
     const ignoreRes = [...readHashIgnore(d), ...(sessionIgnore ?? [])].map(compileIgnore).filter((re): re is RegExp => re !== null);
     // Per-root skill names so a skill-named agent under THIS root scopes to THIS root's skill.
@@ -408,7 +554,9 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
         ? (rel: string, isDir: boolean) =>
             (scopeFn ? scopeFn(rel, isDir) : true) && !ignoreRes.some((re) => re.test(rel)) && (gitFn ? gitFn(rel) : true)
         : undefined;
-    hashDir(d, hash, allErrors, "", accept, onFile);
+    // Stamp the root index here rather than threading it through hashDir's recursion: `skillHash` is
+    // root-major, so an entry's root is the only thing a flat list cannot otherwise recover.
+    hashDir(d, allErrors, "", accept, (e) => snapshot.push({ ...e, rootOrdinal } as HashEntry));
   }
   const scoped = keep !== null;
   // Agent scoping is applied only when env-on AND the hash was skill-scoped (it refines `skills:` scoping).
@@ -417,10 +565,12 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
   const agentScoped = scopeAgents && scoped;
   const readErrors = allErrors.length > 0 ? allErrors : undefined;
   const mode: "git" | "raw" = allGit ? "git" : "raw";
+  const hash = { digest: (_enc?: string) => foldSnapshot(snapshot, algo) };
   return scoped
-    ? { hash: hash.digest("hex"), scoped: true, mode, agentScoped, ...(readErrors ? { readErrors } : {}) }
+    ? { hash: hash.digest("hex"), snapshot, scoped: true, mode, agentScoped, ...(readErrors ? { readErrors } : {}) }
     : {
         hash: hash.digest("hex"),
+        snapshot,
         scoped: false,
         mode,
         agentScoped,

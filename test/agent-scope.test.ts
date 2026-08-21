@@ -211,6 +211,6 @@ describe("v6 cassette with skillHash mismatch reports older-format message", () 
     } as unknown as Cassette;
     const msgs = checkStaleness(v6Cassette, root);
     // Must say "older hash format" referencing v6 → current, NOT "content changed"
-    expect(msgs.join(" ")).toMatch(new RegExp("older hash format.*v6.*v" + String(CASSETTE_VERSION)));
+    expect(msgs.join(" ")).toMatch(new RegExp("hash format v6.*v" + String(CASSETTE_VERSION)));
   });
 });

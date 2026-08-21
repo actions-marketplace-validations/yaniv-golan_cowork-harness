@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 1.25.0`
-(baseline `desktop-1.32885.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 2.0.0`
+(baseline `desktop-1.34493.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
@@ -107,7 +107,7 @@ form a relocatable bundle. `~` expands to home.
 > references relative to **its own** directory at record time (`scenario.session` and
 > `scenarioSource`), so moving it afterwards — a different `--out`, a
 > `git mv`, a copy into another repo — leaves them unresolvable and `verify-cassettes` reports
-> `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location.
+> `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location, or pass `--session <file>`.
 > Decide where a cassette will live *before* you record it.
 
 ## Session YAML

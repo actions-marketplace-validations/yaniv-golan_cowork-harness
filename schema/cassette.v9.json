@@ -4,10 +4,7 @@
   "title": "cowork-harness cassette v9",
   "description": "Recorded control-protocol cassette produced by cowork-harness (https://github.com/yaniv-golan/cowork-harness). Contains a frozen scenario, recorded agent event stream, control-protocol responses, artifact manifest, and a staleness fingerprint. v3 adds `contentSig`. v4 persists `userVisibleRoots`. v6 (staleness redesign, breaking): contentSig unified onto the skillHash walk (same file set incl. OS-junk exclusion, in-tree-symlink-by-target); git-tracked file set is the DEFAULT boundary (opt out with COWORK_HARNESS_GITSET=0). v7: NUL-byte entry separator in hashDir and computeContentSig to prevent hash collisions for file paths containing newline characters. v8: skillHash folds fixed-length content shas (not raw bytes) and contentSig/link entries are type-prefixed & NUL-framed (closes unframed-concatenation collisions → a v8 staleness hash is non-comparable with pre-v8, so `rehash` routes pre-v8 cassettes to re-record); `ManifestEntry.truncationReason` names why a body is absent (the cassette-level `readonlyFolderRoots` list is removed). v9 adds two optional fields, neither changing the skillHash/contentSig algorithm: `sessionFingerprint` (a session-SHAPE hash — connected folders/plugin/skill/mcp discovery config/egress allowlist — checked only by `verify-cassettes`, never the default replay verdict) and `folderPrefixMap` (the record-time connected-folder host-path → mount-name correspondence, so `computer_links_resolve` on replay no longer re-derives that map from the current session file at replay time).",
   "type": "object",
-  "required": [
-    "scenario",
-    "events"
-  ],
+  "required": ["scenario", "events"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -52,10 +49,23 @@
         "properties": {
           "path": { "type": "string", "description": "workRoot-relative path, e.g. outputs/report.json" },
           "bytes": { "type": "number", "description": "file size in bytes at record time" },
-          "sha256": { "type": "string", "description": "sha256 of the raw bytes (empty string only on an unreadable/containment-failed entry)" },
-          "body": { "type": "string", "description": "inlined body (≤ the artifact-body cap); materialized on replay so artifact_json can parse it. Absent on a truncated entry." },
-          "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "how `body` is encoded (base64 for non-UTF-8/binary)." },
-          "truncated": { "type": "boolean", "description": "body omitted (hash-only). file_exists/user_visible_artifact still PASS (existence proven by path+sha); artifact_json is evidence-unavailable." },
+          "sha256": {
+            "type": "string",
+            "description": "sha256 of the raw bytes (empty string only on an unreadable/containment-failed entry)"
+          },
+          "body": {
+            "type": "string",
+            "description": "inlined body (≤ the artifact-body cap); materialized on replay so artifact_json can parse it. Absent on a truncated entry."
+          },
+          "encoding": {
+            "type": "string",
+            "enum": ["utf8", "base64"],
+            "description": "how `body` is encoded (base64 for non-UTF-8/binary)."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "body omitted (hash-only). file_exists/user_visible_artifact still PASS (existence proven by path+sha); artifact_json is evidence-unavailable."
+          },
           "truncationReason": {
             "type": "string",
             "enum": ["size", "readonly", "unreadable"],
@@ -130,10 +140,7 @@
         },
         "mode": {
           "type": "string",
-          "enum": [
-            "git",
-            "raw"
-          ],
+          "enum": ["git", "raw"],
           "description": "Phase C: the file-set boundary used for skillHash — 'git' (git-tracked set — the DEFAULT unless COWORK_HARNESS_GITSET=0, and every dir is a git work tree) or 'raw' (filesystem walk; used when GITSET=0 OR any dir is not a repo). A record-vs-verify mode flip means hashes aren't comparable → re-record."
         },
         "agentScope": {
@@ -152,15 +159,10 @@
         },
         "channel": {
           "type": "string",
-          "enum": [
-            "decider-dir",
-            "decider-llm"
-          ]
+          "enum": ["decider-dir", "decider-llm"]
         }
       },
-      "required": [
-        "nonDeterministic"
-      ]
+      "required": ["nonDeterministic"]
     },
     "sessionFingerprint": {
       "type": "string",

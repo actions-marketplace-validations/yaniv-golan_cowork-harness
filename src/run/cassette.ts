@@ -15,6 +15,7 @@ import {
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { runsWriteRoot } from "./trace-view.js";
 import { join, dirname, relative, isAbsolute, resolve, sep, extname } from "node:path";
 import {
   type Scenario,
@@ -26,6 +27,7 @@ import {
   Assertion as AssertionSchema,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
+  FIDELITY_TIERS,
 } from "../types.js";
 import { executeScenario, assertContradiction, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { UsageError } from "../errors.js";
@@ -95,7 +97,22 @@ import { jsonEnvelope, jsonPayloadEnvelope, fail, isJsonOutput, pkgVersion } fro
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
-import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN, agentSkillName } from "./skill-hash.js";
+import {
+  hashSkillDirs,
+  hashSharedOnly,
+  computeContentSig,
+  skillHashEntries,
+  OS_JUNK_PATTERN,
+  agentSkillName,
+  ACTIVE_HASH_ALGO,
+  foldSnapshot,
+  renderWireEntries,
+  contentSigFromSnapshot,
+} from "./skill-hash.js";
+
+/** What NEW fingerprints record. Absent on a fingerprint means the legacy transform, so only the post-epoch
+ *  algorithm is ever written out. */
+const ACTIVE_HASH_FORMAT: "jcs1" | undefined = ACTIVE_HASH_ALGO === "jcs1" ? "jcs1" : undefined;
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrubField } from "../secrets.js";
@@ -351,7 +368,7 @@ export interface Cassette {
 //  The only value that currently needs v11 is `lane: "remote"` (changes replay-verdict semantics a
 //  pre-lane reader doesn't know about); `lane: "local"`/omitted — nearly every existing scenario — still
 //  stamps v10, unchanged. No hashing or manifest-shape change; HASH_FORMAT_EPOCH stays at v8.
-export const CASSETTE_VERSION = 11;
+export const CASSETTE_VERSION = 12;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -364,7 +381,7 @@ export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
 // NUL-framed (closes unframed-concatenation collisions). Kept as documentation of which algorithm
 // version is now implicitly guaranteed by the read floor; no code branches on it anymore (the classifier
 // that once compared a per-cassette algorithm version against this constant was deleted with the floor).
-const CONTENTSIG_ALGO = 4;
+const CONTENTSIG_ALGO = 5;
 
 /** The last cassette format version that actually changed HASHING (skillHash/contentSig framing or
  *  algorithm) — v7→v8 bumped CONTENTSIG_ALGO 3→4 to fix the two framing collisions (see CHANGELOG). v9
@@ -374,7 +391,7 @@ const CONTENTSIG_ALGO = 4;
  *  "recorded under an older hash format" classification keys off THIS constant, not CASSETTE_VERSION —
  *  otherwise a correctly-current v9/v10/v11 cassette with genuine skill drift would get a false "older
  *  format" finding and lose its per-bucket drift attribution. */
-const HASH_FORMAT_EPOCH = 8;
+const HASH_FORMAT_EPOCH = 12;
 
 /** Canonical URL of the JSON Schema for a given STAMPED cassette version.
  *  Appears in every written cassette as `$schema` so editors and unfamiliar readers can discover what
@@ -423,7 +440,10 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
  *  schema. */
 export function requiredVersionFor(scenario: unknown): number {
   const s = (scenario ?? {}) as Record<string, unknown>;
-  const BASE = 10;
+  // Derived, never hard-coded: this is what actually gets STAMPED at both write sites, so a hash-format
+  // bump that moved only CASSETTE_VERSION/HASH_FORMAT_EPOCH would write new-algorithm digests into
+  // cassettes stamped with an old version — permanently mislabelled, and unprovable at the next epoch.
+  const BASE = HASH_FORMAT_EPOCH;
   return Math.max(BASE, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
 }
 
@@ -596,12 +616,52 @@ function declaredSkillDirs(cfg: SessionConfig): string[] {
   });
 }
 
+/** Where a cassette's session path came from. Surfaced so an explicit override is never silent — a
+ *  `--session` that pins the wrong tree would manufacture false greens, which is worse than an honest
+ *  "cannot verify". */
+export type SessionPathSource = "override" | "cassette-relative" | "as-given" | "inline";
+
+/** Why a resolution produced no skill dirs. ABSENT means "resolved fine, the session simply declares
+ *  none" — a distinction the call sites below could not previously make, because every failure path
+ *  returned a bare `[]`. An empty `dirs` therefore meant *anything*: missing file, unparseable YAML, or
+ *  a perfectly good session with no mounts. `buildFingerprint` then dropped `skillHash` either way. */
+export type SessionResolutionFailure =
+  | { kind: "inline-without-config" }
+  | { kind: "not-found"; path: string }
+  | { kind: "unreadable"; path: string; message: string }
+  /** The session parsed, but EVERY declared skill root was filtered as non-existent by
+   *  `declaredSkillDirs`. The most likely outcome of a WRONG `--session`: a session's mounts are relative
+   *  to ITS OWN directory, so a correct session file copied or symlinked elsewhere declares real mounts
+   *  that resolve to nothing. Distinct from "declares no mounts at all", which is not a failure. */
+  | { kind: "declared-dirs-missing"; path: string; declared: number };
+
+/** THE single cassette-relative join.
+ *
+ *  It was previously duplicated BYTE-IDENTICALLY in three different functions — `skillSourceDirs`,
+ *  `buildSessionFingerprint` and `loadCassetteSessionFolders`. An override landing on only one of them
+ *  produces a split-brain cassette: skill staleness resolves against the override while session-shape or
+ *  folder resolution still resolves against the cassette dir. That failure is QUIET — a green replay with
+ *  a sessionFingerprint note, or skills resolved against unresolved folders, and nothing names the
+ *  inconsistency. Route every consumer through here. */
+export function resolveCassetteSessionPath(
+  sessionPath: string,
+  cassetteDir?: string,
+  override?: string,
+): { path: string; source: SessionPathSource } {
+  // Inline scenarios have no session FILE, so there is nothing an override could point at.
+  if (sessionPath === "(inline)") return { path: sessionPath, source: "inline" };
+  if (override) return { path: override, source: "override" };
+  if (cassetteDir && !isAbsolute(sessionPath)) return { path: join(cassetteDir, sessionPath), source: "cassette-relative" };
+  return { path: sessionPath, source: "as-given" };
+}
+
 function skillSourceDirs(
   sessionPath: string,
   cassetteDir?: string,
   inlineSession?: SessionConfig,
-): { dirs: string[]; baseDir: string; hashIgnore: string[] } {
-  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  override?: string,
+): { dirs: string[]; baseDir: string; hashIgnore: string[]; source: SessionPathSource; failure?: SessionResolutionFailure } {
+  const { path: resolved, source } = resolveCassetteSessionPath(sessionPath, cassetteDir, override);
   const baseDir = dirname(resolved);
   // The `skill`/`probe-dispatch` lanes mount via an in-memory session and pass the "(inline)" sentinel as
   // the path — there is no file to read, but the resolved session object carries the same mounts a session
@@ -609,10 +669,10 @@ function skillSourceDirs(
   // Its paths are already absolute (resolveSessionPaths at the call site), so `skillSources` is stored
   // relative to cwd — the base those paths were resolved against — to avoid leaking an absolute host path.
   if (sessionPath === "(inline)") {
-    if (!inlineSession) return { dirs: [], baseDir, hashIgnore: [] };
-    return { dirs: declaredSkillDirs(inlineSession), baseDir: process.cwd(), hashIgnore: inlineSession.staleness.hash_ignore };
+    if (!inlineSession) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "inline-without-config" } };
+    return { dirs: declaredSkillDirs(inlineSession), baseDir: process.cwd(), hashIgnore: inlineSession.staleness.hash_ignore, source };
   }
-  if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [] };
+  if (!existsSync(resolved)) return { dirs: [], baseDir, hashIgnore: [], source, failure: { kind: "not-found", path: resolved } };
   let cfg;
   try {
     // Mirror loadSessionFromFile (execute.ts): parse the YAML, then RESOLVE its relative skill/plugin
@@ -621,11 +681,26 @@ function skillSourceDirs(
     // string to loadSession() throws (it wants parsed YAML) — the swallowed throw is why skillHash was
     // silently never computed.
     cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), baseDir);
-  } catch {
-    return { dirs: [], baseDir, hashIgnore: [] };
+  } catch (e) {
+    // Previously a bare `return { dirs: [] }` — the swallowed throw is why skillHash was silently never
+    // computed, per the comment above. Keep the same control flow; stop discarding the reason.
+    return {
+      dirs: [],
+      baseDir,
+      hashIgnore: [],
+      source,
+      failure: { kind: "unreadable", path: resolved, message: String((e as Error)?.message ?? e) },
+    };
   }
   // session-declared ignore globs (added to any plugin-local .cowork-hashignore inside hashSkillDirs).
-  return { dirs: declaredSkillDirs(cfg), baseDir, hashIgnore: cfg.staleness.hash_ignore };
+  const dirs = declaredSkillDirs(cfg);
+  const declared = [...cfg.skills.local, ...cfg.plugins.local_plugins, ...cfg.plugins.remote_plugins, ...cfg.plugins.local_marketplaces]
+    .length;
+  // Declared > 0 but resolved 0 is a FAILURE, not an empty session — and reporting "this session mounts
+  // none" for it states the opposite of the truth.
+  const failure: SessionResolutionFailure | undefined =
+    dirs.length === 0 && declared > 0 ? { kind: "declared-dirs-missing", path: resolved, declared } : undefined;
+  return { dirs, baseDir, hashIgnore: cfg.staleness.hash_ignore, source, ...(failure ? { failure } : {}) };
 }
 
 /** Best-effort git commit provenance for the skill dirs a session mounts — the human-readable "which
@@ -803,6 +878,165 @@ export function checkLabelProvenance(stamp: Fingerprint["labelProvenance"], dirs
   return drift;
 }
 
+/**
+ * Recompute a cassette's digests from ONE walk, under BOTH algorithms.
+ *
+ * The migration proof needs the LEGACY digest (to show a pre-epoch recording is unchanged) and the new
+ * one (to write). Two separate walks would let a concurrent edit pass the proof and then migrate different
+ * content, so both are folded from a single snapshot.
+ *
+ * `contentSig` is deliberately NOT the proof. It is algorithm-DEPENDENT (the manifest transform feeds it)
+ * and, worse, it is blind to `D:` directory markers pre-v5 — an added empty directory moves `skillHash`
+ * and leaves `contentSig` identical, so a contentSig-only proof would vouch for genuinely drifted content.
+ */
+export function recomputeBothAlgos(
+  sessionPath: string,
+  cassetteDir: string | undefined,
+  scopeSkills: string[] | undefined,
+  baselineAppVersion: string,
+): {
+  legacyHash: string;
+  legacySigs: [string, string][];
+  live: Fingerprint;
+  mode: "git" | "raw";
+  agentScoped: boolean;
+  readErrors?: string[];
+} | null {
+  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+  if (dirs.length === 0) return null;
+  const res = hashSkillDirs(dirs, scopeSkills, hashIgnore); // ONE walk — everything below folds from res.snapshot
+  const entries = renderWireEntries(res.snapshot);
+  const live: Fingerprint = {
+    baseline: baselineAppVersion,
+    hashFormat: ACTIVE_HASH_FORMAT,
+    skillHash: res.hash,
+    contentSig: contentSigFromSnapshot(res.snapshot),
+    skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+    // Scoped cassettes carry `sharedHash` so `computeStaleness` can name WHICH bucket drifted. Three
+    // constraints, and only one implementation satisfies all of them:
+    //   - it must be RECOMPUTED, not carried over — `.claude-plugin/plugin.json` lives in the shared root,
+    //     so its digest moves under jcs1 for any unsorted manifest;
+    //   - it must not be DROPPED — `computeStaleness` splits buckets only when BOTH sides carry it, so
+    //     losing it silently costs attribution forever;
+    //   - it must be the value LIVE VERIFY will recompute. That rules out folding a filtered snapshot: the
+    //     snapshot is git-tracked-filtered and agent-scope-blind, while `hashSharedOnly` does a raw walk and
+    //     drops skill-named agents under COWORK_HARNESS_AGENT_SCOPE=skill. Either divergence produces a
+    //     migrated value that can never match, so every later bucket split would report a false
+    //     `shared-root`. Call the SAME function `buildFingerprint` calls, guard included.
+    ...sharedHashFor(dirs, hashIgnore, scopeSkills),
+    ...(res.mode === "git" ? { mode: "git" as const } : {}),
+    ...(res.agentScoped ? { agentScope: "skill" as const } : {}),
+    ...(entries.length > MANIFEST_MAX_FILES
+      ? { fileSigsOmitted: true }
+      : { fileSigs: entries.map((e) => [e.path, e.sha] as [string, string]) }),
+  };
+  return {
+    legacyHash: foldSnapshot(res.snapshot, "legacy"),
+    // The pre-epoch per-file manifest, for the alignment proof. `live.fileSigs` is already jcs1, so it
+    // cannot be compared against what a pre-epoch cassette actually recorded.
+    legacySigs: renderWireEntries(res.snapshot, "legacy").map((e) => [e.path, e.sha] as [string, string]),
+    live,
+    mode: res.mode,
+    agentScoped: res.agentScoped,
+    ...(res.readErrors ? { readErrors: res.readErrors } : {}),
+  };
+}
+
+/**
+ * Migrate a fingerprint across a hash-format bump: replace ONLY the algorithm-derived values, carry
+ * everything else through from the RECORDING.
+ *
+ * A `{ ...liveFingerprint }` spread looks equivalent and is not. `buildFingerprint` cannot produce
+ * `promptAssetsHash` unless it is handed a baseline object (rehash does not hand it one), and it never
+ * produces `labelProvenance` at all — so the spread silently DELETED both provenance guards on every
+ * migration. Measured: a recorded `promptAssetsHash` of 491afe2862dc67ea became absent.
+ *
+ * `fileSigs` keeps its RECORDED paths and takes only the new digests, index-aligned. Cassette paths are
+ * redacted before writing, so rebuilding the list from a live walk would write unredacted source paths
+ * back into a redacted cassette — a privacy regression. Alignment is validated first (an aggregate digest
+ * proof says nothing about whether the array is well-formed), and absence is preserved rather than
+ * materialised into a fresh live list.
+ */
+export function migrateFingerprint(
+  recorded: Fingerprint,
+  live: Fingerprint,
+  legacySigs?: [string, string][],
+): { fingerprint: Fingerprint } | { error: string } {
+  // ALIGNMENT IS A PRECONDITION, not a best-effort. An aggregate digest proof says nothing about whether
+  // the recorded manifest array is well-formed, and silently keeping OLD per-file digests beside a NEW
+  // `skillHash` + `hashFormat: jcs1` would stamp a fingerprint that contradicts itself — every later
+  // drift attribution would then name the wrong file while the cassette claimed to be current.
+  if (recorded.fileSigs && live.fileSigs) {
+    if (recorded.fileSigs.length !== live.fileSigs.length)
+      return {
+        error: `fileSigs entry count differs (recorded ${recorded.fileSigs.length}, live ${live.fileSigs.length}) — cannot migrate`,
+      };
+    for (let i = 0; i < recorded.fileSigs.length; i++) {
+      const recIsLink = recorded.fileSigs[i][1].startsWith("lnk:");
+      const liveIsLink = live.fileSigs[i][1].startsWith("lnk:");
+      if (recIsLink !== liveIsLink) return { error: `fileSigs entry ${i} changed kind (file <-> link) — cannot migrate` };
+    }
+    // THE SEQUENCE PROOF. Count and kind do not establish that entry i is the SAME file on both sides: a
+    // sort change, or two roots sharing a root-relative path, would pair a redacted path with another
+    // file's digest while `rehash` still reported "migrated". Compare against the LEGACY manifest
+    // recomputed from the proof snapshot — `live.fileSigs` is already jcs1 and cannot be compared to what
+    // a pre-epoch cassette recorded.
+    // MANDATORY, not opportunistic. Absence of the legacy recompute is a REFUSAL, not a skip: without it
+    // count and kind would stamp `hashFormat: "jcs1"` beside index-aligned swaps that were never shown to
+    // pair the same files. `migrateFingerprint` is exported, so a caller that omits it must not get a
+    // weaker guarantee than `rehash` does.
+    if (!legacySigs) return { error: "no legacy manifest to compare against — cannot prove fileSigs alignment; cannot migrate" };
+    {
+      if (legacySigs.length !== recorded.fileSigs.length)
+        return {
+          error: `fileSigs count differs from the legacy recompute (recorded ${recorded.fileSigs.length}, legacy ${legacySigs.length}) — cannot migrate`,
+        };
+      for (let i = 0; i < recorded.fileSigs.length; i++) {
+        if (recorded.fileSigs[i][1] !== legacySigs[i][1])
+          return { error: `fileSigs entry ${i} does not match the legacy recompute — order or content differs; cannot migrate` };
+      }
+    }
+  } else if (recorded.fileSigs && !live.fileSigs) {
+    // Recorded a manifest, cannot rebuild one: refuse rather than leave stale per-file digests beside a
+    // new aggregate. The reverse is FINE — a cassette that never recorded `fileSigs` (pre-v5, or
+    // `fileSigsOmitted` above the cap) keeps its absence; materialising a fresh live list would both
+    // invent data the recording never had and write unredacted paths.
+    return { error: "recorded fileSigs cannot be rebuilt from the current tree — cannot migrate" };
+  }
+  const out: Fingerprint = { ...recorded };
+  out.skillHash = live.skillHash;
+  out.hashFormat = live.hashFormat;
+  if (live.contentSig !== undefined) out.contentSig = live.contentSig;
+  else delete out.contentSig;
+  if (live.sharedHash !== undefined) out.sharedHash = live.sharedHash;
+  else delete out.sharedHash;
+  out.mode = live.mode;
+  // Index-aligned digest swap, RECORDED paths preserved (they are redacted; a live rebuild would write
+  // unredacted source paths back into a redacted cassette). Absence is preserved, never materialised.
+  if (recorded.fileSigs && live.fileSigs) {
+    out.fileSigs = recorded.fileSigs.map(([p], i) => [p, live.fileSigs![i][1]] as [string, string]);
+  }
+  return { fingerprint: out };
+}
+
+/** The `sharedHash` rule, in ONE place. Both `buildFingerprint` and the migration must produce the same
+ *  number or bucket attribution reports drift that is not there — so neither may reimplement the filter.
+ *  Only set when every dir is a plugin-root: a mix including individual-skill mounts makes the split
+ *  unreliable, since those dirs feed `skillHash` but not `sharedHash`. */
+function sharedHashFor(dirs: string[], hashIgnore: string[], scopeSkills: string[] | undefined): { sharedHash?: string } {
+  if (!scopeSkills || scopeSkills.length === 0) return {};
+  const allPluginRoots = dirs.every((d) => {
+    try {
+      return statSync(join(d, "skills")).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (!allPluginRoots) return {};
+  const sh = hashSharedOnly(dirs, hashIgnore);
+  return sh !== null ? { sharedHash: sh } : {};
+}
+
 /** Attach `labelProvenance` to an already-built fingerprint. Separate from `buildFingerprint` because the
  *  labels come from `controlOut`, which exists only after the run — and best-effort throughout: a stamp is
  *  a diagnostic bonus, so any failure to resolve the session or read prose yields no stamp rather than
@@ -826,10 +1060,15 @@ export function buildFingerprint(
   scopeSkills?: string[],
   baseline?: PlatformBaseline,
   inlineSession?: SessionConfig,
+  sessionOverride?: string,
 ): Fingerprint {
   const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
-  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession);
-  if (dirs.length === 0) return { baseline: baselineAppVersion, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
+  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
+  // `hashFormat` is stamped on EVERY return path, including the two early ones. A v12 fingerprint that
+  // omits it violates the load-time invariant and would fail its own validation — so a baseline-only or
+  // read-error recording must carry it just like a full one.
+  if (dirs.length === 0)
+    return { baseline: baselineAppVersion, hashFormat: ACTIVE_HASH_FORMAT, ...(promptAssetsHash ? { promptAssetsHash } : {}) };
   // hashSkillDirs excludes recorded cassettes (*.cassette.json) + VCS/cache dirs so a committed cassette
   // and unrelated VCS noise don't self-invalidate the fingerprint they were recorded under. When
   // scopeSkills is set, the hash is scoped to those skills' dirs + the plugin's shared roots (fail-closed);
@@ -846,6 +1085,7 @@ export function buildFingerprint(
   if (hashResult.readErrors && hashResult.readErrors.length > 0) {
     return {
       baseline: baselineAppVersion,
+      hashFormat: ACTIVE_HASH_FORMAT,
       skillSources: dirs.sort().map((d) => relative(baseDir, d)),
       ...(promptAssetsHash ? { promptAssetsHash } : {}),
     };
@@ -854,6 +1094,7 @@ export function buildFingerprint(
   // the dirs from the session), so a relative path is enough and never leaks an absolute `/Users/...` path.
   const fp: Fingerprint = {
     baseline: baselineAppVersion,
+    hashFormat: ACTIVE_HASH_FORMAT,
     skillHash: hashResult.hash,
     ...(promptAssetsHash ? { promptAssetsHash } : {}),
     contentSig: computeContentSig(dirs, scopeSkills, hashIgnore), // v6: unified onto the skillHash walk (same set)
@@ -871,24 +1112,10 @@ export function buildFingerprint(
   if (entries.length > MANIFEST_MAX_FILES) fp.fileSigsOmitted = true;
   else fp.fileSigs = entries.map((e) => [e.path, e.sha] as [string, string]);
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
-  // for scoped cassettes, store the shared-root hash separately so checkStaleness can name
-  // the changed bucket (skill vs shared root) at verify time.
-  if (scopeSkills && scopeSkills.length) {
-    // Only store sharedHash when ALL dirs are plugin-roots; a mix that includes individual-skill-mount dirs
-    // (dirs without a top-level skills/) makes bucket diagnosis unreliable — those dirs contribute to
-    // skillHash but not to sharedHash, so a change there would be mis-attributed to the scoped skill.
-    const allPluginRoots = dirs.every((d) => {
-      try {
-        return statSync(join(d, "skills")).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-    if (allPluginRoots) {
-      const sh = hashSharedOnly(dirs, hashIgnore);
-      if (sh !== null) fp.sharedHash = sh;
-    }
-  }
+  // Scoped cassettes carry the shared-root hash so checkStaleness can name the changed bucket. The
+  // rule lives in `sharedHashFor` because the MIGRATION must produce the identical number — two
+  // implementations of this filter is how a scoped rehash starts reporting a false `shared-root`.
+  Object.assign(fp, sharedHashFor(dirs, hashIgnore, scopeSkills));
   return fp;
 }
 
@@ -904,6 +1131,22 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
   const liveMode = live.mode ?? "raw";
   if (recMode !== liveMode) return `recorded in '${recMode}' file-set mode, now '${liveMode}' (COWORK_HARNESS_GITSET)`;
   if ((rec.agentScope ?? "off") !== (live.agentScope ?? "off")) return "agent-scope changed (COWORK_HARNESS_AGENT_SCOPE)";
+  // HASH FORMAT, before the digest comparison. A kept RunResult carries NO version — unlike a cassette,
+  // there is no `cassetteVersion` to route it to the epoch branch — so without this check every run kept
+  // before the epoch reports "the skill/plugin source changed", which is false and gives the operator no
+  // idea what to do. Same shape as the two config discriminators above it: name the real cause instead of
+  // letting an incomparable digest masquerade as drift.
+  //
+  // ABSENT means the LEGACY transform, never "raw" — a pre-epoch run's manifest digests are already
+  // version-stripped. An UNKNOWN id is reported loudly rather than coerced to either format: silently
+  // treating a future `jcs2` as legacy would compare across algorithms and call it source drift again.
+  const recFormat = rec.hashFormat ?? "legacy";
+  const liveFormat = live.hashFormat ?? "legacy";
+  if (recFormat !== liveFormat) {
+    if (recFormat !== "legacy" && recFormat !== "jcs1")
+      return `recorded under an unrecognized hash format '${recFormat}' — this build cannot verify it; re-record`;
+    return `recorded under hash format '${recFormat}', this build hashes '${liveFormat}' — digests are not comparable; re-record`;
+  }
   if (live.skillHash !== rec.skillHash) return "the skill/plugin source changed since this run was recorded";
   return null;
 }
@@ -919,9 +1162,11 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
  *  undefined ("can't verify", never a false mismatch) for an inline scenario or when the session file
  *  can't be read/parsed from `sessionPath` (resolved against `cassetteDir` exactly like
  *  `skillSourceDirs`). Arrays are sorted before hashing so authoring order can't spuriously move the hash. */
-export function buildSessionFingerprint(sessionPath: string, cassetteDir?: string): string | undefined {
+export function buildSessionFingerprint(sessionPath: string, cassetteDir?: string, override?: string): string | undefined {
   if (sessionPath === "(inline)") return undefined;
-  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  // Same resolver as skillSourceDirs: an override that reached only ONE of them would verify skill
+  // staleness against the override while hashing session SHAPE from the old location.
+  const { path: resolved } = resolveCassetteSessionPath(sessionPath, cassetteDir, override);
   if (!existsSync(resolved)) return undefined;
   let cfg;
   try {
@@ -1027,6 +1272,12 @@ function isCapabilityManifest(line: string): boolean {
  *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
 const HOST_INHERITING_TIERS: ReadonlySet<string> = new Set(["protocol", "hostloop", "cowork"]);
 
+/** Every tier name this build understands. Used ONLY by `readCassetteForScan`, to refuse to pass an
+ *  unrecognized tier through to the scan's set-membership gate — see the fail-closed note there.
+ *  Derived from the canonical `FIDELITY_TIERS`, never spelled out: a second literal tier list is what
+ *  `test/fidelity-tiers-single-source.test.ts` exists to stop, and it caught this one. */
+const KNOWN_TIERS: ReadonlySet<string> = new Set<string>(FIDELITY_TIERS);
+
 /** Plugin names the scenario mounted, harvested from anywhere in the event stream.
  *
  *  `system/init` carries `plugins[]` beside `agents[]`, so that surface is self-sufficient — but the
@@ -1060,7 +1311,48 @@ export function collectDeclaredPlugins(events: string[] | undefined): string[] {
   return [...names];
 }
 
-export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
+/**
+ * The EXACT subset of a cassette the privacy scan reads — and the point of the read-boundary split.
+ *
+ * WHY THIS TYPE EXISTS. `verify-cassettes` does two independent jobs: a privacy scan ("does this
+ * recording carry the recording machine's MCP servers / agents / account org?") and a staleness check
+ * ("is it out of date?"). Both used to sit behind one `readCassette`, so a document that failed SHAPE
+ * validation was never privacy-scanned at all — `verifyOneCassette` returned early and `scanCassette` on
+ * the next line never ran. That is backwards: shape validity is what REPLAY needs, and a file too broken
+ * to replay is exactly the kind of file a leak arrives in. Whether a transcript can be READ and whether a
+ * cassette is VALID are different questions, and only the first one gates a privacy scan.
+ *
+ * Narrowing the parameter type is what makes the split safe rather than merely convenient: the compiler
+ * now guarantees the scan cannot reach for a field `readCassetteForScan`'s projection does not supply.
+ * Adding a new scan axis that reads some other field is a TYPE ERROR here until the projection carries it
+ * — which is the whole guard against a future axis silently reading `undefined` off a partial document.
+ *
+ * `Cassette` is structurally assignable to this, so every existing caller is unaffected.
+ */
+export interface ScannableCassette {
+  events: string[];
+  controlOut?: string[];
+  effectiveFidelity?: string;
+  artifacts?: Cassette["artifacts"];
+  fingerprint?: { skillSources?: string[]; fileSigs?: Array<[string, string]> };
+  // Structural METADATA — a customer folder mount name, a scenario name, a private-registry image ref.
+  // These are name fields, invisible to a net aimed at transcript text, and are exactly the shape of the
+  // inventory leak this repo already shipped, so the projection must carry them.
+  userVisibleRoots?: string[];
+  scenarioSource?: string;
+  environment?: { agentImage?: { ref?: string } };
+  // `fidelity` is a plain string here, NOT the Scenario literal union — a malformed document can carry
+  // anything, and the projection is responsible for refusing to pass through a value it cannot vouch for
+  // (see `knownTier` in `readCassetteForScan`). `answers`/`assert` are only ever JSON.stringify'd by the
+  // scan, so their precise Scenario types buy nothing and would force a cast at the projection.
+  scenario: Partial<Pick<Cassette["scenario"], "prompt" | "name" | "session">> & {
+    fidelity?: string;
+    answers?: unknown;
+    assert?: unknown[];
+  };
+}
+
+export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
   const MANIFEST = MANIFEST_SCAN_PATTERNS; // email + path + machine-inventory — for the capability-manifest messages
@@ -1146,7 +1438,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
     } else if (a.truncated)
       findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
   }
-  findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow, FULL));
+  findings.push(...scanText(cassette.scenario.prompt ?? "", "scenario.prompt", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
   for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
@@ -1175,14 +1467,19 @@ const DEBUG_SKILLHASH_ENV = "COWORK_HARNESS_DEBUG_SKILLHASH";
 /** Debug: dump the per-file entries currently feeding the skill hash for a session (same resolution as
  *  `buildFingerprint`), so a staleness mismatch shows WHICH files are in the hash — incl. unexpected
  *  OS-junk / run-generated files that are the usual "stale immediately after record" cause. */
-function explainSkillHash(sessionPath: string, cassetteDir: string | undefined, scopeSkills?: string[]): { path: string; sha: string }[] {
-  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
+function explainSkillHash(
+  sessionPath: string,
+  cassetteDir: string | undefined,
+  scopeSkills?: string[],
+  sessionOverride?: string,
+): { path: string; sha: string }[] {
+  const { dirs, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, undefined, sessionOverride);
   if (dirs.length === 0) return [];
   return skillHashEntries(dirs, scopeSkills, hashIgnore);
 }
 
 /** Debug: on a skillHash mismatch, if COWORK_HARNESS_DEBUG_SKILLHASH=1, write the file set the hash sees
- *  to stderr (flagging OS-junk) plus whether the algorithm-independent contentSig also drifted. When the flag
+ *  to stderr (flagging OS-junk) plus whether contentSig also drifted. When the flag
  *  is OFF, write a one-line hint so the affordance is discoverable. Diagnostics only — never affects the gate. */
 /** The discoverability hint is a CONSTANT string, so repeating it once per drifting cassette is pure
  *  noise (a 16-cassette fleet replay printed it 16x). Once per process is the whole affordance. Only the
@@ -1190,7 +1487,13 @@ function explainSkillHash(sessionPath: string, cassetteDir: string | undefined, 
  *  the entire point of the flag. */
 let skillHashHintShown = false;
 
-function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fingerprint, live: Fingerprint): void {
+function debugSkillHashMismatch(
+  cassette: Cassette,
+  cassetteDir: string,
+  fp: Fingerprint,
+  live: Fingerprint,
+  sessionOverride?: string,
+): void {
   if (process.env[DEBUG_SKILLHASH_ENV] !== "1") {
     if (!skillHashHintShown) {
       skillHashHintShown = true;
@@ -1203,7 +1506,9 @@ function debugSkillHashMismatch(cassette: Cassette, cassetteDir: string, fp: Fin
   const scope = cassette.scenario.skills?.length ? cassette.scenario.skills.join(", ") : "whole-tree";
   let entries: { path: string; sha: string }[] = [];
   try {
-    entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills);
+    // Must carry the override: without it the dump enumerates the RECORDED location, which under
+    // `--session` no longer resolves — an empty or wrong file list exactly when it is most needed.
+    entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills, sessionOverride);
   } catch (e) {
     process.stderr.write(`cowork-harness: skill-hash debug: could not enumerate files: ${String((e as Error)?.message ?? e)}\n`);
     return;
@@ -1235,6 +1540,27 @@ export interface FileSigDiff {
 
 /** v5: diff two per-file manifests (recorded vs live) into the exact changed/added/removed path lists.
  *  Exported for the diff engine (artifacts view) — the exact same [path, sha256] shape it needs. */
+/** Root-relative `fileSigs` paths are NOT unique across mounts: two roots can each hold
+ *  `skills/x/SKILL.md`, and the manifest then carries two entries with the same path and different shas.
+ *  Every consumer keys that manifest by path (`diffFileSigsPaths` builds `new Map(recorded)`), so
+ *  duplicates collapse to the last occurrence and the reported file list can name the wrong file or none.
+ *
+ *  This does NOT make drift undetectable — `skillHash` folds every entry, so the gate still fires. What it
+ *  breaks is ATTRIBUTION, and exact attribution is impossible without stored per-root identity: a multiset
+ *  diff cannot say WHICH root a changed `SKILL.md` came from, and swapping two roots' contents leaves the
+ *  sha multiset identical while the digest moves. So the honest report is "attribution unavailable", not a
+ *  guess. A real fix needs framed root IDs and namespaced manifest paths — a hash-format epoch change. */
+export function duplicateManifestPaths(sigs: ReadonlyArray<readonly [string, string]> | undefined): string[] {
+  if (!sigs) return [];
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const [path] of sigs) {
+    if (seen.has(path)) dupes.add(path);
+    else seen.add(path);
+  }
+  return [...dupes].sort();
+}
+
 export function diffFileSigsPaths(recorded: Array<[string, string]>, live: Array<[string, string]>): FileSigDiff {
   const rec = new Map(recorded);
   const liv = new Map(live);
@@ -1451,7 +1777,11 @@ function computeDiscoverySurfaceNote(cassette: Cassette): string[] {
   ];
 }
 
-export function computeStaleness(cassette: Cassette, cassetteDir: string | undefined): { findings: StalenessFinding[]; notes: string[] } {
+export function computeStaleness(
+  cassette: Cassette,
+  cassetteDir: string | undefined,
+  sessionOverride?: string,
+): { findings: StalenessFinding[]; notes: string[] } {
   const tier = computeTierStaleness(cassette);
   const findings: StalenessFinding[] = [...tier.findings];
   const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette)];
@@ -1484,15 +1814,74 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
     else findings.push(pa);
   }
   if (fp.skillHash) {
-    const live = buildFingerprint(cassette.scenario.session, fp.baseline, cassetteDir, cassette.scenario.skills);
+    // positions matter: (sessionPath, baselineAppVersion, cassetteDir, scopeSkills, baseline, inlineSession, sessionOverride)
+    const live = buildFingerprint(
+      cassette.scenario.session,
+      fp.baseline,
+      cassetteDir,
+      cassette.scenario.skills,
+      undefined,
+      undefined,
+      sessionOverride,
+    );
     const recMode = fp.mode ?? "raw";
     const liveMode = live.mode ?? "raw";
-    if (live.skillHash === undefined)
+    // EPOCH FIRST — before mode, agent scope and equality. All three of those compare values produced by
+    // two different algorithms, so reaching them first is meaningless. Concretely: a pre-epoch cassette
+    // that ALSO has a git/raw mode flip would take the mode branch, be classed `format` (waivable, warns,
+    // exits 0) and never reach here — a false green across the entire pre-epoch corpus.
+    //
+    // Class is `unverifiable-skill`, NOT `format`. `format` sits outside SKILL_DRIFT_CLASSES and outside
+    // the default replay gate, so it warns while exiting 0 — which on the day of an epoch bump is EVERY
+    // cassette in existence. `unverifiable-skill` already means "these two numbers cannot be compared, so
+    // this is not verified": it fails a bare replay, and it ESCALATES under an explicit `--session` rather
+    // than being quietened by it, which is correct — an override cannot make incomparable digests
+    // comparable.
+    const recordedVersion = cassette.cassetteVersion ?? 0;
+    if (live.skillHash === undefined) {
+      // Name WHY. Every failure path used to collapse into this one message, so "missing session file",
+      // "unparseable YAML" and "the session declares no mounts" were indistinguishable — and the first two
+      // point at completely different fixes (`--session <file>` vs repair the file). Re-resolving costs one
+      // YAML parse and only happens on a path that is already failing.
+      const why = skillSourceDirs(cassette.scenario.session, cassetteDir, undefined, sessionOverride).failure;
+      const detail =
+        why === undefined
+          ? ""
+          : why.kind === "not-found"
+            ? ` — no session file at ${why.path}${sessionOverride === undefined ? " (if the cassette moved, point at its session with --session <file>)" : ""}`
+            : why.kind === "unreadable"
+              ? ` — the session at ${why.path} could not be read or parsed: ${why.message}`
+              : why.kind === "declared-dirs-missing"
+                ? ` — the session at ${why.path} declares ${why.declared} skill dir(s) and none exist (mounts are relative to the session's OWN directory, so a session copied or symlinked elsewhere resolves to nothing)`
+                : " — an inline scenario carries no session file to resolve";
+      const where =
+        sessionOverride === undefined ? "from the cassette location" : `from the session given with --session (${sessionOverride})`;
       findings.push({
         class: "unverifiable-skill",
-        message: "skill dirs not resolvable from the cassette location — cannot verify skill staleness (can't verify ⇒ not green)",
+        message: `skill dirs not resolvable ${where}${detail || (why === undefined ? (fp.skillHash !== undefined ? " — the session resolved and its dirs exist, but some could not be READ, so the hash was dropped as unreliable" : " — the session resolved but declares no skill dirs to hash") : "")} — cannot verify skill staleness (can't verify ⇒ not green)`,
       });
-    else if (recMode !== liveMode)
+    } else if (fp.skillHash !== undefined && recordedVersion < HASH_FORMAT_EPOCH) {
+      // EPOCH, ahead of every WAIVABLE branch. Mode and agent-scope compare values produced by two
+      // different algorithms, so reaching them first is meaningless — and worse, both are classed
+      // `format`, which sits outside SKILL_DRIFT_CLASSES and outside the default replay gate. A pre-epoch
+      // cassette that ALSO had a mode flip would warn and exit 0: a false green across the whole
+      // pre-epoch corpus, on the exact day the epoch lands.
+      //
+      // It sits BELOW the unresolvable branch on purpose. That one is already a hard `unverifiable-skill`
+      // too, and "the skill dirs cannot be found" is the more specific, more actionable diagnosis — the
+      // operator's real problem is the session path, not the hash format.
+      //
+      // Class is `unverifiable-skill`, NOT `format`: it already means "these two numbers cannot be
+      // compared, so this is not verified". It fails a bare replay, and it ESCALATES under an explicit
+      // `--session` rather than being quietened by it, which is right — an override cannot make
+      // incomparable digests comparable.
+      findings.push({
+        class: "unverifiable-skill",
+        message:
+          `recorded under hash format v${recordedVersion} (now v${HASH_FORMAT_EPOCH}) — digests are not comparable across the change. ` +
+          `Run \`cowork-harness rehash <dir>\` to migrate, or \`rehash <file> --session <session>\` if the cassette has moved, or re-record`,
+      });
+    } else if (recMode !== liveMode)
       // A hash from a different boundary mode is not comparable — re-record, don't emit a misleading
       // content diff. Classed `format` (not skill drift): a mode flip is an env/config mismatch, not source drift.
       findings.push({
@@ -1507,17 +1896,8 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
         message: `recorded with agent-scope '${fp.agentScope ?? "off"}', verifying with '${live.agentScope ?? "off"}' (COWORK_HARNESS_AGENT_SCOPE) — re-record under the same setting`,
       });
     else if (live.skillHash !== fp.skillHash) {
-      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live); // surface WHICH files drifted
-      const recordedVersion = cassette.cassetteVersion ?? 0;
-      // HASH_FORMAT_EPOCH (not CASSETTE_VERSION): v9/v10/v11 all changed cassette SHAPE, none changed
-      // hashing, so a correctly-current cassette in that range must fall through to the drift-bucket
-      // attribution below, not this branch (P8; see HASH_FORMAT_EPOCH's doc comment).
-      if (recordedVersion < HASH_FORMAT_EPOCH) {
-        findings.push({
-          class: "format",
-          message: `recorded under an older hash format (v${recordedVersion} → v${CASSETTE_VERSION}) — re-record once after upgrading`,
-        });
-      } else if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
+      debugSkillHashMismatch(cassette, cassetteDir ?? "", fp, live, sessionOverride); // surface WHICH files drifted
+      if (fp.sharedHash !== undefined && live.sharedHash !== undefined) {
         // attribute drift to the shared and/or skill bucket(s). `skillScope` is always
         // non-empty when `sharedHash` is set (single assignment site under the same guard in buildFingerprint);
         // the `?? []` is a defensive guard only — the on-disk cassette shape is not schema-validated.
@@ -1525,6 +1905,15 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
         const scopeLabel = scopeArr.map((s) => `skills/${s}`).join(", ") || "skill";
         const scopeSet = new Set(scopeArr);
         const scopeAgents = (live.agentScope ?? "off") === "skill";
+        const dup = [...new Set([...duplicateManifestPaths(fp.fileSigs), ...duplicateManifestPaths(live.fileSigs)])];
+        if (dup.length)
+          findings.push({
+            // Bucket it like every other scoped finding: a duplicate under `skills/<x>/` is skill-private,
+            // anything else (a plugin manifest, a shared root file) belongs to the shared bucket. Hard-coding
+            // `skill` told a JSON gate filtering on class that shared-only drift was skill drift.
+            class: dup.every((p) => scopeArr.some((sk) => p.startsWith(`skills/${sk}/`))) ? "skill" : "shared-root",
+            message: `ambiguous duplicate manifest path(s) across mounts (${dup.slice(0, 3).join(", ")}${dup.length > 3 ? `, +${dup.length - 3} more` : ""}) — drift attribution is unavailable for them; the hash difference is still real`,
+          });
         if (fp.fileSigs && live.fileSigs) {
           // Path-accurate: emit a finding per bucket that ACTUALLY changed, so a co-occurring shared change can
           // never mask the skill's own drift (the original bug) and vice-versa.
@@ -1562,6 +1951,12 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
       } else {
         // Non-scoped (whole-tree) cassette: name the changed files when the per-file manifest is present,
         // else the generic fallback.
+        const dup = [...new Set([...duplicateManifestPaths(fp.fileSigs), ...duplicateManifestPaths(live.fileSigs)])];
+        if (dup.length)
+          findings.push({
+            class: "skill",
+            message: `ambiguous duplicate manifest path(s) across mounts (${dup.slice(0, 3).join(", ")}${dup.length > 3 ? `, +${dup.length - 3} more` : ""}) — drift attribution is unavailable for them; the hash difference is still real`,
+          });
         const summary = fp.fileSigs && live.fileSigs ? diffFileSigs(fp.fileSigs, live.fileSigs) : null;
         if (summary) findings.push({ class: "skill", message: `skill files changed since record — ${summary} — re-record` });
         else findings.push({ class: "skill", message: "local skill/plugin dir contents changed since record — re-record" });
@@ -1579,12 +1974,22 @@ export function computeStaleness(cassette: Cassette, cassetteDir: string | undef
   // a fourth severity nobody configured. Cassettes recorded before the stamp existed simply skip it.
   if (fp.labelProvenance?.length) {
     try {
-      const { dirs } = skillSourceDirs(cassette.scenario.session, cassetteDir);
+      const { dirs } = skillSourceDirs(cassette.scenario.session, cassetteDir, undefined, sessionOverride);
       for (const d of checkLabelProvenance(fp.labelProvenance, dirs)) findings.push({ class: "skill", message: `${d} — re-record` });
     } catch {
       /* an unresolvable session is already reported by the hash path above; don't double-report it here */
     }
   }
+  // Multi-root cassettes carry a limitation the digest cannot express: the roots fold into ONE hash with
+  // no root-boundary marker, so a file MOVED BETWEEN roots is invisible (a false green), and the roots'
+  // fold order comes from their absolute paths (false drift on a rename). Keyed on the RECORDED
+  // skillSources count, never on live resolved dirs — `declaredSkillDirs` filters roots that no longer
+  // exist, so a recorded two-root cassette with one root missing would look single-root and slip past.
+  // A NOTE, not a finding: it is a property of the recording's shape, not evidence anything drifted.
+  if ((cassette.fingerprint?.skillSources?.length ?? 0) >= 2)
+    notes.push(
+      `multi-root: cassette records ${cassette.fingerprint?.skillSources?.length} skill roots — skillHash cannot distinguish a file MOVED between roots, and root fold order follows absolute paths — a rename can read as drift. See docs/cassette.md.`,
+    );
   return { findings, notes };
 }
 
@@ -2161,6 +2566,15 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // The fingerprint was previously unvalidated — it arrived through the loose passthrough as untyped data,
+  // so nothing at the READ boundary enforced the version/format invariant. `looseObject` keeps unknown
+  // members, so this validates the two fields the epoch depends on without freezing the rest.
+  fingerprint: z
+    .looseObject({
+      skillHash: z.string().optional(),
+      hashFormat: z.string().optional(),
+    })
+    .optional(),
   scenario: z.looseObject({ prompt: z.string(), session: z.string(), assert: z.array(z.unknown()).optional() }),
   // v9 (Finding 23/24) — both optional; absent on any pre-v9 cassette (backward-compat).
   sessionFingerprint: z.string().optional(),
@@ -2173,6 +2587,166 @@ const CassetteShape = z.looseObject({
  *  slugifies, so `cassettes/My Run.cassette.json` reported but `cassettes/my-run.cassette.json` written). */
 export function defaultCassettePath(scenarioName: string): string {
   return join("cassettes", `${slugForPath(scenarioName)}.cassette.json`);
+}
+
+/**
+ * Read a cassette for the PRIVACY SCAN ONLY, with no shape validation beyond "is there a transcript".
+ *
+ * The other half of the read-boundary split (see `ScannableCassette`). `readCassette` stays strict —
+ * everything downstream of it (replay, staleness, the version/hashFormat invariant) depends on that, and
+ * it was deliberately tightened for the hash-format epoch. This function does NOT relax it; it is a
+ * separate, narrower door for the one job that never needed document validity in the first place.
+ *
+ * The only hard requirement is `events: string[]`. Everything else is best-effort and dropped when it is
+ * not the expected shape, because a partially-corrupt document must still be scannable — that is the
+ * entire point. Two consequences worth being explicit about:
+ *
+ *  - A dropped `fidelity`/`effectiveFidelity` leaves the tier UNDEFINED, which `scanCassette` treats as
+ *    host-inheriting and scans structurally. Fail-closed, and the direction we want here.
+ *  - This function MUST NOT throw. It runs on files that are already known to be malformed; a crash here
+ *    reads as "the rest were fine" for every remaining file in a batch walk.
+ */
+export function readCassetteForScan(path: string): { scannable: ScannableCassette } | { error: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { error: "not a JSON object" };
+  const o = raw as Record<string, unknown>;
+
+  const strings = (v: unknown): string[] | undefined =>
+    Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined;
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const obj = (v: unknown): Record<string, unknown> | undefined =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  // Only a tier this build positively recognizes survives; anything else becomes `undefined`, which
+  // `scanCassette` treats as host-inheriting. Never widen this to "any string".
+  const knownTier = (v: unknown): string | undefined => (typeof v === "string" && KNOWN_TIERS.has(v) ? v : undefined);
+
+  // The ONE hard requirement. Without a transcript there is nothing to scan, and saying so is honest —
+  // reporting "clean" for a file we could not read is the false-green this whole split exists to remove.
+  const events = strings(o.events);
+  if (events === undefined) return { error: "no readable transcript (`events` is not an array of strings)" };
+
+  const scenario = obj(o.scenario) ?? {};
+  const fingerprint = obj(o.fingerprint);
+  const environment = obj(o.environment);
+  const agentImage = environment ? obj(environment.agentImage) : undefined;
+
+  return {
+    scannable: {
+      events,
+      controlOut: strings(o.controlOut),
+      // FAIL CLOSED on a tier we do not recognize. `scanCassette` exempts a positively-sealed tier and
+      // scans everything else, INCLUDING `undefined` — but it tests set membership, so an arbitrary string
+      // (`"garbage"`, or a typo'd `"containerr"`) is neither undefined nor host-inheriting and would SKIP
+      // the structural host-inventory scan entirely. The strict reader cannot produce that (Zod validates
+      // fidelity to a literal union); this reader can, because malformed input is its whole job. So a tier
+      // that is not a known one is dropped to `undefined`, which scans.
+      effectiveFidelity: knownTier(o.effectiveFidelity),
+      // Artifacts are read for `path`/`body`/`encoding`; keep only entries that actually carry a string
+      // path, so a malformed element cannot make `scanCassette` throw mid-walk.
+      artifacts: (Array.isArray(o.artifacts) ? o.artifacts : []).filter(
+        (a): a is NonNullable<Cassette["artifacts"]>[number] => obj(a) !== undefined && typeof (a as { path?: unknown }).path === "string",
+      ),
+      fingerprint:
+        fingerprint === undefined
+          ? undefined
+          : {
+              skillSources: strings(fingerprint.skillSources),
+              fileSigs: (Array.isArray(fingerprint.fileSigs) ? fingerprint.fileSigs : []).filter(
+                (e): e is [string, string] => Array.isArray(e) && typeof e[0] === "string",
+              ),
+            },
+      userVisibleRoots: strings(o.userVisibleRoots),
+      scenarioSource: str(o.scenarioSource),
+      environment: agentImage === undefined ? undefined : { agentImage: { ref: str(agentImage.ref) } },
+      scenario: {
+        prompt: str(scenario.prompt),
+        fidelity: knownTier(scenario.fidelity),
+        answers: scenario.answers,
+        assert: Array.isArray(scenario.assert) ? scenario.assert : undefined,
+        name: str(scenario.name),
+        session: str(scenario.session),
+      },
+    },
+  };
+}
+
+/** The finding classes that mean "this recording carries the RECORDING MACHINE's identity" — as opposed to
+ *  the content classes (`email`, `currency`, `domain`, `path`), which are frequently legitimate scenario
+ *  content: a cap-table fixture is SUPPOSED to contain currency figures and customer domains. Quarantining
+ *  on those would make `record` unusable and train the operator to pass the escape flag by reflex, which is
+ *  how a safety gate becomes decoration. These two are never legitimate output of a scenario. */
+const QUARANTINE_CLASSES: ReadonlySet<string> = new Set(["host-inventory", "machine-inventory"]);
+
+/** Where a leaking recording goes instead of the path the operator asked for.
+ *
+ *  Inside the runs root, which already exists to keep sensitive run output OUT of the working tree and
+ *  already honours `--run-dir`/`COWORK_HARNESS_RUNS_DIR`. NOT a gitignored directory inside the repo: a
+ *  `.gitignore` entry is one `git add -f` from being defeated and, worse, makes the file invisible to
+ *  `git status`, so the operator cannot see what they are carrying.
+ *
+ *  If the runs root is itself repo-visible (someone pointed `--run-dir` inside the working tree), fall back
+ *  to the OS temp dir and SAY SO — quarantining a leak into another committable location would be theatre. */
+function quarantineDir(): { dir: string; fellBack: boolean } {
+  const preferred = join(runsWriteRoot(), "quarantine");
+  if (isRepoVisiblePath(preferred)) return { dir: join(tmpdir(), "cowork-harness-quarantine"), fellBack: true };
+  return { dir: preferred, fellBack: false };
+}
+
+/** RECORD-TIME verdict on a finished recording — evidence, where `hostInventoryPreflight` is a PREDICTION.
+ *
+ *  The preflight reads the tier and the destination path and refuses before the paid spawn. It is the right
+ *  check and this does not replace it, but it never reads the resulting bytes and can be wrong in both
+ *  directions. Until this existed, `scanCassette` had a single production call site — `verify-cassettes` —
+ *  which runs at COMMIT time at the earliest.
+ *
+ *  Pure and exported so the policy is testable without a paid run. The caller executes the verdict; every
+ *  branch here is a decision, not an effect.
+ */
+export function classifyRecordLeak(
+  cassette: ScannableCassette,
+  cassettePath: string,
+  allowOverride: boolean,
+): { kind: "ok" } | { kind: "override" | "outside-repo" | "quarantine"; detail: string } {
+  const leaks = scanCassette(cassette, []).filter((f) => QUARANTINE_CLASSES.has(f.cls));
+  if (leaks.length === 0) return { kind: "ok" };
+  const detail = leaks.map((f) => `  [${f.cls}] ${f.where} — ${f.sample ?? "(no sample)"}`).join("\n");
+  // The operator already asserted this fixture is deliberate (the same flag the preflight honours). Still
+  // reported by the caller — an override must never be quiet about what it overrode.
+  if (allowOverride) return { kind: "override", detail };
+  // Outside a repo nothing publishes this by accident, so quarantining would be obstruction rather than
+  // protection. Still worth saying loudly: the operator may be about to copy it somewhere.
+  if (!isRepoVisiblePath(cassettePath)) return { kind: "outside-repo", detail };
+  return { kind: "quarantine", detail };
+}
+
+/** Write a leaking recording somewhere it cannot be committed, plus a sibling explaining why.
+ *
+ *  Quarantine rather than discard: the tokens are already spent, so throwing the recording away is the most
+ *  expensive possible answer and the one most likely to end in "just commit it anyway". Exported for tests.
+ */
+export function quarantineCassette(
+  cassette: unknown,
+  scenarioName: string,
+  intendedPath: string,
+  tier: string | undefined,
+  detail: string,
+  now: string,
+): { path: string; fellBack: boolean } {
+  const { dir, fellBack } = quarantineDir();
+  mkdirSync(dir, { recursive: true });
+  const stamp = now.replace(/[:.]/g, "-");
+  const qPath = join(dir, `${slugForPath(scenarioName)}-${stamp}.cassette.json`);
+  writeFileAtomic(qPath, JSON.stringify(cassette, null, 2));
+  writeFileAtomic(
+    `${qPath}.findings.txt`,
+    `cowork-harness record — quarantined ${now}\nintended path: ${intendedPath}\ntier: ${tier ?? "(unknown)"}\n\n${detail}\n`,
+  );
+  return { path: qPath, fellBack };
 }
 
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
@@ -2208,6 +2782,41 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
         `v${MIN_SUPPORTED_CASSETTE_VERSION} — re-record this cassette (pre-1.0, no compatibility is ` +
         `maintained for cassette formats below v${MIN_SUPPORTED_CASSETTE_VERSION})`,
     };
+  }
+  // VERSION/FORMAT INVARIANT, at the read boundary. `cassetteVersion` says which reader is required;
+  // `fingerprint.hashFormat` says which transform produced the digests. Nothing else ties them together,
+  // and the "absent means legacy" rule would silently mis-read a v12 document that forgot the stamp.
+  //
+  // Bound to the KNOWN current version only. A future v13/`jcs2` must NOT be rejected here — that belongs
+  // to the future-cassette policy just below, which is the surface that already knows how to talk about
+  // versions this build does not understand.
+  if (cassette.fingerprint !== undefined) {
+    const fmt = cassette.fingerprint.hashFormat;
+    const shown = fmt === undefined ? "(absent)" : `'${fmt}'`;
+    // KNOWN versions only, both directions. A future v13/`jcs2` is NOT judged here — that belongs to the
+    // future-cassette policy below, which is the surface that knows how to talk about versions this build
+    // does not understand. The check applies to a baseline-only fingerprint too: `hashFormat` is stamped on
+    // every buildFingerprint return path, so its absence at the current version is a genuine inconsistency
+    // rather than a shape this build ever writes.
+    // Bound to HASH_FORMAT_EPOCH, not CASSETTE_VERSION. They are equal today and will not stay so: the
+    // next SHAPE-only bump moves CASSETTE_VERSION to 13 and leaves the epoch at 12. Keyed on the shape
+    // version, a v12 fingerprint missing `hashFormat` would start loading again, D7's "absent ⇒ legacy"
+    // would apply to an epoch-stamped document, and live `jcs1` digests would be compared as though they
+    // were the same algorithm. `requiredVersionFor` derives its BASE from the epoch for this same reason.
+    if (recordedVersion === HASH_FORMAT_EPOCH && fmt !== "jcs1") {
+      return {
+        error:
+          `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ${shown} — a v${HASH_FORMAT_EPOCH} ` +
+          `cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
+      };
+    }
+    if (recordedVersion < HASH_FORMAT_EPOCH && fmt !== undefined) {
+      return {
+        error:
+          `cassette is stamped v${recordedVersion} (pre-epoch) but its fingerprint carries hashFormat ${shown} — a ` +
+          `pre-v${HASH_FORMAT_EPOCH} cassette predates that field entirely, so the stamp and the digests disagree; re-record`,
+      };
+    }
   }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
   const assertErrors: string[] = [];
@@ -2428,7 +3037,7 @@ export function cassettePortabilityPreflight(
       `  cassette: ${tildeify(cassetteDir)}
 ` +
       `  Consequence: verify-cassettes cannot resolve the skill dirs from it and reports 'unverifiable' ` +
-      `for staleness (can't verify ⇒ not green, exit 3). Only a re-record at the final location fixes it.
+      `for staleness (can't verify ⇒ not green, exit 3), and since 2.0.0 a bare replay fails too. Recover with --session <file>, or re-record at the final location.
 ` +
       `  Fix: record into the same tree as the scenario and its session, and decide that path BEFORE ` +
       `spending the run — a cassette cannot be moved afterwards.
@@ -3667,6 +4276,37 @@ async function recordScenarioObject(
   // record has no prior to compare. Best-effort: an unreadable prior is simply no delta, never an error —
   // this is a reporting nicety appended to a successful record, and must not turn one into a failure.
   const priorSummary = existsSync(cassettePath) ? behaviourSummaryOfFile(cassettePath) : undefined;
+
+  // RECORD-TIME PRIVACY SCAN. Scanned AFTER redaction, deliberately: redaction is the mechanism that is
+  // supposed to remove this, so scanning the pre-redaction bytes would quarantine recordings that are clean.
+  // The policy itself lives in `classifyRecordLeak` so it is testable without a paid run.
+  const leak = classifyRecordLeak(cassette, cassettePath, opts.allowHostInventoryFixture === true);
+  if (leak.kind === "override") {
+    warn(
+      `::warning:: [record] host inventory PRESENT in the recording, written anyway because ` +
+        `--allow-host-inventory-fixture was passed:\n${leak.detail}`,
+    );
+  } else if (leak.kind === "outside-repo") {
+    warn(
+      `::warning:: [record] this recording carries THIS MACHINE's inventory. Its path is not repo-visible, ` +
+        `so it is not quarantined — but do NOT copy it into a repo:\n${leak.detail}`,
+    );
+  } else if (leak.kind === "quarantine") {
+    const q = quarantineCassette(cassette, scenario.name, cassettePath, scenario.fidelity, leak.detail, new Date().toISOString());
+    throw new Error(
+      `refusing to write ${cassettePath}: this recording carries THIS MACHINE's inventory, and that path is ` +
+        `inside a git repo — committing it would publish your own tool stack.\n${leak.detail}\n` +
+        `The recording was NOT discarded (you paid for it). It is quarantined at:\n  ${q.path}\n  ${q.path}.findings.txt\n` +
+        (q.fellBack
+          ? `  (the runs root is inside a git repo, so this fell back to the OS temp dir — quarantining into ` +
+            `another committable location would be pointless.)\n`
+          : "") +
+        `Fix it by re-recording at a SEALED tier (--fidelity container), or from an environment without your ` +
+        `personal MCP servers/agents configured. If this inventory is genuinely part of the fixture, re-run ` +
+        `with --allow-host-inventory-fixture.`,
+    );
+  }
+
   writeFileAtomic(cassettePath, JSON.stringify(cassette, null, 2)); // atomic — no partial cassette on a mid-write crash
   const delta = priorSummary ? describeBehaviourDelta(priorSummary, behaviourSummary(cassette)) : undefined;
   return { result, cassettePath, artifacts: artifacts.length, delta };
@@ -3950,9 +4590,10 @@ export function sessionFingerprintDrift(
   cassette: Pick<Cassette, "sessionFingerprint" | "scenario">,
   cassetteDir: string | undefined,
   sourceVia?: "persisted" | "name-lookup" | "none",
+  sessionOverride?: string,
 ): { drifted: boolean; note?: string; unverifiable?: boolean } {
   if (cassette.sessionFingerprint === undefined) return { drifted: false }; // pre-v9 — not checked
-  const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir);
+  const live = buildSessionFingerprint(cassette.scenario.session, cassetteDir, sessionOverride);
   if (live === undefined)
     return {
       drifted: false,
@@ -3965,7 +4606,12 @@ export function sessionFingerprintDrift(
   // "none" means "nothing to compare the layout against" (mirrors scenarioContentDrift's own `!src.path`
   // early return, which stays silent rather than downgrading) — it is NOT evidence the tree moved, so it
   // must NOT mask a genuine drift; keep the pre-F51 hard-fail for "none" and for an omitted argument.
-  if (sourceVia === "name-lookup")
+  // An explicit `--session` IS the authoritative resolution, so the layout heuristic must not veto it.
+  // Threading the override alone would still mask every genuine drift on a relocated cassette:
+  // `_resolveRerecordSource` resolves the SCENARIO source, which is cassette-relative too, so any
+  // relocation sets `persistedMissing` -> `sourceVia === "name-lookup"` -> downgraded to a note. The
+  // operator named the session; a guess about directory structure cannot outrank that.
+  if (sourceVia === "name-lookup" && sessionOverride === undefined)
     return {
       drifted: false,
       unverifiable: true,
@@ -4194,7 +4840,7 @@ export const REPLAY_BOOLEAN_FLAGS = [
   "--quiet",
   "--verbose",
 ] as const;
-export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from", "--mutate-max-per-file", "--mutate-max-total"] as const;
+export const REPLAY_VALUE_FLAGS = ["--output-format", "--assert-from", "--session", "--mutate-max-per-file", "--mutate-max-total"] as const;
 
 // A SEPARATE axis from REPLAY_VALUE_FLAGS, for the same reason VERIFY_CASSETTES_REPEATED_FLAGS is one:
 // parseArgs collects every occurrence of a repeated flag into p.repeated[], while a value flag keeps only
@@ -4218,7 +4864,8 @@ export const REPLAY_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // one; this one was missing --best-effort-future-cassette entirely, undiscoverable at the exact point
 // (`cassette format too new: …`) that tells a user to pass it — the P9 bug this generalization fixes).
 export const REPLAY_USAGE =
-  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "usage: replay <file.cassette.json | dir/> [--strict] [--fail-on-skill-drift] [--mutate] [--assert-from <scenario.yaml> | --reassert] [--session <file>] [--write [--allow-failing]] [--explain] [--best-effort-future-cassette] [--output-format text|json]\n" +
+  "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.\n" +
   "       --mutate: perturb recorded JSON artifact values, re-run the assertions, and report which perturbations NOTHING caught — those fields are unguarded. SAMPLES: max 10 values per file, 50 total (per-file applies first), so `N/N caught by nothing` is N of the sample, not of your corpus; when a cap binds the report names it and the eligible total. Reporting only; never changes the verdict or exit code.\n" +
   "       --mutate-include <glob> / --mutate-exclude <glob>: scope which artifact paths are perturbed (repeatable; exclude wins). `*` stays inside a path segment, `**` crosses them — so `--mutate-exclude 'handoff/**'` drops per-run internals nobody should assert on, and the sample is spent on deliverables instead.\n" +
   "       --mutate-max-per-file <n> / --mutate-max-total <n>: raise the sampling caps (default 10 / 50). Per-file is applied FIRST, so with a handful of artifacts raising only --mutate-max-total changes nothing. Cost is linear — one full assertion re-run per perturbation.\n" +
@@ -4334,6 +4981,29 @@ export async function cmdReplay(args: string[]) {
     color: process.stderr.isTTY === true && !process.env.NO_COLOR,
     compact: false,
   };
+  // `--session` names ONE cassette's session. Over a directory each cassette may have been recorded
+  // against a different source, so a single override cannot be right for all of them — refuse rather than
+  // silently pin the wrong tree, which would manufacture false greens (worse than an honest "cannot
+  // verify"). Same reasoning as `record --out` and the `--assert-from --write` guard below.
+  const sessionOverride = p.options["--session"];
+  const targetIsDir = existsSync(target) && statSync(target).isDirectory();
+  if (sessionOverride !== undefined && (targetIsDir || resolved.files.length > 1)) {
+    return fail(
+      "replay",
+      "usage",
+      `replay --session <file> names one cassette's session and is not valid for a directory target (${resolved.files.length} cassette(s)) — run it per cassette`,
+      undefined,
+      asJson,
+    );
+  }
+  if (sessionOverride !== undefined && (!existsSync(sessionOverride) || !statSync(sessionOverride).isFile())) {
+    // `isFile()` too: a directory passed the existence gate and only surfaced later as an EISDIR parse
+    // error, with the notice meanwhile claiming the override was "in effect".
+    return fail("replay", "usage", `replay --session: not a session file: ${sessionOverride}`, undefined, asJson);
+  }
+  // An override must never be silent about where it looked — a wrong one pinning the wrong tree is the
+  // failure mode that matters, and it is worse than the honest exit 3 it replaces.
+
   // Footgun guard: one --assert-from file applied to a whole dir asserts the SAME on-disk block against every
   // cassette (the drift gate protects divergent cassettes, but two with identical shaping fields would be
   // cross-asserted). Use --reassert (per-cassette sibling) for a dir. Warn rather than reject — it's occasionally
@@ -4378,6 +5048,35 @@ export async function cmdReplay(args: string[]) {
   };
   for (const f of resolved.files) {
     const rc = readCassette(f); // safe parse + lenient Zod — never throws
+    // `--session` names a session FILE, and an inline scenario has none. Refuse rather than accept,
+    // announce "override in effect", and then silently ignore it — three lines that contradict each other,
+    // with the notice being the feature's own anti-false-green guarantee.
+    if (sessionOverride !== undefined && "cassette" in rc && rc.cassette.scenario.session === "(inline)") {
+      return fail(
+        "replay",
+        "usage",
+        `replay --session: this cassette records an inline scenario, which has no session file to override — remove --session (its skill sources, if any, were declared inline at record time)`,
+        undefined,
+        asJson,
+      );
+    }
+    if (sessionOverride !== undefined) {
+      // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
+      // override gets wrong. "override in effect: <path>" alone would look right while resolving to
+      // nothing — the silent-false-green shape this flag must never have.
+      const od = skillSourceDirs(sessionOverride, undefined);
+      const where = od.dirs.length
+        ? od.dirs.join(", ")
+        : od.failure?.kind === "declared-dirs-missing"
+          ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
+          : od.failure?.kind === "unreadable"
+            ? "NO skill dirs — this session could not be read or parsed"
+            : od.failure?.kind === "not-found"
+              ? "NO skill dirs — no file at that path"
+              : "NO skill dirs — this session declares none";
+      warn(`::notice:: [replay] --session override in effect: ${sessionOverride} -> ${where}\n`);
+    }
+
     if ("error" in rc) {
       log(`replay: ${f}: ${rc.error}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
@@ -4506,6 +5205,7 @@ export async function cmdReplay(args: string[]) {
         mutateMaxPerFile,
         mutateMaxTotal,
         cassetteDir: dirname(f),
+        sessionOverride,
         bestEffortFutureCassette,
         notesSink: collectNotes,
       });
@@ -4607,14 +5307,14 @@ const COUNT_BOUND_MARGIN_KEYS: {
 /** Fold the recorded count for each count-bound assert in a cassette's frozen block by replaying it
  *  (token-free). Returns [] when the cassette carries no count-bound asserts, so `--margins` skips a
  *  needless replay for those cassettes. A SINGLE-SAMPLE estimate — one cassette is not a variance. */
-async function computeCassetteMargins(cassette: Cassette, cassetteDir: string): Promise<MarginRow[]> {
+async function computeCassetteMargins(cassette: Cassette, cassetteDir: string, sessionOverride?: string): Promise<MarginRow[]> {
   const present = COUNT_BOUND_MARGIN_KEYS.map((spec) => {
     const entry = (cassette.scenario.assert ?? []).find((a) => (a as Record<string, unknown>)[spec.key as string] !== undefined);
     const budget = entry ? Number((entry as Record<string, unknown>)[spec.key as string]) : undefined;
     return budget !== undefined && Number.isFinite(budget) ? { spec, budget } : undefined;
   }).filter((x): x is { spec: (typeof COUNT_BOUND_MARGIN_KEYS)[number]; budget: number } => x !== undefined);
   if (present.length === 0) return [];
-  const result = await replayCassette(cassette, [], { cassetteDir });
+  const result = await replayCassette(cassette, [], { cassetteDir, sessionOverride });
   const bf = budgetFields(result);
   const hasControlOut = !!cassette.controlOut?.length;
   return present.map(({ spec, budget }) => {
@@ -4653,7 +5353,7 @@ export const VERIFY_CASSETTES_BOOLEAN_FLAGS = [
   "--quiet",
   "--verbose",
 ] as const;
-export const VERIFY_CASSETTES_VALUE_FLAGS = ["--output-format"] as const;
+export const VERIFY_CASSETTES_VALUE_FLAGS = ["--output-format", "--session"] as const;
 export const VERIFY_CASSETTES_REPEATED_FLAGS = [
   "--allow",
   "--allow-domain",
@@ -4676,10 +5376,11 @@ export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
 // recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
 export const VERIFY_CASSETTES_USAGE =
-  "usage: verify-cassettes <file|dir> [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "usage: verify-cassettes <file|dir> [--session <file>] [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
   "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
-  "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.";
+  "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.\n" +
+  "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.";
 
 // The full flag-coverage guard registry (P9) — see the UsageGuardEntry doc comment above RECORD_ALLOWLIST.
 // Defined here (after all three commands' consts exist) so it can reference them directly.
@@ -4732,6 +5433,11 @@ export async function cmdVerifyCassettes(args: string[]) {
     return fail("verify-cassettes", "usage", String((e as Error).message), undefined, asJson);
   }
   const json = p.options["--output-format"] === "json";
+  // Ship A escape hatch, same contract as `replay --session`: supplies a SESSION (so `staleness.hash_ignore`
+  // and the rest of the boundary survive) for ONE relocated cassette. Refused for a batch — each cassette in a
+  // directory may have been recorded against a different source, and silently pinning the wrong tree would
+  // manufacture false greens, which is strictly worse than this command's honest exit 3.
+  const vcSessionOverride = p.options["--session"];
   const skipPrivacy = p.flags["--skip-privacy"] ?? false;
   const skipStaleness = p.flags["--skip-staleness"] ?? false;
   if (skipPrivacy && skipStaleness) {
@@ -4803,7 +5509,11 @@ export async function cmdVerifyCassettes(args: string[]) {
     // both would exit 0 on a typo'd or moved path — silently reporting "verified" for a directory that
     // does not exist. That is the vacuous pass this command's loud default exists to prevent, and the
     // caller most likely to hit it is the scripted CI job the flag is FOR.
-    if (resolved.kind === "empty-dir" && (p.flags["--allow-empty"] ?? false)) {
+    // An override must never be silently unconsumed. `--skip-staleness --session` is refused for exactly
+    // this reason, and an empty directory is still a DIRECTORY target, which `--session` refuses anyway.
+    // Returning ok:true here would skip the directory refusal, the "not a session file" check and the
+    // announcement in one go.
+    if (resolved.kind === "empty-dir" && (p.flags["--allow-empty"] ?? false) && vcSessionOverride === undefined) {
       const empty = { command: "verify-cassettes", ok: true, coverage: { privacy: doPrivacy, staleness: doStaleness }, results: [] };
       if (json) out(JSON.stringify(empty));
       else if (!p.flags["--quiet"]) log(`✓ verify-cassettes: no cassettes under ${target} — nothing to verify (--allow-empty)`);
@@ -4812,6 +5522,63 @@ export async function cmdVerifyCassettes(args: string[]) {
     return fail("verify-cassettes", "usage", `verify-cassettes: ${resolved.error}`, undefined, asJson);
   }
   const files = resolved.files;
+  const vcTargetIsDir = existsSync(target) && statSync(target).isDirectory();
+  if (vcSessionOverride !== undefined && (vcTargetIsDir || files.length > 1)) {
+    return fail(
+      "verify-cassettes",
+      "usage",
+      `verify-cassettes --session <file> names one cassette's session and is not valid for a directory target (${files.length} cassette(s)) — run it per cassette`,
+      undefined,
+      json,
+    );
+  }
+  if (vcSessionOverride !== undefined && (!existsSync(vcSessionOverride) || !statSync(vcSessionOverride).isFile())) {
+    return fail("verify-cassettes", "usage", `verify-cassettes --session: not a session file: ${vcSessionOverride}`, undefined, json);
+  }
+  if (vcSessionOverride !== undefined && skipStaleness) {
+    // `--session` exists only to resolve skill sources for the staleness check. With --skip-staleness
+    // nothing reads it, so accepting it and announcing "override in effect" advertises a resolution that
+    // never happens.
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "verify-cassettes --session has no effect with --skip-staleness — drop one of them",
+      undefined,
+      json,
+    );
+  }
+  // An inline scenario has no session file, so an override can never apply. Refuse BEFORE announcing:
+  // announcing first prints "override in effect: … -> <dirs>" directly above "this cassette records an
+  // inline scenario, which has no session file to override" — a self-contradiction, and the exact shape
+  // both commands are meant to avoid. (The per-cassette refusal below still covers a directory batch.)
+  if (vcSessionOverride !== undefined && files.length === 1) {
+    const only = readCassette(files[0]);
+    if (!("error" in only) && only.cassette.scenario.session === "(inline)") {
+      return fail(
+        "verify-cassettes",
+        "usage",
+        "verify-cassettes --session: this cassette records an inline scenario, which has no session file to override — remove --session",
+        undefined,
+        asJson,
+      );
+    }
+  }
+  if (vcSessionOverride !== undefined) {
+    // Name the DIRS, not just the file: the dirs are what feed the hash, and they are what a wrong
+    // override gets wrong. "override in effect: <path>" alone would look right while resolving to
+    // nothing — the silent-false-green shape this flag must never have.
+    const od = skillSourceDirs(vcSessionOverride, undefined);
+    const where = od.dirs.length
+      ? od.dirs.join(", ")
+      : od.failure?.kind === "declared-dirs-missing"
+        ? `NO usable skill dirs — it declares ${od.failure.declared} but none exist (mounts are relative to the session's own directory)`
+        : od.failure?.kind === "unreadable"
+          ? "NO skill dirs — this session could not be read or parsed"
+          : od.failure?.kind === "not-found"
+            ? "NO skill dirs — no file at that path"
+            : "NO skill dirs — this session declares none";
+    warn(`::notice:: [verify-cassettes] --session override in effect: ${vcSessionOverride} -> ${where}\n`);
+  }
   const results = files.map((f) => {
     try {
       return verifyOneCassette(f);
@@ -4829,18 +5596,52 @@ export async function cmdVerifyCassettes(args: string[]) {
         version: [],
         scenarioDrift: [],
         error: (e as Error)?.message ?? String(e),
+        privacyScanned: false, // a crash mid-verify never completed the scan, whatever it crashed on
       };
     }
   });
   function verifyOneCassette(f: string) {
     const rc = readCassette(f);
-    if ("error" in rc)
-      return { file: f, findings: [], staleness: [], unverifiable: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
+    // `--session` names a session FILE, and an inline scenario has none. Refuse rather than accept it,
+    // announce "override in effect", and then silently ignore it.
+    if (vcSessionOverride !== undefined && "cassette" in rc && rc.cassette.scenario.session === "(inline)") {
+      return fail(
+        "verify-cassettes",
+        "usage",
+        `verify-cassettes --session: this cassette records an inline scenario, which has no session file to override — remove --session`,
+        undefined,
+        json,
+      );
+    }
+    if ("error" in rc) {
+      // SHAPE INVALID — but that only blocks the STALENESS half. The privacy scan needs a readable
+      // transcript, not a valid document, so try the narrow scan-only door before giving up. Before this,
+      // a file that failed shape validation was reported with zero findings and never scanned at all,
+      // which reads in every summary as "0 PII findings" — a clean-looking number from an instrument that
+      // never ran. A file too broken to replay is exactly the kind a leak arrives in.
+      const scanOnly = doPrivacy ? readCassetteForScan(f) : { error: "privacy scan disabled" };
+      const salvaged = "scannable" in scanOnly ? scanCassette(scanOnly.scannable, allow) : [];
+      return {
+        file: f,
+        findings: salvaged,
+        staleness: [],
+        unverifiable: [],
+        notes: [],
+        version: [],
+        scenarioDrift: [],
+        error: rc.error,
+        // The honest signal, and the one the pre-commit gate keys on: did the privacy scan actually run?
+        // `error` alone cannot answer that any more — it now covers both "never scanned" and "scanned
+        // fine, just not replayable". Conflating them is what made the gate block on an eval fixture it
+        // could in fact scan.
+        privacyScanned: doPrivacy && "scannable" in scanOnly,
+      };
+    }
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
     // never dropped, and must never red the gate.
-    const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f)) : { findings: [], notes: [] };
+    const stale = doStaleness ? computeStaleness(rc.cassette, dirname(f), vcSessionOverride) : { findings: [], notes: [] };
     // Class-based split (StalenessFinding.class, src/types.ts): every `unverifiable-*` class means
     // "verification could not run" (exit 3), while every other class is a genuine drift finding
     // (exit 1) — preserve the class instead of collapsing straight to `.message` (that used to drop it,
@@ -4864,7 +5665,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       // programmatic-record cassette would silently downgrade every genuine session drift → false-green).
       const rr = _resolveRerecordSource(f, rc.cassette);
       const sourceVia = rr.persistedMissing ? "name-lookup" : "none";
-      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia);
+      const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
           "session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress config changed since record) — re-record",
@@ -4900,7 +5701,17 @@ export async function cmdVerifyCassettes(args: string[]) {
             `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
           ]
         : [];
-    return { file: f, findings, staleness, unverifiable, notes, version, scenarioDrift, error: undefined as string | undefined };
+    return {
+      file: f,
+      findings,
+      staleness,
+      unverifiable,
+      notes,
+      version,
+      scenarioDrift,
+      error: undefined as string | undefined,
+      privacyScanned: doPrivacy, // false under --skip-privacy: "we did not look" is not "we looked and it was clean"
+    };
   }
   // --margins (diagnostic; never affects the gate): replay each cassette that carries count-bound asserts
   // and report recorded-vs-budget + margin. A per-cassette replay cost the base command doesn't have.
@@ -4911,7 +5722,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const rc = readCassette(f);
       if ("error" in rc) continue; // unreadable — already flagged in `results`; skip its margins
       try {
-        const rows = await computeCassetteMargins(rc.cassette, dirname(f));
+        const rows = await computeCassetteMargins(rc.cassette, dirname(f), vcSessionOverride);
         if (rows.length) margins.push({ file: f, rows });
       } catch (e) {
         margins.push({ file: f, rows: [], error: (e as Error)?.message ?? String(e) }); // a diagnostic failure must not red the gate
@@ -4982,7 +5793,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     );
     if (!ok)
       log(
-        "  exit 1 = verified & failed (a real finding); exit 3 = could not verify (unresolvable baseline/skill/tier, an unsupported cassette version, or a per-file read ERROR/CRASH — that's a bug to report, not a signal to re-record)",
+        "  exit 1 = verified & failed (a real finding); exit 3 = could not verify (unresolvable baseline/skill/tier, an unsupported cassette version, or a per-file read ERROR/CRASH — that's a bug to report, not a signal to re-record). A cassette that fails SHAPE validation is still privacy-scanned; `privacyScanned` in --output-format json says whether the scan ran.",
       );
     if (margins) {
       log(
@@ -5005,11 +5816,18 @@ export async function cmdVerifyCassettes(args: string[]) {
 }
 
 /** `cowork-harness rehash <dir/> [--dry-run] [--output-format text|json]`
+ *  `cowork-harness rehash <file.cassette.json> --session <session.yaml>`
  *
- *  Migrates cassettes recorded under an older `cassetteVersion` to the current version
- *  WITHOUT a full re-record — but ONLY when `contentSig` confirms the skill content is
- *  provably unchanged (every v9+ cassette — the read floor — always has one).
+ *  Migrates cassettes recorded under an older `cassetteVersion` — including across a HASH-FORMAT epoch —
+ *  to the current version WITHOUT a full re-record, but ONLY when the content is provably unchanged.
  *
+ *  The proof recomputes the recording's digest under the **ORIGINAL** algorithm and compares it to what was
+ *  stored. `contentSig` is deliberately NOT the proof: it follows the same manifest transform `skillHash`
+ *  does, so it is not comparable across a format change either, and it is blind to `D:` directory markers,
+ *  so an added empty directory would slip past it while the real digest moved. `mode` and agent-scope must
+ *  match as well, since both change which files are hashed.
+ *
+ *  Anything unprovable is REFUSED, never migrated. `--session` supplies the tree for a cassette that moved.
  *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
 export function cmdRehash(args: string[]): void {
   // isJsonOutput (not a bare `p.options` read): it works even when parseArgs throws below, and honors the
@@ -5019,19 +5837,38 @@ export function cmdRehash(args: string[]): void {
   try {
     p = parseArgs(args, {
       booleans: ["--dry-run"],
-      values: ["--output-format"],
+      values: ["--output-format", "--session"],
       enums: { "--output-format": ["text", "json"] },
     });
   } catch (e) {
     return fail("rehash", "usage", (e as Error).message, undefined, asJson);
   }
+  const USAGE =
+    "usage: rehash <dir/> [--dry-run] [--output-format text|json]   |   rehash <file.cassette.json> --session <session.yaml> [--dry-run]";
   if (p.positionals.length !== 1) {
-    return fail("rehash", "usage", "usage: rehash <dir/> [--dry-run] [--output-format text|json]", undefined, asJson);
+    return fail("rehash", "usage", USAGE, undefined, asJson);
   }
-  const dir = p.positionals[0];
-  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    return fail("rehash", "usage", `rehash: not a directory: ${dir}`, undefined, asJson);
+  const target = p.positionals[0];
+  const sessionOverride = p.options["--session"];
+  // A MOVED cassette cannot resolve its recorded `session:` from its own directory, so it can never be
+  // proved unchanged — and the hash-format epoch makes migration MANDATORY, which would leave it failing
+  // every bare replay with no remedy at all. Mirrors `replay --session`: ONE cassette at a time, because
+  // each may have been recorded against a different tree, so a directory batch cannot share one override.
+  if (sessionOverride !== undefined) {
+    if (!existsSync(target) || statSync(target).isDirectory()) {
+      return fail("rehash", "usage", `rehash --session takes a single cassette FILE, not a directory: ${target}`, undefined, asJson);
+    }
+    // `isFile()` too, matching `replay --session`: a directory otherwise passes the existence gate and only
+    // surfaces much later as "skill dirs not resolvable", which reads as a cassette problem rather than a
+    // typo in the flag. One flag, one contract.
+    if (!existsSync(sessionOverride) || !statSync(sessionOverride).isFile()) {
+      return fail("rehash", "usage", `rehash --session: not a session file: ${sessionOverride}`, undefined, asJson);
+    }
+  } else if (!existsSync(target) || !statSync(target).isDirectory()) {
+    const hint = existsSync(target) ? " — pass a directory, or a single cassette with --session <session.yaml>" : "";
+    return fail("rehash", "usage", `rehash: not a directory: ${target}${hint}`, undefined, asJson);
   }
+  const dir = target;
 
   const dryRun = p.flags["--dry-run"] ?? false;
 
@@ -5042,10 +5879,13 @@ export function cmdRehash(args: string[]): void {
     return fail("rehash", "runtime", `rehash: cannot load latest baseline — ${(e as Error).message}`, undefined, asJson, 1);
   }
 
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith(".cassette.json"))
-    .sort()
-    .map((f) => join(dir, f));
+  const files =
+    sessionOverride !== undefined
+      ? [dir] // single-cassette mode: `dir` is the file itself, guarded above
+      : readdirSync(dir)
+          .filter((f) => f.endsWith(".cassette.json"))
+          .sort()
+          .map((f) => join(dir, f));
 
   if (files.length === 0) {
     if (asJson) out(jsonPayloadEnvelope("rehash", true, { dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
@@ -5069,6 +5909,21 @@ export function cmdRehash(args: string[]): void {
     // blanket cost P8 exists to avoid via the very command this plan names as the recovery path.
     const requiredVersion = requiredVersionFor(cassette.scenario);
 
+    // INVARIANT BEFORE SKIP. `cassetteVersion` says which reader is required; `fingerprint.hashFormat`
+    // says which transform produced the digests. Nothing ties them together, and the skip below returns
+    // before anything inspects the fingerprint — so a v12 cassette missing `hashFormat` would be waved
+    // through as current while carrying legacy digests, and the "absent means legacy" rule would then
+    // mis-read it forever.
+    // Same binding as the read boundary, and deliberately NOT gated on `skillHash`: a baseline-only v12
+    // fingerprint without `hashFormat` is just as inconsistent, and gating would skip it as "current".
+    if (recordedVersion === HASH_FORMAT_EPOCH && cassette.fingerprint !== undefined && cassette.fingerprint.hashFormat !== "jcs1") {
+      results.push({
+        file,
+        action: "error",
+        reason: `v${recordedVersion} cassette is missing fingerprint.hashFormat — inconsistent with its stamped version; re-record`,
+      });
+      continue;
+    }
     // Already at (or above) the version this scenario requires — nothing to do.
     if (recordedVersion >= requiredVersion) {
       results.push({ file, action: "skipped", reason: `already at v${recordedVersion}` });
@@ -5081,50 +5936,141 @@ export function cmdRehash(args: string[]): void {
     // promises. A silent version-stamp would mint a v10-labeled cassette that never actually captured its
     // links. Route a v9→v10 bump to a re-record. Placed AFTER the "already current" skip but this only
     // needs to block the eventual STAMP — the content/baseline gates below still run and their own
-    // skip/error reasons (baseline drift) take precedence, so this fires only when a cassette would
+    // error reasons (content mismatch, unreadable sources, mode/agent-scope change) fire first, so this is reached only when a cassette would
     // otherwise have migrated cleanly.
     const crossesIntoV10 = recordedVersion < 10 && requiredVersion >= 10;
 
     // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
     if (!cassette.fingerprint?.skillHash) {
-      results.push({
-        file,
-        action: "skipped",
-        reason: "no skillHash in fingerprint — only baseline drift is possible; re-record if needed",
-      });
+      // NO skillHash. `buildFingerprint` omits it in TWO different situations — genuinely zero skill
+      // sources, and files that could not be read ("can't verify"). Treating both as "nothing to prove"
+      // would bless an UNVERIFIABLE recording as current-format, so absence alone is not evidence.
+      //
+      // A metadata-only restamp needs POSITIVE proof of the zero-source case: a recorded
+      // `sessionFingerprint` that still matches a resolvable session. That says the recording's session
+      // shape is intact and genuinely declared nothing to hash. Without it, refuse.
+      // A matching sessionFingerprint proves the session SHAPE is intact — it does NOT prove the session
+      // declared nothing to hash. A recording whose hash failed over real, declared roots has a perfectly
+      // matching shape too, and migrating that would bless an unverifiable recording as current-format.
+      // So: shape intact AND the session resolves AND it declares ZERO roots.
+      const zeroSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
+      const shapeIntact =
+        cassette.sessionFingerprint !== undefined && cassette.sessionFingerprint === buildSessionFingerprint(zeroSession, dirname(file));
+      // `dirs` is the SURVIVING mounts — `declaredSkillDirs` has already dropped paths that do not exist —
+      // so an empty `dirs` is ambiguous between "declared nothing" and "declared roots that are all
+      // missing". The second is exactly the case this proof exists to reject: a cassette recorded against a
+      // typo'd plugin path has no `skillHash` BECAUSE the hash failed, and a perfectly valid
+      // `sessionFingerprint`. `failure` is the discriminator the resolver already computes for this —
+      // absent means "resolved fine, and it genuinely declares none". (It never throws; it reports.)
+      const zeroRes = skillSourceDirs(zeroSession, dirname(file));
+      const genuinelyZero = zeroRes.failure === undefined && zeroRes.dirs.length === 0;
+      if (!shapeIntact || !genuinelyZero) {
+        results.push({
+          file,
+          // ERROR, not "skipped": a pre-epoch cassette still fails every bare replay, so reporting it as
+          // "nothing to migrate" lets a batch exit 0 while leaving it unlabelled and broken. A failed proof
+          // is a failure, exactly like a content mismatch.
+          action: "error",
+          reason:
+            zeroRes.failure?.kind === "declared-dirs-missing"
+              ? `no skillHash, and the session declares ${zeroRes.failure.declared} skill root(s) that do not resolve — absence means the hash FAILED, not that there was nothing to hash; re-record`
+              : zeroRes.failure !== undefined
+                ? `no skillHash, and the session could not be resolved (${zeroRes.failure.kind}) — cannot prove the recording had zero skill sources; re-record`
+                : "no skillHash, and no matching session shape to prove the recording genuinely had zero skill sources — re-record if this cassette needs to be current",
+        });
+        continue;
+      }
+      // The v9→v10 link-identity refusal applies to EVERY migration path, including this one: a v9
+      // baseline-only cassette never captured the symlink identity a v10+ stamp promises, and rehash
+      // cannot synthesize it. Without this the metadata branch would stamp it current regardless.
+      if (crossesIntoV10) {
+        results.push({
+          file,
+          action: "error",
+          reason: `v10 records symlink/hardlink identity (#38) the v${recordedVersion} manifest could not capture — \`rehash\` cannot add it; re-record to migrate`,
+        });
+        continue;
+      }
+      if (!dryRun) {
+        // Metadata-only: no digest to migrate — but the version/format invariant still applies, so the
+        // fingerprint must declare the current format rather than being left to read as legacy.
+        const stamped: Cassette = {
+          ...cassette,
+          $schema: cassetteSchemaUrl(requiredVersion),
+          cassetteVersion: requiredVersion,
+          ...(cassette.fingerprint ? { fingerprint: { ...cassette.fingerprint, hashFormat: ACTIVE_HASH_FORMAT } } : {}),
+        };
+        writeFileAtomic(file, JSON.stringify(stamped, null, 2));
+      }
+      results.push({ file, action: "migrated", reason: `v${recordedVersion} → v${requiredVersion} (metadata only — zero skill sources)` });
       continue;
     }
 
-    // Baseline drifted — a re-record is required regardless of skill content.
-    if (cassette.fingerprint.baseline !== liveBaseline) {
-      results.push({
-        file,
-        action: "skipped",
-        reason: `baseline drifted (${cassette.fingerprint.baseline} → ${liveBaseline}) — re-record required`,
-      });
-      continue;
-    }
+    // BASELINE DRIFT DOES NOT BLOCK A FORMAT MIGRATION. `fingerprint.baseline` is the resolved Cowork app
+    // version at record time — recorded metadata, never an input to `skillHash` — so it says nothing about
+    // whether the content is provably unchanged.
+    //
+    // Skipping on it used to be harmless: an un-migrated cassette still replayed. After the epoch it is a
+    // TRAP. A pre-epoch cassette fails a bare `replay` until it is restamped, so "skip" leaves it unplayable
+    // while `rehash` exits 0 and prints "nothing to migrate" — and anyone who has run `sync`, or whose
+    // committed cassettes predate the current `baselines/`, hits that on every file. The release notes sell
+    // `rehash` as the one-command fix; a silent no-op reporting success is the opposite of that.
+    //
+    // So: migrate the hashes, KEEP the recorded baseline, and let baseline drift stay what it already is —
+    // its own staleness finding at verify time, which a re-record (not a rehash) resolves.
+    const baselineDrifted = cassette.fingerprint.baseline !== liveBaseline;
 
-    // Compute current contentSig from skill dirs relative to the cassette location.
-    const liveFingerprint = buildFingerprint(
-      cassette.scenario.session,
-      cassette.fingerprint.baseline,
-      dirname(file),
-      cassette.scenario.skills,
-    );
-
-    if (!liveFingerprint.contentSig) {
-      results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot compute contentSig" });
-      continue;
-    }
-
-    // The content check: current contentSig must match the recorded one. Every v9+ cassette (the read
-    // floor) was recorded under CONTENTSIG_ALGO, so no algorithm-mismatch branch is needed here.
-    if (liveFingerprint.contentSig !== cassette.fingerprint.contentSig) {
+    // ONE resolution, ONE walk: `recomputeBothAlgos` folds BOTH the legacy proof and the replacement
+    // fingerprint from the SAME snapshot. A second independent walk would let a file change in between,
+    // so the proof would validate one tree while the migration wrote digests from another.
+    //
+    // An override is resolved ABSOLUTE: `skillSourceDirs` only joins `cassetteDir` for a RELATIVE session,
+    // so passing both a relative override and its own dirname would double-join them.
+    // An INLINE cassette has no session file, so there is nothing an override can point at. `replay` and
+    // `verify-cassettes` get this for free because `resolveCassetteSessionPath` short-circuits on the
+    // sentinel BEFORE considering an override — but substituting the override AS the session path here
+    // bypasses that. Without this guard, an override tree that happened to match the recorded digest would
+    // report "migrated" and stamp v12/jcs1 while the cassette still says `(inline)`: a bare `replay` then
+    // fails with `inline-without-config`, `replay --session` is refused, and the operator has been told the
+    // cassette is current with no recovery path left.
+    if (sessionOverride !== undefined && cassette.scenario.session === "(inline)") {
       results.push({
         file,
         action: "error",
-        reason: "skill content changed since recording (contentSig mismatch) — re-record required",
+        reason: "--session cannot apply to an INLINE scenario (it has no session file to override) — re-record",
+      });
+      continue;
+    }
+    const migrateSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
+    const proof = recomputeBothAlgos(migrateSession, dirname(file), cassette.scenario.skills, cassette.fingerprint.baseline);
+    if (!proof) {
+      results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot prove content unchanged" });
+      continue;
+    }
+    if (proof.readErrors?.length) {
+      results.push({ file, action: "error", reason: "unreadable skill sources — cannot prove content unchanged; re-record" });
+      continue;
+    }
+    // `mode` and `agentScope` change the FILE SET, so a matching digest under a different boundary proves
+    // nothing about the same content.
+    const recModeR = cassette.fingerprint.mode ?? "raw";
+    if (recModeR !== proof.mode) {
+      results.push({
+        file,
+        action: "error",
+        reason: `recorded in '${recModeR}' file-set mode, now '${proof.mode}' — re-record under the same mode`,
+      });
+      continue;
+    }
+    if ((cassette.fingerprint.agentScope ?? "off") !== (proof.agentScoped ? "skill" : "off")) {
+      results.push({ file, action: "error", reason: "agent-scope differs from the recording — re-record under the same setting" });
+      continue;
+    }
+    if (proof.legacyHash !== cassette.fingerprint.skillHash) {
+      results.push({
+        file,
+        action: "error",
+        reason: "skill content changed since recording (legacy skillHash mismatch) — re-record required",
       });
       continue;
     }
@@ -5141,22 +6087,33 @@ export function cmdRehash(args: string[]): void {
       continue;
     }
 
-    // Safe to migrate: content is provably unchanged. Recompute the full fingerprint under the
-    // current algorithm and bump cassetteVersion to what this scenario requires (may be < CASSETTE_VERSION).
+    // Content is provably unchanged. Build the migrated fingerprint — selective, allow-listed, and able to
+    // REFUSE: a manifest that cannot be aligned entry-for-entry must not be stamped `jcs1` while carrying
+    // the old per-file digests, or the cassette would claim to be current while every attribution lied.
+    const migrated = migrateFingerprint(cassette.fingerprint, proof.live, proof.legacySigs);
+    if ("error" in migrated) {
+      results.push({ file, action: "error", reason: `${migrated.error} — re-record required` });
+      continue;
+    }
+
     if (!dryRun) {
       const updated: Cassette = {
         ...cassette,
         $schema: cassetteSchemaUrl(requiredVersion),
         generator: "cowork-harness",
         cassetteVersion: requiredVersion,
-        fingerprint: { ...liveFingerprint },
+        fingerprint: migrated.fingerprint,
       };
       writeFileAtomic(file, JSON.stringify(updated, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }
     results.push({
       file,
       action: "migrated",
-      reason: `v${recordedVersion} → v${requiredVersion}${dryRun ? " (dry-run)" : ""}`,
+      reason:
+        `v${recordedVersion} → v${requiredVersion}${dryRun ? " (dry-run)" : ""}` +
+        (baselineDrifted
+          ? ` — NOTE: baseline still reads ${cassette.fingerprint.baseline} (live ${liveBaseline}); re-record to clear that separately`
+          : ""),
     });
   }
 
@@ -5216,7 +6173,10 @@ function buildRecordTimeFolderPrefixMap(scenario: Scenario, recordRoots: string[
  */
 function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): { from: string }[] {
   if (sessionPath === "(inline)") return [];
-  const resolved = cassetteDir && !isAbsolute(sessionPath) ? join(cassetteDir, sessionPath) : sessionPath;
+  // Third consumer of the same join — see resolveCassetteSessionPath. NO session override here on
+  // purpose: the only caller is buildRecordTimeFolderPrefixMap, which runs at RECORD time, so a
+  // replay-time `--session` can never reach it. A future replay-time caller must pass one.
+  const { path: resolved } = resolveCassetteSessionPath(sessionPath, cassetteDir);
   if (!existsSync(resolved)) return [];
   try {
     return resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved)).folders;
@@ -5380,6 +6340,9 @@ export async function replayCassette(
     strict?: boolean;
     failOnSkillDrift?: boolean;
     cassetteDir?: string;
+    /** Ship A: explicit `--session` override. Supplies a SESSION (not bare dirs) so the session-level
+     *  `staleness.hash_ignore` and the rest of the hash boundary survive the override. */
+    sessionOverride?: string;
     bestEffortFutureCassette?: boolean;
     /** --mutate: perturb recorded values and report which perturbations no assertion catches. Reporting
      *  only — never changes the verdict (an unguarded field is a gap in the scenario, not a failed run). */
@@ -5455,7 +6418,7 @@ export async function replayCassette(
   // per-branch `warn()`, so a non-strict run never double-warns one cause. Uses the SHARED `computeStaleness`
   // (no longer a forked copy), so it inherits the per-file detail, the `debugSkillHashMismatch` hook, the
   // GITSET/agent-scope flip buckets, and the both-buckets attribution fix for free.
-  const { findings: staleness, notes: stalenessNotes } = computeStaleness(cassette, opts.cassetteDir);
+  const { findings: staleness, notes: stalenessNotes } = computeStaleness(cassette, opts.cassetteDir, opts.sessionOverride);
   for (const s of staleness) warn(`::warning:: [replay] cassette stale: ${s.message}\n`);
   // Notes are the non-failing informational channel — surfaced so they're never a silent drop, but
   // NEVER escalated by --strict. They are emitted at `::notice::`: `warn()` auto-prefixes `::warning::`
@@ -5962,6 +6925,44 @@ export async function replayCassette(
           assertion: {} as Assertion,
           pass: false,
           message: `skill-source drift (--fail-on-skill-drift): ${s.message}`,
+          source: "staleness",
+        });
+    // BREAKING in 2.0.0: `unverifiable-skill` fails the DEFAULT verdict. "Verified and unchanged" and
+    // "could not be checked at all" are categorically different claims, and only the first should be green.
+    // Before this a bare `replay` warned on stderr, recorded the class in `staleness[]`, and still returned
+    // pass:true / exit 0 — so a cassette that had silently stopped proving anything kept passing the lane
+    // most people run. Green-against-unverified is worse than a loud red: silence prompts a re-record,
+    // green does not.
+    //
+    // Deliberately NARROW. `skill` / `shared-root` — "we checked, and it changed" — still require
+    // `--fail-on-skill-drift`, so that flag keeps its meaning and no inverse escape hatch is needed. The
+    // remedy for the commonest cause is `--session <file>`; re-recording is the other.
+    // An explicit `--session` must never LOWER the verdict. Without it, an unresolvable cassette is a hard
+    // fail (above); resolving it to the WRONG tree turns `unverifiable-skill` into ordinary `skill` drift,
+    // which is warn-only — so the flag would convert a loud red into a green, which is precisely the
+    // green-against-nothing this release argues is worse than a red. The operator asserted this tree, so
+    // any drift they then see is real and actionable. Escalating here keeps the flag an escape from
+    // "cannot verify", never an escape from "verified, and it changed".
+    // `format` is in here deliberately. A mode / agent-scope / hash-epoch mismatch means the recorded and
+    // live hashes are NOT COMPARABLE — the same "could not verify" the default gate reds on, reached by a
+    // different route. Excluding it left a hole with exactly the shape this guard exists to close: pointing
+    // --session at a NON-GIT tree turned the hard `unverifiable-skill` into a `format` warning and exit 0.
+    // An explicit override can never LOWER the verdict, so every class meaning "this tree could not be
+    // checked against the recording" escalates with it.
+    else if (opts.sessionOverride !== undefined)
+      for (const s of staleness.filter((s) => SKILL_DRIFT_CLASSES.has(s.class) || s.class === "format"))
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `skill-source drift under an explicit --session: ${s.message}`,
+          source: "staleness",
+        });
+    else
+      for (const s of staleness.filter((s) => s.class === "unverifiable-skill"))
+        assertions.push({
+          assertion: {} as Assertion,
+          pass: false,
+          message: `skill staleness could not be verified: ${s.message}`,
           source: "staleness",
         });
 
