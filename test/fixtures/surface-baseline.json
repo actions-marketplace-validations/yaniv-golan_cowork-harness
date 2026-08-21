@@ -3554,6 +3554,10 @@
       ".results[].notes[]": {
         "type": "string"
       },
+      ".results[].privacyScanned": {
+        "type": "boolean",
+        "required": true
+      },
       ".results[].scenarioDrift": {
         "type": "array",
         "required": true

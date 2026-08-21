@@ -121,6 +121,37 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A cassette that fails shape validation is now privacy-scanned.** `verify-cassettes` does two
+  independent jobs — a privacy scan and a staleness check — and both sat behind one strict `readCassette`.
+  Any document that failed shape validation returned early, so `scanCassette`, on the very next line, never
+  ran: the file was reported with zero findings, which reads in every summary as `0 PII finding(s)`. That is
+  a clean-looking number from an instrument that never ran, and a file too broken to replay is exactly the
+  kind of file a leak arrives in. Measured on a malformed fixture carrying MCP server names, an account org
+  and an agent roster: **0 findings and exit 3 before, 6 findings and exit 1 after.**
+
+  The fix is a read-boundary **split**, not a loosening: `readCassette` stays exactly as strict (replay,
+  staleness and the hash-format epoch's version/`hashFormat` invariant all depend on it). A separate
+  `readCassetteForScan` reads the transcript only, requiring nothing but `events: string[]`, and
+  `scanCassette`'s parameter type is narrowed to the fields it genuinely reads — so a future scan axis that
+  reaches for some other field is a compile error until the projection carries it, rather than silently
+  reading `undefined` off a partial document. Narrowing that type immediately turned up five fields the
+  scan reads that a hand audit had missed (`userVisibleRoots`, `scenario.name`, `scenario.session`,
+  `scenarioSource`, `environment.agentImage.ref`).
+
+  The projection also **fails closed on an unrecognized tier**. `scanCassette` exempts a positively-sealed
+  tier and scans everything else including `undefined`, but it tests set membership — so an arbitrary
+  string (`"garbage"`, a typo'd `"containerr"`) is neither, and would have skipped the structural
+  host-inventory scan entirely. The strict reader cannot produce that; this one can, because malformed
+  input is its whole job.
+
+- **`verify-cassettes --output-format json` now reports `privacyScanned` per result.** `error` used to be
+  the only signal a gate could key on, and it now means two different things — "never scanned" and "scanned
+  fine, just not replayable". `privacyScanned` answers the question directly: `findings: []` with
+  `privacyScanned: false` is an absence of evidence, not evidence of absence. The pre-commit gate keys on
+  it, which also removes a false positive it had on the repo's own eval fixture — a file it was blocking
+  commits to and could in fact scan perfectly well. A pre-commit false positive is expensive: it teaches
+  the operator to pass `--no-verify`, which disables the gate for everything.
+
 - **The pre-commit cassette gate now fails CLOSED.** `.githooks/pre-commit` tested `hook_status` for `1`
   (block) and `3` (warn) and let every other outcome through to a successful commit, so the guard switched
   itself off — silently — on outcomes that ordinary refactors produce: exit `2` (`examples/replays/` renamed

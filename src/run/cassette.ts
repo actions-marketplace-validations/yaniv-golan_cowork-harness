@@ -26,6 +26,7 @@ import {
   Assertion as AssertionSchema,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
+  FIDELITY_TIERS,
 } from "../types.js";
 import { executeScenario, assertContradiction, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { UsageError } from "../errors.js";
@@ -1270,6 +1271,12 @@ function isCapabilityManifest(line: string): boolean {
  *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
 const HOST_INHERITING_TIERS: ReadonlySet<string> = new Set(["protocol", "hostloop", "cowork"]);
 
+/** Every tier name this build understands. Used ONLY by `readCassetteForScan`, to refuse to pass an
+ *  unrecognized tier through to the scan's set-membership gate — see the fail-closed note there.
+ *  Derived from the canonical `FIDELITY_TIERS`, never spelled out: a second literal tier list is what
+ *  `test/fidelity-tiers-single-source.test.ts` exists to stop, and it caught this one. */
+const KNOWN_TIERS: ReadonlySet<string> = new Set<string>(FIDELITY_TIERS);
+
 /** Plugin names the scenario mounted, harvested from anywhere in the event stream.
  *
  *  `system/init` carries `plugins[]` beside `agents[]`, so that surface is self-sufficient — but the
@@ -1303,7 +1310,48 @@ export function collectDeclaredPlugins(events: string[] | undefined): string[] {
   return [...names];
 }
 
-export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFinding[] {
+/**
+ * The EXACT subset of a cassette the privacy scan reads — and the point of the read-boundary split.
+ *
+ * WHY THIS TYPE EXISTS. `verify-cassettes` does two independent jobs: a privacy scan ("does this
+ * recording carry the recording machine's MCP servers / agents / account org?") and a staleness check
+ * ("is it out of date?"). Both used to sit behind one `readCassette`, so a document that failed SHAPE
+ * validation was never privacy-scanned at all — `verifyOneCassette` returned early and `scanCassette` on
+ * the next line never ran. That is backwards: shape validity is what REPLAY needs, and a file too broken
+ * to replay is exactly the kind of file a leak arrives in. Whether a transcript can be READ and whether a
+ * cassette is VALID are different questions, and only the first one gates a privacy scan.
+ *
+ * Narrowing the parameter type is what makes the split safe rather than merely convenient: the compiler
+ * now guarantees the scan cannot reach for a field `readCassetteForScan`'s projection does not supply.
+ * Adding a new scan axis that reads some other field is a TYPE ERROR here until the projection carries it
+ * — which is the whole guard against a future axis silently reading `undefined` off a partial document.
+ *
+ * `Cassette` is structurally assignable to this, so every existing caller is unaffected.
+ */
+export interface ScannableCassette {
+  events: string[];
+  controlOut?: string[];
+  effectiveFidelity?: string;
+  artifacts?: Cassette["artifacts"];
+  fingerprint?: { skillSources?: string[]; fileSigs?: Array<[string, string]> };
+  // Structural METADATA — a customer folder mount name, a scenario name, a private-registry image ref.
+  // These are name fields, invisible to a net aimed at transcript text, and are exactly the shape of the
+  // inventory leak this repo already shipped, so the projection must carry them.
+  userVisibleRoots?: string[];
+  scenarioSource?: string;
+  environment?: { agentImage?: { ref?: string } };
+  // `fidelity` is a plain string here, NOT the Scenario literal union — a malformed document can carry
+  // anything, and the projection is responsible for refusing to pass through a value it cannot vouch for
+  // (see `knownTier` in `readCassetteForScan`). `answers`/`assert` are only ever JSON.stringify'd by the
+  // scan, so their precise Scenario types buy nothing and would force a cast at the projection.
+  scenario: Partial<Pick<Cassette["scenario"], "prompt" | "name" | "session">> & {
+    fidelity?: string;
+    answers?: unknown;
+    assert?: unknown[];
+  };
+}
+
+export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   const FULL = DEFAULT_SCAN_PATTERNS; // email + currency + domain + path + machine-inventory
   const MANIFEST = MANIFEST_SCAN_PATTERNS; // email + path + machine-inventory — for the capability-manifest messages
@@ -1389,7 +1437,7 @@ export function scanCassette(cassette: Cassette, allow: AllowInput[]): ScanFindi
     } else if (a.truncated)
       findings.push({ where: `artifact ${a.path}`, cls: "unscanned", sample: "(body not committed — too large or unreadable)" });
   }
-  findings.push(...scanText(cassette.scenario.prompt, "scenario.prompt", allow, FULL));
+  findings.push(...scanText(cassette.scenario.prompt ?? "", "scenario.prompt", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.answers ?? null), "scenario.answers", allow, FULL));
   findings.push(...scanText(JSON.stringify(cassette.scenario.assert ?? null), "scenario.assert", allow, FULL));
   for (const s of cassette.fingerprint?.skillSources ?? []) findings.push(...scanText(s, "fingerprint.skillSources", allow, FULL));
@@ -2538,6 +2586,92 @@ const CassetteShape = z.looseObject({
  *  slugifies, so `cassettes/My Run.cassette.json` reported but `cassettes/my-run.cassette.json` written). */
 export function defaultCassettePath(scenarioName: string): string {
   return join("cassettes", `${slugForPath(scenarioName)}.cassette.json`);
+}
+
+/**
+ * Read a cassette for the PRIVACY SCAN ONLY, with no shape validation beyond "is there a transcript".
+ *
+ * The other half of the read-boundary split (see `ScannableCassette`). `readCassette` stays strict —
+ * everything downstream of it (replay, staleness, the version/hashFormat invariant) depends on that, and
+ * it was deliberately tightened for the hash-format epoch. This function does NOT relax it; it is a
+ * separate, narrower door for the one job that never needed document validity in the first place.
+ *
+ * The only hard requirement is `events: string[]`. Everything else is best-effort and dropped when it is
+ * not the expected shape, because a partially-corrupt document must still be scannable — that is the
+ * entire point. Two consequences worth being explicit about:
+ *
+ *  - A dropped `fidelity`/`effectiveFidelity` leaves the tier UNDEFINED, which `scanCassette` treats as
+ *    host-inheriting and scans structurally. Fail-closed, and the direction we want here.
+ *  - This function MUST NOT throw. It runs on files that are already known to be malformed; a crash here
+ *    reads as "the rest were fine" for every remaining file in a batch walk.
+ */
+export function readCassetteForScan(path: string): { scannable: ScannableCassette } | { error: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { error: "not a JSON object" };
+  const o = raw as Record<string, unknown>;
+
+  const strings = (v: unknown): string[] | undefined =>
+    Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined;
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const obj = (v: unknown): Record<string, unknown> | undefined =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  // Only a tier this build positively recognizes survives; anything else becomes `undefined`, which
+  // `scanCassette` treats as host-inheriting. Never widen this to "any string".
+  const knownTier = (v: unknown): string | undefined => (typeof v === "string" && KNOWN_TIERS.has(v) ? v : undefined);
+
+  // The ONE hard requirement. Without a transcript there is nothing to scan, and saying so is honest —
+  // reporting "clean" for a file we could not read is the false-green this whole split exists to remove.
+  const events = strings(o.events);
+  if (events === undefined) return { error: "no readable transcript (`events` is not an array of strings)" };
+
+  const scenario = obj(o.scenario) ?? {};
+  const fingerprint = obj(o.fingerprint);
+  const environment = obj(o.environment);
+  const agentImage = environment ? obj(environment.agentImage) : undefined;
+
+  return {
+    scannable: {
+      events,
+      controlOut: strings(o.controlOut),
+      // FAIL CLOSED on a tier we do not recognize. `scanCassette` exempts a positively-sealed tier and
+      // scans everything else, INCLUDING `undefined` — but it tests set membership, so an arbitrary string
+      // (`"garbage"`, or a typo'd `"containerr"`) is neither undefined nor host-inheriting and would SKIP
+      // the structural host-inventory scan entirely. The strict reader cannot produce that (Zod validates
+      // fidelity to a literal union); this reader can, because malformed input is its whole job. So a tier
+      // that is not a known one is dropped to `undefined`, which scans.
+      effectiveFidelity: knownTier(o.effectiveFidelity),
+      // Artifacts are read for `path`/`body`/`encoding`; keep only entries that actually carry a string
+      // path, so a malformed element cannot make `scanCassette` throw mid-walk.
+      artifacts: (Array.isArray(o.artifacts) ? o.artifacts : []).filter(
+        (a): a is NonNullable<Cassette["artifacts"]>[number] => obj(a) !== undefined && typeof (a as { path?: unknown }).path === "string",
+      ),
+      fingerprint:
+        fingerprint === undefined
+          ? undefined
+          : {
+              skillSources: strings(fingerprint.skillSources),
+              fileSigs: (Array.isArray(fingerprint.fileSigs) ? fingerprint.fileSigs : []).filter(
+                (e): e is [string, string] => Array.isArray(e) && typeof e[0] === "string",
+              ),
+            },
+      userVisibleRoots: strings(o.userVisibleRoots),
+      scenarioSource: str(o.scenarioSource),
+      environment: agentImage === undefined ? undefined : { agentImage: { ref: str(agentImage.ref) } },
+      scenario: {
+        prompt: str(scenario.prompt),
+        fidelity: knownTier(scenario.fidelity),
+        answers: scenario.answers,
+        assert: Array.isArray(scenario.assert) ? scenario.assert : undefined,
+        name: str(scenario.name),
+        session: str(scenario.session),
+      },
+    },
+  };
 }
 
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
@@ -5356,6 +5490,7 @@ export async function cmdVerifyCassettes(args: string[]) {
         version: [],
         scenarioDrift: [],
         error: (e as Error)?.message ?? String(e),
+        privacyScanned: false, // a crash mid-verify never completed the scan, whatever it crashed on
       };
     }
   });
@@ -5372,8 +5507,30 @@ export async function cmdVerifyCassettes(args: string[]) {
         json,
       );
     }
-    if ("error" in rc)
-      return { file: f, findings: [], staleness: [], unverifiable: [], notes: [], version: [], scenarioDrift: [], error: rc.error };
+    if ("error" in rc) {
+      // SHAPE INVALID — but that only blocks the STALENESS half. The privacy scan needs a readable
+      // transcript, not a valid document, so try the narrow scan-only door before giving up. Before this,
+      // a file that failed shape validation was reported with zero findings and never scanned at all,
+      // which reads in every summary as "0 PII findings" — a clean-looking number from an instrument that
+      // never ran. A file too broken to replay is exactly the kind a leak arrives in.
+      const scanOnly = doPrivacy ? readCassetteForScan(f) : { error: "privacy scan disabled" };
+      const salvaged = "scannable" in scanOnly ? scanCassette(scanOnly.scannable, allow) : [];
+      return {
+        file: f,
+        findings: salvaged,
+        staleness: [],
+        unverifiable: [],
+        notes: [],
+        version: [],
+        scenarioDrift: [],
+        error: rc.error,
+        // The honest signal, and the one the pre-commit gate keys on: did the privacy scan actually run?
+        // `error` alone cannot answer that any more — it now covers both "never scanned" and "scanned
+        // fine, just not replayable". Conflating them is what made the gate block on an eval fixture it
+        // could in fact scan.
+        privacyScanned: doPrivacy && "scannable" in scanOnly,
+      };
+    }
     const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
@@ -5438,7 +5595,17 @@ export async function cmdVerifyCassettes(args: string[]) {
             `cassette format v${recordedVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
           ]
         : [];
-    return { file: f, findings, staleness, unverifiable, notes, version, scenarioDrift, error: undefined as string | undefined };
+    return {
+      file: f,
+      findings,
+      staleness,
+      unverifiable,
+      notes,
+      version,
+      scenarioDrift,
+      error: undefined as string | undefined,
+      privacyScanned: doPrivacy, // false under --skip-privacy: "we did not look" is not "we looked and it was clean"
+    };
   }
   // --margins (diagnostic; never affects the gate): replay each cassette that carries count-bound asserts
   // and report recorded-vs-budget + margin. A per-cassette replay cost the base command doesn't have.
@@ -5520,7 +5687,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     );
     if (!ok)
       log(
-        "  exit 1 = verified & failed (a real finding); exit 3 = could not verify (unresolvable baseline/skill/tier, an unsupported cassette version, or a per-file read ERROR/CRASH — that's a bug to report, not a signal to re-record)",
+        "  exit 1 = verified & failed (a real finding); exit 3 = could not verify (unresolvable baseline/skill/tier, an unsupported cassette version, or a per-file read ERROR/CRASH — that's a bug to report, not a signal to re-record). A cassette that fails SHAPE validation is still privacy-scanned; `privacyScanned` in --output-format json says whether the scan ran.",
       );
     if (margins) {
       log(

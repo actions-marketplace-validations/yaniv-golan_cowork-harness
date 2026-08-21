@@ -113,34 +113,32 @@ if [ -n "$baseline_files" ]; then
       if [ "$s" != "0" ] && { [ "$hook_status" = "0" ] || [ "$s" = "1" ]; }; then hook_status=$s; fi
     done
 
-    # Exit 3 folds three things together: unverifiable STALENESS, an unsupported cassetteVersion, and a
-    # per-file read error. Only the first means "we looked and could not conclude". The other two mean the
-    # privacy scan NEVER RAN — no evidence either way about host inventory — and waving those through
-    # inverts this repo's own `can't verify ⇒ not green` doctrine on the one gate that runs before a push.
+    # Exit 3 still folds several outcomes together, but the JSON envelope now answers the only question
+    # that matters here directly: `privacyScanned`. The privacy scan needs a READABLE TRANSCRIPT, not a
+    # valid document, so a cassette that fails SHAPE validation is still scanned for host inventory — and
+    # this gate must block only when the scan genuinely could not run (unreadable JSON, no `events` array,
+    # or a crash mid-verify). The first version keyed on `error` instead, which blocked commits touching a
+    # perfectly scannable eval fixture and would have taught the operator to reach for --no-verify.
+    #
+    # A MISSING field counts as not scanned: an older CLI on PATH cannot vouch for a file it never checked.
     if [ "$hook_status" = "3" ]; then
-      # Read the CAUSE out of the JSON envelope. Two things make this fiddly, both learned the hard way:
-      #
-      #  1. `verify-cassettes --output-format json` EXITS 3 here by construction — that is why we are in
-      #     this branch. So the JSON must be captured with `|| true`, or `set -e`/`pipefail` aborts the
-      #     hook. Piping it straight into the probe and appending `|| echo true` produced the string
-      #     "truetrue" (the probe's own answer, plus the fallback fired by the pipeline's exit 3), which
-      #     then failed an `= "true"` comparison and waved an UNSCANNABLE cassette through as staleness.
-      #  2. The polarity is therefore fail-CLOSED: only an explicit "false" clears the file. Empty output,
-      #     a doubled string, or anything unexpected blocks. A guard whose safe answer depends on an exact
-      #     string match is one typo away from the fail-open it exists to prevent.
       unscanned=false
       for c in examples/replays/ $staged_cassettes; do
         [ -e "$c" ] || continue
         probe_json=$(node dist/cli.js verify-cassettes "$c" --output-format json 2>/dev/null || true)
-        u=$(printf '%s' "$probe_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(!j||!Array.isArray(j.results))throw 0;process.stdout.write(String(j.results.some(r=>r.error||((r.version||[]).length>0))))}catch(e){process.stdout.write("true")}})' 2>/dev/null || true)
+        u=$(printf '%s' "$probe_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(!j||!Array.isArray(j.results))throw 0;process.stdout.write(String(j.results.some(r=>r.privacyScanned!==true)))}catch(e){process.stdout.write("true")}})' 2>/dev/null || true)
+        # Fail CLOSED: only an explicit "false" clears. Empty output, or a doubled string (how the first
+        # version broke — `pipefail` lifted the CLI's own exit 3 out of the pipeline and `|| echo true`
+        # appended a SECOND "true", yielding "truetrue"), or anything unexpected all block.
         if [ "$u" != "false" ]; then unscanned=true; fi
       done
       if [ "$unscanned" = "true" ]; then
         cat "$tmp"; rm -f "$tmp"
         echo ""
-        echo "✖ pre-commit: a staged cassette could NOT BE SCANNED (unreadable, or a cassetteVersion this"
-        echo "  build does not support), so the privacy scan never ran — nothing has checked it for a"
-        echo "  [host-inventory] leak. 'Could not verify' is not 'verified clean'."
+        echo "✖ pre-commit: a staged cassette could NOT BE SCANNED — its JSON is unreadable, it carries no"
+        echo "  \`events\` array, or verification crashed. The privacy scan never ran, so nothing has checked"
+        echo "  it for a [host-inventory] leak. 'Could not verify' is not 'verified clean'."
+        echo "  (A cassette that merely fails SHAPE validation is still scanned, and does not land here.)"
         echo "  Fix the cassette, or rebuild against the CLI that recorded it, then re-stage."
         echo "  (Bypass with 'git commit --no-verify' if you must.)"
         exit 1

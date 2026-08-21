@@ -694,7 +694,13 @@ verdict logic a finding doesn't have) — it emits its own, published as
                  "unverifiable": [ "string" ],// a StalenessFinding whose class IS `unverifiable-*` — could not verify (exit 3, unless the SAME run also has a `staleness`/`findings`/`scenarioDrift` entry, which wins exit 1)
                  "notes": [ "string" ],       // NON-failing informational channel (never affects ok/exit) — e.g. a pre-effectiveFidelity cassette with an explicit tier: statically knowable, nothing baseline-dependent to verify. Text output: a `·`-prefixed row.
                  "version": [ "string" ],     // cassette written by a NEWER harness than this one understands — always a could-not-verify failure (exit 3), independent of --skip-staleness
-                 "error?": "string" } ] }     // a malformed/unreadable cassette (or a per-file crash) is TALLIED here, never crashes the batch — a could-not-verify failure (exit 3)
+                 "error?": "string",          // a malformed/unreadable cassette (or a per-file crash) is TALLIED here, never crashes the batch — a could-not-verify failure (exit 3)
+                 "privacyScanned": true } ] }  // did the privacy scan actually RUN on this file? It needs a readable TRANSCRIPT (an `events` array of
+                                              // strings), NOT a valid cassette — so a file that fails shape validation still reports findings AND an
+                                              // `error`, and `error` alone cannot answer "was this checked". `false` = the scan could not run (unreadable
+                                              // JSON, no `events`, a crash) or was disabled with `--skip-privacy`; there, `findings: []` is an absence of
+                                              // evidence, not evidence of absence. A gate that must not treat "could not verify" as "verified clean"
+                                              // keys on THIS, never on `error`.
 ```
 
 The full net (email/currency/domain/path/machine-inventory) runs over the WHOLE cassette (deliverable

@@ -147,30 +147,38 @@ describe("pre-commit cassette gate — it must FAIL CLOSED", () => {
 });
 
 describe("pre-commit cassette gate — exit 3 is split by CAUSE, not waved through wholesale", () => {
-  // `cmdVerifyCassettes` returns 3 for THREE different things: unverifiable staleness, an unsupported
-  // cassetteVersion, and a per-file read error. Only the first means "we looked and could not conclude".
-  // The other two mean `scanCassette` never ran, so there is no evidence either way about host inventory —
-  // and a cassette recorded by a newer CLI than the committer's dist/ would commit completely unscanned.
-  it("blocks when the cause is a read ERROR — the privacy scan never ran", () => {
+  // `cmdVerifyCassettes` returns 3 for several different things, so the exit code alone cannot say
+  // whether the privacy scan ran. The envelope answers that directly with `privacyScanned`, and the gate
+  // keys on it: a cassette that merely fails SHAPE validation is still scanned (see the read-boundary
+  // split in test/scan-read-boundary.test.ts) and must NOT block, while one whose transcript could not be
+  // read at all must, because zero findings there is an absence of evidence, not evidence of absence.
+  // Keying on `error` instead — as the first version did — blocked commits touching a scannable eval
+  // fixture, which is how an operator learns to reach for --no-verify.
+  it("blocks when the privacy scan could not run at all", () => {
     const { code, out } = runHook(
-      scratchRepo({ stubExit: 3, stubJson: { results: [{ file: "x", error: "invalid cassette shape", version: [] }] } }),
+      scratchRepo({ stubExit: 3, stubJson: { results: [{ file: "x", error: "unreadable JSON", version: [], privacyScanned: false }] } }),
     );
     expect(code).not.toBe(0);
     expect(out).toMatch(/could NOT BE SCANNED/);
   });
 
-  it("blocks when the cause is an unsupported cassetteVersion", () => {
+  it("blocks whenever privacyScanned is false, whatever the accompanying error says", () => {
     const { code, out } = runHook(
-      scratchRepo({ stubExit: 3, stubJson: { results: [{ file: "x", error: null, version: ["recorded at v99"] }] } }),
+      scratchRepo({
+        stubExit: 3,
+        stubJson: { results: [{ file: "x", error: null, version: ["recorded at v99"], privacyScanned: false }] },
+      }),
     );
     expect(code).not.toBe(0);
     expect(out).toMatch(/could NOT BE SCANNED/);
   });
 
-  it("WARNS but allows when the cause is unverifiable staleness only", () => {
+  it("WARNS but allows when the file WAS scanned and only staleness is unverifiable", () => {
     // Staleness genuinely is "we looked and could not conclude", and it is common on a moved cassette.
     // Blocking here would train the maintainer to reach for --no-verify, which is worse than the warning.
-    const { code, out } = runHook(scratchRepo({ stubExit: 3, stubJson: { results: [{ file: "x", error: null, version: [] }] } }));
+    const { code, out } = runHook(
+      scratchRepo({ stubExit: 3, stubJson: { results: [{ file: "x", error: null, version: [], privacyScanned: true }] } }),
+    );
     expect(code).toBe(0);
     expect(out).toMatch(/unverifiable STALENESS/);
   });
@@ -342,8 +350,13 @@ describe("END TO END: the real hook, the real CLI, the real unscannable cassette
     // thing that can block is the per-file check.
     mkdirSync(join(dir, "examples", "replays"), { recursive: true });
     cpSync(resolve("examples/replays/example-multiselect-gate.cassette.json"), join(dir, "examples/replays/clean.cassette.json"));
+    // A cassette with NO transcript — genuinely unscannable. (It used to be report-check.cassette.json,
+    // but the read-boundary split made that file scannable on purpose, so it no longer tests this.)
     mkdirSync(join(dir, "evals"), { recursive: true });
-    cpSync(resolve("test/evals/files/report-check.cassette.json"), join(dir, "evals", "unscannable.cassette.json"));
+    writeFileSync(
+      join(dir, "evals", "unscannable.cassette.json"),
+      JSON.stringify({ generator: "cowork-harness", scenario: { prompt: "x" } }),
+    );
     git("add", "evals/unscannable.cassette.json");
 
     let code = 0;
@@ -358,6 +371,47 @@ describe("END TO END: the real hook, the real CLI, the real unscannable cassette
     expect(code, `the hook allowed an unscannable cassette through:\n${out}`).not.toBe(0);
     expect(out).toMatch(/could NOT BE SCANNED/);
     expect(out).not.toMatch(/scan passed/);
+  });
+});
+
+describe("END TO END: a shape-invalid but SCANNABLE cassette must not block", () => {
+  // The other side of the case above, and the reason the read-boundary split was worth doing. The repo's
+  // own eval fixture has no `scenario.session`, so it fails shape validation — but its transcript reads
+  // fine and the privacy scan runs on it. Blocking here (which the first version of this gate did) is a
+  // false positive on a file that IS checked, and the cost of a false positive on a pre-commit hook is
+  // that the operator learns to pass --no-verify, which disables the gate for everything.
+  const built = existsSync(REAL_CLI);
+  beforeAll(() => {
+    if (!built) throw new Error("dist/cli.js missing — run `npm run build`; this case must not silently skip");
+  });
+
+  it("allows a commit staging a cassette that fails shape validation but was scanned clean", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-hook-e2e2-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "T");
+    mkdirSync(join(dir, ".githooks"), { recursive: true });
+    cpSync(HOOK, join(dir, ".githooks", "pre-commit"));
+    symlinkSync(resolve("dist"), join(dir, "dist"));
+    symlinkSync(resolve("node_modules"), join(dir, "node_modules"));
+    mkdirSync(join(dir, "examples", "replays"), { recursive: true });
+    cpSync(resolve("examples/replays/example-multiselect-gate.cassette.json"), join(dir, "examples/replays/clean.cassette.json"));
+    mkdirSync(join(dir, "evals"), { recursive: true });
+    cpSync(resolve("test/evals/files/report-check.cassette.json"), join(dir, "evals", "attachment.cassette.json"));
+    git("add", "evals/attachment.cassette.json");
+
+    let code = 0;
+    let out = "";
+    try {
+      out = execFileSync("bash", [join(dir, ".githooks", "pre-commit")], { cwd: dir, encoding: "utf8", stdio: "pipe" });
+    } catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      code = err.status ?? -1;
+      out = `${err.stdout ?? ""}${err.stderr ?? ""}`;
+    }
+    expect(code, `a scannable cassette was blocked:\n${out}`).toBe(0);
+    expect(out).not.toMatch(/could NOT BE SCANNED/);
   });
 });
 
@@ -379,7 +433,7 @@ describe("the stub's contract matches the real CLI", () => {
     expect(code).toBe(2);
   });
 
-  it("exits 3 and reports the cause in results[].error for an unreadable cassette", () => {
+  it("exits 3 on a shape-invalid cassette, and still reports privacyScanned", () => {
     let code = 0;
     let out = "";
     try {
@@ -393,8 +447,11 @@ describe("the stub's contract matches the real CLI", () => {
       out = err.stdout ?? "";
     }
     expect(code).toBe(3);
-    const parsed = JSON.parse(out) as { results: { error?: string | null; version?: unknown[] }[] };
+    const parsed = JSON.parse(out) as { results: { error?: string | null; version?: unknown[]; privacyScanned?: boolean }[] };
     expect(parsed.results[0].error).toMatch(/invalid cassette shape/);
     expect(Array.isArray(parsed.results[0].version)).toBe(true);
+    // ...and it reports that the privacy scan DID run despite the shape failure — the field the hook
+    // keys on, pinned here against the real binary so the stub above cannot drift away from it.
+    expect(parsed.results[0].privacyScanned).toBe(true);
   });
 });
