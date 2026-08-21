@@ -81,6 +81,19 @@ All notable changes to this project are documented here. The format is based on
   rather than re-recording. If you genuinely want the old behaviour for a lane, it was never expressible
   as a flag and still isn't; fix the resolution instead.
 
+- **`verify-cassettes --output-format json` gained a REQUIRED `privacyScanned` field on every result.**
+  `schema/verify-cassettes.json` is a covered 1.0 surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)),
+  and `privacyScanned` is now in its `required` list — so a consumer validating this build's output against
+  an older copy of the schema is unaffected, but one validating an OLDER CLI's output against the NEW schema
+  will fail. It is emitted on every return path, so anything keying on it can rely on it.
+
+  The field exists because `error` became ambiguous. A cassette that fails SHAPE validation is now still
+  privacy-scanned (see Fixed, below), so `error` covers both "never scanned" and "scanned fine, just not
+  replayable" — and a gate cannot tell those apart from it. **If you have CI keyed on `error` meaning "this
+  file was not checked", that reading is now wrong; switch to `privacyScanned === false`,** where
+  `findings: []` is an absence of evidence rather than evidence of absence. `--skip-privacy` also reports
+  `false`, for the same reason.
+
 ### Added
 
 - **`record` now scans what it wrote, and quarantines a leaking recording instead of publishing it.**
@@ -177,14 +190,6 @@ All notable changes to this project are documented here. The format is based on
   string (`"garbage"`, a typo'd `"containerr"`) is neither, and would have skipped the structural
   host-inventory scan entirely. The strict reader cannot produce that; this one can, because malformed
   input is its whole job.
-
-- **`verify-cassettes --output-format json` now reports `privacyScanned` per result.** `error` used to be
-  the only signal a gate could key on, and it now means two different things — "never scanned" and "scanned
-  fine, just not replayable". `privacyScanned` answers the question directly: `findings: []` with
-  `privacyScanned: false` is an absence of evidence, not evidence of absence. The pre-commit gate keys on
-  it, which also removes a false positive it had on the repo's own eval fixture — a file it was blocking
-  commits to and could in fact scan perfectly well. A pre-commit false positive is expensive: it teaches
-  the operator to pass `--no-verify`, which disables the gate for everything.
 
 - **The pre-commit cassette gate now fails CLOSED.** `.githooks/pre-commit` tested `hook_status` for `1`
   (block) and `3` (warn) and let every other outcome through to a successful commit, so the guard switched

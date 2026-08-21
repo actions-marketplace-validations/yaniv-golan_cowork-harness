@@ -88,6 +88,26 @@ function scratchRepo(opts: {
   return dir;
 }
 
+/** Copy a committed cassette in as the "this directory verifies clean" fixture, with its `fingerprint`
+ *  STRIPPED.
+ *
+ *  Normalising that axis is load-bearing, not tidiness. These cases are about the hook's exit-code
+ *  handling; the cassette is scenery. But a committed fixture carries `fingerprint.baseline`, and EVERY
+ *  parity sync moves `latest` and stales it — at which point the directory scan exits 1, the hook blocks,
+ *  and these cases fail with a message about baseline drift that has nothing to do with what they test.
+ *  Verified by simulation, not assumed: re-stamping the fixture to an older baseline reds exactly the two
+ *  cases below, and restoring this line greens them again.
+ *
+ *  With no fingerprint there is no baseline or skill axis to go stale, and the file still verifies clean
+ *  (exit 0), so the fixture keeps its only job and a future sync cannot touch it. Credit to the peer
+ *  session that hit the same coupling from the other side. */
+function stageCleanReplays(dir: string): void {
+  mkdirSync(join(dir, "examples", "replays"), { recursive: true });
+  const c = JSON.parse(readFileSync(resolve("examples/replays/example-multiselect-gate.cassette.json"), "utf8")) as Record<string, unknown>;
+  delete c.fingerprint;
+  writeFileSync(join(dir, "examples", "replays", "clean.cassette.json"), JSON.stringify(c, null, 2));
+}
+
 /** Run the hook. Returns its exit code and combined output — never throws on a non-zero exit. */
 function runHook(dir: string): { code: number; out: string } {
   try {
@@ -348,8 +368,7 @@ describe("END TO END: the real hook, the real CLI, the real unscannable cassette
 
     // A clean fixture so the DIRECTORY scan passes; the unscannable one staged alongside it, so the only
     // thing that can block is the per-file check.
-    mkdirSync(join(dir, "examples", "replays"), { recursive: true });
-    cpSync(resolve("examples/replays/example-multiselect-gate.cassette.json"), join(dir, "examples/replays/clean.cassette.json"));
+    stageCleanReplays(dir);
     // A cassette with NO transcript — genuinely unscannable. (It used to be report-check.cassette.json,
     // but the read-boundary split made that file scannable on purpose, so it no longer tests this.)
     mkdirSync(join(dir, "evals"), { recursive: true });
@@ -395,8 +414,7 @@ describe("END TO END: a shape-invalid but SCANNABLE cassette must not block", ()
     cpSync(HOOK, join(dir, ".githooks", "pre-commit"));
     symlinkSync(resolve("dist"), join(dir, "dist"));
     symlinkSync(resolve("node_modules"), join(dir, "node_modules"));
-    mkdirSync(join(dir, "examples", "replays"), { recursive: true });
-    cpSync(resolve("examples/replays/example-multiselect-gate.cassette.json"), join(dir, "examples/replays/clean.cassette.json"));
+    stageCleanReplays(dir);
     mkdirSync(join(dir, "evals"), { recursive: true });
     cpSync(resolve("test/evals/files/report-check.cassette.json"), join(dir, "evals", "attachment.cassette.json"));
     git("add", "evals/attachment.cassette.json");
