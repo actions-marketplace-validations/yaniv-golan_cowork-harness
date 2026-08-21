@@ -103,7 +103,12 @@ if [ -n "$baseline_files" ]; then
     #
     # No --allow-* flags: the fixtures verify clean without them (CI runs this bare and passes), and
     # carrying suppressions here made the local gate LAXER than the CI gate it exists to pre-empt.
-    tmp=$(mktemp -t cwh-verify-cassettes) || exit 1
+    # PORTABLE template, not `-t`. BSD `mktemp -t PREFIX` treats the argument as a prefix and appends
+    # its own X's; GNU requires the TEMPLATE to carry at least three X's and errors with
+    # "mktemp: too few X's in template" otherwise. `-t` therefore works on macOS and fails on Linux —
+    # which is what CI caught the first time this hook's tests ran on a Linux runner. A positional
+    # template with an explicit directory is accepted by both.
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cwh-verify-cassettes.XXXXXX") || exit 1
     hook_status=0
     node dist/cli.js verify-cassettes examples/replays/ >"$tmp" 2>&1 || hook_status=$?
     for c in $staged_cassettes; do
