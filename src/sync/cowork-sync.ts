@@ -343,8 +343,8 @@ export function decodeFcacheProvenance(path = join(SUPPORT, "fcache")): FcachePr
  *
  *  THE FILTER IS THE ID SPACE, NOT A GUESS: every one of the 278 live fcache ids is 8-10 digits with no
  *  leading zero and below 2^32 (min 17519066, max 4293378213). Quoting matters too — gate ids are passed
- *  as STRING literals, and scanning bare numbers instead drops the signal into 2205 unrelated numeric
- *  tokens (of which only 8 are gate ids). Some numeric noise still survives; that is fine and deliberate,
+ *  as STRING literals: over the same require-graph input this reads, scanning BARE numbers instead yields
+ *  1953 numeric tokens (1680 after the same id-space filter) of which only **8** are live gate ids. Some numeric noise still survives; that is fine and deliberate,
  *  because a constant is invisible in the DELTA, which is what this field is read for. */
 export function extractAsarGateIds(files: Map<string, string>): string[] {
   const re = /["'`](\d{5,13})["'`]/g;
@@ -352,6 +352,11 @@ export function extractAsarGateIds(files: Map<string, string>): string[] {
   for (const text of files.values())
     for (const m of text.matchAll(re)) {
       const id = m[1];
+      // `length > 10` is REDUNDANT and deliberately kept: any 11+ digit run is >= 1e10 > 2^32, so the
+      // range check already rejects it. Mutation-verified — relaxing it to `> 11` changes nothing, on
+      // synthetic input or on the real bundle (208 -> 208). It stays because the pair states the id space
+      // (8-10 digits, below 2^32) in the shape the fcache actually exhibits. Do not read its
+      // untestability as a dead guard and do not "fix" it with a case that cannot discriminate.
       if (id.startsWith("0") || id.length < 8 || id.length > 10 || Number(id) >= 2 ** 32) continue;
       out.add(id);
     }
@@ -1126,6 +1131,17 @@ function extractFromAsar(
     // H1-H3 prompt-drift guard: extract the raw system-prompt content fingerprint and diff it against
     // the committed baselines/prompts/cowork-system-prompt-fingerprints.json (sha drift = hard-fail,
     // placeholder/section inventory diff = informational, unmodeled placeholder = hard-fail).
+    // A zero-id extraction on an otherwise-successful read means the literal shape moved, not that the
+    // release dropped every gate. Flag it: without this the write below silently CARRIES FORWARD the
+    // previous release's list under the new appVersion — a fabricated fact attributed to the wrong
+    // release, which is worse than a blank because nothing in the artifact reveals it. Matches the
+    // empty-`allowDomains` precedent, which refuses rather than inherits.
+    const gateIds = extractAsarGateIds(bundleFiles);
+    if (gateIds.length === 0)
+      flag(
+        unknown,
+        "provenance.asarGateIds: the gate-id literal scan matched nothing — the asar's literal shape moved, so a membership diff would be blind. Fix extractAsarGateIds (maintainer), or the written baseline will inherit the PREVIOUS release's ids under this appVersion",
+      );
     const promptFingerprint = extractPromptFingerprint(bundle);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(
@@ -1137,7 +1153,7 @@ function extractFromAsar(
     for (const d of promptDrift.unknownDeltas) flag(unknown, d);
     return {
       fingerprint,
-      asarGateIds: extractAsarGateIds(bundleFiles),
+      asarGateIds: gateIds,
       spawnEnv: spawn.env,
       spawnEnvKeys: spawn.keys,
       spawnEnvSpreadCount: spawn.spreadCount,

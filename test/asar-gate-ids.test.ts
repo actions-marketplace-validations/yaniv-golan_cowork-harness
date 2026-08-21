@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractAsarGateIds } from "../src/sync/cowork-sync.js";
-import { diffBaselines, formatDiffLines } from "../src/sync/baseline-diff.js";
+import { diffBaselines, formatDiffLines, renderChangelog } from "../src/sync/baseline-diff.js";
 
 /**
  * `provenance.asarGateIds` — the field that makes a gate-membership change NAMEABLE.
@@ -15,9 +15,11 @@ import { diffBaselines, formatDiffLines } from "../src/sync/baseline-diff.js";
  * plan could not:
  *   - the filtering case: an implementation that keeps only "interesting" entries passes every
  *     naive case, and the risk was named in the plan with no test behind it.
- *   - the sortedness case: every real gate id is a canonical array index, so JS enumerates them
- *     numerically no matter the insertion order — a key-permutation test passes with `.sort()` deleted.
- *     Only an id above 2^32-1 makes sortedness observable.
+ *   - the sortedness case: the collector is a `Set<string>`, which preserves INSERTION order for every
+ *     key, so the only variation that can catch a deleted `.sort()` is input whose appearance order
+ *     differs from its numeric order. (The canonical-array-index rule — numeric enumeration regardless of
+ *     insertion order — governs plain OBJECTS, not this collector. An earlier draft cited it here and
+ *     drew the wrong conclusion, which is why the 2^32 case below no longer claims to prove the sort.)
  */
 
 const filesOf = (...texts: string[]) => new Map(texts.map((t, i) => [`chunk-${i}.js`, t]));
@@ -53,25 +55,38 @@ describe("extractAsarGateIds — what it keeps", () => {
 
 describe("extractAsarGateIds — what it rejects, and why", () => {
   it("rejects bare (unquoted) numbers", () => {
-    // Gate ids are passed as STRING literals. Scanning bare numbers drowns 8 real ids in 2205 unrelated
-    // numeric tokens, measured on the 1.34493.1 bundle.
+    // Gate ids are passed as STRING literals. Over the same require-graph input the extractor reads,
+    // scanning bare numbers instead yields 1953 numeric tokens on the 1.34493.1 bundle — of which only
+    // 8 are live gate ids. (An earlier draft said 2205; that was measured over ALL of `.vite`, a
+    // different population than the extractor actually walks.)
     expect(extractAsarGateIds(filesOf("const t=1755123456; setTimeout(f,66187241)"))).toEqual([]);
   });
 
-  it("rejects leading-zero strings and out-of-range lengths", () => {
+  it("rejects leading-zero strings and out-of-range lengths, at BOTH bounds", () => {
     // Every one of the 278 live fcache ids is 8-10 digits with no leading zero, so this is the id space
     // rather than a taste call. `0123456789` and `00000000` are real literals in the shipped bundle.
     const ids = extractAsarGateIds(filesOf('a("0123456789");b("00000000");c("10000");d("12345678901234")'));
     expect(ids).toEqual([]);
+    // The lower bound needs its OWN adjacent case: with only a 5-digit and a 14-digit sample above,
+    // relaxing `< 8` to `< 7` passed every case while admitting a 7-digit token (208 -> 209 on the real
+    // bundle). Mutation-verified — an off-by-one at a bound is invisible unless something sits on it.
+    expect(extractAsarGateIds(filesOf('a("1234567")'))).toEqual([]); // 7 digits — just below the space
+    expect(extractAsarGateIds(filesOf('a("17519066")'))).toEqual(["17519066"]); // 8 — min live id, kept
   });
 
-  it("rejects an id at or above 2^32 — and that is what proves the sort is real", () => {
-    // Below 2^32 an id is a canonical array index, so JS enumerates numerically whatever the insertion
-    // order; sortedness is unobservable there. This id is NOT an array index, so an implementation that
-    // dropped `.sort()` and relied on enumeration order would expose itself — except it never reaches
-    // the array at all, because the range filter rejects it first. Both halves are asserted.
+  it("rejects an id at or above 2^32", () => {
+    // Range check ONLY. This case does not prove the sort — mutation-verified, it kills the range check
+    // and nothing else. The descending-input case above is what a deleted `.sort()` fails.
     expect(extractAsarGateIds(filesOf('a("4294967296")'))).toEqual([]);
     expect(extractAsarGateIds(filesOf('a("4293378213")'))).toEqual(["4293378213"]); // max live id, kept
+  });
+
+  it("requires a CLOSING quote, not just an opening one", () => {
+    // Uncovered until an adversarial pass found it: deleting the closing character class from the regex
+    // passed all ten cases while inflating the real 1.34493.1 bundle 208 -> 216, admitting numbers out of
+    // unterminated or differently-delimited contexts. An id is only an id when its literal is closed.
+    expect(extractAsarGateIds(filesOf("a(\"66187241);b('123929380"))).toEqual([]);
+    expect(extractAsarGateIds(filesOf('a("66187241")'))).toEqual(["66187241"]);
   });
 
   it("dedupes across chunks and returns a stable order", () => {
@@ -90,7 +105,20 @@ describe("the diff names the delta", () => {
   const withIds = (ids: string[]) => ({ provenance: { asarGateIds: ids } });
 
   it("renders added and removed ids by name, not as a count", () => {
-    const lines = formatDiffLines(diffBaselines(withIds(["66187241", "235864698"]) as never, withIds(["66187241", "40173473"]) as never));
+    // Through renderChangelog — that is what reaches the per-field renderer. Asserting through
+    // formatDiffLines instead only exercises the pre-existing generic `+[…] -[…]` formatter: measured,
+    // deleting the entire renderer block left this file and baseline-diff green at 38/38.
+    const out = renderChangelog(diffBaselines(withIds(["66187241", "235864698"]) as never, withIds(["66187241", "40173473"]) as never));
+    expect(out).toContain("gate ids referenced by the bundle");
+    expect(out).toContain("40173473");
+    expect(out).toContain("235864698");
+  });
+
+  it("`sync --diff` uses the GENERIC formatter, so the field must read sanely there too", () => {
+    // The per-field renderer above is reachable only from `diff --changelog` (cli.ts:4915).
+    // `sync --diff` calls formatDiffLines (cli.ts:2958), whose docstring says it carries no known-field
+    // prose. Pinning both so a future reader does not assume the nice line appears during a sync.
+    const lines = formatDiffLines(diffBaselines(withIds(["66187241"]) as never, withIds(["66187241", "40173473"]) as never));
     expect(lines.join("\n")).toContain("40173473");
   });
 
@@ -103,5 +131,23 @@ describe("the diff names the delta", () => {
       { provenance: { asarFingerprint: "x", asarGateIds: ["66187241"] } } as never,
     );
     expect(d.some((e) => e.path === "provenance.asarGateIds" && e.kind === "added")).toBe(true);
+  });
+});
+
+describe("the field actually reaches the committed artifact", () => {
+  it("the newest baseline carries a well-formed asarGateIds", async () => {
+    // The consumer contract. An adversarial pass showed that deleting the write in `src/cli.ts` left all
+    // 5,749 tests byte-identical — nothing observed whether `sync` emitted the field at all. This closes
+    // the artifact half of that: shape, sortedness and id-space are asserted on what actually shipped.
+    // Honest limit: it catches a deleted write only AFTER the next sync regenerates a baseline without
+    // it. The record-time half is covered by the empty-extraction flag in `extractFromAsar`.
+    const { loadBaseline } = await import("../src/baseline.js");
+    const ids = (loadBaseline("latest") as unknown as { provenance?: { asarGateIds?: unknown } }).provenance?.asarGateIds;
+    expect(Array.isArray(ids)).toBe(true);
+    const list = ids as string[];
+    expect(list.length).toBeGreaterThan(100);
+    expect(list.every((i) => /^[1-9]\d{7,9}$/.test(i) && Number(i) < 2 ** 32)).toBe(true);
+    expect([...list].sort((a, b) => Number(a) - Number(b))).toEqual(list);
+    expect(new Set(list).size).toBe(list.length);
   });
 });
