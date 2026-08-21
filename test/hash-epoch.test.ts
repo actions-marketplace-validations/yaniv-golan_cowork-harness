@@ -3,8 +3,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildFingerprint, fingerprintSkillDrift, migrateFingerprint, CASSETTE_VERSION, requiredVersionFor } from "../src/run/cassette.js";
-import { skillHashSnapshot, foldSnapshot, jcs1HashedContent, legacyHashedContent } from "../src/run/skill-hash.js";
+import {
+  buildFingerprint,
+  buildSessionFingerprint,
+  fingerprintSkillDrift,
+  migrateFingerprint,
+  recomputeBothAlgos,
+  CASSETTE_VERSION,
+  requiredVersionFor,
+} from "../src/run/cassette.js";
+import { skillHashSnapshot, foldSnapshot, renderWireEntries, jcs1HashedContent, legacyHashedContent } from "../src/run/skill-hash.js";
 import type { Fingerprint } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
 
@@ -198,7 +206,14 @@ describe.skipIf(!existsSync(CLI))("rehash — the migration path the epoch makes
           cassetteVersion: EPOCH - 1, // pre-epoch by construction
           scenario: { name: "c", baseline: LIVE_BASELINE, session: recordedSession, fidelity: "container", prompt: "hi", answers: [] },
           events: [],
-          fingerprint: { ...fp, skillHash: legacy, hashFormat: undefined },
+          // FAITHFUL: legacy digests throughout. Recording jcs1 `fileSigs` beside a legacy `skillHash`
+          // is not a pre-epoch artifact any recorder ever wrote, and the sequence proof rightly refuses it.
+          fingerprint: {
+            ...fp,
+            hashFormat: undefined,
+            skillHash: legacy,
+            fileSigs: renderWireEntries(skillHashSnapshot([root]), "legacy").map((e) => [e.path, e.sha] as [string, string]),
+          },
         },
         null,
         2,
@@ -269,5 +284,90 @@ describe.skipIf(!existsSync(CLI))("the version/format invariant is enforced at t
     const r = spawnSync("node", [CLI, "replay", file], { encoding: "utf8" });
     expect(r.status).not.toBe(0);
     expect(`${r.stdout}${r.stderr}`).toMatch(/hashFormat/);
+  });
+});
+
+describe.skipIf(!existsSync(CLI))("rehash proofs that a matching session shape does NOT establish", () => {
+  /** A cassette with NO skillHash whose session declares a root that does not exist — so the hash FAILED,
+   *  it did not have nothing to hash. Its sessionFingerprint is perfectly valid. */
+  function hashFailedCassette(): string {
+    const dir = mkdtempSync(join(tmpdir(), "epoch-declared-"));
+    const sessionPath = join(dir, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ${join(dir, "does-not-exist")}\n`);
+    const file = join(dir, "c.cassette.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cassetteVersion: EPOCH - 1,
+        scenario: { name: "c", baseline: LIVE_BASELINE, session: sessionPath, fidelity: "container", prompt: "hi", answers: [] },
+        events: [],
+        // No skillHash — because the mount was missing, NOT because nothing was declared.
+        fingerprint: { baseline: LIVE_BASELINE },
+        sessionFingerprint: buildSessionFingerprint(sessionPath, dir),
+      }),
+    );
+    return dir;
+  }
+
+  it("REFUSES to metadata-migrate a recording whose hash FAILED over declared-but-missing roots", () => {
+    // `skillSourceDirs` filters missing mounts out of `dirs`, so an empty `dirs` is ambiguous between
+    // "declared nothing" and "declared roots that all vanished". Reading the survivor count as the proof
+    // would bless exactly the unverifiable recording this check exists to reject.
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", hashFailedCassette()], { encoding: "utf8" });
+    const res = JSON.parse(r.stdout.trim()).results[0];
+    expect(res.action).not.toBe("migrated");
+    expect(res.reason).toMatch(/declares 1 skill root/);
+  });
+});
+
+describe("a scoped migration keeps its bucket attribution", () => {
+  it("recomputes sharedHash rather than dropping it — losing it costs skill-vs-shared forever", () => {
+    // `computeStaleness` only splits buckets when BOTH sides carry `sharedHash`, so a migration that
+    // dropped it would silently and permanently degrade every scoped cassette's drift reporting. It also
+    // cannot be carried over: `.claude-plugin/plugin.json` lives in the shared root, so its digest moves
+    // under jcs1 for any unsorted manifest.
+    const root = unsortedRoot();
+    const sessionPath = join(root, "session.yaml");
+    writeFileSync(sessionPath, `skills:\n  local:\n    - ${root}\n`);
+    const proof = recomputeBothAlgos(sessionPath, root, ["s"], LIVE_BASELINE);
+    expect(proof?.live.sharedHash).toBeTruthy();
+    // …and it is the SHARED subset, not the whole tree.
+    expect(proof?.live.sharedHash).not.toBe(proof?.live.skillHash);
+  });
+});
+
+describe("migrateFingerprint compares the legacy digest SEQUENCE", () => {
+  const recorded: Fingerprint = {
+    baseline: "1.0.0",
+    skillHash: "old",
+    fileSigs: [
+      ["a.md", "sha-a"],
+      ["b.md", "sha-b"],
+    ],
+  };
+  const live: Fingerprint = {
+    baseline: "1.0.0",
+    skillHash: "new",
+    hashFormat: "jcs1",
+    fileSigs: [
+      ["a.md", "new-a"],
+      ["b.md", "new-b"],
+    ],
+  };
+
+  it("accepts when the legacy recompute matches entry-for-entry", () => {
+    const r = migrateFingerprint(recorded, live, [
+      ["a.md", "sha-a"],
+      ["b.md", "sha-b"],
+    ]);
+    expect("error" in r).toBe(false);
+  });
+
+  it("REFUSES when the order disagrees — count and kind alone would have paired the wrong digest", () => {
+    const r = migrateFingerprint(recorded, live, [
+      ["b.md", "sha-b"],
+      ["a.md", "sha-a"],
+    ]);
+    expect("error" in r && r.error).toMatch(/does not match the legacy recompute/);
   });
 });

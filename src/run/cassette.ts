@@ -106,6 +106,7 @@ import {
   foldSnapshot,
   renderWireEntries,
   contentSigFromSnapshot,
+  sharedHashFromSnapshot,
 } from "./skill-hash.js";
 
 /** What NEW fingerprints record. Absent on a fingerprint means the legacy transform, so only the post-epoch
@@ -892,7 +893,14 @@ export function recomputeBothAlgos(
   cassetteDir: string | undefined,
   scopeSkills: string[] | undefined,
   baselineAppVersion: string,
-): { legacyHash: string; live: Fingerprint; mode: "git" | "raw"; agentScoped: boolean; readErrors?: string[] } | null {
+): {
+  legacyHash: string;
+  legacySigs: [string, string][];
+  live: Fingerprint;
+  mode: "git" | "raw";
+  agentScoped: boolean;
+  readErrors?: string[];
+} | null {
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
   if (dirs.length === 0) return null;
   const res = hashSkillDirs(dirs, scopeSkills, hashIgnore); // ONE walk — everything below folds from res.snapshot
@@ -903,6 +911,11 @@ export function recomputeBothAlgos(
     skillHash: res.hash,
     contentSig: contentSigFromSnapshot(res.snapshot),
     skillSources: dirs.sort().map((d) => relative(baseDir, d)),
+    // Scoped cassettes carry `sharedHash` so `computeStaleness` can name WHICH bucket drifted. It must be
+    // RECOMPUTED, not carried over: `.claude-plugin/plugin.json` lives in the shared root, so its digest
+    // moves under jcs1 for any unsorted manifest. And it must not be dropped — `computeStaleness` only
+    // splits buckets when BOTH sides have it, so losing it silently costs attribution forever.
+    ...(scopeSkills && scopeSkills.length ? { sharedHash: sharedHashFromSnapshot(res.snapshot) } : {}),
     ...(res.mode === "git" ? { mode: "git" as const } : {}),
     ...(res.agentScoped ? { agentScope: "skill" as const } : {}),
     ...(entries.length > MANIFEST_MAX_FILES
@@ -911,6 +924,9 @@ export function recomputeBothAlgos(
   };
   return {
     legacyHash: foldSnapshot(res.snapshot, "legacy"),
+    // The pre-epoch per-file manifest, for the alignment proof. `live.fileSigs` is already jcs1, so it
+    // cannot be compared against what a pre-epoch cassette actually recorded.
+    legacySigs: renderWireEntries(res.snapshot, "legacy").map((e) => [e.path, e.sha] as [string, string]),
     live,
     mode: res.mode,
     agentScoped: res.agentScoped,
@@ -933,7 +949,11 @@ export function recomputeBothAlgos(
  * proof says nothing about whether the array is well-formed), and absence is preserved rather than
  * materialised into a fresh live list.
  */
-export function migrateFingerprint(recorded: Fingerprint, live: Fingerprint): { fingerprint: Fingerprint } | { error: string } {
+export function migrateFingerprint(
+  recorded: Fingerprint,
+  live: Fingerprint,
+  legacySigs?: [string, string][],
+): { fingerprint: Fingerprint } | { error: string } {
   // ALIGNMENT IS A PRECONDITION, not a best-effort. An aggregate digest proof says nothing about whether
   // the recorded manifest array is well-formed, and silently keeping OLD per-file digests beside a NEW
   // `skillHash` + `hashFormat: jcs1` would stamp a fingerprint that contradicts itself — every later
@@ -947,6 +967,21 @@ export function migrateFingerprint(recorded: Fingerprint, live: Fingerprint): { 
       const recIsLink = recorded.fileSigs[i][1].startsWith("lnk:");
       const liveIsLink = live.fileSigs[i][1].startsWith("lnk:");
       if (recIsLink !== liveIsLink) return { error: `fileSigs entry ${i} changed kind (file <-> link) — cannot migrate` };
+    }
+    // THE SEQUENCE PROOF. Count and kind do not establish that entry i is the SAME file on both sides: a
+    // sort change, or two roots sharing a root-relative path, would pair a redacted path with another
+    // file's digest while `rehash` still reported "migrated". Compare against the LEGACY manifest
+    // recomputed from the proof snapshot — `live.fileSigs` is already jcs1 and cannot be compared to what
+    // a pre-epoch cassette recorded.
+    if (legacySigs) {
+      if (legacySigs.length !== recorded.fileSigs.length)
+        return {
+          error: `fileSigs count differs from the legacy recompute (recorded ${recorded.fileSigs.length}, legacy ${legacySigs.length}) — cannot migrate`,
+        };
+      for (let i = 0; i < recorded.fileSigs.length; i++) {
+        if (recorded.fileSigs[i][1] !== legacySigs[i][1])
+          return { error: `fileSigs entry ${i} does not match the legacy recompute — order or content differs; cannot migrate` };
+      }
     }
   } else if (recorded.fileSigs && !live.fileSigs) {
     // Recorded a manifest, cannot rebuild one: refuse rather than leave stale per-file digests beside a
@@ -5468,11 +5503,18 @@ export async function cmdVerifyCassettes(args: string[]) {
 }
 
 /** `cowork-harness rehash <dir/> [--dry-run] [--output-format text|json]`
+ *  `cowork-harness rehash <file.cassette.json> --session <session.yaml>`
  *
- *  Migrates cassettes recorded under an older `cassetteVersion` to the current version
- *  WITHOUT a full re-record — but ONLY when `contentSig` confirms the skill content is
- *  provably unchanged (every v9+ cassette — the read floor — always has one).
+ *  Migrates cassettes recorded under an older `cassetteVersion` — including across a HASH-FORMAT epoch —
+ *  to the current version WITHOUT a full re-record, but ONLY when the content is provably unchanged.
  *
+ *  The proof recomputes the recording's digest under the **ORIGINAL** algorithm and compares it to what was
+ *  stored. `contentSig` is deliberately NOT the proof: it follows the same manifest transform `skillHash`
+ *  does, so it is not comparable across a format change either, and it is blind to `D:` directory markers,
+ *  so an added empty directory would slip past it while the real digest moved. `mode` and agent-scope must
+ *  match as well, since both change which files are hashed.
+ *
+ *  Anything unprovable is REFUSED, never migrated. `--session` supplies the tree for a cassette that moved.
  *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
 export function cmdRehash(args: string[]): void {
   // isJsonOutput (not a bare `p.options` read): it works even when parseArgs throws below, and honors the
@@ -5596,21 +5638,24 @@ export function cmdRehash(args: string[]): void {
       const zeroSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
       const shapeIntact =
         cassette.sessionFingerprint !== undefined && cassette.sessionFingerprint === buildSessionFingerprint(zeroSession, dirname(file));
-      const declaredRoots = (() => {
-        try {
-          return skillSourceDirs(zeroSession, dirname(file)).dirs.length;
-        } catch {
-          return -1; // unresolvable — not evidence of anything
-        }
-      })();
-      if (!shapeIntact || declaredRoots !== 0) {
+      // `dirs` is the SURVIVING mounts — `declaredSkillDirs` has already dropped paths that do not exist —
+      // so an empty `dirs` is ambiguous between "declared nothing" and "declared roots that are all
+      // missing". The second is exactly the case this proof exists to reject: a cassette recorded against a
+      // typo'd plugin path has no `skillHash` BECAUSE the hash failed, and a perfectly valid
+      // `sessionFingerprint`. `failure` is the discriminator the resolver already computes for this —
+      // absent means "resolved fine, and it genuinely declares none". (It never throws; it reports.)
+      const zeroRes = skillSourceDirs(zeroSession, dirname(file));
+      const genuinelyZero = zeroRes.failure === undefined && zeroRes.dirs.length === 0;
+      if (!shapeIntact || !genuinelyZero) {
         results.push({
           file,
           action: "skipped",
           reason:
-            declaredRoots > 0
-              ? `no skillHash, but the session declares ${declaredRoots} skill root(s) — absence means the hash FAILED, not that there was nothing to hash; re-record`
-              : "no skillHash, and no proof the recording genuinely had zero skill sources (a matching session shape that still resolves to zero roots) — re-record if this cassette needs to be current",
+            zeroRes.failure?.kind === "declared-dirs-missing"
+              ? `no skillHash, and the session declares ${zeroRes.failure.declared} skill root(s) that do not resolve — absence means the hash FAILED, not that there was nothing to hash; re-record`
+              : zeroRes.failure !== undefined
+                ? `no skillHash, and the session could not be resolved (${zeroRes.failure.kind}) — cannot prove the recording had zero skill sources; re-record`
+                : "no skillHash, and no matching session shape to prove the recording genuinely had zero skill sources — re-record if this cassette needs to be current",
         });
         continue;
       }
@@ -5705,7 +5750,7 @@ export function cmdRehash(args: string[]): void {
     // Content is provably unchanged. Build the migrated fingerprint — selective, allow-listed, and able to
     // REFUSE: a manifest that cannot be aligned entry-for-entry must not be stamped `jcs1` while carrying
     // the old per-file digests, or the cassette would claim to be current while every attribution lied.
-    const migrated = migrateFingerprint(cassette.fingerprint, proof.live);
+    const migrated = migrateFingerprint(cassette.fingerprint, proof.live, proof.legacySigs);
     if ("error" in migrated) {
       results.push({ file, action: "error", reason: `${migrated.error} — re-record required` });
       continue;

@@ -398,6 +398,18 @@ function scopedAccept(keep: Set<string>, dirSkills: Set<string>, scopeAgents: bo
  *  for an empty/all-missing set. (Used by `rehash` to detect content change across a *format-only* hash bump;
  *  this v6 unification is an algorithm change, so a pre-v6 cassette's contentSig is non-comparable — `rehash`
  *  routes those to a re-record, see cassette.ts.) */
+/** Fold ONLY the shared-root entries of an already-walked snapshot — everything not under `skills/<name>`.
+ *  Mirrors `sharedOnlyAccept`, but reuses the migration's snapshot so a scoped cassette can keep its
+ *  skill-vs-shared bucket attribution without a second walk. Returns undefined when nothing is shared. */
+export function sharedHashFromSnapshot(snapshot: HashEntry[], algo: "legacy" | "jcs1" = ACTIVE_HASH_ALGO): string | undefined {
+  const shared = snapshot.filter((e) => {
+    const parts = e.path.split("/");
+    return parts[0] !== "skills" || parts.length === 1; // keep the `skills` marker dir, drop its subtrees
+  });
+  if (shared.length === 0) return undefined;
+  return foldSnapshot(shared, algo);
+}
+
 export function contentSigFromSnapshot(snapshot: HashEntry[]): string | undefined {
   // Same rendering `computeContentSig` uses, but from an ALREADY-WALKED snapshot — so a caller that has
   // one (rehash, which must derive its proof and its replacement from identical bytes) never walks twice.
