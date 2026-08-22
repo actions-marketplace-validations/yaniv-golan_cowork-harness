@@ -58,7 +58,19 @@ const TARGETS = [
   {
     file: "scenario.schema.json",
     schema: ScenarioObject,
-    description: "cowork-harness scenario YAML — prompt + scripted answers + assert:. See docs/scenario.md.",
+    // STRUCTURAL-ONLY label (plus the mirrored `not`). Without it the schema reads as the authority on
+    // what runs, and it is not: a `{}` answer rule validates here and is refused by the loader (exit 2),
+    // and `lane: remote` with a delivery-shaped assertion validates here and is refused at load too.
+    // Measured: `lint` catches the lane case and NOT the empty rule; `record --dry-run` catches the empty
+    // rule. Neither alone covers both, which is why the text names both commands.
+    description:
+      "cowork-harness scenario YAML — prompt + scripted answers + assert:. STRUCTURAL validation only, " +
+      "plus the mutually-exclusive delete-assertion rules mirrored as a top-level `not`. The loader and the " +
+      "runner enforce cross-field rules this schema cannot express, so a file that validates here can still " +
+      "be refused: an `answers:` entry with no matcher is rejected at load, and delivery-shaped assertion " +
+      "keys are rejected on `lane: remote`. Neither tool alone covers those — run `cowork-harness lint " +
+      "<file>` for the authoring checks AND `cowork-harness record <file> --dry-run` for the real loader. " +
+      "See docs/scenario.md.",
   },
   {
     file: "session.schema.json",

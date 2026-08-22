@@ -44,6 +44,24 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **`schema/scenario.schema.json` said nothing about its own scope, so validating against it read as
+  "this will run".** It mirrors the two mutually-exclusive delete-assertion rules and nothing else, which
+  means an editor or a CI step that checks a scenario against it alone greens files the harness refuses.
+  Its `description` now says so and names where behavioural validation actually lives. Measured, because
+  the answer is not one command: a matcher-less `answers:` entry (`{}`) passes `lint` **clean** and is
+  refused by the loader (`record --dry-run`, exit 2), while `lane: remote` with a delivery-shaped
+  assertion is caught by `lint` (`lane-remote-incompatible-key`, exit 1). Neither tool alone covers both,
+  so the text points at both. Tests pin the gap from both sides — mirroring one of those rules in later,
+  or dropping the one that IS mirrored, fails and forces the description to be rewritten.
+- **`RELEASING.md`'s tarball checklist told the releaser the companion skill "ships via the marketplace,
+  not npm".** It ships on both: `package.json` `files[]` publishes `SKILL.md`, `references/` and the
+  bundled `scenario.py` + `assertion-keys.json` — 26 files under `.claude/` in the packed tarball. The
+  marketplace install is the NARROWER one, materializing only `.claude/skills/cowork-harness/**`. Since
+  the checklist item exists to make a releaser confirm what is in the tarball, it was pointing at the
+  wrong expectation at exactly the wrong moment.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
