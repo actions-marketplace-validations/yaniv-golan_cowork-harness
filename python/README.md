@@ -104,6 +104,18 @@ pytest -m cowork            # the lane (needs build + Docker + token)
 pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
 ```
 
+> **The lane is opt-in, and it does not rely on you configuring that.** These tests spawn node, Docker
+> and a real model — cost, per test. `-m 'not cowork'` is INI config, and INI config does not travel
+> with an installed helper: your `pytest` reads *your* rootdir, not this package's. So the module
+> itself skips `cowork`-marked tests, and the `cowork` fixture refuses to build a runner, unless the run
+> asked for the lane — `-m` mentioning `cowork`, or `COWORK_HARNESS_PYTEST_LANE=1`. The skip reason says
+> which. Selecting one of these tests some other way (`-m fast`, a bare node id) is deliberately *not*
+> treated as opt-in: asking for the fast tests is not asking to spend money.
+>
+> Use the env var when you want a whole suite run, lane included, rather than `-m cowork`'s
+> lane-and-nothing-else. The `cowork` fixture is guarded separately from the marker, so a test of your
+> own that takes the fixture without wearing `@pytest.mark.cowork` is covered too.
+
 ## API
 
 **At a glance** (full reference in the bullets below):
