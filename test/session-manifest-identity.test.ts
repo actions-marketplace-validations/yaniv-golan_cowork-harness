@@ -75,7 +75,10 @@ describe("session manifest — the WRITER records identity", () => {
     const src = mkdtempSync(join(tmpdir(), "cwh-mw-src-"));
     writeFileSync(join(src, "f.txt"), "x");
     const scnDir = mkdtempSync(join(tmpdir(), "cwh-mw-scn-"));
-    writeFileSync(join(scnDir, "s.yaml"), `folders:\n  - from: ${src}\n    write: true\n`);
+    // `mode: rw` — the real key. This fixture said `write: true`, which is not a Folder field: it was
+    // silently stripped and the folder fell back to the `rw` DEFAULT, so the consent gate fired by
+    // accident rather than by what the fixture asked for. Strict parsing surfaced it.
+    writeFileSync(join(scnDir, "s.yaml"), `folders:\n  - from: ${src}\n    mode: rw\n`);
     writeFileSync(
       join(scnDir, "w.yaml"),
       `name: manifest-writer\nbaseline: latest\nsession: ./s.yaml\nfidelity: hostloop\nprompt: identify me\n`,
