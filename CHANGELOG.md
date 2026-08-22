@@ -44,6 +44,25 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **Three present-tense claims about the cassette format were stale at `CASSETTE_VERSION` 12.**
+  `task-recipes.md` — the page a skill author reads when they open a cassette — linked
+  `schema/cassette.v11.json` and called 11 "current max", describing a version regime (`lane: remote`
+  stamps 11, everything else 10) that the hash-format epoch had already replaced. `SPEC.md` said
+  `schema/cassette.v9.json` and `v10` were "retained alongside v11", which both understated the retained
+  set and re-stated 11 as the top. Corrected, and `check:versions` gained invariant 12: SPEC's max, read
+  floor and retained-range sentences and task-recipes' schema pointer and "current max: N" are now checked
+  against `CASSETTE_VERSION`, `MIN_SUPPORTED_CASSETTE_VERSION` and the `schema/cassette.v*.json` files on
+  disk, and no shipped page may link a schema file that is not there. Bumping `CASSETTE_VERSION` in a
+  scratch tree now fails the check naming all four surfaces.
+
+  It guards **current** claims only. `docs/scenario.md` and `docs/cassette.md` explain the v10-vs-v11
+  `lane: remote` regime at length and are correct history; `CHANGELOG.md` is nothing but history. A guard
+  that flagged those would train the next author to route around it. The retained set is stated as a range
+  rather than a list precisely so it cannot go stale by omission the way the old sentence did — and the
+  check refuses the range form outright if `schema/` ever stops being contiguous.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
