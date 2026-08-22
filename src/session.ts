@@ -46,7 +46,7 @@ function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
  * Field-by-field mapping to Cowork's pre-prompt controls is in the comments.
  */
 
-const Folder = z.object({
+const Folder = z.strictObject({
   from: z.string().min(1), // host path; the mount name is ALWAYS derived (collision-resolved basename of the
   // canonical path), matching real Cowork — there is no author-chosen `to:` override (it has no Cowork
   // analog). For Desktop >= 1.14271.0 the folder mounts at `mnt/<name>`; below it at `mnt/.projects/<name>`.
@@ -60,7 +60,7 @@ const Folder = z.object({
  *  builder, where it is hardcoded rather than resolved through the delete-deny resolver that outputs
  *  and connected folders pass through. So there is deliberately NO `mode` here: the product does
  *  not vary it, and offering the knob would invent a degree of freedom that does not exist. */
-const Project = z.object({
+const Project = z.strictObject({
   uuid: z.string().min(1), // the project uuid — becomes the `.projects/<uuid>` mount path
   from: z.string().min(1), // host path to the project's content
 });
@@ -115,7 +115,7 @@ export const SessionConfig = z.strictObject({
   // --- discovery: marketplaces / plugins / skills / mcp ---
   // Faithful default = same roots the in-VM claude-code agent uses; override for tests.
   plugins: z
-    .object({
+    .strictObject({
       config_dir: z.string().min(1).nullable().default(null), // CLAUDE_CONFIG_DIR; null = harness-managed clean dir
       marketplaces: z.array(z.string().min(1)).default([]), // plugin_marketplaces (git URLs / paths)
       local_marketplaces: z.array(z.string().min(1)).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
@@ -126,7 +126,7 @@ export const SessionConfig = z.strictObject({
     .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),
 
   skills: z
-    .object({
+    .strictObject({
       local: z.array(z.string().min(1)).default([]), // host skill dirs -> CLAUDE_CONFIG_DIR/skills
       // Session-level overrides for the two skill-discovery SDK-MCP gates (container/hostloop only —
       // see docs/fidelity-gaps.md "Skill/plugin discovery SDK-MCP servers"). Precedence: this knob ▸
@@ -155,7 +155,7 @@ export const SessionConfig = z.strictObject({
     .default({ local: [] }),
 
   mcp: z
-    .object({
+    .strictObject({
       config: z.string().min(1).nullable().default(null), // --mcp-config file (mcpServers map); "" rejected at parse (was silently treated as "no config")
       enabled: z.array(z.string()).default([]), // enabledMcpjsonServers
     })
@@ -163,13 +163,13 @@ export const SessionConfig = z.strictObject({
 
   // --- network (Cowork egress, pre-prompt) ---
   egress: z
-    .object({
+    .strictObject({
       extra_allow: z.array(z.string().min(1)).default([]), // coworkEgressAllowedHosts additions
       unrestricted: z.boolean().default(false), // "*"
     })
     .default({ extra_allow: [], unrestricted: false }),
   web_fetch: z
-    .object({
+    .strictObject({
       // TEST CONVENIENCE (not a real Cowork setting): pre-approve these hosts for the run, as if the
       // user had clicked "Allow all for website" earlier this session. Seeds Run.approvedDomains so a
       // web_fetch to them raises no gate. Cowork has no persistent pre-approval — this is per-run only.
@@ -185,7 +185,7 @@ export const SessionConfig = z.strictObject({
   // `docs/`, `**/*.md`. Composes with (and adds to) a plugin-local `.cowork-hashignore` file at a mount
   // root. Editing an ignored path no longer re-stales cassettes.
   staleness: z
-    .object({
+    .strictObject({
       hash_ignore: z.array(z.string().min(1)).default([]),
     })
     .default({ hash_ignore: [] }),
@@ -196,7 +196,7 @@ export const SessionConfig = z.strictObject({
   // local testing (e.g. probing an out-of-band thinking budget); prefer `extended_thinking` for anything
   // meant to model real Cowork behavior.
   debug: z
-    .object({
+    .strictObject({
       // Overrides the emitted `--max-thinking-tokens <N>` budget directly, bypassing `extended_thinking`'s
       // on(31999)/off boundary. Real Cowork never emits any budget besides 31999, or (via `--thinking
       // disabled`) none at all — this exists purely as a harness-only escape hatch. Rejects 0/negative

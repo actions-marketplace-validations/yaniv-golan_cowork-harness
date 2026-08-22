@@ -142,7 +142,7 @@ export type PlatformBaseline = z.infer<typeof PlatformBaseline>;
 
 /** Scenario — what the user authors. */
 export const AnswerRule = z
-  .object({
+  .strictObject({
     // AskUserQuestion matcher
     when_question: z.string().optional(),
     // a label (single-select / one member) OR a list of labels (multiSelect — delivered comma-joined,
@@ -298,7 +298,7 @@ export const Assertion = z.strictObject({
       "hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid. Needs controlOut on replay (else skipped-and-surfaced).",
     ),
   path_denied: z
-    .object({
+    .strictObject({
       tool: toolGlob.optional().describe("glob over the denied tool name"),
       path_matches: z.string().optional().describe("regex over the denied path"),
       source: z.enum(["pretooluse", "can_use_tool", "permission_denied"]).optional(),
@@ -316,7 +316,7 @@ export const Assertion = z.strictObject({
       "hostloop-only: NO path denial was recorded (the channel is path-scoped already, unlike no_hook_blocked). Only `true` is valid.",
     ),
   subagent_file_write: z
-    .object({
+    .strictObject({
       path: z
         .string()
         .min(1)
@@ -333,7 +333,7 @@ export const Assertion = z.strictObject({
       "a SUB-AGENT-origin write attempt whose raw path EQUALS `path` (or ends with `path_suffix`) has a PAIRED non-error tool_result — the causal half of a delivery probe (pair with artifact_json for content). Prefer `path` (exact) so a foo/artifacts/probe.json can't satisfy an artifacts/probe.json suffix. Tier-agnostic.",
     ),
   subagent_dispatch_healthy: z
-    .object({
+    .strictObject({
       type: z
         .string()
         .optional()
@@ -363,7 +363,7 @@ export const Assertion = z.strictObject({
     .describe("a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched"),
   subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
   subagent_output_contains: z
-    .object({
+    .strictObject({
       match: z
         .string()
         .optional()
@@ -448,7 +448,7 @@ export const Assertion = z.strictObject({
       "total WASTED repeated tool calls (sum of (count-1) across every redundant {name,args} group in RunResult.redundantToolCalls) ≤ N — not the raw count of redundant groups",
     ),
   skill_tool_used: z
-    .object({
+    .strictObject({
       skill: z.string().describe("regex matched against a skill-activation window's skillId"),
       tool: z.string().describe("regex matched against a tool name in that window's toolCounts"),
     })
@@ -469,7 +469,7 @@ export const Assertion = z.strictObject({
     .optional()
     .describe("at least N tasks were created (RunResult.tasks.length >= N) — the presence companion for task assertions"),
   task_status: z
-    .object({
+    .strictObject({
       match: z.string().describe("regex matched against a task's subject OR id"),
       status: z.string().describe("the status the matching task must have reached"),
     })
@@ -549,7 +549,7 @@ export const Assertion = z.strictObject({
       "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
     ),
   artifact_text: z
-    .object({
+    .strictObject({
       artifact: z
         .string()
         .min(1)
@@ -596,7 +596,7 @@ export const Assertion = z.strictObject({
     ),
   question_asked: z.string().optional().describe("a question matching this regex was asked"),
   question_options: z
-    .object({
+    .strictObject({
       when_question: z
         .string()
         .optional()
@@ -717,7 +717,7 @@ export const Assertion = z.strictObject({
   // never a vacuous pass. Manifest-backed: evaluated on replay when the cassette carries an `artifacts`
   // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
   artifact_json: z
-    .object({
+    .strictObject({
       artifact: z.string().min(1).describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
       path: z
         .string()
@@ -737,7 +737,7 @@ export const Assertion = z.strictObject({
     .optional()
     .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
   semantic_matches: z
-    .object({
+    .strictObject({
       rubric: z
         .array(z.string().min(1))
         .min(1)
