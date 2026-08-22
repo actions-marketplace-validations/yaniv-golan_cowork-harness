@@ -44,6 +44,20 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **The flagship zero-token replay now works from an npm install.** `README.md` and
+  [`examples/replays/README.md`](./examples/replays/README.md) tell a new reader that the first thing to run is
+  `cowork-harness replay examples/replays/example-pdf-skill.cassette.json`. From an npm install that exited 1:
+  the cassette resolves `../sessions/default.yaml`, `../scenarios/…` and `../skills/my-pdf-skill`, and
+  `package.json` `files[]` shipped only `examples/replays`. A 2.0.0 regression — before the hash-format epoch,
+  unverifiable staleness warned and exited 0. `files[]` now also ships `examples/sessions`, `examples/skills`,
+  `examples/scenarios` and `examples/data`, and a guard reads the packed file list and derives its requirements
+  from the cassette itself (session, `scenarioSource`, every hashed `fileSig`), so a re-record cannot quietly
+  outrun it. Note that `replay --strict` from an extracted tarball still reports the `format`-class
+  `recorded in 'git' file-set mode, verifying in 'raw'`: a tarball is not a git work tree, so the file-set
+  boundary differs from the one the cassette was recorded under. That is honest, not a packaging defect.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
