@@ -53,6 +53,21 @@ All notable changes to this project are documented here. The format is based on
   Markdown file, and resolves each one against it; it also checks that every target it extracted exists in a
   source checkout, so a regex that starts matching prose fails rather than inflating the pass count.
 
+- **`pytest` from the repo root collected the paid `cowork` lane.** `addopts = "-m 'not cowork'"` lived
+  only in `python/pyproject.toml`, and pytest reads the config at the rootdir for the invocation — so a bare
+  `pytest` from the repo root read none of it and selected the three `@pytest.mark.cowork` tests, each of
+  which spawns node, Docker and a real model. A root `pytest.ini` fixes that invocation.
+
+- **The `cowork` lane is now opt-in from the module, not just from config.** INI config does not travel with
+  an installed helper: a consumer's `pytest` reads *their* rootdir, so `addopts` protects nobody downstream —
+  and it will protect nobody here either once the helper ships as a `pytest11` plugin. `cowork_harness` now
+  carries the rule itself: a collection hook skips `cowork`-marked tests, and the `cowork` fixture refuses to
+  build a runner, unless the run asked for the lane (`-m` mentioning `cowork`, or the new
+  `COWORK_HARNESS_PYTEST_LANE=1`). The two guards are not redundant — the hook keys on the marker, so a test
+  that takes the fixture without wearing `@pytest.mark.cowork` reaches the fixture guard and nothing else.
+  Selecting a lane test some other way (`-m fast`, a bare node id) is deliberately not opt-in; the skip
+  reason names both switches. `pytest -m cowork` and `pytest -m 'not cowork'` behave exactly as before.
+
 ### Documentation
 
 - **[`docs/fidelity-gaps.md`](./docs/fidelity-gaps.md) no longer narrates its own edit history.** Removed a

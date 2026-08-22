@@ -24,6 +24,50 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Union
 
 
+# ── The paid lane is opt-in, and that has to hold without the repo's own pytest config ──────────────
+#
+# `@pytest.mark.cowork` tests spawn the node CLI, Docker, and a real model — money, per test. Deselecting
+# them lives in `addopts = -m 'not cowork'`, which is INI config: it does not travel with the module. A
+# consumer who installs this helper and runs a bare `pytest` gets no such protection, and neither did a
+# bare `pytest` from this repo's own root until a root `pytest.ini` was added. So the module carries the
+# rule itself.
+
+LANE_ENV = "COWORK_HARNESS_PYTEST_LANE"
+
+
+def lane_opted_in(markexpr: str, env: Mapping[str, str]) -> bool:
+    """Did this run ASK for the paid lane? `-m` mentioning `cowork`, or LANE_ENV set to anything but 0.
+
+    On the `not cowork` reading of the substring test: both callers only ever see an item pytest has
+    already SELECTED. A cowork-marked item cannot survive `-m 'not cowork'`, so if one reaches us while
+    the expression mentions cowork, the expression selected it positively. Selecting the same test some
+    other way (`-m fast`, a bare node id) is deliberately NOT opt-in — asking for the fast tests is not
+    asking to spend money, and the skip reason says how to ask.
+    """
+    if env.get(LANE_ENV, "0") not in ("", "0"):
+        return True
+    return "cowork" in (markexpr or "")
+
+
+_SKIP_REASON = (
+    "cowork lane not requested: these tests spawn the CLI, Docker and a real model (real cost). "
+    f"Run them with `pytest -m cowork`, or set {LANE_ENV}=1."
+)
+
+
+def pytest_collection_modifyitems(config, items):  # pragma: no cover - exercised via the unit tests below
+    """Skip `cowork`-marked tests unless the run asked for the lane. Registered from `conftest.py`, and
+    positioned here rather than there so it survives being packaged as a `pytest11` plugin."""
+    import pytest  # local: the helper module itself must import without pytest installed
+
+    if lane_opted_in(getattr(config.option, "markexpr", "") or "", os.environ):
+        return
+    skip = pytest.mark.skip(reason=_SKIP_REASON)
+    for item in items:
+        if any(m.name == "cowork" for m in item.iter_markers()):
+            item.add_marker(skip)
+
+
 def _find_cli() -> str:
     env = os.environ.get("COWORK_HARNESS_CLI")
     if env:
