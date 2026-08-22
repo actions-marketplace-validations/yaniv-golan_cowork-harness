@@ -44,6 +44,26 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **Two replay-class misclassifications, and a guard that could not see them.** Which bucket an assertion
+  key sits in — always-content, controlOut-gated, manifest-backed, or live-only — is what tells an author
+  whether their assertion survives a token-free `replay` or is silently skipped. The existing
+  `docs/cassette.md` guard compared a **union** of three buckets (leaving `LIVE_ONLY_KEYS` out entirely),
+  and a union cannot see a key MOVE between buckets, which is the change that matters.
+  - `fidelity-and-answers.md` enumerated the live-only set and omitted **`no_delete_in_mounts`** — a
+    reader working from that list would expect it to replay.
+  - `scenario.py`'s `scaffold` emitted `file_exists` and `user_visible_artifact` under a heading reading
+    *"LIVE-only (skipped on replay)"*. Both are manifest-backed: they replay whenever the cassette carries
+    an artifacts manifest, which `record` has snapshotted since 0.24. The scaffold contradicted the
+    taxonomy declared in its own file, and taught new authors exactly the misconception the
+    `manifest-needs-snapshot` INFO exists to correct. It now emits two labelled buckets.
+  - Each bucket is now guarded independently and in **both** directions — every live-only key is named,
+    and no key from another bucket is. Moving one key between buckets in `cassette.ts` fails four tests.
+    The `scenario.py` check is deliberately a self-consistency check against that file's own sets rather
+    than a mirror of the TypeScript constants, because `scenario.py` says outright that it is "NOT a 1:1
+    mirror" (it keeps the verdict modifiers out of `CONTENT_KEYS` on purpose).
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))

@@ -125,3 +125,107 @@ describe("the whole-scenario freeze passage names every ScenarioObject field", (
     });
   }
 });
+
+// ── T-G1: the replay-class buckets, guarded INDEPENDENTLY ────────────────────────────────────────────
+//
+// The docs/cassette.md guard at the top of this file compares a UNION of three buckets, and leaves
+// LIVE_ONLY_KEYS out entirely. A union cannot see a key MOVING between buckets — and the move is the
+// change that matters, because the bucket is what tells an author whether their assertion survives a
+// token-free replay or is silently skipped. Two real misclassifications were sitting behind that blind
+// spot when this was written:
+//
+//   * `fidelity-and-answers.md` enumerated the live-only set and omitted `no_delete_in_mounts`, so a
+//     reader counting on that list would expect it to replay.
+//   * `scenario.py`'s scaffold emitted `file_exists`/`user_visible_artifact` under a heading reading
+//     "LIVE-only (skipped on replay)". Both are MANIFEST_KEYS — they replay whenever the cassette
+//     carries an artifacts manifest, which `record` has snapshotted since 0.24. The scaffold contradicted
+//     the taxonomy in its OWN file, and taught the misconception the `manifest-needs-snapshot` INFO exists
+//     to correct.
+//
+// The scenario.py check is deliberately a SELF-consistency check against that file's own sets, not a
+// mirror of the TS constants: `scenario.py:67` says outright that it is "NOT a 1:1 mirror" (it keeps the
+// verdict modifiers out of CONTENT_KEYS on purpose), so demanding equality would be wrong and would get
+// worked around rather than fixed.
+
+describe("T-G1 · each replay-class bucket is guarded on its own, not as a union", () => {
+  const NON_LIVE = [...ALWAYS_CONTENT_KEYS, ...QUESTION_GATE_KEYS, ...MANIFEST_KEYS];
+
+  /** Text from `start` up to the first match of `end` — so a key elsewhere in the file can't satisfy
+   *  a claim made by one specific passage. */
+  const section = (text: string, start: string, end: RegExp): string => {
+    const i = text.indexOf(start);
+    if (i < 0) return "";
+    const rest = text.slice(i + start.length);
+    const m = end.exec(rest);
+    return rest.slice(0, m ? m.index : rest.length);
+  };
+
+  const cassetteMd = readFileSync(resolve("docs/cassette.md"), "utf8");
+  const fidelityMd = readFileSync(resolve(".claude/skills/cowork-harness/references/fidelity-and-answers.md"), "utf8");
+  const scenarioPy = readFileSync(resolve(".claude/skills/cowork-harness/scripts/scenario.py"), "utf8");
+
+  const skippedSection = section(cassetteMd, "### Still skipped on replay", /^#{2,3} /m);
+  const liveOnlyList = section(fidelityMd, "keys is live-only and **skipped outright** on replay", /Everything else/);
+
+  it("located every passage it claims to check (an empty section would pass vacuously)", () => {
+    expect(skippedSection.length, 'docs/cassette.md "### Still skipped on replay" not found').toBeGreaterThan(100);
+    expect(liveOnlyList.length, "fidelity-and-answers.md's live-only enumeration not found").toBeGreaterThan(50);
+    expect(LIVE_ONLY_KEYS.length, "LIVE_ONLY_KEYS is empty — the import resolved to nothing").toBeGreaterThan(5);
+  });
+
+  // Two directions per consumer. Membership alone would stay green when a key moves INTO the bucket it
+  // does not belong in; exclusion alone would stay green when one goes missing.
+  it("docs/cassette.md's skipped-on-replay section names every live-only key AND no other bucket's", () => {
+    const missing = LIVE_ONLY_KEYS.filter((k) => !skippedSection.includes(`\`${k}\``));
+    expect(missing, `docs/cassette.md's "Still skipped on replay" omits: ${missing.join(", ")}`).toEqual([]);
+    const wrong = NON_LIVE.filter((k) => skippedSection.includes(`\`${k}\``));
+    expect(wrong, `docs/cassette.md lists these as skipped, but they are NOT live-only: ${wrong.join(", ")}`).toEqual([]);
+  });
+
+  it("fidelity-and-answers.md's live-only enumeration names every live-only key AND no other bucket's", () => {
+    const missing = LIVE_ONLY_KEYS.filter((k) => !liveOnlyList.includes(`\`${k}\``));
+    expect(missing, `the skill's live-only list omits: ${missing.join(", ")} — a reader expects these to replay`).toEqual([]);
+    const wrong = NON_LIVE.filter((k) => liveOnlyList.includes(`\`${k}\``));
+    expect(wrong, `the skill's live-only list wrongly includes: ${wrong.join(", ")}`).toEqual([]);
+  });
+
+  it("scenario.py's scaffold does not file a manifest-backed key under its LIVE-only heading", () => {
+    // Self-consistency: `scenario.py` declares its own MANIFEST_KEYS set, and the scaffold must agree
+    // with it. Parsed from the file so the check cannot drift from the set it is checking against.
+    const declared = section(scenarioPy, "MANIFEST_KEYS = {", /\n}/);
+    const pyManifestKeys = new Set([...declared.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+    expect(pyManifestKeys.size, "could not parse scenario.py's MANIFEST_KEYS").toBeGreaterThan(5);
+
+    // Resolve key -> list variable -> the heading that variable is emitted under, rather than looking
+    // for the key's literal text near the heading. The literal lives in the list-BUILDING block, far
+    // from the heading, so a proximity check answers a different question: it happens to catch the
+    // historical defect and stays GREEN when the two lists are merged behind one `L.extend(...)`,
+    // which is the same misclassification reached by a refactor. Measured — that variant passed a
+    // proximity check while the scaffold really did emit `file_exists` under the LIVE-only heading.
+    const varOfKey = new Map<string, string>();
+    for (const m of scenarioPy.matchAll(/(\w+)\.append\(f?"\s{2}- ([a-z_]+):/g)) varOfKey.set(m[2], m[1]);
+    expect(varOfKey.size, 'parsed no `<var>.append("  - <key>:")` lines — the scaffold was restructured').toBeGreaterThan(4);
+
+    // Walk the emit block: each `L.append("  # --- <heading> ---")` owns the `L.extend(<var>)` calls
+    // that follow it, until the next heading.
+    const liveVars = new Set<string>();
+    let currentHeading: string | undefined;
+    for (const line of scenarioPy.split("\n")) {
+      const h = /L\.append\("\s*# --- (.+?) ---"\)/.exec(line);
+      if (h) {
+        currentHeading = h[1];
+        continue;
+      }
+      const e = /L\.extend\((\w+)\)/.exec(line);
+      if (e && currentHeading && /LIVE-only/i.test(currentHeading)) liveVars.add(e[1]);
+    }
+    expect(liveVars.size, "no list is emitted under a LIVE-only heading — the emit block was restructured").toBeGreaterThan(0);
+
+    const misfiled = [...varOfKey].filter(([k, v]) => liveVars.has(v) && pyManifestKeys.has(k)).map(([k]) => k);
+    expect(
+      misfiled,
+      `scenario.py's scaffold emits these under a "LIVE-only (skipped on replay)" heading while its own ` +
+        `MANIFEST_KEYS says they replay from an artifacts manifest: ${misfiled.join(", ")}`,
+    ).toEqual([]);
+  });
+});
