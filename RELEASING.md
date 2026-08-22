@@ -232,6 +232,25 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       globs match full `vX.Y.Z` semver only — so pushing them produces no workflow runs at all.)
 - [ ] Smoke the published artifact: `npx cowork-harness@X.Y.Z --version` and
       `npx cowork-harness@X.Y.Z doctor --tier protocol`.
+- [ ] **Promote to `latest`** — CI publishes to the **`next`** dist-tag, never `latest`
+      (`release.yml`, "staged publish"). Until you run this, the release is installable only as
+      `cowork-harness@next` or by exact version; a bare `npm i cowork-harness` and the Action's
+      `version: latest` default still resolve to the PREVIOUS release. That is deliberate: it puts a
+      human between a green CI run and every unpinned consumer.
+
+      Smoke the staged artifact first (the step above), then:
+      ```
+      npm dist-tag add cowork-harness@X.Y.Z latest
+      npm dist-tag ls cowork-harness          # MUST show latest: X.Y.Z — verify, don't assume
+      ```
+      **Run this in a real terminal, not a non-TTY shell.** It needs a 2FA challenge, and
+      `npm/lib/utils/auth.js` re-throws `EOTP` outright unless both stdin and stdout are TTYs. On a
+      passkey/WebAuthn account npm opens a browser ("Authenticate your account at…") and **no `--otp`
+      flag is needed** — passing one forces the TOTP branch, which a passkey cannot satisfy.
+
+      *Why this step exists:* 2.0.0 became the default install for every unpinned consumer the moment CI
+      went green — a breaking hash-format epoch plus a flagship replay that exits 1 from an npm install —
+      and `latest` had to be rolled back to 1.25.0 by hand (2026-08-22).
 
 ## Notes
 

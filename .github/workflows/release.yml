@@ -69,8 +69,19 @@ jobs:
       - name: Build + test (also runs via prepublishOnly)
         run: npm run ci
 
-      - name: Publish to npm (Trusted Publishing + provenance)
-        run: npm publish --provenance --access public
+      # STAGED PUBLISH — deliberately NOT `latest`.
+      #
+      # `npm publish` with no `--tag` writes `latest`, so a release became the default install for every
+      # unpinned consumer the instant CI succeeded, with no human between the two. 2.0.0 reached everyone
+      # that way — a breaking hash-format epoch, plus a flagship replay that exits 1 from an npm install —
+      # and `latest` had to be rolled back to 1.25.0 by hand afterwards.
+      #
+      # Publishing to `next` makes promotion an explicit act. The version is fully published and
+      # installable as `cowork-harness@next` or by exact version; it is simply not what a bare
+      # `npm i cowork-harness` (or the Action's `version: latest` default) resolves to until promoted.
+      # Promotion is a documented step in RELEASING.md and needs a 2FA challenge, which is the point.
+      - name: Publish to npm (Trusted Publishing + provenance, staged on `next`)
+        run: npm publish --provenance --access public --tag next
 
       - name: Extract this version's CHANGELOG section
         run: |
