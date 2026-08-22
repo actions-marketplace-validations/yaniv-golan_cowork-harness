@@ -657,9 +657,13 @@ Nor is it "the harness never constructs `settings.autoMode`". That much is true 
 `--permission-mode` and `--setting-sources`, never an autoMode payload — but it is not sufficient on its
 own: auto-mode's `AUTO_MODE_TRUSTED_SOURCES` is `["userSettings","flagSettings","policySettings"]`, so
 **`userSettings` is a trusted source**, and the harness passes `--setting-sources user`. At
-`protocol`/`hostloop` under OAuth the agent also reads the operator's REAL `CLAUDE_CONFIG_DIR`. An
-operator's own settings are therefore a trusted source for auto-mode's `allow` / `soft_deny` /
-`hard_deny` / `environment` rules.
+`protocol` under OAuth the agent also reads the operator's REAL `CLAUDE_CONFIG_DIR` (a fresh one breaks
+local login, so that tier keeps it deliberately — `src/runtime/protocol.ts`). Every other tier, `hostloop`
+included, gets the managed dir: `hostNativeSpawnEnv` sets `CLAUDE_CONFIG_DIR` to `plan.configDir`
+(`src/runtime/argv.ts`), and pinning `plugins.config_dir` at an EXISTING directory is refused outright
+unless `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` (`src/session.ts`) — precisely so the harness cannot
+write into a real `~/.claude`. An operator's own settings are therefore a trusted source for auto-mode's
+`allow` / `soft_deny` / `hard_deny` / `environment` rules wherever that dir IS the real one.
 
 What actually closes it is the activation predicate. Binary-verified in agent **2.1.237**, auto-mode is
 entered on the permission mode alone:
