@@ -161,7 +161,7 @@ cloud** / **On your computer**"), with cloud the default for new sessions. They 
 |---|---|---|
 | A file under a user-visible root | **is delivered** — `outputs/` is durable, and Cowork's own prompt tells the agent to save deliverables there | **is not delivered** — a remote container has no auto-delivering outputs directory, and it is reclaimed at session end |
 | `present_files` | served | **not served** — a local MCP server cannot reach a remote session |
-| `user_visible_artifact` | asserts location, as always | rejected at scenario-LOAD time — location proves nothing there; assert the delivery itself |
+| `user_visible_artifact` | asserts location, as always | rejected at scenario-LOAD time — location proves nothing there. **Tool-level delivery is not assertable on this lane** (the harness models no remote delivery tool): assert the written path plus the agent's own statement of it (`file_exists` + `transcript_matches`), or set `lane: local`. |
 | `present_files_called` / `no_scratchpad_leak` | as documented per tier | rejected at scenario-LOAD time — the tool does not exist on that lane, so the scenario never runs |
 
 > **`lane:` needs cowork-harness ≥ 1.14.0.** On an older CLI a scenario carrying it does **not** load —
@@ -245,7 +245,10 @@ reproducible definition of its own test, so steer it by editing the YAML rather 
 the harness warns when the two disagree rather than dropping the flag in silence. **The two also accept
 different value sets:** the CLI `--on-unanswered` flag takes only
 `fail|first` on `run` (`fail|prompt|first` on `skill`) — `llm` is a scenario-YAML-only value, never a
-valid `--on-unanswered` argument (the CLI equivalent is the separate `--decider-llm` flag). Default for
+valid `--on-unanswered` argument. The nearest CLI equivalent is the separate `--decider-llm` flag — which
+`run` does **not** accept (`unexpected argument(s)`, exit 2; `run --help`: "run omits `--decider-llm` by
+design"). `record`, `skill` and `decide` do; on `run`, `on_unanswered: llm` in the YAML is the only route,
+and `--decider-dir` is the flag `run` does take. Default for
 `run` is **`fail`** (the error names the exact `--answer`/`choose` to add, and also now mentions
 `on_unanswered: llm` in the scenario YAML as a secondary escape valve — useful when a gate's wording
 drifts run-to-run and a regex chases a moving target, but non-deterministic and one model call per gate,
@@ -260,7 +263,7 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 > **For large unattended batches, script the stable gates.** A pure live decider re-asks the model
 > once per gate; across a back-to-back batch that is more wall-clock, more paid calls, and more exposure to
 > a transient `claude -p` exit (now bounded-retried, but not free). For unattended multi-doc completion
-> prefer scripted `--answer` / `--answer-policy` on the gates you can name, and keep `--decider-llm` for
+> prefer scripted `--answer` / `--answer-policy` on the gates you can name, and keep the live decider for
 > exploration. **Also script any gate whose answer feeds a *semantic* assertion:** a decided answer can be a
 > confident guess — the decider sees only the transcript tail, not the mounted documents, so it can get a
 > doc-answerable fact wrong (a stronger model included) — and a green run resting on it is a false pass.
@@ -271,7 +274,8 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 > structurally stable (the gate reliably appears). It does NOT cover *structural* stochasticity — a skill
 > that decides run-to-run *whether* or *which* to ask: there, `on_unanswered: fail` will hard-error on a
 > gate it didn't anticipate (correct, but flaky for that skill). For that case answer live instead —
-> `--decider-llm` (a model answers, run flagged non-deterministic) or `--decider-dir` (you answer in-band)
+> `--decider-llm` (a model answers, run flagged non-deterministic — **not accepted by `run`**; use
+> `on_unanswered: llm` in the scenario there) or `--decider-dir` (you answer in-band; accepted by `run`)
 > — accepting the run is then no longer a deterministic regression.
 >
 > **Stochastic option *labels* (distinct from stochastic *structure*).** If a skill regenerates both the

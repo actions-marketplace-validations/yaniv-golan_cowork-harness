@@ -16,7 +16,7 @@ cowork-harness replay  cassettes/my-test.cassette.json # token-free re-evaluatio
 
 **In CI, run both commands — `replay` alone gates only `unverifiable-skill`, not the drift classes.** A recording describes the skill as
 it was on the day you paid for it; once the skill moves, a bare `replay` prints
-`::warning:: cassette stale` and — since 2.0.0 — **exits non-zero** when staleness could not be VERIFIED (`unverifiable-skill`); the drift classes still only warn. `verify-cassettes` exits **1** on the same tree. The
+`::warning:: cassette stale` and — since 2.0.0 — **exits non-zero** when staleness could not be VERIFIED (`unverifiable-skill`); the drift classes still only warn. `verify-cassettes` exits **3** on the same tree — could-not-verify, distinct from the exit **1** it uses for a verified failure. The
 split is deliberate — `replay` answers *"do the assertions still hold"*, `verify-cassettes` answers *"is
 this recording still current"* — but running only the first means a skill edit silently stops being
 tested:
@@ -588,7 +588,7 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 > **On `replay`, drift WARNS by default — the staleness gate is `verify-cassettes`.** Edit a skill without
 > re-recording and a bare `replay` prints `::warning:: cassette stale … re-record` and (for the
 > content-drift classes) still reports
-> success (exit 0); `verify-cassettes` on the same tree exits **1**. That split is deliberate: `replay`
+> success (exit 0); `verify-cassettes` on the same tree exits **3** (could not verify). That split is deliberate: `replay`
 > answers "do the assertions still hold", `verify-cassettes` answers "is this recording still current", and
 > a stale recording is not by itself a wrong answer. **The consequence is that `replay` alone does not gate
 > staleness.** Run both in CI — this repo does ([`ci.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) runs the replay
