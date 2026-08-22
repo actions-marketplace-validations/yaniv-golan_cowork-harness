@@ -126,8 +126,9 @@ docker run --rm -i --platform linux/arm64 --network <net>
 ### 3.4 host-loop (`spawnHostLoop`) — a NATIVE host process + a no-agent Docker VM sidecar
 
 Reproduces production's real host-loop architecture: the agent LOOP is a native macOS process spawned
-directly on the host (no container around its file tools), while `bash`/`web_fetch` route into a Docker
-container that never runs an agent at all.
+directly on the host (no container around its file tools), while `bash` routes into a Docker container that
+never runs an agent at all. `web_fetch` does **not**: it is host-routed (§6, and the `web_fetch` note in the
+SDK-servers section below), so it never crosses the container egress boundary.
 
 **The native process:**
 ```
@@ -141,7 +142,7 @@ child_process.spawn(<resolveHostAgentBinary(baseline)>, [ …§3.1 args, HOST pa
 - `cwd` = the harness-owned `<mntHost>/outputs` dir — this MUST equal the PreToolUse gate's `hostCwd` (below); a mismatch is cross-checked live via the hook payload's `input.cwd` and warned loudly, never silently trusted.
 - Connected folders are NEVER staged/copied for the native process — they're read directly at their real `Mount.hostPath` (bind-mounted into the sidecar too, so the native tools and `bash` see the same bytes).
 - system-prompt append includes the host-loop "Shell access" section (unchanged generator).
-- the driver declares `sdkMcpServers:["workspace"]` and handles `mcp_message` (§4, §5) — this is unchanged; the workspace MCP server still routes `bash`/`web_fetch` into the sidecar container regardless of who runs the agent loop.
+- the driver declares `sdkMcpServers:["workspace"]` and handles `mcp_message` (§4, §5) — this is unchanged; the workspace MCP server still routes `bash` into the sidecar container regardless of who runs the agent loop (`web_fetch` is host-routed on both paths — see the `web_fetch` note below).
 - a `hooks` bundle (§4a) installs the PreToolUse path-containment gate alongside the always-on Task-bg-block hook.
 
 **The VM sidecar container** (`docker run`, `--name cowork-hl-<id>` so the driver can `docker exec`):

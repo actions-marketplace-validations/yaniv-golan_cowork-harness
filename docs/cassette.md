@@ -934,8 +934,11 @@ scenarios' `name:` slugify to the same cassette path is rejected up front (they'
 
 ## Privacy: cassettes are committed fixtures
 
-A cassette snapshots the transcript **and** the `outputs/` JSON bodies (names, dollar figures, share
-counts) — committed PII surface. Two layers, distinct from secret-scrub (which only strips auth tokens):
+A cassette snapshots the transcript **and the body of every under-cap regular file** under `outputs/` and
+`.projects/` — not just JSON. UTF-8-safe content is inlined as text, anything else as base64, so a
+spreadsheet, an image or a PDF is embedded just as literally as a `.json` (names, dollar figures, share
+counts). Uploads and `mode:r` connected folders are hash-only, and a file over the body cap carries
+`truncationReason: "size"` instead of its contents. That is the committed PII surface. Two layers, distinct from secret-scrub (which only strips auth tokens):
 
 - **Opt-in redaction** (the mutation). Drop a `.cowork-redact.json` next to your scenarios, or set
   `COWORK_HARNESS_REDACT_PATTERNS` / `COWORK_HARNESS_REDACT_KEYS`. The policy file is searched in
@@ -1034,7 +1037,7 @@ counts) — committed PII surface. Two layers, distinct from secret-scrub (which
 
   **The right way out is usually `fidelity: container`**, which is sealed (`HOME=/tmp`) and has nothing
   to leak. Redirecting the *output* elsewhere is not equivalent: a cassette recorded outside the repo
-  and moved in afterwards is [permanently unverifiable for staleness](#where-a-cassette-lives-and-why-it-cant-move-afterwards),
+  and moved in afterwards is [unverifiable for staleness from its own location](#where-a-cassette-lives-and-why-it-cant-move-afterwards) — recoverable only by passing `--session <file>` on every invocation —
   so you would trade a loud refusal for a silent one. Record where the file will live, at a tier whose
   recording you're willing to publish.
   **Tier-gated on purpose:** at `container` the agent is sealed (`HOME=/tmp`), so a foreign server name there
@@ -1161,7 +1164,15 @@ Add this to the **token-free** job in your CI pipeline (no API key needed):
       examples/replays/example-pdf-skill.cassette.json \
       --output-format json
   # exit 1 if any assertion fails; the json envelope has ok:true on pass
+- name: Verify cassettes (the staleness + privacy gate replay does NOT apply)
+  run: node dist/cli.js verify-cassettes examples/replays/ --output-format json
+  # exit 1 = a real finding; exit 3 = could not verify. Both are gate failures.
 ```
+
+Both steps, because they answer different questions — which is what this page's opening line means by "run
+both commands". `replay` asks "do the frozen assertions still pass"; `verify-cassettes` asks "is this fixture
+still a valid, non-stale, privacy-clean thing to commit". A gate with only the first leaves staleness and the
+privacy scan unchecked.
 
 **`replay` exit-code key** (so a CI script can tell a real failure from a misconfiguration):
 

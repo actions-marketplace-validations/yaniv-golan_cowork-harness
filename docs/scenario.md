@@ -521,7 +521,9 @@ path **needs** (e.g. `office_convert`, `ocr`, `pdf_tables`, `ml_extract`, `cv`, 
 **hard-fails** if the running tier:
 
 - **omits** a declared family (the lean `core` image lacks it), or
-- **cannot verify** it — `protocol`/`replay` or `COWORK_SKIP_CAPABILITY_PROBE=1`, where no live probe runs.
+- **cannot verify** it — `protocol` or `COWORK_SKIP_CAPABILITY_PROBE=1`, where no live probe runs. (Not
+  `replay`: it re-drives and resets the outcome, so the check neither fires nor suppresses there — as the
+  paragraph below says.)
 
 This closes the false-green for extraction-heavy skills: a PDF/Excel-ingestion skill that silently fell back
 to manual parsing on a tier without the deps now fails loudly instead of passing. Unlike the *use*-detection

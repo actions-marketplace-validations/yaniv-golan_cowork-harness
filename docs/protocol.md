@@ -33,9 +33,12 @@ frozen schema — freezing it here would either lag every SDK bump or force a sp
 `parseMessage` tolerates unknown or missing fields, but it fails closed on unsafe structural
 malformation: a `system/init` frame whose `tools`/`mcp_servers`/`skills` is present but not an array, or
 an assistant content-block entry that isn't an object, throws a typed `control-in: malformed …` protocol
-error rather than propagating a shape that would crash downstream unguarded. Every caller — the live
-session, cassette replay, and `trace` reconstruction — catches that error and skips the offending frame
-loudly rather than aborting. (The frozen `schema/protocol.v1.json` control shapes documented below are
+error rather than propagating a shape that would crash downstream unguarded. Every caller catches it rather
+than aborting, but they do **three different things** with it, and only one is a plain skip: the **live**
+session surfaces a typed `{type:"error", source:"protocol"}` event; **cassette replay** records a protocol
+error that becomes a FAILING `replay_protocol_fidelity` assertion and continues — a malformed frame could
+conceal a failed assertion, so a silent skip would risk a false green; **`trace` reconstruction** is the one
+that skips the frame loudly and moves on. (The frozen `schema/protocol.v1.json` control shapes documented below are
 unaffected by this — `parseMessage`'s SDK-event handling is a separate code path.) The `{type:"user",
 message:{role:"user", ...}}` turn-send message
 (`sendUserTurn`) is mirrored into `control-out.jsonl` for full-fidelity replay but is also SDK input

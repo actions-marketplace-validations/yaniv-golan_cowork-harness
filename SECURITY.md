@@ -8,7 +8,7 @@ Please report security issues privately via [GitHub Security Advisories](https:/
 
 This project is a **test harness**, and its sandbox is a **fidelity fixture, not a security boundary**. Understanding the distinction matters:
 
-- The harness reproduces Claude Cowork's *limitations* (sealed host filesystem, default-deny egress, and MCP-only cross-boundary communication — host resources are reachable only through an MCP server, never via direct host tools) so that a skill which passes a scenario here is constrained the same way it would be in real Cowork. This is about **catching false passes**, not about containing adversaries.
+- The harness reproduces Claude Cowork's *limitations* (sealed host filesystem, default-deny egress, and MCP-only cross-boundary communication) so that a skill which passes a scenario here is constrained the same way it would be in real Cowork. This is about **catching false passes**, not about containing adversaries. **At `hostloop` the file tools are not MCP-mediated**: the agent loop is a native host process and Read/Write/Edit/Glob/Grep run with no container around them, contained only by a `PreToolUse` software gate — which is what production does, and why a writable connected folder there needs the explicit `allow_host_writes` consent. See [docs/boundary.md](./docs/boundary.md) for the full statement.
 - The `container` tier uses OS containers. Containers are a real isolation boundary for **trusted code under test**, but they are *not* a hardened boundary against **deliberately malicious** code (container escapes exist). Do **not** run untrusted, adversarial skills against real credentials at the `container` tier.
 - For untrusted-isolation testing, use the `microvm` tier (a real VM — Apple Virtualization.framework via Lima, macOS arm64 only), which provides VM-grade isolation comparable to Cowork itself.
 
@@ -24,9 +24,11 @@ Set the tier with the scenario's **`fidelity:`** field (see [docs/scenario.md](.
 
 ### Input-boundary hardening
 
-The harness treats scenario/session YAML, cassettes, and marketplace metadata as **semi-trusted inputs** —
-authored by you or your CI, but worth validating so a typo or a copied fixture can't quietly read or write
-outside the intended tree. This is defense-in-depth against footguns and accidental host exposure, **not** a
+**Scenario and session files are TRUSTED input**, in the same sense as any test file you execute: a
+scenario's `allow_if` predicate is evaluated as host JavaScript (via `new Function`), so an author can run
+arbitrary code, by design. Only run scenarios you trust. Cassettes and marketplace metadata are treated as
+**semi-trusted** — authored by you or your CI, but worth validating so a typo or a copied fixture can't
+quietly read or write outside the intended tree. This is defense-in-depth against footguns and accidental host exposure, **not** a
 claim that the harness contains a deliberately malicious skill (see the tier guidance above for that). The
 following are enforced:
 
@@ -38,8 +40,10 @@ following are enforced:
 - **Collected artifacts skip hardlinks** (`nlink > 1`) so a hardlink to an out-of-root host file can't inline
   its contents into a committed cassette.
 - **The host-loop `web_fetch` SSRF backstop pins the vetted address through connect** (closing a DNS-rebind
-  time-of-check/time-of-use gap) and re-vets each redirect hop. As before, this is a backstop for test
-  fixtures, not the egress boundary itself — egress is enforced by the per-run proxy / guest firewall.
+  time-of-check/time-of-use gap) and re-vets each redirect hop. This is a backstop for test fixtures, and at
+  `hostloop` it is the **only** network check on that path: `web_fetch` is host-routed there (a fetch from the
+  host process, matching production's host-API route), so it never crosses the per-run proxy / guest firewall
+  at all. Those enforce `bash` egress. Do not read "the egress allowlist" as covering host-loop `web_fetch`.
 - **Container infrastructure failures are reported to the model as a generic harness error** (the raw daemon
   text is logged for the operator, not surfaced), so Docker/host details don't leak into model-visible output.
 
@@ -54,8 +58,6 @@ following are enforced:
   on `argv`; microVM: a stdin prologue before the agent binary starts), so it is not visible via
   `ps`/`/proc`. It is **never written to disk in a runtime path** and **scrubbed by value** from every
   persisted run log (events/run/trace/result). Still, treat scenario runs like any CI job that holds a key.
-- **Scenario files are trusted input.** A scenario's `allow_if` predicate is evaluated as host
-  JavaScript (via `new Function`); only run scenarios you trust, the same as any test you'd execute.
 - The egress allowlist limits where the agent can send data, but at the `container` tier it is enforced by a proxy + an `internal` Docker network, not a kernel-level netfilter you should rely on against hostile code.
 
 ## Supported versions
