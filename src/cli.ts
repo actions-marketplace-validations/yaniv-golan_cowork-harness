@@ -58,6 +58,7 @@ import { resolveStatusTarget } from "./run/status-target.js";
 import { classifyRunDir, hasTurnDirs, latestTurn, preLayoutMessage, requireTurns, turnArtifactPath } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
+import { parseAnswerPolicyDoc } from "./answer-policy.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
   noteIfMultiTurn,
@@ -1225,26 +1226,9 @@ function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerR
   } catch (e) {
     return fail(command, "usage", `cannot parse --answer-policy ${path}: ${String((e as Error).message)}`, undefined, json);
   }
-  const rules = Array.isArray(parsed) ? parsed : ((parsed as { answers?: unknown })?.answers ?? []);
-  if (!Array.isArray(rules))
-    fail(command, "usage", `--answer-policy must be a list of rules (or an {answers: [...]} doc)`, undefined, json);
-  // validate EACH rule against the AnswerRule schema instead of a blind cast. A malformed rule
-  // (non-object, wrong field types) must fail loud here, not silently validate as a rule that never
-  // matches and surfaces only as an unanswered gate mid-run.
-  const out: AnswerRule[] = [];
-  for (const [idx, raw] of (rules as unknown[]).entries()) {
-    const r = AnswerRule.safeParse(raw);
-    if (!r.success)
-      fail(
-        command,
-        "usage",
-        `--answer-policy rule #${idx + 1} is malformed: ${r.error.issues.map((i) => `${i.path.join(".") || "(root)"} ${i.message}`).join("; ")}`,
-        undefined,
-        json,
-      );
-    out.push(r.data);
-  }
-  return out;
+  const res = parseAnswerPolicyDoc(parsed);
+  if ("error" in res) return fail(command, "usage", `--answer-policy ${path}: ${res.error}`, undefined, json);
+  return res.rules;
 }
 
 /**
