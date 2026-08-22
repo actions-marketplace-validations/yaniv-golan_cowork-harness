@@ -328,7 +328,7 @@ block uses — a bare list of `{ when_question, choose }` rules, or an `{ answer
 
 A missing, unparseable, or non-list policy file **fails loud** at load time — a malformed policy is never
 treated as "0 rules" (which would surface only when a gate went unanswered mid-run). A runnable copy is
-[`examples/answer-policies/demo.yaml`](../examples/answer-policies/demo.yaml). Use it for declarative,
+[`examples/answer-policies/demo.yaml`](https://github.com/yaniv-golan/cowork-harness/blob/main/examples/answer-policies/demo.yaml). Use it for declarative,
 deterministic CI: scripted answers + `fail` for everything they don't cover.
 
 ### Tool permissions
@@ -1002,8 +1002,7 @@ example.
 One scenario, a cross-product of axes, one command. `--matrix <matrix.yaml>` runs the resolved scenario
 once per cell of a matrix file's declared axes and reports one row per cell, instead of one pass/fail for
 the whole run. For a real, runnable starting point (not just the illustrative snippet below), see
-[`examples/matrices/csv-metrics-matrix.yaml`](../examples/matrices/csv-metrics-matrix.yaml)
-*(source checkout only — not shipped in the npm package)* — it matrixes
+[`examples/matrices/csv-metrics-matrix.yaml`](https://github.com/yaniv-golan/cowork-harness/blob/main/examples/matrices/csv-metrics-matrix.yaml) — it matrixes
 `examples/scenarios/csv-metrics.yaml` across the two most recent shipped baselines:
 
 ```bash

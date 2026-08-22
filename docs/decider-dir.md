@@ -218,5 +218,5 @@ decider-flag probe is free.
 - [`cassette.md`](./cassette.md#answering-gates-during-recording) — `record --decider-dir`, the
   single-scenario recording variant of this recipe.
 - [`run-status.md`](./run-status.md) — the `status --follow` companion for overall run progress.
-- [`../src/decide/external-channel.ts`](../src/decide/external-channel.ts) — the file-rendezvous
+- [`src/decide/external-channel.ts`](https://github.com/yaniv-golan/cowork-harness/blob/main/src/decide/external-channel.ts) — the file-rendezvous
   implementation (`fileChannel`, `streamGates`, `answerGate`).

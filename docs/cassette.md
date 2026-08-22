@@ -34,7 +34,7 @@ before fingerprints existed has nothing to check and passes silently, and a `COW
 `format` finding.
 
 Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
-**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml) *(source checkout only — not shipped in the npm package)*). The walkthrough below assumes `container` fidelity, the common case.
+**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml)). The walkthrough below assumes `container` fidelity, the common case.
 
 ## Mental model
 
@@ -591,7 +591,7 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 > success (exit 0); `verify-cassettes` on the same tree exits **1**. That split is deliberate: `replay`
 > answers "do the assertions still hold", `verify-cassettes` answers "is this recording still current", and
 > a stale recording is not by itself a wrong answer. **The consequence is that `replay` alone does not gate
-> staleness.** Run both in CI — this repo does ([`ci.yml`](../.github/workflows/ci.yml) runs the replay
+> staleness.** Run both in CI — this repo does ([`ci.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) runs the replay
 > fixtures and then `verify-cassettes examples/replays/`) — or, if you want one command to do both, pass
 > `replay --fail-on-skill-drift` (or `--strict`, which also fails on baseline drift). `--reassert` /
 > `--assert-from` imply skill-drift hard-fail already.
