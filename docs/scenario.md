@@ -61,7 +61,9 @@ requires_capabilities: [pdf_tables]       # OPTIONAL — capability families the
                                          # not an assert key); a tier missing one fails unless allow_missing_capability
 
 allow_host_writes: true                  # OPTIONAL — required consent to run `hostloop` with a WRITABLE
-                                         # connected folder (session `folders:` mode rw/rwd): the native
+                                         # connected folder (session `folders:` mode rw/rwd) — and so ALSO
+                                         # for `fidelity: cowork` whenever the baseline's gate resolves it
+                                         # to hostloop, which is what the shipped baselines do: the native
                                          # agent process gets genuine host filesystem access there, gated
                                          # only by a software check, not a container/VM wall. See below.
 

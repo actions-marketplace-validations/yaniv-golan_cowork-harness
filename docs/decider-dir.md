@@ -24,7 +24,7 @@ The harness and the driver rendezvous through files in `<dir>`:
 4. On run completion the harness writes `<dir>/done.json`, which tells a `gates --follow` watcher to
    emit a terminal `{"done":true}` and exit.
 
-You **do not** hand-write those files. Two CLI subcommands wrap the protocol:
+For a **question** gate you do not hand-write those files — two CLI subcommands wrap the protocol:
 
 > **See it work first, for free.** `cowork-harness decide --decider-dir "$(mktemp -d)"` fires ONE sample
 > gate through this exact channel — the same `fileChannel` a real run uses, so the fresh-dir refusal and
@@ -49,6 +49,20 @@ You **do not** hand-write those files. Two CLI subcommands wrap the protocol:
   sub-question; for a later sub-question, `--answer "<q>=<label>"` delivers exactly **one** selection per
   question — selecting *multiple* members of a non-first multiSelect needs a hand-written `resp-N.json`
   with a JSON array of labels.)
+
+> **`answer` covers QUESTION gates only.** It writes `{id, answers}` and nothing else. The same channel
+> also carries **permission**, **dialog** and **elicit** gates, whose replies take `{behavior}` /
+> `{action}` — there is no subcommand for those, so write `resp-N.json` yourself. You do not have to guess
+> the shape: every request advertises it. `req-N.json` carries a `reply_with` field holding the literal
+> template for its own kind, e.g.
+>
+> ```json
+> {"id":"…","behavior":"allow|deny"}                      // permission
+> {"id":"…","behavior":"allow|deny","grant":"once|domain"} // permission, web_fetch approval
+> ```
+>
+> Write it the way the harness does — to a temp file, then `rename` into place — so the poller never
+> reads a partial file, and echo the request's `id`: a reply without it is rejected.
 
 ## Recipe
 

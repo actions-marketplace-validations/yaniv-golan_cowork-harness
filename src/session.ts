@@ -118,7 +118,10 @@ export const SessionConfig = z.strictObject({
     .strictObject({
       config_dir: z.string().min(1).nullable().default(null), // CLAUDE_CONFIG_DIR; null = harness-managed clean dir
       marketplaces: z.array(z.string().min(1)).default([]), // plugin_marketplaces (git URLs / paths)
-      local_marketplaces: z.array(z.string().min(1)).default([]), // LOCAL marketplace dirs -> registered via `claude plugin marketplace add`
+      // LOCAL marketplace dirs. NOT registered: `.claude-plugin/marketplace.json` is read directly here and
+      // the plugins it names are resolved to `--plugin-dir` in buildLaunchPlan — the `claude plugin
+      // marketplace add` registry is inert in cowork mode (SPEC §6), so there is no pre-registration step.
+      local_marketplaces: z.array(z.string().min(1)).default([]),
       enabled: z.array(z.string().min(1)).default([]), // enabledPlugins (name@marketplace)
       local_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
       remote_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.remote-plugins

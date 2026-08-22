@@ -44,6 +44,44 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **Seven authoring-surface claims that misdescribe what the code does.** The first two are in the shipped
+  skill, so an installed agent was teaching them.
+  - **`SKILL.md` said a "type-it-in-notes" option has "no scripted deterministic answer" today.** It has
+    one: `answer:` — an arbitrary string delivered verbatim, bypassing label validation by author intent
+    (`AnswerRule.answer` in `src/types.ts`, implemented at `src/decide/decider.ts`, and present in the
+    published scenario schema). The claim steers agents onto the LLM decider, with its cost and its
+    `nonDeterministic` flag, for something a scripted key already covers. What genuinely has no scripted
+    equivalent is the `OTHER:` *directive*, which is what the surrounding parenthetical is about.
+  - **"Never hand-write the `req-N.json`/`resp-N.json` files" is unachievable for three of four gate
+    kinds.** The `answer` subcommand's only terminal write is `{id, answers}`, while the same channel
+    carries **permission**, **dialog** and **elicit** gates, whose replies take `{behavior}` / `{action}`.
+    Both [`SKILL.md`](./.claude/skills/cowork-harness/SKILL.md) and
+    [`docs/decider-dir.md`](./docs/decider-dir.md) now scope the rule to question gates, and `decider-dir`
+    documents the alternative: each `req-N.json` advertises its own `reply_with` template, so the shape
+    never has to be guessed.
+  - **`fidelity: cowork` can also require `allow_host_writes`.** The consent check gates on
+    `effectiveFidelity === "hostloop"`, and `cowork` resolves to hostloop on every shipped baseline —
+    so a gate flip can red an unchanged `cowork` scenario. [`docs/scenario.md`](./docs/scenario.md)
+    described the consent as hostloop-only.
+  - **Local marketplaces are read, not registered.** `.claude-plugin/marketplace.json` is parsed directly
+    and the plugins it names are resolved to `--plugin-dir`; the `claude plugin marketplace add` registry
+    is inert in cowork mode. [`docs/session.md`](./docs/session.md) said "registered via `claude plugin
+    marketplace add`" in two places, and `src/session.ts` carried the same stale comment.
+  - **Git-tracked staging does not apply to `hostloop` connected folders.** They are bind-mounted rather
+    than copied there (matching production), and the git filter lives in the copy path — so the same
+    session exposes untracked files at `hostloop` that are invisible at `container`. The rule was stated
+    without a tier qualifier.
+  - **The connected-folder delete assertion is `no_delete_in_mounts`, not `no_delete_in_outputs`.**
+    `no_delete_in_outputs` covers `outputs/` only; the mount-wide form covers "outputs + every `rw`
+    connected folder". [`docs/session.md`](./docs/session.md) and
+    [`docs/boundary.md`](./docs/boundary.md) both routed the reader to the one that does not cover it.
+  - **`web_fetch.approved_domains` is inert except at `hostloop`.** `enableWebFetchGate()` is called at
+    one site, guarded by `effectiveFidelity === "hostloop" && viaApiOn`, and that gate is the only
+    consumer of the set. The value is still parsed and seeded at `container`/`microvm`, where nothing
+    reads it — [`docs/session.md`](./docs/session.md) described it as unconditional in two places.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
