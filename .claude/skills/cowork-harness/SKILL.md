@@ -416,7 +416,8 @@ missing was anything saying so while you could still act. Related: recording at 
 (`protocol`/`hostloop`/`cowork`→hostloop) into a repo-visible path is refused outright (gotcha 25).
 The clean answer there is `fidelity: container` (sealed, `HOME=/tmp`, nothing to leak) — **not**
 redirecting `--out` outside the repo and moving the file in afterwards, which trades a loud refusal
-for a permanently unverifiable cassette.
+for a cassette that cannot verify staleness from its own location — recoverable only by passing
+`--session <file>` on every invocation thereafter.
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`

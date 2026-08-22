@@ -44,6 +44,45 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **Nine claims where one page contradicted another — or itself.** The accurate version already existed in
+  most cases; these hoist it rather than inventing new content.
+  - **`SECURITY.md` classified scenario YAML as both "semi-trusted" and "trusted input", 30 lines apart.**
+    The trusted reading is the correct one — `allow_if` is evaluated as host JavaScript via `new Function`,
+    so an author can run arbitrary code, by design. That statement now leads the input-boundary section;
+    cassettes and marketplace metadata stay semi-trusted.
+  - **`SECURITY.md` said host resources are "reachable only through an MCP server, never via direct host
+    tools".** Not at `hostloop`: the agent loop is a native host process whose Read/Write/Edit/Glob/Grep
+    run with no container around them, contained only by a `PreToolUse` gate — which is exactly what
+    production does, and why a writable connected folder there needs `allow_host_writes`.
+    [`docs/boundary.md`](./docs/boundary.md) documented this correctly all along.
+  - **`SECURITY.md` and `SPEC.md` routed `web_fetch` through the container egress boundary.** It is
+    host-routed at `hostloop` (matching production's host-API route), so it never crosses the per-run proxy
+    or guest firewall — those enforce `bash` egress. `SPEC.md` said so correctly in two later sections while
+    two earlier ones said the opposite.
+  - **`docs/scenario.md` listed `replay` as a `requires_capabilities` hard-fail case** in a bullet, and said
+    the opposite two sentences later. Replay re-drives and resets the outcome; the bullet was the stale half.
+  - **`docs/cassette.md` understated the committed body surface.** A cassette inlines the body of *every*
+    under-cap regular file under `outputs/` and `.projects/` — UTF-8 as text, anything else as base64 — not
+    just "the `outputs/` JSON bodies". An author can commit a spreadsheet, an image or a PDF believing only
+    JSON is embedded. Uploads and `mode:r` folders are hash-only; over-cap files carry
+    `truncationReason: "size"`.
+  - **"Permanently unverifiable" is wrong in two places** ([`docs/cassette.md`](./docs/cassette.md),
+    [`SKILL.md`](./.claude/skills/cowork-harness/SKILL.md) — the latter ten lines below its own correct
+    statement of the recovery). A relocated cassette is unverifiable *from its own location*;
+    `--session <file>` resolves it without a re-record.
+  - **`docs/cassette.md`'s minimal CI snippet ran `replay` only**, on a page that opens with "In CI, run
+    both commands". The snippet now runs `verify-cassettes` too, with its exit-code meanings.
+  - **`docs/protocol.md` said all three callers "skip the offending frame loudly"** on a malformed frame.
+    They do three different things, and only one is a skip: the live session surfaces a typed protocol
+    error event, **cassette replay turns it into a FAILING `replay_protocol_fidelity` assertion** (a
+    malformed frame could conceal a failed assertion, so a silent skip would risk a false green), and
+    `trace` is the one that skips and moves on.
+  - **`rehash` is the 2.0.0 upgrade step and the README command row did not say so.** The row now states
+    that the hash-format epoch fails a bare `replay` until each cassette is migrated, and points at the
+    CHANGELOG entry.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))
