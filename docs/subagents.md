@@ -80,8 +80,11 @@ The `--output-format json` payload nests per-file results under a `files:` key �
 deliberately left out of THIS target's scope — a `skills/<name>` dir with no `SKILL.md` (not a scannable
 skill dir), or a sibling skill dir in the enclosing plugin when the target is one skill dir inside that
 plugin, not the plugin root — printed as a scope banner in text mode too, so a narrower-than-expected scan
-is never silent. `ok`/`--strict` are computed across ALL scanned files: `ok` is true only when every file
-has zero findings, and `--strict` fails (exit 1) if ANY file has an unsuppressed finding. The `analyze-skill:
+is never silent. `ok`/`--strict` are computed across ALL scanned files, and both key on
+**severity, not on the finding count**: `ok` mirrors the exit code, so a default run prints findings and
+still reports `ok: true`; `--strict` fails (exit 1) only when some unsuppressed finding is severity
+`error`. An `advisory`-only run — `artifact-write-back-suspect` is the one advisory rule — exits 0 even
+under `--strict` (measured). The `analyze-skill:
 ignore` marker (and the two scoped markers below) apply PER FILE — silencing one scanned file has no
 effect on any other file in the union.
 
@@ -97,8 +100,8 @@ effect on any other file in the union.
 
 **ADVISORY by default.** Because the extraction is heuristic and can over-flag innocent
 documentation/teaching examples, findings print as warnings but the command **exits 0 by default even
-when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any finding, mirroring
-`lint-skill --strict` exactly.
+when it prints findings**. Pass `--strict` to turn it into a hard gate — exit 1 on any **`error`-severity**
+finding. Advisory findings never gate, even under `--strict`.
 
 **Three ignore markers, three scopes.** A SKILL.md can silence findings at the granularity that fits the
 false positive — from a single teaching line up to the whole file:
@@ -135,7 +138,7 @@ just that sample in `ignore-start`/`ignore-end` (or prefix the one bad line with
 instead of reaching for the file-wide marker — the rest of the file, including any REAL `/sessions`
 mistake introduced later, stays fully scanned.
 
-Three rules, all advisory findings — including `unclosed-ignore-fence`, which fires on this file's own
+Three rules, all severity `error` — so each one gates under `--strict` — including `unclosed-ignore-fence`, which fires on this file's own
 ignore-marker syntax rather than on `/sessions` addressing:
 
 - **`sessions-path-to-file-tool`** — a `/sessions/...` token in a file-tool/output POSITIVE context: an
@@ -235,7 +238,11 @@ harness run is structurally blind to this (no browser, no human — see
 set — the `.py`/`.js` *generator* that emits the HTML is scanned too, since the write-back string often
 lives in a template). `.ts`/`.tsx`/`.jsx` sources are deliberately out of scope — the in-process parser
 cannot read TypeScript or JSX — so a target whose artifact generator is written in one of those languages
-is reported under `unscannedArtifactSources` rather than silently passing as clean. In scope, it emits:
+is reported under `unscannedArtifactSources` **when you name that file as an explicit positional**. The
+field is scoped to positionals on purpose (a directory walk collects candidates by extension and never
+reaches a `.ts` file, so listing every unrelated `.ts` in a repo would be noise) — which means a
+**directory** scan over a TypeScript generator reports nothing and is silently clean. Point at the file
+if you want the skip announced. In scope, it emits:
 
 - **`artifact-write-back-lost`** (severity `error` — gates under `--strict`) — a relative write-back with
   a lost consequence: a broken download fallback, an unchecked success claim, or a native

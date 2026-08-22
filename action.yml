@@ -40,10 +40,10 @@ inputs:
     default: "latest"
   strict:
     description: >-
-      Pass --strict — fail on any finding instead of just the default gate: for `replay`, any
+      Pass --strict — widen the gate past each command's default: for `replay`, any
       cassette-staleness finding (not just skill/shared-root drift); for `lint`/`lint-skill`, any
-      WARN/INFO finding (not just ERROR); for `analyze-skill`, any advisory finding at all (it's exit-0
-      by default). `verify-cassettes`/`run` don't accept `--strict` (unknown-flag usage error), so it is
+      WARN/INFO finding (not just ERROR); for `analyze-skill`, any `error`-severity finding (it's exit-0
+      by default, and advisory findings never gate — `artifact-write-back-suspect` stays exit-0 even here). `verify-cassettes`/`run` don't accept `--strict` (unknown-flag usage error), so it is
       IGNORED (not forwarded) for those two commands.
     required: false
     default: "false"

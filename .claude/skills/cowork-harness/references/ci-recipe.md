@@ -30,15 +30,19 @@ jobs:
     runs-on: [self-hosted, linux, arm64]   # needs Docker + this staged ELF; not a stock GitHub-hosted runner
     steps:
       - uses: actions/checkout@v4
-      - name: Stage the agent binary (official channel, sha256-verified — see https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md)
+      - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
           V=2.1.237   # match your scenario's pinned baseline's agentVersion
+          # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here, or
+          # read it with jq if you vendor the baseline. An unverified download is an unverified agent:
+          # this step FAILS rather than staging one, which is the whole point of naming it "verified".
+          EXPECTED=<paste agentBinary.sha256 for $V>
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
+          echo "$EXPECTED  $RUNNER_TEMP/claude-$V" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/claude-$V"
-          # verify against the committed baseline's sha256 (baselines/desktop-*.json → agentBinary.sha256)
-          # before trusting it — see the "Agent-binary provenance" section of
-          # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
+          # Background on the provenance chain: the "Agent-binary provenance" section of
+          # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md
       - uses: yaniv-golan/cowork-harness@main
         with:
           command: run
@@ -374,10 +378,14 @@ sandbox).
 ## Reading results in CI
 
 `--output-format json` emits a machine envelope on stdout (human output goes to stderr):
-`{tool, version, command, ok, results[], error}` — one `RunResult` per scenario. Overall pass for a
-scenario = `result === "success" && assertions.every(pass)`. Exit code is non-zero if any assertion
-fails or a run errors, so a plain `cowork-harness run scenarios/` is already CI-ready without parsing
-JSON.
+`{tool, version, command, ok, results[], error}` — one `RunResult` per scenario. **Overall pass for a
+scenario is `verdict.pass`** (envelope-wide: `ok`), and it is strictly stronger than
+`result === "success" && assertions.every(pass)`: the verdict also carries ~20 signal codes that fail a run
+with no failing assertion at all — `stalled`, `outputs_delete`, `mount_delete`, `host_path_leak`,
+`undelivered_deliverables`, `missing_capability`, `permissive_auto_allow`, `ended_with_question`,
+`infra_error`, and more. A parser that reimplements the shorter formula greens through every one of them.
+Read `ok` / `verdict.pass`, or just use the exit code — a plain `cowork-harness run scenarios/` is already
+CI-ready without parsing JSON.
 
 **Telling *why* a run failed, without scraping stderr.** Each result carries a `verdict` whose
 `failures[]` is the one place every failure reason is enumerated, in one shape (the same object lands
