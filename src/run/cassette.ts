@@ -1341,6 +1341,14 @@ export interface ScannableCassette {
   userVisibleRoots?: string[];
   scenarioSource?: string;
   environment?: { agentImage?: { ref?: string } };
+  // `folderPrefixMap[].from` is the RECORD-TIME connected-folder HOST path (`/Users/<name>/...`), persisted
+  // by `buildRecordTimeFolderPrefixMap`. It is a path field like `userVisibleRoots`, and it was invisible to
+  // both privacy layers: `scanCassette` never read it and `redactCassette` passed it through the `...cassette`
+  // spread, so a committed fixture leaked a username + private directory structure while `verify-cassettes`
+  // reported `ok:true`/`privacyScanned:true`. Carried here so the malformed-document lane sees it too — the
+  // VALID lane gets it free (it passes the whole `Cassette`), which is exactly why a valid-only regression
+  // passes with half the fix missing.
+  folderPrefixMap?: Array<{ from?: string; mount?: string }>;
   // `fidelity` is a plain string here, NOT the Scenario literal union — a malformed document can carry
   // anything, and the projection is responsible for refusing to pass through a value it cannot vouch for
   // (see `knownTier` in `readCassetteForScan`). `answers`/`assert` are only ever JSON.stringify'd by the
@@ -1408,6 +1416,11 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
     structural(cassette.events, "events");
     structural(cassette.controlOut, "controlOut");
   }
+  // Record-time connected-folder host paths. Same class as `userVisibleRoots` above: a structural path
+  // field the transcript net cannot see, because it never appears in transcript text.
+  cassette.folderPrefixMap?.forEach((e, i) => {
+    if (typeof e?.from === "string") findings.push(...scanText(e.from, `folderPrefixMap[${i}].from`, allow, FULL));
+  });
   // Deliverable + author-written fields — full net (a real cap table's figures/domains live here).
   for (const a of cassette.artifacts ?? []) {
     findings.push(...scanText(a.path, `artifact path ${a.path}`, allow, FULL)); // a filename can name a customer
@@ -2335,6 +2348,9 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
         );
     }
   }
+  // Same context-free `redactText` as `userVisibleRoots`: identical input redacts identically on both
+  // sides, so a `from` that also appears in a root stays consistent with it.
+  const redactedFolderPrefixMap = cassette.folderPrefixMap?.map((e) => ({ ...e, from: redactText(e.from, policy) }));
   const redactedPreRunPaths = cassette.preRunPaths?.map((p) => redactText(p, policy));
   // preRunHashes VALUES are hex sha256 (or null) — no secrets, never redacted. The KEYS are paths (same
   // privacy surface as preRunPaths entries), so redact each key and keep the value as-is.
@@ -2344,6 +2360,7 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     ...cassette,
     scenario,
     userVisibleRoots: redactedRoots,
+    folderPrefixMap: redactedFolderPrefixMap,
     artifacts: redactedArtifacts,
     preRunPaths: redactedPreRunPaths,
     preRunHashes: redactedPreRunHashes,
@@ -2661,6 +2678,12 @@ export function readCassetteForScan(path: string): { scannable: ScannableCassett
               ),
             },
       userVisibleRoots: strings(o.userVisibleRoots),
+      // Keep only entries carrying a string `from` so a malformed element cannot make the scan throw
+      // mid-walk — same defensive shape as `artifacts` above.
+      folderPrefixMap: (Array.isArray(o.folderPrefixMap) ? o.folderPrefixMap : []).flatMap((e) => {
+        const el = obj(e);
+        return el === undefined ? [] : [{ from: str(el.from), mount: str(el.mount) }];
+      }),
       scenarioSource: str(o.scenarioSource),
       environment: agentImage === undefined ? undefined : { agentImage: { ref: str(agentImage.ref) } },
       scenario: {
@@ -4107,13 +4130,18 @@ async function recordScenarioObject(
     // base64 branch above), otherwise replay's materializeManifest verify throws "body does not match
     // its recorded sha256". encoding is already undefined on this branch, so the spread keeps it.
     if (scrubbed === "[REDACTED:base64]" || scrubbed === "[REDACTED:uri]") {
-      // Whole-field marker replacement destroys the deliverable content — artifact_json /
-      // user_visible_artifact assertions on this artifact will fail at replay, exactly like the base64
-      // case above. Warn so the author isn't surprised. (Inline literal scrubs leave the rest of the
-      // body intact, so they stay silent.)
+      // Whole-field marker replacement destroys the deliverable CONTENT, so only the assertions that
+      // READ the body fail at replay: `artifact_json` (parses it) and `artifact_text` (matches it).
+      //
+      // `user_visible_artifact` and `file_exists` still PASS — they check location and existence, and the
+      // marker is written to disk with a recomputed sha256. `materializeManifest`'s doc comment in this
+      // same file already says so. The warning previously named `user_visible_artifact`, which invited the
+      // reading that a passing visibility assertion proves the scrubbed content survived. It proves only
+      // that a file is there. (Inline literal scrubs leave the rest of the body intact, so they stay silent.)
       warn(
         `::warning:: record: artifact "${a.path}" contains a secret in whole-field encoded content — ` +
-          `body replaced with redaction marker; artifact_json/user_visible_artifact assertions on this artifact will fail at replay\n`,
+          `body replaced with redaction marker; artifact_json/artifact_text assertions on this artifact will fail at replay ` +
+          `(user_visible_artifact/file_exists still PASS — they check location, not content)\n`,
       );
     }
     const newSha256 = createHash("sha256").update(Buffer.from(scrubbed, "utf8")).digest("hex");
