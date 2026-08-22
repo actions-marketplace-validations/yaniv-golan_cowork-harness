@@ -44,6 +44,34 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
+### Fixed
+
+- **Four overclaims that a prospective user reads while deciding whether to trust the tool.** Each was
+  checked against primary evidence rather than against the doc that repeated it.
+  - **Egress parity was stated as identity, in five places.** `DESIGN.md` called the default allowlist
+    "captured from the live asar"; `README.md` called it "the **synced** allowlist" and the fidelity
+    "allowlist-exact"; `README.md` and `docs/boundary.md` said domain allow/deny "matches Cowork" / "is
+    identical", and a `DESIGN.md` table row said the same. The pinned baseline refutes all five in its own
+    `network.$comment`: the list is "a PINNED, hand-curated list — `sync` carries it forward and never
+    re-derives it … a curated RECONSTRUCTION, not an extraction", because on the first-party deployment
+    the VM egress allowlist is not in the app bundle at all (that class returns `vmEgressPolicy(){return
+    null}`; the real list is server-delivered per session), and four entries are flagged UNVERIFIED as VM
+    egress. What is true — enforcement is domain-exact against the pinned list — is now what the docs say.
+  - **"A green test means green in real Cowork"** (`README.md`, `llms.txt`) was unconditional, 21 lines
+    above a callout that correctly calls this an emulator of the contract. `mount_delete` alone is
+    `severity: "warn"` here while production denies it. The tagline now claims what it can support — a
+    green run has cleared the constraints that break skills in Cowork — and points at
+    [`docs/fidelity-gaps.md`](./docs/fidelity-gaps.md) for the deliberate divergences.
+  - **The local lane was described as an agent inside the microVM** in `README.md` and `DESIGN.md` §1,
+    while `DESIGN.md`'s spawn-contract section says the opposite and is right. Measured:
+    `decideLoopFromBaseline(desktop-1.34493.1)` returns `"host"` — the loop runs on the host and reaches
+    the VM for shell. §1 now defers to that section instead of contradicting it.
+  - **The hermetic-`CLAUDE_CONFIG_DIR` guarantee is not unconditional** (`README.md`,
+    `docs/discovery.md`). At `protocol` fidelity with no `ANTHROPIC_API_KEY`, the harness deliberately
+    keeps your real config dir — a fresh one breaks local OAuth — and layers discovery settings via
+    `--settings` instead (`src/runtime/protocol.ts`, whose comment already says so). Both pages now carry
+    the exception and name `COWORK_MANAGED_CONFIG=1`; the sandboxed tiers are unaffected.
+
 ## [2.0.0] — 2026-08-21
 
 ### Changed — BREAKING (requires a major bump; see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract))

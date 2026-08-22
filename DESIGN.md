@@ -35,9 +35,12 @@ flowchart TB
 
 ## 1. What "real Cowork" actually is (and why scripting it is closed)
 
-Cowork runs a session in one of two lanes. This section describes the **local** lane — the Desktop app driving an
-agent that runs **inside an Apple Virtualization.framework microVM** on the user's own machine — which is the lane
-this harness emulates. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead, and is
+Cowork runs a session in one of two lanes. This section describes the **local** lane — the Desktop app driving the
+agent on the user's own machine, with an **Apple Virtualization.framework microVM** as the sandbox — which is the lane
+this harness emulates. Where the agent LOOP runs inside that lane is a separate axis, and on the pinned baseline it is
+the host, not the VM: see "Which Cowork? — both are implemented" under
+[§6, Control protocol mapping](#6-control-protocol-mapping) below, which is authoritative over the
+sandbox-centric description here. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead, and is
 the default for new sessions from 2026-07-07 (local stays available, and both are in active use). The lanes differ
 in how a file reaches the user, which is what changes skill behaviour: see
 [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) → "File delivery" for the split and
@@ -80,7 +83,7 @@ in how a file reaches the user, which is what changes skill behaviour: see
 | Delta | Why it's acceptable for skill testing | When it bites |
 |---|---|---|
 | No Apple VZ kernel | Skills are agent-loop + tool behavior; kernel-invisible | Skill probes `/proc`, kernel version, VM artifacts |
-| L1 and L2 egress is a proxy, not gVisor | Domain allow/deny is identical; that's what skills observe | Skill depends on raw-socket / non-HTTP egress behavior |
+| L1 and L2 egress is a proxy, not gVisor | Allow/deny is decided per domain against the pinned allowlist, which is what skills observe | Skill depends on raw-socket / non-HTTP egress behavior, or on a domain where the pinned list and production's server-delivered set differ |
 | No host-loop staging / mountPath RPC / bridge | Those are Desktop host services, not part of a portable skill | Skill calls a Desktop-only host RPC (non-portable by definition) |
 | Host `claude` at L0 may differ from pinned ver | L0 is the fast lane; use L1 for version-exact | Version-specific tool/flag behavior — pin via L1 |
 | Files mounted locally, not via `/v1/files` + `stage_file` | The skill only needs the file *present* at `mnt/uploads/`; it `Read`s the same path either way | Skill depends on the Files-API round-trip itself (id, gating) rather than file contents |
@@ -144,7 +147,7 @@ caught the same "silent rot → visible signal" way:
 
 ## 5. Egress model details
 
-Real Cowork compiles `{kind:"allowlist", domains:[...vmAllowedDomains(), ...coworkEgressAllowedHosts]}` (or `{kind:"unrestricted"}` iff the set contains `"*"`). Default allowlist captured from the live asar includes:
+Real Cowork compiles `{kind:"allowlist", domains:[...vmAllowedDomains(), ...coworkEgressAllowedHosts]}` (or `{kind:"unrestricted"}` iff the set contains `"*"`). The default allowlist below is a **pinned, hand-curated reconstruction, not an extraction** — on the first-party deployment this harness models the VM egress allowlist is not in the app bundle at all (that deployment class returns `vmEgressPolicy(){return null}`, so the session's SERVER-DELIVERED `egressAllowedDomains` is used instead), which means it cannot be read out of the asar. It is the list the harness **enforces**; whether it equals production's server-delivered set is unverified, and four entries (`www.`, `console.`, `support.`, `docs.anthropic.com`) are flagged unverified-as-VM-egress in the baseline's own `network.$comment`. `sync` carries the list forward and never re-derives it:
 
 ```
 api.anthropic.com  a-api.anthropic.com  a-cdn.anthropic.com  api-staging.anthropic.com

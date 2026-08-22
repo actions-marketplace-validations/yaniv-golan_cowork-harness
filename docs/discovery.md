@@ -43,6 +43,8 @@ For each run it builds a **clean, hermetic `CLAUDE_CONFIG_DIR`** (under the run 
 
 Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mcp-config`. Because nothing leaks from your real `~/.claude`, runs are reproducible across machines and CI.
 
+> **One exception, at `protocol` fidelity only.** A fresh config dir breaks local OAuth, whose login state lives in the real one — so with no `ANTHROPIC_API_KEY` set, `protocol` keeps your real `CLAUDE_CONFIG_DIR` and layers the generated settings via `--settings`. Discovery still applies; the isolation does not. Set `ANTHROPIC_API_KEY` (the CI path) or `COWORK_MANAGED_CONFIG=1` for the managed branch. The sandboxed tiers are unaffected.
+
 ## Overriding for tests
 
 | Goal | How |
