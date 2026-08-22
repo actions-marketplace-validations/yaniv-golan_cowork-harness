@@ -84,7 +84,8 @@ plugins:
   config_dir: null               # CLAUDE_CONFIG_DIR; null = harness builds a clean managed dir
   marketplaces:                  # plugin_marketplaces (git URLs or local paths)
     - https://github.com/anthropics/claude-code.git
-  local_marketplaces: []         # LOCAL marketplace dirs → registered via `claude plugin marketplace add`
+  local_marketplaces: []         # LOCAL marketplace dirs → read directly and resolved to `--plugin-dir`
+                                 # (the `claude plugin marketplace add` registry is inert in cowork mode)
   enabled:                       # enabledPlugins (name@marketplace)
     - my-skill@local
   local_plugins:                 # host plugin dirs → mnt/.local-plugins/marketplaces/<marketplace>/<plugin>
@@ -110,7 +111,8 @@ egress:
 
 # ── web_fetch (TEST CONVENIENCE — not a real Cowork setting) ────────────────────
 web_fetch:
-  approved_domains: []           # pre-approve these hosts for the run — simulates the in-session effect of
+  approved_domains: []           # HOSTLOOP-ONLY in effect (see the table below): pre-approve these hosts
+                                 # for the run — simulates the in-session effect of
                                  # clicking "Allow all for website" (seeds Run.approvedDomains), but for THIS
                                  # run only: the set starts empty every run (Cowork has no persistent
                                  # pre-approval). A web_fetch to a listed host raises no approval gate.
@@ -208,7 +210,7 @@ default `{}`) hashes identically to one authored before this field existed.
 For an ad-hoc `skill` run (no session file), the CLI flags **`--upload <file>`** and **`--folder <dir>`**
 are the equivalents of `uploads[]` and `folders[]`.
 
-`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc `no_delete_in_outputs` + the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md), which records what production denies: `unlink`/`rmdir` only, not in-place emptying).
+`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc detection instead: `no_delete_in_mounts` is the one that covers connected folders — `no_delete_in_outputs` covers `outputs/` ONLY — plus the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md), which records what production denies: `unlink`/`rmdir` only, not in-place emptying).
 
 ### Discovery
 See [discovery.md](./discovery.md) for the full model. In short: the harness builds a clean `CLAUDE_CONFIG_DIR` with a generated `settings.json`, mounts plugins at the Cowork paths, and wires `--mcp-config` — every field here is an override knob.
@@ -216,7 +218,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | Field | Maps to | Notes |
 |---|---|---|
 | `plugins.marketplaces[]` | `plugin_marketplaces` / `extraKnownMarketplaces` | git URLs or local paths. |
-| `plugins.local_marketplaces[]` | `claude plugin marketplace add` | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace <dir> --enable name@marketplace` flags are the ad-hoc equivalent — when the marketplace is the only plugin source, `--enable` is required or `skill` fails fast (nothing would be loaded otherwise). |
+| `plugins.local_marketplaces[]` | *(no registry step — `.claude-plugin/marketplace.json` is read directly and the plugins it names are resolved to `--plugin-dir`; the `claude plugin marketplace add` registry is inert in cowork mode)* | LOCAL marketplace dirs (each holds a `marketplace.json`); plugins they reference are mounted. The `skill --marketplace <dir> --enable name@marketplace` flags are the ad-hoc equivalent — when the marketplace is the only plugin source, `--enable` is required or `skill` fails fast (nothing would be loaded otherwise). |
 | `plugins.enabled[]` | `enabledPlugins` | `name@marketplace`. |
 | `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins/plugin_<id>` (migrated-Cowork uploaded/org-remote shape; the id is a stable hash of the declared source). A skill that references these via `${CLAUDE_PLUGIN_ROOT}` must mind [the two-namespace resolution model](./plugin-root.md) — the token is unset in host-loop VM bash. |
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
@@ -225,7 +227,10 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
-> real Cowork's install-from-repo behavior) — an untracked skill mounts empty. The **content** staged is the
+> real Cowork's install-from-repo behavior) — an untracked skill mounts empty. **Not at `hostloop`, for
+> `folders[]`:** connected content is bind-mounted there rather than copied (matching production), and the
+> git filter lives in the copy path — so the same session exposes untracked files at `hostloop` that are
+> invisible at `container`. The **content** staged is the
 > working tree, so uncommitted edits to a tracked file are tested without committing; but commit before
 > recording the locking cassette, since real Cowork ships the committed tree. See
 > [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
@@ -235,7 +240,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 
 | Field | Type | Cowork control | Notes |
 |---|---|---|---|
-| `web_fetch.approved_domains[]` | string[] | *(none — TEST CONVENIENCE, not a real Cowork setting)* | Pre-approves these hosts for the run, as if the user had clicked "Allow all for website" earlier in the session (seeds `Run.approvedDomains`) — a `web_fetch` to a listed host raises no approval gate. The set starts empty every run; Cowork itself has no persistent pre-approval across runs. `web_fetch`'s real gate is the URL provenance set, seeded from URLs in the prompt — see [boundary.md](./boundary.md). |
+| `web_fetch.approved_domains[]` | string[] | *(none — TEST CONVENIENCE, not a real Cowork setting)* | **Takes effect at `hostloop` only** (and at `cowork` when it resolves there), and only with the web_fetch-via-API gate on: that is the one path that enables the web_fetch approval gate, which is the only consumer of this set. The value is still parsed and seeded at `container`/`microvm`, where nothing reads it. Where it does apply: pre-approves these hosts for the run, as if the user had clicked "Allow all for website" earlier in the session (seeds `Run.approvedDomains`) — a `web_fetch` to a listed host raises no approval gate. The set starts empty every run; Cowork itself has no persistent pre-approval across runs. `web_fetch`'s real gate is the URL provenance set, seeded from URLs in the prompt — see [boundary.md](./boundary.md). |
 
 ## Path expansion
 

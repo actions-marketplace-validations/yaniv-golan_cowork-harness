@@ -220,9 +220,14 @@ run's echoed `--answer "<q>=<choice>"` footer lines into the scenario's `answers
 being unattended. Skip the transcribe step only for one-off/exploratory runs.
 <!-- answer-channels:end -->
 
-**Never hand-write the `req-N.json`/`resp-N.json` files.** `gates` and `answer` wrap the protocol — the
-atomic temp+rename, the `{id, answers}` envelope, the multiSelect array shape. Hand-rolling a Monitor over
-the raw files is the single most common mistake on this channel.
+**For a QUESTION gate, never hand-write the `req-N.json`/`resp-N.json` files.** `gates` and `answer` wrap
+the protocol — the atomic temp+rename, the `{id, answers}` envelope, the multiSelect array shape.
+Hand-rolling a Monitor over the raw files is the single most common mistake on this channel.
+
+`answer` writes `{id, answers}` and nothing else, so it covers **question gates only**. The channel also
+carries **permission**, **dialog** and **elicit** gates, whose replies need `{behavior}` / `{action}` — for
+those, write `resp-N.json` yourself, following the `reply_with` template the gate's own `req-N.json`
+advertises (it spells out the exact shape, e.g. `{"id":"…","behavior":"allow|deny"}`).
 
 Exact accepted values (teach precisely): `--on-unanswered` takes `fail|prompt|first` on `skill`,
 only `fail|first` on `run`. **`llm` is NOT an `--on-unanswered` value** — the bare flag
@@ -917,8 +922,11 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
       `artifact_json` / `transcript_matches`), never just `result: success`.
     - `on_unanswered` governs **unanswered** `AskUserQuestion` gates; the `stalled` signal covers
       stalling *after* one is answered — two different failure modes.
-    - **Free-text aside:** a "type-it-in-notes" option has **no scripted deterministic answer** today
-      (the `OTHER:` directive works only on the LLM-decider path, not scripted `choose:`, and only on
+    - **Free-text aside:** the scripted key for a "type-it-in-notes" option is **`answer:`** — an
+      arbitrary string delivered verbatim, bypassing label validation by author intent (Cowork
+      auto-provides an "Other" free-text path on every gate). Mutually exclusive with `choose:`; setting
+      both fails loud. What has no scripted equivalent is the `OTHER:` *directive*
+      (it works only on the LLM-decider path, not scripted `choose:`, and only on
       **single-select** gates — a **multi-select** gate is index-only, so `OTHER:` fails loud there; on an
       options-bearing single-select gate a bare out-of-set LLM answer also fails loud (exit 2) — see the
       LLM-decider free-text note in `references/fidelity-and-answers.md`). An LLM decision answered via
