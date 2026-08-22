@@ -50,6 +50,13 @@
 //       and because shipping a baseline flips NO-GAP into GAP, a new release forces the note to be
 //       rewritten instead of silently overstating coverage. It had drifted twice unnoticed before this
 //       existed — see `checkDesignScopeNote`.
+//   12. cassette-format claims === the constants: SPEC.md's max/min/retained-range sentences and
+//       task-recipes.md's schema pointer + "current max: N" track `CASSETTE_VERSION`,
+//       `MIN_SUPPORTED_CASSETTE_VERSION` and the schema/cassette.v*.json files on disk. CURRENT
+//       claims only — docs/scenario.md and docs/cassette.md explain the v10/v11 `lane: remote`
+//       regime as correct history, and CHANGELOG.md is nothing but history; neither is checked.
+//       See `checkCassetteVersionClaims`.
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -57,6 +64,29 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
 const json = (p: string) => JSON.parse(r(p)) as Record<string, any>;
+
+const TASK_RECIPES = ".claude/skills/cowork-harness/references/task-recipes.md";
+
+/** Markdown that ships to a reader — root pages, `docs/`, and the companion skill. `CHANGELOG.md` is
+ *  excluded because it is history by construction.
+ *
+ *  Enumerated from git rather than by walking the filesystem, which gets the untracked working-notes
+ *  directory excluded as a consequence of it being untracked instead of by a hardcoded path — and the
+ *  same for any other scratch file a developer happens to have sitting under `docs/`. */
+function shippedDocs(): { path: string; text: string }[] {
+  const tracked = execFileSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "*.md"], { encoding: "utf8" })
+    .split("\0")
+    .filter(Boolean)
+    // An ALLOW-list of prefixes, not a deny-list: `baselines/prompts/**` is captured prompt text rather
+    // than documentation, `test/**` holds fixtures that may name a bogus schema on purpose, and
+    // `.github/**` ships to nobody. A new directory should have to opt in.
+    .filter(
+      (p) =>
+        p !== "CHANGELOG.md" && (!p.includes("/") || ["docs/", ".claude/skills/", "examples/", "python/"].some((d) => p.startsWith(d))),
+    );
+  if (tracked.length === 0) throw new Error("shippedDocs(): git ls-files returned no markdown — the corpus would be empty");
+  return tracked.map((path) => ({ path, text: r(path) }));
+}
 
 const SEMVER = /^\d+\.\d+\.\d+$/;
 /** Compare two X.Y.Z strings: <0 if a<b, 0 if equal, >0 if a>b. */
@@ -230,6 +260,113 @@ export function checkDesignScopeNote(opts: {
   if (claimedMoves === undefined) errors.push(`DESIGN.md scope note ELF-move count "${m[3]}" is not a number this check understands`);
   else if (claimedMoves !== moves)
     errors.push(`DESIGN.md scope note says ${claimedMoves} of those baselines moved the agent ELF; the baselines say ${moves}`);
+
+  return errors;
+}
+
+/** Invariant 12 — the docs' claims about the cassette FORMAT track `CASSETTE_VERSION` /
+ *  `MIN_SUPPORTED_CASSETTE_VERSION` and the schema files actually on disk.
+ *
+ *  `CASSETTE_VERSION` reached 12 while `task-recipes.md` still linked `schema/cassette.v11.json` and
+ *  called 11 "current max" — the reference a skill author reads when they open a cassette pointed at a
+ *  superseded schema, and at a version regime (`lane: remote` stamps 11, else 10) the hash-format epoch
+ *  had already replaced. `SPEC.md` said v9 and v10 were "retained alongside v11", which both understates
+ *  the retained set and re-states 11 as the top.
+ *
+ *  It guards CURRENT/MAX CLAIMS, not every mention of a version. `docs/scenario.md` and `docs/cassette.md`
+ *  explain the v10-vs-v11 `lane: remote` regime at length and are correct history; `CHANGELOG.md` is
+ *  nothing but history. Flagging those would train the next author to route around the check. So each
+ *  present-tense claim is pinned by its own phrasing, the way invariants 9-11 pin DESIGN.md's — and a
+ *  claim that cannot be FOUND is an error, so rewording the sentence fails rather than silently disabling
+ *  the rule.
+ *
+ *  Pure (no disk access) so every branch can be mutation-tested; `checkVersions` supplies the real inputs. */
+export function checkCassetteVersionClaims(opts: {
+  current: number;
+  minSupported: number;
+  /** Versions with a `schema/cassette.vN.json` on disk. */
+  retained: number[];
+  spec: string;
+  taskRecipes: string;
+  /** The whole shipped-doc corpus, for the referenced-schema-exists sweep. */
+  docs: { path: string; text: string }[];
+}): string[] {
+  const errors: string[] = [];
+  const { current, minSupported, retained, spec, taskRecipes, docs } = opts;
+
+  if (!Number.isInteger(current) || current <= 0) errors.push(`could not read CASSETTE_VERSION from src/run/cassette.ts (got ${current})`);
+  if (!Number.isInteger(minSupported) || minSupported <= 0)
+    errors.push(`could not read MIN_SUPPORTED_CASSETTE_VERSION from src/run/cassette.ts (got ${minSupported})`);
+  if (retained.length === 0) errors.push("no schema/cassette.v*.json files found — the schema sweep would be vacuous");
+  // A corpus that quietly collapsed to nothing would make 12e vacuous while 12a-12d still passed, which
+  // reads as "checked" in CI output. The floor sits well below the real count (~45).
+  if (docs.length < 20) errors.push(`the shipped-doc corpus is only ${docs.length} files — the schema sweep would be near-vacuous`);
+  if (errors.length) return errors; // everything below compares against these; do not report noise on top
+
+  // 12a. SPEC's max-version claim, and the schema file it names alongside it.
+  const max = /the maximum `cassetteVersion` this build writes\/reads is \*\*(\d+)\*\*\s*\n?\s*\(`schema\/cassette\.v(\d+)\.json`\)/.exec(
+    spec,
+  );
+  if (!max)
+    errors.push(
+      'SPEC.md has no "the maximum `cassetteVersion` this build writes/reads is **N** (`schema/cassette.vN.json`)" claim to verify (invariant 12)',
+    );
+  else {
+    if (Number(max[1]) !== current) errors.push(`SPEC.md says the maximum cassetteVersion is ${max[1]}; CASSETTE_VERSION is ${current}`);
+    if (Number(max[2]) !== current)
+      errors.push(`SPEC.md points at schema/cassette.v${max[2]}.json as the current schema; CASSETTE_VERSION is ${current}`);
+  }
+
+  // 12b. SPEC's read floor.
+  const min = /The minimum supported read version is \*\*v(\d+)\*\*/.exec(spec);
+  if (!min) errors.push('SPEC.md has no "The minimum supported read version is **vN**" claim to verify (invariant 12)');
+  else if (Number(min[1]) !== minSupported)
+    errors.push(`SPEC.md says the minimum supported read version is v${min[1]}; MIN_SUPPORTED_CASSETTE_VERSION is ${minSupported}`);
+
+  // 12c. SPEC's retained-schema range. Stated as a RANGE rather than a list so it cannot go stale by
+  // omission the way "v9 and v10 ... alongside v11" did — and the range is only honest while the set on
+  // disk is contiguous, which is checked rather than assumed.
+  const sorted = [...retained].sort((a, b) => a - b);
+  const contiguous = sorted.every((v, i) => i === 0 || v === sorted[i - 1] + 1);
+  // `\s+` not a space: the sentence wraps mid-claim in SPEC.md, and a regex that only matched the
+  // one-line form would have reported "no claim to verify" for a claim that was right there.
+  const range = /the retained schema files are\s+`schema\/cassette\.v(\d+)\.json`\s+through\s+`schema\/cassette\.v(\d+)\.json`/.exec(spec);
+  if (!range)
+    errors.push(
+      'SPEC.md has no "the retained schema files are `schema/cassette.vN.json` through `schema/cassette.vM.json`" claim to verify (invariant 12)',
+    );
+  else if (!contiguous)
+    errors.push(
+      `schema/cassette.v*.json is no longer contiguous (${sorted.join(", ")}) — SPEC.md's "through" range cannot describe it; enumerate instead`,
+    );
+  else {
+    if (Number(range[1]) !== sorted[0])
+      errors.push(`SPEC.md says the retained schemas start at v${range[1]}; schema/ starts at v${sorted[0]}`);
+    if (Number(range[2]) !== sorted[sorted.length - 1])
+      errors.push(`SPEC.md says the retained schemas end at v${range[2]}; schema/ ends at v${sorted[sorted.length - 1]}`);
+  }
+
+  // 12d. task-recipes.md — the schema a skill author is pointed at, and its "current max" number.
+  const anat = /Top-level fields of a `\*\.cassette\.json` \(schema \[`schema\/cassette\.v(\d+)\.json`\]\((\S+?)\)\)/.exec(taskRecipes);
+  if (!anat)
+    errors.push('task-recipes.md has no "Top-level fields of a `*.cassette.json` (schema [...])" pointer to verify (invariant 12)');
+  else {
+    if (Number(anat[1]) !== current)
+      errors.push(`task-recipes.md points a skill author at schema/cassette.v${anat[1]}.json; CASSETTE_VERSION is ${current}`);
+    if (!anat[2].endsWith(`/schema/cassette.v${anat[1]}.json`))
+      errors.push(`task-recipes.md's schema link text and URL disagree: text says v${anat[1]}, URL is ${anat[2]}`);
+  }
+  const curMax = /current max: (\d+)/.exec(taskRecipes);
+  if (!curMax) errors.push('task-recipes.md has no "current max: N" claim to verify (invariant 12)');
+  else if (Number(curMax[1]) !== current) errors.push(`task-recipes.md says "current max: ${curMax[1]}"; CASSETTE_VERSION is ${current}`);
+
+  // 12e. Nothing anywhere links a schema file that does not exist. Cheap, and the one rule that keeps
+  // working if someone deletes a retained schema instead of adding one.
+  const have = new Set(retained);
+  for (const { path, text } of docs)
+    for (const m of text.matchAll(/`?schema\/cassette\.v(\d+)\.json/g))
+      if (!have.has(Number(m[1])))
+        errors.push(`${path} references schema/cassette.v${m[1]}.json, which is not in schema/ (have v${sorted.join(", v")})`);
 
   return errors;
 }
@@ -457,6 +594,26 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       maxBaseline,
       maxAgentVersion,
       agentOf: (v) => json(`baselines/desktop-${v}.json`).agentVersion as string | undefined,
+    }),
+  );
+
+  // 12. cassette-format claims (see `checkCassetteVersionClaims`). The constants are read out of the
+  //     source text rather than imported: `src/run/cassette.ts` is a large module with side-effectful
+  //     imports, and this script must stay runnable before a build. A regex that stops matching yields
+  //     NaN, which the function reports as an error rather than passing.
+  const cassetteSrc = r("src/run/cassette.ts");
+  const constOf = (name: string) => Number(new RegExp(`export const ${name} = (\\d+);`).exec(cassetteSrc)?.[1]);
+  const retained = readdirSync(join(REPO_ROOT, "schema"))
+    .map((f) => /^cassette\.v(\d+)\.json$/.exec(f)?.[1])
+    .flatMap((v) => (v === undefined ? [] : [Number(v)]));
+  errors.push(
+    ...checkCassetteVersionClaims({
+      current: constOf("CASSETTE_VERSION"),
+      minSupported: constOf("MIN_SUPPORTED_CASSETTE_VERSION"),
+      retained,
+      spec: r("SPEC.md"),
+      taskRecipes: r(TASK_RECIPES),
+      docs: shippedDocs(),
     }),
   );
 

@@ -830,8 +830,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   stamp **v12**; the differential decides anything above it. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
-  their schema files are no longer shipped; `schema/cassette.v9.json` and `schema/cassette.v10.json` are
-  both retained alongside v11). A cassette whose stamped version exceeds what a given build understands is
+  their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
+  through `schema/cassette.v12.json`). A cassette whose stamped version exceeds what a given build understands is
   refused loudly by both `replay` and `verify-cassettes`; `replay` alone offers an opt-in override
   (`--best-effort-future-cassette`), which `verify-cassettes` does not accept — a verification gate has no
   "read it anyway" path. `record --rerecord-stale`'s selection and `rehash`'s own version check accept a
