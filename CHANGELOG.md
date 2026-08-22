@@ -6,6 +6,68 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`lint` warns when `prompt:` names a slash command anywhere but the start** (⚠
+  `WARN [prompt-slash-not-leading]`). Writing `/<skill-name>` into a scenario prompt is what an author
+  reaches for when a skill will not auto-trigger, and it works — the harness sends `prompt:` verbatim and the
+  agent expands a **leading** slash before the model is called. Named mid-sentence ("review the deck with
+  `/deck-review`") it is never expanded: the text reaches the model as prose, which may then pick the `Skill`
+  tool on its own — the same auto-trigger path the slash was meant to bypass. The scenario still runs and can
+  still pass, so it silently stops testing what it reads as testing. Paths, URLs, filenames and dates
+  (`/mnt/uploads/x`, `https://…`, `/deck.pdf`, `8/22`) do not trigger it.
+
+### Fixed
+
+- **The flagship zero-token replay now works from an npm install.** `README.md` and
+  [`examples/replays/README.md`](./examples/replays/README.md) tell a new reader that the first thing to run is
+  `cowork-harness replay examples/replays/example-pdf-skill.cassette.json`. From an npm install that exited 1:
+  the cassette resolves `../sessions/default.yaml`, `../scenarios/…` and `../skills/my-pdf-skill`, and
+  `package.json` `files[]` shipped only `examples/replays`. A 2.0.0 regression — before the hash-format epoch,
+  unverifiable staleness warned and exited 0. `files[]` now also ships `examples/sessions`, `examples/skills`,
+  `examples/scenarios` and `examples/data`, and a guard reads the packed file list and derives its requirements
+  from the cassette itself (session, `scenarioSource`, every hashed `fileSig`), so a re-record cannot quietly
+  outrun it. Note that `replay --strict` from an extracted tarball still reports the `format`-class
+  `recorded in 'git' file-set mode, verifying in 'raw'`: a tarball is not a git work tree, so the file-set
+  boundary differs from the one the cassette was recorded under. That is honest, not a packaging defect.
+
+- **Seven statements about what a global install ships were left stale by that packaging change**, five of
+  them in `README.md` — including a "What ships" table row marking the runnable worked examples ✗ for npm, a
+  callout saying `run examples/scenarios/…` "errors with a missing file", and two
+  *(source checkout only — not shipped in the npm package)* parentheticals in
+  [`docs/cassette.md`](./docs/cassette.md) and [`docs/discovery.md`](./docs/discovery.md) against files that
+  now ship. Measured from an extracted tarball: all eight published example scenarios resolve their session
+  and every skill/plugin root they stage, and `lint examples/scenarios/` is clean.
+  What genuinely does not ship is `examples/matrices/`, `examples/answer-policies/` and `examples/probes/`,
+  and the corrected prose says so. A `files[]` edit and the prose describing it had no mechanical link; a
+  guard now resolves every shipped scenario's references against the packed file list, so the next such edit
+  fails rather than quietly turning three pages into fiction.
+
+- **Nine relative links in shipped documentation pointed at files npm does not publish.** `./action.yml`,
+  `.github/workflows/ci.yml` (twice), three `src/**` implementation pointers in
+  [`docs/decider-dir.md`](./docs/decider-dir.md) and [`docs/run-status.md`](./docs/run-status.md), and two
+  "runnable copy" pointers in [`docs/scenario.md`](./docs/scenario.md). All nine resolve in a git checkout —
+  which is why nothing caught them — and all nine were dead from `npm i cowork-harness`. They are now
+  `blob/main` links, the convention the companion skill's references already use for the same reason. A guard
+  now reads the packed file list from `npm pack --dry-run --json`, extracts every link from every shipped
+  Markdown file, and resolves each one against it; it also checks that every target it extracted exists in a
+  source checkout, so a regex that starts matching prose fails rather than inflating the pass count.
+
+- **`pytest` from the repo root collected the paid `cowork` lane.** `addopts = "-m 'not cowork'"` lived
+  only in `python/pyproject.toml`, and pytest reads the config at the rootdir for the invocation — so a bare
+  `pytest` from the repo root read none of it and selected the three `@pytest.mark.cowork` tests, each of
+  which spawns node, Docker and a real model. A root `pytest.ini` fixes that invocation.
+
+- **The `cowork` lane is now opt-in from the module, not just from config.** INI config does not travel with
+  an installed helper: a consumer's `pytest` reads *their* rootdir, so `addopts` protects nobody downstream —
+  and it will protect nobody here either once the helper ships as a `pytest11` plugin. `cowork_harness` now
+  carries the rule itself: a collection hook skips `cowork`-marked tests, and the `cowork` fixture refuses to
+  build a runner, unless the run asked for the lane (`-m` mentioning `cowork`, or the new
+  `COWORK_HARNESS_PYTEST_LANE=1`). The two guards are not redundant — the hook keys on the marker, so a test
+  that takes the fixture without wearing `@pytest.mark.cowork` reaches the fixture guard and nothing else.
+  Selecting a lane test some other way (`-m fast`, a bare node id) is deliberately not opt-in; the skip
+  reason names both switches. `pytest -m cowork` and `pytest -m 'not cowork'` behave exactly as before.
+
 ### Documentation
 
 - **[`docs/fidelity-gaps.md`](./docs/fidelity-gaps.md) no longer narrates its own edit history.** Removed a
@@ -19,19 +81,6 @@ All notable changes to this project are documented here. The format is based on
   guard exists to stop. Three patterns added for that shape; each is covered by a mutation check rather
   than by matching nothing and being assumed live.
 
-### Added
-
-- **`lint` warns when `prompt:` names a slash command anywhere but the start** (⚠
-  `WARN [prompt-slash-not-leading]`). Writing `/<skill-name>` into a scenario prompt is what an author
-  reaches for when a skill will not auto-trigger, and it works — the harness sends `prompt:` verbatim and the
-  agent expands a **leading** slash before the model is called. Named mid-sentence ("review the deck with
-  `/deck-review`") it is never expanded: the text reaches the model as prose, which may then pick the `Skill`
-  tool on its own — the same auto-trigger path the slash was meant to bypass. The scenario still runs and can
-  still pass, so it silently stops testing what it reads as testing. Paths, URLs, filenames and dates
-  (`/mnt/uploads/x`, `https://…`, `/deck.pdf`, `8/22`) do not trigger it.
-
-### Documentation
-
 - **[`docs/scenario.md`](./docs/scenario.md) — new "Slash commands in `prompt:`" section.** Documents that a
   slash command must START the prompt; that skills resolve by their bare frontmatter `name:` from either
   staging route (`skills.local` or a `--plugin-dir` plugin source); that an unregistered name is answered by
@@ -44,33 +93,18 @@ All notable changes to this project are documented here. The format is based on
   expansion on stream-json input on its own, so the body injection here is identical to production; only
   Desktop's additional `additionalContext` is missing.
 
-### Fixed
-
-- **Four overclaims that a prospective user reads while deciding whether to trust the tool.** Each was
-  checked against primary evidence rather than against the doc that repeated it.
-  - **Egress parity was stated as identity, in five places.** `DESIGN.md` called the default allowlist
-    "captured from the live asar"; `README.md` called it "the **synced** allowlist" and the fidelity
-    "allowlist-exact"; `README.md` and `docs/boundary.md` said domain allow/deny "matches Cowork" / "is
-    identical", and a `DESIGN.md` table row said the same. The pinned baseline refutes all five in its own
-    `network.$comment`: the list is "a PINNED, hand-curated list — `sync` carries it forward and never
-    re-derives it … a curated RECONSTRUCTION, not an extraction", because on the first-party deployment
-    the VM egress allowlist is not in the app bundle at all (that class returns `vmEgressPolicy(){return
-    null}`; the real list is server-delivered per session), and four entries are flagged UNVERIFIED as VM
-    egress. What is true — enforcement is domain-exact against the pinned list — is now what the docs say.
-  - **"A green test means green in real Cowork"** (`README.md`, `llms.txt`) was unconditional, 21 lines
-    above a callout that correctly calls this an emulator of the contract. `mount_delete` alone is
-    `severity: "warn"` here while production denies it. The tagline now claims what it can support — a
-    green run has cleared the constraints that break skills in Cowork — and points at
-    [`docs/fidelity-gaps.md`](./docs/fidelity-gaps.md) for the deliberate divergences.
-  - **The local lane was described as an agent inside the microVM** in `README.md` and `DESIGN.md` §1,
-    while `DESIGN.md`'s spawn-contract section says the opposite and is right. Measured:
-    `decideLoopFromBaseline(desktop-1.34493.1)` returns `"host"` — the loop runs on the host and reaches
-    the VM for shell. §1 now defers to that section instead of contradicting it.
-  - **The hermetic-`CLAUDE_CONFIG_DIR` guarantee is not unconditional** (`README.md`,
-    `docs/discovery.md`). At `protocol` fidelity with no `ANTHROPIC_API_KEY`, the harness deliberately
-    keeps your real config dir — a fresh one breaks local OAuth — and layers discovery settings via
-    `--settings` instead (`src/runtime/protocol.ts`, whose comment already says so). Both pages now carry
-    the exception and name `COWORK_MANAGED_CONFIG=1`; the sandboxed tiers are unaffected.
+- **`--fail-on-skill-drift` does not detect skill drift when you replay from an npm install** — measured, and
+  now pinned by a test that replays the flagship cassette from a real extracted tarball. A cassette is
+  recorded in `git` file-set mode; an extracted tarball is not a work tree, so the walk falls back to `raw`.
+  Digests taken over different file-set boundaries are not comparable, so staleness stops at the `format`-class
+  `recorded in 'git' file-set mode, verifying in 'raw'` rather than inventing a content diff — and `format` is
+  outside the skill-drift classes. The practical consequence: a tampered skill file in an extracted tarball
+  replays `ok: true` under the flag whose job is to catch exactly that, and `--strict` fails on the boundary
+  without ever naming the tampering. Run `replay` from a git work tree when skill-drift detection is the point.
+  The test carries a git-mode positive control on the same directory and the same mutation, so the finding is
+  a measurement rather than an absence of one. [`docs/cassette.md`](./docs/cassette.md)'s staleness-class list
+  now says this at the finding itself — it previously described the boundary mismatch and told you to
+  re-record, without noting that the finding REPLACES the skill comparison rather than accompanying it.
 
 ## [2.0.0] — 2026-08-21
 
@@ -5911,7 +5945,7 @@ irreversible once 1.0's semver contract freezes them.
   `--min-pass-rate`; the JSON envelope gains an additive `matrixRepeat: {cells[]}` field, checked before
   `matrix`/`rollups` when present. Also closes the previously-ungated `--repeat` + `--decider-cmd`
   combination (rejected for the same live-decider reasoning as `--decider-dir`).
-- **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](./action.yml)) wrapping
+- **Packaged GitHub Action** (`uses: yaniv-golan/cowork-harness@v1`, [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml)) wrapping
   `replay`/`lint`/`verify-cassettes`/`run` with a PR job-summary reporter (verdict table, staleness
   findings, the skipped-live-only-assertions honesty line, cost/turns when available). Token-free lane runs
   on any `ubuntu-latest` runner; `run` (live lane) needs a self-hosted runner with Docker + the agent binary
