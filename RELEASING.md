@@ -190,9 +190,11 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.
-- [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the bundled
-      `scenario.py` + `assertion-keys.json` (the skill itself ships via the marketplace, not npm), and no
-      internal planning notes.
+- [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the companion
+      skill (`SKILL.md`, `references/`, the bundled `scenario.py` + `assertion-keys.json`), and no internal
+      planning notes. The skill ships on BOTH channels: npm carries it alongside everything else, while a
+      marketplace install materializes only `.claude/skills/cowork-harness/**`. npm is the wider payload,
+      not the one without the skill.
 - [ ] Public export resolves: `node --input-type=module -e "import('cowork-harness/secrets').then(m => {
       if (!m.scrubField || !m.collectSecrets) throw new Error('missing export'); })"` (run from an install of
       the packed tarball, or via self-reference in-repo). Guards the sole programmatic API subpath.

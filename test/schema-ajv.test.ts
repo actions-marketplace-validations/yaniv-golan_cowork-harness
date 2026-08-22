@@ -8,6 +8,7 @@ import { join } from "node:path";
 import Ajv from "ajv";
 import { describe, expect, it } from "vitest";
 import { SCHEMA_DIR } from "../scripts/gen-schema.js";
+import { Scenario } from "../src/types.js";
 
 const ajv = new Ajv({ strict: true });
 const load = (f: string) => JSON.parse(readFileSync(join(SCHEMA_DIR, f), "utf8"));
@@ -34,5 +35,44 @@ describe("published session.schema.json validates via ajv (draft-07)", () => {
   });
   it("rejects an unknown NESTED key (nested objects stay fail-closed — not loosened by `io:input`)", () => {
     expect(validateSession({ folders: [{ from: "/x", surprise: true }] })).toBe(false);
+  });
+});
+
+// ── The gap the schema's own `description` now declares (T-G5) ─────────────────────────────────────
+//
+// `scenario.schema.json` mirrors the two mutually-exclusive delete-assertion rules and nothing else, so
+// it is not the authority on what runs. An editor or a CI step that validates against it alone will green
+// a file the harness refuses. The description says so; these pin the two examples it names, from BOTH
+// sides — so mirroring a rule in later, or dropping one, fails here and forces the text to be updated.
+
+describe("published scenario.schema.json is structural, and says so", () => {
+  it("accepts a matcher-less `answers:` entry that the LOADER refuses", () => {
+    const doc = { prompt: "x", answers: [{}] };
+    expect(validateScenario(doc), "the JSON schema started rejecting this — update the description").toBe(true);
+    const parsed = Scenario.safeParse(doc);
+    expect(parsed.success, "the loader started accepting a matcher-less answer rule").toBe(false);
+    if (!parsed.success) expect(JSON.stringify(parsed.error.issues)).toContain("no matcher");
+  });
+
+  it("accepts `lane: remote` with a delivery-shaped assertion, which is refused at load time", () => {
+    // Refused by `execute.ts`'s lane check and by `lint`'s `lane-remote-incompatible-key` — NOT by the
+    // zod schema, which is why `Scenario.safeParse` passing here is the point rather than a bug.
+    const doc = { prompt: "x", lane: "remote", assert: [{ user_visible_artifact: "outputs/x.md" }] };
+    expect(validateScenario(doc)).toBe(true);
+    expect(Scenario.safeParse(doc).success, "this moved into the zod schema — update the description").toBe(true);
+  });
+
+  it("still rejects what it DOES mirror (the delete-assertion contradiction)", () => {
+    // The counterweight: "structural only" must not become "checks nothing".
+    expect(validateScenario({ prompt: "x", assert: [{ no_delete_in_outputs: true }, { allow_outputs_delete: true }] })).toBe(false);
+  });
+
+  it("the description points at both commands, because neither alone covers the two cases above", () => {
+    // Measured: `lint` catches the lane case and not the empty rule; `record --dry-run` catches the empty
+    // rule. A description naming only one would send an author to a tool that reports clean.
+    const d = load("scenario.schema.json").description as string;
+    expect(d).toContain("lint");
+    expect(d).toContain("--dry-run");
+    expect(d).toMatch(/STRUCTURAL/);
   });
 });
