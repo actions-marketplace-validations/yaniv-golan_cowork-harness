@@ -199,6 +199,6 @@ lives at the `outDir` ROOT, a sibling of `work/`, so it is structurally unreacha
 
 - [`decider-dir.md`](./decider-dir.md) — the closest existing precedent (`gates --follow` + `done.json`)
   for polling a file for run state.
-- [`../src/run/run-status.ts`](../src/run/run-status.ts) — the implementation.
-- [`../src/run/vm-path-ctx-file.ts`](../src/run/vm-path-ctx-file.ts) — the `mounts.json`
+- [`src/run/run-status.ts`](https://github.com/yaniv-golan/cowork-harness/blob/main/src/run/run-status.ts) — the implementation.
+- [`src/run/vm-path-ctx-file.ts`](https://github.com/yaniv-golan/cowork-harness/blob/main/src/run/vm-path-ctx-file.ts) — the `mounts.json`
   serializer/reader implementation.

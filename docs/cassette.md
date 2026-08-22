@@ -34,7 +34,7 @@ before fingerprints existed has nothing to check and passes silently, and a `COW
 `format` finding.
 
 Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
-**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml) *(source checkout only — not shipped in the npm package)*). The walkthrough below assumes `container` fidelity, the common case.
+**no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml)). The walkthrough below assumes `container` fidelity, the common case.
 
 ## Mental model
 
@@ -591,7 +591,7 @@ Either way, every replay result also reports the drift in `staleness[]` (class-t
 > success (exit 0); `verify-cassettes` on the same tree exits **1**. That split is deliberate: `replay`
 > answers "do the assertions still hold", `verify-cassettes` answers "is this recording still current", and
 > a stale recording is not by itself a wrong answer. **The consequence is that `replay` alone does not gate
-> staleness.** Run both in CI — this repo does ([`ci.yml`](../.github/workflows/ci.yml) runs the replay
+> staleness.** Run both in CI — this repo does ([`ci.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) runs the replay
 > fixtures and then `verify-cassettes examples/replays/`) — or, if you want one command to do both, pass
 > `replay --fail-on-skill-drift` (or `--strict`, which also fails on baseline drift). `--reassert` /
 > `--assert-from` imply skill-drift hard-fail already.
@@ -830,7 +830,14 @@ possible.
   mismatch to a non-failing note instead of a hard fail.
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
-  comparable, so re-record under the same mode.
+  comparable, so re-record under the same mode. **This finding REPLACES the skill/shared-root comparison
+  rather than accompanying it** — with nothing comparable to diff, emitting a content diff would be
+  misleading. It is classed `format`, which is outside the skill-drift classes, so a bare `replay` warns and
+  exits 0 and **`--fail-on-skill-drift` cannot fire**: while the boundary differs, skill-source drift is not
+  detected at all. `--strict` fails, but on the boundary, not on the drift. This is the state you are in
+  when you replay a git-recorded cassette from an **extracted npm tarball**, which is not a work tree — so
+  run `replay` from a git work tree (or re-record with the same `COWORK_HARNESS_GITSET` setting) whenever
+  detecting skill drift is the point.
 - **`fidelity: cowork now resolves to '<tier>' … but the cassette was recorded at '<tier>'`** (class
   `resolved-tier`) — a `fidelity: cowork` cassette's recorded `effectiveFidelity` (the concrete tier —
   `hostloop` or `container` — the baseline's host-loop gate resolved to at record time) no longer matches

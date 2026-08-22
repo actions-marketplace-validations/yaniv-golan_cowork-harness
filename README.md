@@ -23,7 +23,7 @@ And because every run is recorded, you get the thing a transcript can't give you
 
 > **Requirements at a glance** (a summary — full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below)
 > - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
-> - **Global `npm install -g`:** ships only `examples/replays/` — `run examples/scenarios/…` needs a source checkout instead; full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below.
+> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below.
 > - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
 > - **Live tiers** need three things:
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
@@ -166,10 +166,13 @@ npx skills add yaniv-golan/cowork-harness --skill cowork-harness
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
 | Committed replay fixtures (`examples/replays/`) | ✓ | ✓ |
 | `python/` (the `cowork` pytest lane helper package) | ✓ | ✓ |
-| Runnable worked examples on disk (`examples/scenarios/`, `examples/skills/`, `examples/data/`) | ✗ | ✓ |
+| Runnable worked examples on disk (`examples/scenarios/`, `examples/sessions/`, `examples/skills/`, `examples/data/`) | ✓ | ✓ |
+| `examples/matrices/`, `examples/answer-policies/`, `examples/probes/` | ✗ | ✓ |
 
-A global install is enough for CI `lint`, reading the teaching skill, and replaying the committed cassettes.
-To `run` the worked examples live or copy them as a starting point, use a source checkout. (The marketplace
+A global install is enough for CI `lint`, reading the teaching skill, replaying the committed cassettes, and
+`run`ning the worked scenarios — pass them as `$(npm root -g)/cowork-harness/examples/scenarios/…`, since a
+global install puts nothing in your working directory. The matrix, answer-policy and probe examples are the
+ones that still need a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
 above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@>=2.0.0"` — see
@@ -235,7 +238,7 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
 
 > `sync` (below) is **optional for a first run** — the repo ships `baselines/desktop-*.json`, so `baseline: latest` already resolves. Run `sync` only to refresh the platform baseline after Claude Desktop updates. (`sync` is **macOS-only** today; on Linux/Windows use the committed baselines — they work cross-platform.)
 
-> **Global install?** The only runnable `examples/` subtree a global install ships is `examples/replays/` (for token-free `replay`) — the `examples/scenarios/…` paths below need a **source checkout** (`git clone`); a global `npm install -g` omits `scenarios/`, `sessions/`, and `matrices/`, so `run examples/scenarios/…` errors with a missing file. (See the "What ships" table above for the full package contents; `package.json` `files`.)
+> **Global install?** The `examples/scenarios/…` paths below all ship, along with the `sessions/`, `skills/` and `data/` they resolve — but a global install puts them under `$(npm root -g)/cowork-harness/`, not in your working directory, so the bare relative paths below need either a source checkout or that prefix. `matrices/`, `answer-policies/` and `probes/` are not published at all. (See the "What ships" table above for the full package contents; `package.json` `files`.)
 
 ```bash
 # 0. Before the first live run: check prerequisites (Docker, staged agent, token, baseline).
@@ -750,9 +753,9 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=2.0.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](./action.yml) for the full input/output reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — intentional so recipes track the current release; pin an exact version for reproducible CI. The companion skill's `cowork-harness@>=2.0.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any advisory finding); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
 
-The provided [GitHub Actions workflow](.github/workflows/ci.yml) runs a **nine-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `image-recipe`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
+The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) runs a **nine-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `image-recipe`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
 
 | Stage | Runs | Needs | Gates |
 |---|---|---|---|
@@ -901,7 +904,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/protocol.md](./docs/protocol.md) | The `schema/protocol.v1.json` control-channel wire-protocol schema — versioning policy, golden vector pack, and its descriptive-not-normative scope. |
 | [CHANGELOG.md](./CHANGELOG.md) | Release history. |
 | [python/README.md](./python/README.md) | The `cowork` pytest lane for driving the harness from Python. |
-| [examples/README.md](./examples/README.md) | The worked examples to copy — sessions, scenarios, and skills you can run end-to-end (from a source checkout — a global npm install's only runnable `examples/` subtree is `replays/`; see the "What ships" table). |
+| [examples/README.md](./examples/README.md) | The worked examples to copy — sessions, scenarios, and skills you can run end-to-end. Published too, under `$(npm root -g)/cowork-harness/`; `matrices/`, `answer-policies/` and `probes/` need a source checkout (see the "What ships" table). |
 | [SECURITY.md](./SECURITY.md) | Threat model — the sandbox is a fidelity fixture, not a security boundary. |
 | [RELEASING.md](./RELEASING.md) | The release flow — branch → PR → tag → npm publish. |
 | [llms.txt](./llms.txt) | The AI-agent index — a machine-readable map of this repo's docs for an agent bootstrapping context. |
