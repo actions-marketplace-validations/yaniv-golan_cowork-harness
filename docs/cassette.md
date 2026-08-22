@@ -403,12 +403,18 @@ When `record` processes a base64-encoded artifact (i.e. `artifact.encoding === "
 5. A CI warning fires:
 
    ```
-   ::warning:: artifact <path>: body contained a secret and was replaced with [REDACTED:base64]; artifact_json/user_visible_artifact assertions on this artifact will fail at replay
+   ::warning:: artifact <path>: body contained a secret and was replaced with [REDACTED:base64]; artifact_json/artifact_text assertions on this artifact will fail at replay (user_visible_artifact/file_exists still PASS — they check location, not content)
    ```
 
-The warning is intentional: any `artifact_json` or `user_visible_artifact` assertion targeting this
-artifact **will fail at replay** because the body no longer matches its record-time content. This is
-the correct outcome — a compromised artifact should not green a replay.
+The warning is intentional, and its scope is exact: the assertions that **read the body** —
+`artifact_json` (parses it) and `artifact_text` (matches it) — **will fail at replay**, because the body
+no longer matches its record-time content. That is the correct outcome; a compromised artifact should not
+green a replay.
+
+**`user_visible_artifact` and `file_exists` still PASS.** They check *location and existence*, never
+content, and the marker is written to disk with a recomputed `sha256`. So a green visibility assertion on
+a scrubbed artifact proves a file is there — **not** that the scrubbed content survived. Assert
+`artifact_json`/`artifact_text` if you need the content checked.
 
 For UTF-8 artifacts, `scrubField()` is applied in the same way (it is safe on plain text; text passes
 through unless the entire value is a base64 blob).

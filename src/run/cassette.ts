@@ -4130,13 +4130,18 @@ async function recordScenarioObject(
     // base64 branch above), otherwise replay's materializeManifest verify throws "body does not match
     // its recorded sha256". encoding is already undefined on this branch, so the spread keeps it.
     if (scrubbed === "[REDACTED:base64]" || scrubbed === "[REDACTED:uri]") {
-      // Whole-field marker replacement destroys the deliverable content — artifact_json /
-      // user_visible_artifact assertions on this artifact will fail at replay, exactly like the base64
-      // case above. Warn so the author isn't surprised. (Inline literal scrubs leave the rest of the
-      // body intact, so they stay silent.)
+      // Whole-field marker replacement destroys the deliverable CONTENT, so only the assertions that
+      // READ the body fail at replay: `artifact_json` (parses it) and `artifact_text` (matches it).
+      //
+      // `user_visible_artifact` and `file_exists` still PASS — they check location and existence, and the
+      // marker is written to disk with a recomputed sha256. `materializeManifest`'s doc comment in this
+      // same file already says so. The warning previously named `user_visible_artifact`, which invited the
+      // reading that a passing visibility assertion proves the scrubbed content survived. It proves only
+      // that a file is there. (Inline literal scrubs leave the rest of the body intact, so they stay silent.)
       warn(
         `::warning:: record: artifact "${a.path}" contains a secret in whole-field encoded content — ` +
-          `body replaced with redaction marker; artifact_json/user_visible_artifact assertions on this artifact will fail at replay\n`,
+          `body replaced with redaction marker; artifact_json/artifact_text assertions on this artifact will fail at replay ` +
+          `(user_visible_artifact/file_exists still PASS — they check location, not content)\n`,
       );
     }
     const newSha256 = createHash("sha256").update(Buffer.from(scrubbed, "utf8")).digest("hex");
