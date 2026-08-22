@@ -87,7 +87,9 @@ All notable changes to this project are documented here. The format is based on
   replays `ok: true` under the flag whose job is to catch exactly that, and `--strict` fails on the boundary
   without ever naming the tampering. Run `replay` from a git work tree when skill-drift detection is the point.
   The test carries a git-mode positive control on the same directory and the same mutation, so the finding is
-  a measurement rather than an absence of one.
+  a measurement rather than an absence of one. [`docs/cassette.md`](./docs/cassette.md)'s staleness-class list
+  now says this at the finding itself — it previously described the boundary mismatch and told you to
+  re-record, without noting that the finding REPLACES the skill comparison rather than accompanying it.
 
 ## [2.0.0] — 2026-08-21
 

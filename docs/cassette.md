@@ -830,7 +830,14 @@ possible.
   mismatch to a non-failing note instead of a hard fail.
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
-  comparable, so re-record under the same mode.
+  comparable, so re-record under the same mode. **This finding REPLACES the skill/shared-root comparison
+  rather than accompanying it** — with nothing comparable to diff, emitting a content diff would be
+  misleading. It is classed `format`, which is outside the skill-drift classes, so a bare `replay` warns and
+  exits 0 and **`--fail-on-skill-drift` cannot fire**: while the boundary differs, skill-source drift is not
+  detected at all. `--strict` fails, but on the boundary, not on the drift. This is the state you are in
+  when you replay a git-recorded cassette from an **extracted npm tarball**, which is not a work tree — so
+  run `replay` from a git work tree (or re-record with the same `COWORK_HARNESS_GITSET` setting) whenever
+  detecting skill drift is the point.
 - **`fidelity: cowork now resolves to '<tier>' … but the cassette was recorded at '<tier>'`** (class
   `resolved-tier`) — a `fidelity: cowork` cassette's recorded `effectiveFidelity` (the concrete tier —
   `hostloop` or `container` — the baseline's host-loop gate resolved to at record time) no longer matches
