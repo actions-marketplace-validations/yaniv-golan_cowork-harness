@@ -1898,11 +1898,16 @@ def build_scenario(args):
         )
         content_lines.append("  - gate_answers_delivered: true   # the steered answers actually reached the model")
 
-    live_lines = []
+    # Two buckets, not one. `file_exists`/`user_visible_artifact` are MANIFEST_KEYS above — they DO
+    # evaluate on replay whenever the cassette carries an artifacts manifest, which `record` has
+    # snapshotted since 0.24. Filing them under a "LIVE-only" heading taught the reader the opposite of
+    # what this file's own taxonomy says, and of what the `manifest-needs-snapshot` INFO tells them.
+    manifest_lines = []
     for p in (args.file or []):
-        live_lines.append(f"  - file_exists: {p}")
+        manifest_lines.append(f"  - file_exists: {p}")
     for p in (args.artifact or []):
-        live_lines.append(f"  - user_visible_artifact: {p}")
+        manifest_lines.append(f"  - user_visible_artifact: {p}")
+    live_lines = []
     if args.no_delete:
         live_lines.append("  - no_delete_in_outputs: true")
     for h in (args.egress_allowed or []):
@@ -1914,12 +1919,16 @@ def build_scenario(args):
     L.append("assert:")
     L.append("  # --- content / structure: evaluate on the token-free replay PR gate AND live ---")
     L.extend(content_lines)
+    if manifest_lines:
+        L.append("  # --- artifacts: replay-checkable WHEN the cassette carries an artifacts manifest ---")
+        L.extend(manifest_lines)
     if live_lines:
-        L.append("  # --- filesystem / egress: LIVE-only (skipped on replay, with a loud warning) ---")
+        L.append("  # --- egress / deletes: LIVE-only (skipped on replay, with a loud warning) ---")
         L.extend(live_lines)
-    else:
-        L.append("  # TODO add filesystem/egress checks (file_exists / user_visible_artifact /")
-        L.append("  #      egress_denied / no_delete_in_outputs) — they run on the LIVE lane only.")
+    if not manifest_lines and not live_lines:
+        L.append("  # TODO add artifact checks (file_exists / user_visible_artifact — these replay from")
+        L.append("  #      the cassette's artifacts manifest) and filesystem/egress checks")
+        L.append("  #      (egress_denied / no_delete_in_outputs — LIVE lane only).")
 
     if args.web_fetch:
         notes.append(
