@@ -223,11 +223,13 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
       ```
 - [ ] **Clean up**: `git push origin --delete release/X.Y.Z && git branch -d release/X.Y.Z`
-- [ ] **Move the major/minor tags** (so `uses: yaniv-golan/cowork-harness@v1` and `@v1.0` resolve to
-      this release — the packaged Action's Marketplace consumers pin those). Note what this does NOT
-      do: these tags select the ACTION, never the CLI. A consumer who leaves the `version:` input at
-      its `latest` default already tracks CLI majors regardless of which alias tag they pin, so moving
-      `vX` neither causes nor prevents a cross-major CLI upgrade for them:
+- [x] **Move the major/minor tags** — **AUTOMATED** by `release.yml`'s last step, which points `vX` and
+      `vX.Y` at the release it just published. It skips a prerelease tag entirely, and never moves an alias
+      backwards (re-releasing an older patch on a line moves `vX.Y` but leaves `vX` where it is). Left as a
+      checklist item, it lapsed: `v1` sat at 1.24.0 through two releases. Note what these tags do NOT do:
+      they select the ACTION, never the CLI. A consumer who leaves the `version:` input at its `latest`
+      default already tracks CLI majors regardless of which alias they pin, so moving `vX` neither causes
+      nor prevents a cross-major CLI upgrade for them. Manual fallback, if the step ever needs redoing:
       ```
       git tag -f vX vX.Y.Z && git tag -f vX.Y vX.Y.Z   # e.g. v1 and v1.0 → v1.2.3
       git push -f origin vX vX.Y
