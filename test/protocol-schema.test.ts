@@ -223,11 +223,23 @@ describe("protocol.v1.json — golden vector pack lockstep (fixtures/protocol/v1
     "initialize.json": "ControlRequestInitialize",
     "permission-request.json": "ControlRequestCanUseTool",
     "question-request.json": "ControlRequestCanUseTool",
+    // O2/DA#30: subtypes the harness has always answered and the schema never described.
+    "user-dialog-request.json": "ControlRequestUserDialog",
+    "elicitation-request.json": "ControlRequestElicitation",
   };
   const responseVectors: Record<string, string> = {
     "allow-response.json": "AllowBody",
     "deny-response.json": "DenyBody",
     "question-answer-response.json": "QuestionAnswerUpdatedInput",
+    "dialog-response.json": "DialogResponseBody",
+    "elicit-response.json": "ElicitResponseBody",
+  };
+  // O2/DA#31: the fail-closed error envelope is a DIFFERENT top-level shape, not a ControlResponse with a
+  // different body — `subtype:"error"` and a STRING under `error`, where the success envelope has an object
+  // under `response`. It gets its own map because the responseVectors loop asserts every member validates
+  // as `ControlResponse`, and this one deliberately must not.
+  const errorVectors: Record<string, string> = {
+    "error-response.json": "ControlResponseError",
   };
   // Round-trip vectors: { request, response } — each half validates against its own def.
   const roundTripVectors: Record<string, { request: string; response: string }> = {
@@ -238,7 +250,12 @@ describe("protocol.v1.json — golden vector pack lockstep (fixtures/protocol/v1
   const allFiles = readdirSync(VECTORS_DIR).filter((f) => f.endsWith(".json"));
 
   it("every file under fixtures/protocol/v1/ is accounted for in exactly one of the three maps above", () => {
-    const mapped = new Set([...Object.keys(requestVectors), ...Object.keys(responseVectors), ...Object.keys(roundTripVectors)]);
+    const mapped = new Set([
+      ...Object.keys(requestVectors),
+      ...Object.keys(responseVectors),
+      ...Object.keys(roundTripVectors),
+      ...Object.keys(errorVectors),
+    ]);
     expect(new Set(allFiles)).toEqual(mapped);
   });
 
@@ -279,6 +296,18 @@ describe("protocol.v1.json — golden vector pack lockstep (fixtures/protocol/v1
     });
   }
 
+  for (const [file, defName] of Object.entries(errorVectors)) {
+    it(`${file} validates as #/definitions/${defName} — and NOT as the success envelope`, () => {
+      const vector = JSON.parse(readFileSync(join(VECTORS_DIR, file), "utf8"));
+      expect(validateMessage(vector)).toBe(true);
+      expect(compileDef(defName)(vector)).toBe(true);
+      // The defect this closes, stated as an assertion: a validator that knew only the success envelope
+      // rejected every error reply the harness sends. If this ever starts passing, the two envelopes have
+      // been conflated and the error shape is no longer described distinctly.
+      expect(compileDef("ControlResponse")(vector), "the error envelope must not validate as a success envelope").toBe(false);
+    });
+  }
+
   it("every schema definitions entry is exercised by at least one vector (no unexercised definition)", () => {
     // Defs exercised directly by the maps above, PLUS the structural wrapper/union defs that every
     // vector transitively exercises by validating against the root Message schema (oneOf ControlRequest |
@@ -287,6 +316,7 @@ describe("protocol.v1.json — golden vector pack lockstep (fixtures/protocol/v1
       ...Object.values(requestVectors),
       ...Object.values(responseVectors),
       ...Object.values(roundTripVectors).flatMap((d) => [d.request, d.response]),
+      ...Object.values(errorVectors),
     ]);
     const transitivelyExercised = new Set([
       "Message", // every vector validates against the root

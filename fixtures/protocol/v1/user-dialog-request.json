@@ -1,0 +1,11 @@
+{
+  "type": "control_request",
+  "request_id": "req-dialog-1",
+  "request": {
+    "subtype": "request_user_dialog",
+    "dialogKind": "confirm_action",
+    "payload": {
+      "title": "Overwrite?"
+    }
+  }
+}

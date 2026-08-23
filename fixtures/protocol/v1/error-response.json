@@ -1,0 +1,8 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "error",
+    "request_id": "req-unknown-1",
+    "error": "unrecognized control_request subtype: nope"
+  }
+}

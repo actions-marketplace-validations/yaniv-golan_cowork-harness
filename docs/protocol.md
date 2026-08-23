@@ -2,8 +2,9 @@
 
 cowork-harness speaks a **stream-json control channel** to the staged agent CLI it drives — the
 `initialize` handshake, `can_use_tool` permission/question gates (including AskUserQuestion's
-`questions[]`), `hook_callback`/`mcp_message` round-trips, and the nested `control_response` envelope
-it answers them with. `schema/protocol.v1.json` is a hand-authored draft-07 JSON Schema for **that**
+`questions[]`), `hook_callback`/`mcp_message` round-trips, `request_user_dialog` and
+`elicitation`/`side_question` gates, and the two `control_response` envelopes it answers them with — the
+nested success envelope and the fail-closed `subtype:"error"` one. `schema/protocol.v1.json` is a hand-authored draft-07 JSON Schema for **that**
 wire surface — the harness's *own* protocol, not Anthropic's.
 
 ## Scope: what this schemas, and what it deliberately doesn't
@@ -85,15 +86,20 @@ a supported use.
 | `AskUserQuestionInput` / `QSpec` / `QSpecOption` | The `input` body when `tool_name==="AskUserQuestion"`. |
 | `ControlRequestHookCallback` | A fired PreToolUse hook awaiting a reply. |
 | `ControlRequestMcpMessage` | A host-loop MCP JSON-RPC round-trip. |
-| `ControlRequest` | Union of the four request shapes above, discriminated on `request.subtype`. |
+| `ControlRequestUserDialog` | A `request_user_dialog` gate (~6s auto-cancel if nothing answers). Accepts `dialogKind` and `dialog_kind` — the parser reads either. |
+| `ControlRequestElicitation` | An MCP `elicitation` **or** `side_question` gate. Each field has two accepted spellings (`mcp_server_name`/`server`, `message`/`prompt`). |
+| `ControlRequest` | Union of the six request shapes above, discriminated on `request.subtype`. |
 | `ControlResponse` | The nested `control_response` success envelope. |
+| `ControlResponseError` | The fail-closed `subtype:"error"` envelope — a STRING under `error`, not an object under `response`. A distinct top-level shape, not a `ControlResponse` variant. |
 | `ControlResponseBody` | Union of the reply-body shapes below (the inner `response.response` payload). |
 | `AllowBody` / `DenyBody` | Permission/question allow-or-deny reply bodies. |
 | `McpResponseBody` | Reply body to an `mcp_message` request (JSON-RPC 2.0 envelope, or `{}`). |
 | `HookOutputBody` | Reply body to a `hook_callback` request (`{}` or `{decision:"block", reason}`). |
+| `DialogResponseBody` | Reply body to a dialog (`{behavior:"ok"\|"cancelled", choice?}`). |
+| `ElicitResponseBody` | Reply body to an elicitation (`{action:"accept"\|"decline"\|"cancel", content?}`). |
 | `Answers` | `Record<string,string>` — the AskUserQuestion answer map. |
 | `QuestionAnswerUpdatedInput` | `{questions, answers}` — the `updatedInput` of a question-allow reply. |
-| `Message` | Root: any single line the harness reads/writes on the control channel (`ControlRequest \| ControlResponse`). |
+| `Message` | Root: any single line the harness reads/writes on the control channel (`ControlRequest \| ControlResponse \| ControlResponseError`). |
 
 ## Golden vector pack (`fixtures/protocol/v1/`)
 
@@ -156,6 +162,14 @@ least one vector.
 
 ### v1 changelog
 
+- **2026-08-23** — **coverage correction, additive.** Three request subtypes the harness has always
+  answered were undescribed — `request_user_dialog`, `elicitation`, `side_question` — as was the
+  fail-closed `subtype:"error"` response envelope. Measured before the fix: all five representative frames
+  were **rejected** by the published schema; a consumer validating real traffic against it saw failures on
+  frames the harness handles correctly. Added as new `oneOf`/`anyOf` branches and one new top-level
+  response shape, per the additive rule above — nothing existing was narrowed, and no frame the schema
+  already accepted is affected. `SPEC.md` §12's control-protocol bullet now states that additive latitude
+  explicitly, since its silence had read as a prohibition.
 - **2026-07-03** — initial publication. Verified against staged agent 2.1.197 / baselines through
   `desktop-1.18286.0.json`.
 - **2026-07-09** — baseline set extended through `desktop-1.19367.0` (staged agent 2.1.202). The `v1`

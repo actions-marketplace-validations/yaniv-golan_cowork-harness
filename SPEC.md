@@ -839,6 +839,15 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   future-stamped cassette without refusing, since neither produces a pass/fail verdict. Post-1.0, raising
   the read floor past a still-readable version is breaking.
 - **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
+  Removing or narrowing a described frame is breaking; **DESCRIBING A FRAME THE HARNESS ALREADY
+  ANSWERS IS NOT** — it can only make a validator that was rejecting real traffic start accepting it,
+  so no working consumer changes behaviour. (The same additive latitude the `verify-cassettes` and
+  `doctor` envelopes above are granted. Stated explicitly because its absence here read as a
+  prohibition: three subtypes the harness had always answered — `request_user_dialog`, `elicitation`
+  and `side_question` — plus the fail-closed `subtype:"error"` envelope went undescribed rather than
+  added. A schema that rejects frames the code sends is worse than one that grows.) The golden vector
+  pack is coupled: every schema definition must be exercised by a vector, so a new frame ships with
+  evidence or not at all.
 - **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
   `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.
 - **Packaged GitHub Action** — `action.yml` inputs (`command`, `path`, `version`, `strict`,

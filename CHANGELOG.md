@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **The published control-protocol schema rejected five kinds of frame the harness sends and answers.**
+  `schema/protocol.v1.json` described four request subtypes; the harness has always answered **six** —
+  adding `request_user_dialog` and `elicitation`/`side_question` — and it also sends a fail-closed
+  `subtype:"error"` response envelope, whose payload is a *string* under `error` rather than an object
+  under `response`, so a validator that knew only the success envelope rejected every one. Measured
+  against the previous schema: all five representative frames **REJECT**; against the new one, all five
+  accept. Anyone validating real traffic was seeing failures on frames the harness handles correctly.
+
+  Added as new `oneOf`/`anyOf` branches plus one new top-level response shape — **111 insertions, zero
+  deletions** in the surface baseline, so nothing existing was narrowed and no frame the schema already
+  accepted is affected. Both spellings the parser accepts are admitted (`dialogKind`/`dialog_kind`,
+  `mcp_server_name`/`server`, `message`/`prompt`) rather than guessing which the agent sends.
+
+  The golden vector pack grew with it, generated from the **real** envelope builders rather than
+  hand-authored lookalikes. The existing lockstep test — every schema definition must be exercised by a
+  vector — caught all five additions immediately, which is what forced those vectors to exist. One of them
+  asserts the error envelope does **not** validate as a success envelope, so the two shapes cannot be
+  quietly conflated later.
+
+  [`SPEC.md`](./SPEC.md) §12 now states the additive latitude for this surface explicitly. Its silence had
+  read as a prohibition, which is plausibly why three subtypes went undescribed rather than added — while
+  [`docs/protocol.md`](./docs/protocol.md)'s own versioning policy had said all along that an additive
+  variant is a v1 minor note, which is where the dated entry now lives.
+
 ### Documentation
 
 - **The `uses:` ref pins the Action; the `version:` input pins the CLI — and only the second one holds a
