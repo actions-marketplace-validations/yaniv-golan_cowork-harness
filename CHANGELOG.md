@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The documented Action ref is now `@v2`, not `@main`** — 7 references across `README.md`,
+  `SKILL.md` and `ci-recipe.md`. `@main` was right when it was written: no alias tag had ever been
+  published, so naming one would have sent a copy-pasting reader to a `uses:` that 404s, and the guard's
+  own note said to revisit "once 1.0.0 ships". Two things had to be true first, and now are — `v2`/`v2.0`
+  point at a real release, and `release.yml` moves them on every stable release rather than leaving it to a
+  checklist. Recommending a floating tag nobody remembers to move is worse than recommending `@main`; that
+  was the actual situation while `v1` sat at 1.24.0.
+
+  `action-docs-sync` now derives the expected ref from `package.json`'s major instead of hardcoding it, so
+  the next major forces these docs to move with it rather than silently pointing a reader at the previous
+  line. `@main` is deliberately no longer accepted there: permitting both would let the recommendation
+  drift back with nothing noticing. Verified by mutation — regressing one reference to `@main` fails, and
+  setting the package version to 3.0.0 fails all three files.
+
+  **This changes nothing about which CLI you get.** The ref selects the Action; the CLI still comes from the
+  `version:` input, which still defaults to `latest`. `@v2` looks more like a version pin than `@main` did,
+  so that distinction matters more now, not less — it is spelled out in `README.md`'s Action section and in
+  `action.yml`'s own input description.
+
 ### Documentation
 
 - **The `uses:` ref pins the Action; the `version:` input pins the CLI — and only the second one holds a

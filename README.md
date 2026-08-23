@@ -731,7 +731,7 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 > [CHANGELOG.md](./CHANGELOG.md).
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@main
+- uses: yaniv-golan/cowork-harness@v2
   with:
     command: replay              # replay | lint | lint-skill | analyze-skill | verify-cassettes | run
     path: cassettes/my-skill.cassette.json
@@ -759,7 +759,7 @@ jobs:
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
           chmod +x "$RUNNER_TEMP/claude-$V"
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
-      - uses: yaniv-golan/cowork-harness@main
+      - uses: yaniv-golan/cowork-harness@v2
         with:
           command: run
           path: scenarios/
