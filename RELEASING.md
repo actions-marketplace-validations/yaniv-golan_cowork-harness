@@ -224,7 +224,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       ```
 - [ ] **Clean up**: `git push origin --delete release/X.Y.Z && git branch -d release/X.Y.Z`
 - [ ] **Move the major/minor tags** (so `uses: yaniv-golan/cowork-harness@v1` and `@v1.0` resolve to
-      this release — the packaged Action's Marketplace consumers pin those):
+      this release — the packaged Action's Marketplace consumers pin those). Note what this does NOT
+      do: these tags select the ACTION, never the CLI. A consumer who leaves the `version:` input at
+      its `latest` default already tracks CLI majors regardless of which alias tag they pin, so moving
+      `vX` neither causes nor prevents a cross-major CLI upgrade for them:
       ```
       git tag -f vX vX.Y.Z && git tag -f vX.Y vX.Y.Z   # e.g. v1 and v1.0 → v1.2.3
       git push -f origin vX vX.Y
