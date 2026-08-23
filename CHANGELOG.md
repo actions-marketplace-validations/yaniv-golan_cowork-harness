@@ -8,29 +8,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **The published control-protocol schema rejected five kinds of frame the harness sends and answers.**
-  `schema/protocol.v1.json` described four request subtypes; the harness has always answered **six** —
-  adding `request_user_dialog` and `elicitation`/`side_question` — and it also sends a fail-closed
-  `subtype:"error"` response envelope, whose payload is a *string* under `error` rather than an object
-  under `response`, so a validator that knew only the success envelope rejected every one. Measured
-  against the previous schema: all five representative frames **REJECT**; against the new one, all five
-  accept. Anyone validating real traffic was seeing failures on frames the harness handles correctly.
+- **`projects[].from` was missing from two places, and the second was a false green.** A connected project
+  is a host path exactly like a connected folder, and it was:
+  - **not resolved against the session file.** [`docs/session.md`](./docs/session.md) promises, without
+    qualification, that *"relative paths resolve from the session file's own directory"* — and it was true
+    of every path field except this one, which resolved against the **process CWD**. So the same session
+    file mounted different content depending on which directory you invoked from. The doc was right; the
+    resolver had simply skipped the field.
+  - **not part of the session fingerprint.** Swapping which directory is mounted at `.projects/<uuid>`
+    changed the run's inputs and `verify-cassettes` reported nothing — a false green in the gate whose job
+    is to notice that inputs moved. Folded in on the same **non-empty-only** terms as `agent_env`, so a
+    session with no `projects:` (and one with an explicit `projects: []`) hashes byte-identically to
+    before; only sessions that use the feature move. No committed cassette does.
 
-  Added as new `oneOf`/`anyOf` branches plus one new top-level response shape — **111 insertions, zero
-  deletions** in the surface baseline, so nothing existing was narrowed and no frame the schema already
-  accepted is affected. Both spellings the parser accepts are admitted (`dialogKind`/`dialog_kind`,
-  `mcp_server_name`/`server`, `message`/`prompt`) rather than guessing which the agent sends.
-
-  The golden vector pack grew with it, generated from the **real** envelope builders rather than
-  hand-authored lookalikes. The existing lockstep test — every schema definition must be exercised by a
-  vector — caught all five additions immediately, which is what forced those vectors to exist. One of them
-  asserts the error envelope does **not** validate as a success envelope, so the two shapes cannot be
-  quietly conflated later.
-
-  [`SPEC.md`](./SPEC.md) §12 now states the additive latitude for this surface explicitly. Its silence had
-  read as a prohibition, which is plausibly why three subtypes went undescribed rather than added — while
-  [`docs/protocol.md`](./docs/protocol.md)'s own versioning policy had said all along that an additive
-  variant is a v1 minor note, which is where the dated entry now lives.
+  **A cassette recorded before this is reported `unverifiable`, not clean.** Its hash contains nothing
+  about `projects[]`, so it cannot distinguish "the field was never covered" from "the mount changed since
+  record time" — and reporting the mismatch as a benign migration would put the same false green back in
+  the remedy. When everything else matches exactly, `verify-cassettes` says so and asks for a re-record to
+  gain the coverage. `sessionFingerprintDrift` remains `verify-cassettes`-only: none of this can change a
+  `replay` verdict, even under `--strict`.
 
 ### Documentation
 
