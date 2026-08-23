@@ -110,20 +110,26 @@ Action has no input for, and it creates a coupling nothing checks:
 
 > **If a flag in `extra-args` was added in release X, floor that step's `version` to `>=X`.**
 
-`version` defaults to `latest`, and accepts **any npm range** — not just an exact pin. So:
+`version` defaults to `latest`, and accepts **any npm range** — not just an exact pin. Leave it off unless
+you have a reason:
 
 ```yaml
 - uses: yaniv-golan/cowork-harness@v2
   with:
     command: lint
     path: scenarios/
-    version: ">=1.11.0"          # --min-severity landed in 1.11.0
-    extra-args: --min-severity WARN
+    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; `latest` satisfies that
 ```
 
-Without the floor, an older CLI fails the step with `unrecognized arguments: --min-severity WARN` (exit 2,
-wrapped in an `ok:false` envelope) — it does **not** degrade gracefully. An exact pin is fine for
-reproducibility, but it rots the moment a recipe adopts a newer flag; a floor expresses the real dependency.
+**If a flag you pass in `extra-args` landed in a specific release, bound the range — don't write a bare
+floor.** `>=1.11.0` reads as "at least 1.11.0" and silently means "and every future major too", so a
+recipe written that way hands a copy-paster the next major with no say in it. Anchor it at the current
+major instead — `version: "^2"` — which keeps the floor's intent and stops at the major boundary. An exact
+pin (`version: "2.0.1"`) is the right choice when you want byte-reproducible CI, at the cost of rotting the
+moment a recipe adopts a newer flag.
+
+Without a satisfied floor, an older CLI fails the step with `unrecognized arguments: --min-severity WARN`
+(exit 2, wrapped in an `ok:false` envelope) — it does **not** degrade gracefully.
 
 
 The harness has two execution lanes with different cost, coverage, AND infrastructure requirements.

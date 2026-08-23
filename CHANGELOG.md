@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The CI recipe no longer pins the Action's `version:` input, and no longer teaches a bare floor.** It
+  carried `version: ">=1.11.0"` — which reads as "at least 1.11.0" and silently means "and every future
+  major too", so a copy-paster gets the next major with no say in it. It was **not** broken today
+  (`--min-severity` still exists in 2.x, and `lint` reads no cassette, so 2.0.0's hash-format epoch never
+  applied to that step) — the defect was latent and in the FORM.
+
+  The pin is dropped rather than corrected. It resolved 2.0.1, exactly as the `latest` default does, so it
+  changed nothing while *looking* like a bound — and the numbered alternatives all rot: `^1.11.0` would
+  have frozen every new copy-paster on 1.25.0, the previous major, and `^2.0.1` needs remembering at each
+  release. The guidance moved to prose instead: if a flag in `extra-args` landed in a specific release,
+  anchor the range at the current major (`^2`), and reach for an exact pin only when you want
+  byte-reproducible CI. [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml)'s own description stops offering `>=1.11.0` and
+  `^1.11.0` as interchangeable — they are not, and it had been recommending the unbounded one.
+
+  `check:versions` invariant 13 now covers the Action's `version:` input, which it could not see before:
+  it keys on `@>=`, and `version: ">=1.11.0"` has no `@` — the same defect in different syntax, with no
+  coverage. Only the **unbounded** floor is rejected; verified against each form, `>=1.11.0 <3`, `^2`,
+  `2.0.1` and `latest` all pass.
+
 - **The documented Action ref is now `@v2`, not `@main`** — 7 references across `README.md`,
   `SKILL.md` and `ci-recipe.md`. `@main` was right when it was written: no alias tag had ever been
   published, so naming one would have sent a copy-pasting reader to a `uses:` that 404s, and the guard's
