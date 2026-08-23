@@ -8,22 +8,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **The Marketplace alias tags are moved by the release workflow instead of by remembering.** `v1` sat at
-  1.24.0 through two releases because moving it was a checklist line. `release.yml`'s last step now points
-  `vX` and `vX.Y` at the release it just published, with two guards a hand-run `git tag -f` skips: a
-  **prerelease** tag moves nothing (the trigger accepts `v1.0.4-rc.1`, and pointing `v1` at an rc would
-  hand every `@v1` consumer a prerelease), and an alias **never moves backwards** — re-releasing an older
-  patch on a line moves `vX.Y` and leaves `vX` alone. Verified by executing the logic against a synthetic
-  tag set rather than by reading it: releasing `v1.20.5` while `v1.25.0` exists correctly skips `v1` and
-  still moves `v1.20`. It runs last, after publish and the GitHub Release, so a failure there cannot
-  half-publish anything.
+- **`projects[].from` was missing from two places, and the second was a false green.** A connected project
+  is a host path exactly like a connected folder, and it was:
+  - **not resolved against the session file.** [`docs/session.md`](./docs/session.md) promises, without
+    qualification, that *"relative paths resolve from the session file's own directory"* — and it was true
+    of every path field except this one, which resolved against the **process CWD**. So the same session
+    file mounted different content depending on which directory you invoked from. The doc was right; the
+    resolver had simply skipped the field.
+  - **not part of the session fingerprint.** Swapping which directory is mounted at `.projects/<uuid>`
+    changed the run's inputs and `verify-cassettes` reported nothing — a false green in the gate whose job
+    is to notice that inputs moved. Folded in on the same **non-empty-only** terms as `agent_env`, so a
+    session with no `projects:` (and one with an explicit `projects: []`) hashes byte-identically to
+    before; only sessions that use the feature move. No committed cassette does.
 
-  Alongside it, the tags are now correct: **`v2` and `v2.0` created** (they did not exist, so nothing
-  pointed at the 2.x Action), and **`v1` moved 1.24.0 → 1.25.0**. Worth recording what that move did and
-  did not fix: the Action's whole surface — `action.yml` plus the `render.js` it loads — is **byte-identical
-  from 1.24.0 through 2.0.1** apart from three lines of input *description*. So a stale `v1` was a promise
-  the repo had stopped keeping, not a functional gap, and the one public `@v1` consumer pins `version:` on
-  every step and was never exposed to the `latest` default at all.
+  **A cassette recorded before this is reported `unverifiable`, not clean.** Its hash contains nothing
+  about `projects[]`, so it cannot distinguish "the field was never covered" from "the mount changed since
+  record time" — and reporting the mismatch as a benign migration would put the same false green back in
+  the remedy. When everything else matches exactly, `verify-cassettes` says so and asks for a re-record to
+  gain the coverage. `sessionFingerprintDrift` remains `verify-cassettes`-only: none of this can change a
+  `replay` verdict, even under `--strict`.
 
 ### Documentation
 
