@@ -36,6 +36,10 @@ inputs:
       installs where an accidental older resolve should fail loud rather than silently downgrade.
       The skill pins an exact current floor; see its preflight section rather than a number here,
       which would rot on every minor.)
+      IMPORTANT — the ref on your `uses:` line (`@v1`, `@main`, a SHA) pins THE ACTION, never the CLI.
+      The two move independently, so leaving this input at `latest` means a CLI MAJOR reaches your
+      workflow the moment it is promoted, even though your `uses:` ref never changed. That is how a
+      workflow pinned to `@v1` began installing CLI 2.x. To hold a major, set this to `^1` or `^2`.
     required: false
     default: "latest"
   strict:

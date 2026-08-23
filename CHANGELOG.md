@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
+## [Unreleased]
+
+### Documentation
+
+- **The `uses:` ref pins the Action; the `version:` input pins the CLI — and only the second one holds a
+  major.** Both are documented as if pinning `@v1` bounded what you install. It does not: they move
+  independently, and `version:` defaults to `latest`, so promoting a CLI major reaches a workflow whose
+  `uses:` ref has not changed in months. Measured at the time of writing — `v1` points at **1.24.0** and
+  has never been moved, yet an `@v1` workflow with no `version:` input installs **2.x**. `README.md`,
+  `action.yml` (the text GitHub Marketplace renders) and `RELEASING.md`'s alias-tag step now say so, and
+  name the fix: pin the **input** (`version: ^2`), not the ref. Crossing 1.x → 2.x this way means the
+  hash-format epoch, so pre-v12 cassettes need `cowork-harness rehash <dir/>`.
+
+  `RELEASING.md`'s "move the major/minor tags" step additionally records what moving `vX` does *not* do,
+  since that step reads as the thing that controls consumer upgrades and is not.
+
 ## [2.0.1] — 2026-08-23
 
 ### Added

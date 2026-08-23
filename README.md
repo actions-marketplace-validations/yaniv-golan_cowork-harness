@@ -719,6 +719,17 @@ cowork-harness run scenarios/            # your repo's scenarios; runs every *.y
 
 The fastest path to CI: a composite action wrapping the token-free lane, with a PR job-summary reporter.
 
+> **The `uses:` ref pins the Action, not the CLI.** `@main`, `@v1` and a commit SHA all select which
+> *Action* runs; which *CLI* it installs is the separate `version:` input below, which defaults to
+> `latest`. The two move independently — so a workflow whose `uses:` ref has not changed in months still
+> picks up a CLI **major** the moment one is promoted to `latest`. That is not hypothetical: `@v1` points
+> at 1.24.0 and has not moved, yet an `@v1` workflow without a `version:` input installs 2.x today.
+> **To hold a major, pin the input** — `version: ^2` (or `^1`) — not the `uses:` ref.
+>
+> Upgrading across the 1.x → 2.x boundary this way means the hash-format epoch: cassettes recorded before
+> format v12 need `cowork-harness rehash <dir/>` (no re-record). See the 2.0.0 entry in
+> [CHANGELOG.md](./CHANGELOG.md).
+
 ```yaml
 - uses: yaniv-golan/cowork-harness@main
   with:
