@@ -56,6 +56,13 @@
 //       claims only — docs/scenario.md and docs/cassette.md explain the v10/v11 `lane: remote`
 //       regime as correct history, and CHANGELOG.md is nothing but history; neither is checked.
 //       See `checkCassetteVersionClaims`.
+//   13. floors are BOUNDED: no shipped doc may advertise `cowork-harness@>=X.Y.Z`. `>=` crosses
+//       majors (measured: `@>=1.0.0` resolves 2.0.0), so an unbounded floor hands a consumer the
+//       next BREAKING release — which is how the skill's own floor pointed at a deprecated 2.0.0.
+//       The canonical form is `@^X.Y.Z`. Placeholder `X.Y.Z` prose is fine (it is not a version);
+//       CHANGELOG.md is exempt, being history. Also checks that every doc carrying a live floor
+//       agrees with SKILL.md's — invariants 3/5/5b covered only SKILL.md and README.md, leaving
+//       ci-recipe.md and examples/replays/README.md to drift unseen.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -386,7 +393,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   const frontmatter = skillMd.split("---")[1] ?? "";
   const skillVer = frontmatter.match(/^\s*version:\s*(\S+)\s*$/m)?.[1];
   const tracks = skillMd.match(/tracks-harness:\s*cowork-harness\s+(\d+\.\d+\.\d+)/)?.[1];
-  const floor = skillMd.match(/cowork-harness@>=(\d+\.\d+\.\d+)/)?.[1];
+  const floor = skillMd.match(/cowork-harness@\^(\d+\.\d+\.\d+)/)?.[1];
 
   // Baseline pins (invariant 7) — extracted here so they can ride in `values` alongside the rest.
   const skillBaseline = skillMd.match(/tracks-harness:\s*cowork-harness\s+\d+\.\d+\.\d+\s*\(baseline\s+desktop-(\d+\.\d+\.\d+)\)/)?.[1];
@@ -435,34 +442,33 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   }
 
   // 3. floor === tracks-harness
-  if (!floor) errors.push(`could not find bootstrap floor "cowork-harness@>=X.Y.Z" in SKILL.md`);
+  if (!floor) errors.push(`could not find bootstrap floor "cowork-harness@^X.Y.Z" in SKILL.md`);
   if (!tracks) errors.push(`could not find "tracks-harness: cowork-harness X.Y.Z" in SKILL.md`);
   if (floor && tracks && floor !== tracks) {
-    errors.push(`bootstrap floor "@>=${floor}" != tracks-harness "${tracks}" (keep them in lockstep)`);
+    errors.push(`bootstrap floor "@^${floor}" != tracks-harness "${tracks}" (keep them in lockstep)`);
   }
 
   // 4. floor <= package.json (the skill must not demand an unpublished/future harness)
   if (floor && SEMVER.test(pkg) && cmp(floor, pkg) > 0) {
-    errors.push(`bootstrap floor "@>=${floor}" is ahead of package.json "${pkg}" — skill would lead npm`);
+    errors.push(`bootstrap floor "@^${floor}" is ahead of package.json "${pkg}" — skill would lead npm`);
   }
 
   // 5. README bootstrap floor(s) must match the SKILL.md floor (README is not under any other version check,
   //    so it drifts silently — this is the guard that would have caught the @>=0.9.0-while-package-0.12.0 gap).
   const readme = r("README.md");
-  const readmeFloors = [...readme.matchAll(/cowork-harness@>=(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+  const readmeFloors = [...readme.matchAll(/cowork-harness@\^(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
   if (floor) {
-    if (readmeFloors.length === 0) errors.push(`README.md has no "cowork-harness@>=X.Y.Z" floor to verify against SKILL.md "@>=${floor}"`);
-    for (const f of readmeFloors) if (f !== floor) errors.push(`README.md floor "@>=${f}" != SKILL.md floor "@>=${floor}"`);
+    if (readmeFloors.length === 0) errors.push(`README.md has no "cowork-harness@^X.Y.Z" floor to verify against SKILL.md "@^${floor}"`);
+    for (const f of readmeFloors) if (f !== floor) errors.push(`README.md floor "@^${f}" != SKILL.md floor "@^${floor}"`);
   }
 
   // 5b. EVERY `@>=X.Y.Z` inside SKILL.md must equal the floor — including a BARE `Pin `@>=X`` with no
   //     `cowork-harness` prefix. Invariant 3 reads only the FIRST `cowork-harness@>=` match, so a bare
   //     floor drifted silently (it shipped stale from 0.33.0 through 1.0.0). This catches all of them.
   if (floor) {
-    const skillFloors = [...skillMd.matchAll(/@>=(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+    const skillFloors = [...skillMd.matchAll(/@\^(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
     for (const f of skillFloors)
-      if (f !== floor)
-        errors.push(`SKILL.md floor "@>=${f}" != SKILL.md bootstrap floor "@>=${floor}" (a bare \`@>=X\` drifted — bump it)`);
+      if (f !== floor) errors.push(`SKILL.md floor "@^${f}" != SKILL.md bootstrap floor "@^${floor}" (a bare \`@^X\` drifted — bump it)`);
   }
 
   // 6. Each reference doc's "Tracks `cowork-harness X.Y.Z`" stamp must match tracks-harness, and any
@@ -596,6 +602,32 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       agentOf: (v) => json(`baselines/desktop-${v}.json`).agentVersion as string | undefined,
     }),
   );
+
+  // 13. Bounded floors. `>=` is the defect, not the version behind it: it crosses majors, so a floor
+  //     written that way resolves the next breaking release. Scanned across the whole shipped-doc corpus,
+  //     not a hand-listed set of files — the two docs that drifted (ci-recipe, examples/replays/README)
+  //     drifted precisely because they were not on such a list.
+  {
+    const docsForFloors = shippedDocs();
+    if (docsForFloors.length < 20) errors.push(`floor scan corpus is only ${docsForFloors.length} files — near-vacuous`);
+    for (const { path, text } of docsForFloors) {
+      for (const m of text.matchAll(/(?:cowork-harness)?@>=(\d+\.\d+\.\d+)/g))
+        errors.push(
+          `${path} advertises an UNBOUNDED floor "@>=${m[1]}" — \`>=\` crosses majors (a consumer resolves the ` +
+            `next breaking release). Use "@^${m[1]}".`,
+        );
+      // A doc may deliberately name an OLD floor to illustrate a past feature gate. That is exempt from
+      // the equality rule — but never from the `>=` rule above: the FORM is the defect, whatever the
+      // version. The opt-out is an explicit inline marker on the same line, so the intent is visible in
+      // the doc rather than buried in a file list here.
+      if (floor)
+        for (const line of text.split("\n")) {
+          if (line.includes("floor-historical")) continue;
+          for (const m of line.matchAll(/(?:cowork-harness)?@\^(\d+\.\d+\.\d+)/g))
+            if (m[1] !== floor) errors.push(`${path} floor "@^${m[1]}" != SKILL.md floor "@^${floor}"`);
+        }
+    }
+  }
 
   // 12. cassette-format claims (see `checkCassetteVersionClaims`). The constants are read out of the
   //     source text rather than imported: `src/run/cassette.ts` is a large module with side-effectful

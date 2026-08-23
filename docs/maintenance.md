@@ -410,8 +410,8 @@ it assumes; that version must be published before the skill goes public. A skill
 skill-internal wording (no new CLI dependency) is exempt and can ship anytime.
 
 **Bootstrap version floor — keep it in lockstep with `tracks-harness`.** The skill's Preflight bootstraps
-the CLI with a version FLOOR (`npx "cowork-harness@>=X.Y.Z"`), not `@latest`. `@>=X.Y.Z` still resolves to the
-newest published version, but **fails loud** if none satisfies the floor — so a too-old CLI (or a skill
+the CLI with a version FLOOR (`npx "cowork-harness@^X.Y.Z"`), not `@latest`. `@^X.Y.Z` resolves to the newest
+published version **within the same major**, and **fails loud** if none satisfies the floor — so a too-old CLI (or a skill
 accidentally pushed ahead of npm) surfaces as a clear "no matching version" instead of a silent "unknown
 command." When a skill bump starts depending on new CLI features, bump this floor (in `SKILL.md` Preflight)
 together with `tracks-harness:` so the two can't drift — both name the minimum harness version the skill

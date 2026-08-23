@@ -36,14 +36,15 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 // never matches.
 // ---------------------------------------------------------------------------
 
-/** Every `cowork-harness@>=X.Y.Z` floor. */
+/** Every `cowork-harness@^X.Y.Z` floor. CARET, not `>=`: `>=` crosses majors (measured — `@>=1.0.0`
+ *  resolves 2.0.0), so an unbounded floor hands a consumer the next breaking release. */
 function bumpHarnessFloors(content: string, newVersion: string): string {
-  return content.replace(/cowork-harness@>=\d+\.\d+\.\d+/g, `cowork-harness@>=${newVersion}`);
+  return content.replace(/cowork-harness@\^\d+\.\d+\.\d+/g, `cowork-harness@^${newVersion}`);
 }
 
-/** A bare, backtick-delimited `` `@>=X.Y.Z` `` floor with no `cowork-harness` prefix (README's Action-inputs mention + SKILL.md's `Pin `@>=X`` phrase). */
+/** A bare, backtick-delimited `` `@^X.Y.Z` `` floor with no `cowork-harness` prefix (README's Action-inputs mention + SKILL.md's `Pin `@^X`` phrase). */
 function bumpBareFloors(content: string, newVersion: string): string {
-  return content.replace(/`@>=\d+\.\d+\.\d+`/g, `\`@>=${newVersion}\``);
+  return content.replace(/`@\^\d+\.\d+\.\d+`/g, `\`@^${newVersion}\``);
 }
 
 /** The single `"version": "X.Y.Z"` JSON field in a file that carries exactly one such key. */
@@ -141,7 +142,7 @@ export function rewriteFileContent(relPath: string, content: string, newVersion:
       next = bumpNeedsFloor(next, newVersion);
       next = bumpFloorGatesHeading(next, newVersion);
       next = bumpHarnessFloors(next, newVersion);
-      next = bumpBareFloors(next, newVersion); // the `Pin `@>=X`` phrase — a bare floor, like README's
+      next = bumpBareFloors(next, newVersion); // the `Pin `@^X`` phrase — a bare floor, like README's
       return next;
     }
 

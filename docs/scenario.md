@@ -168,7 +168,7 @@ cloud** / **On your computer**"), with cloud the default for new sessions. They 
 
 > **`lane:` needs cowork-harness ≥ 1.14.0.** On an older CLI a scenario carrying it does **not** load —
 > `Unrecognized key: "lane"`, exit 2 — rather than falling back to `lane: local`. So adopting the key means
-> raising your floor (`npx "cowork-harness@>=1.14.0"`, or the `npm i -g` pin in your CI recipe); it will
+> raising your floor (`npx "cowork-harness@^1.14.0"` <!-- floor-historical: illustrates the 1.14.0 feature gate, not the current floor -->, or the `npm i -g` pin in your CI recipe); it will
 > not silently mean something different on an older runner **at the loader**. That guarantee is
 > loader-only: on `replay`, a frozen `lane:` an older CLI doesn't recognize is **silently ignored**, not
 > refused — unless the cassette itself is stamped v11 (recorded ≥ 1.16.0 with `lane: remote`), which
