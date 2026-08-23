@@ -1162,7 +1162,14 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
  *  undefined ("can't verify", never a false mismatch) for an inline scenario or when the session file
  *  can't be read/parsed from `sessionPath` (resolved against `cassetteDir` exactly like
  *  `skillSourceDirs`). Arrays are sorted before hashing so authoring order can't spuriously move the hash. */
-export function buildSessionFingerprint(sessionPath: string, cassetteDir?: string, override?: string): string | undefined {
+export function buildSessionFingerprint(
+  sessionPath: string,
+  cassetteDir?: string,
+  override?: string,
+  /** `omitProjects` reproduces the PRE-`projects` shape. Only `sessionFingerprintDrift` passes it, to tell
+   *  "this recording predates `projects` coverage" apart from "your session changed" — see there. */
+  opts?: { omitProjects?: boolean },
+): string | undefined {
   if (sessionPath === "(inline)") return undefined;
   // Same resolver as skillSourceDirs: an override that reached only ONE of them would verify skill
   // staleness against the override while hashing session SHAPE from the old location.
@@ -1200,6 +1207,15 @@ export function buildSessionFingerprint(sessionPath: string, cassetteDir?: strin
     // affects only hostloop/protocol replay behavior — see agent_env's doc comment) moves the hash so
     // `verify-cassettes` surfaces the drift instead of a cassette quietly replaying stale env behavior.
     ...(Object.keys(agentEnv).length ? { agent_env: agentEnv } : {}),
+    // Connected PROJECTS, on the same NON-EMPTY-ONLY terms as `agent_env` above: a session with no
+    // `projects:` hashes byte-identically to before, so the overwhelming majority of cassettes do not
+    // move. Unlike `agent_env` (a brand-new field nobody had), `projects` is an EXISTING field, so a
+    // project-bearing session's hash DOES move once — which is why `sessionFingerprintDrift` reports that
+    // case as unverifiable rather than as drift. Omitting it was a false green: swapping which directory
+    // is mounted at `.projects/<uuid>` changed the run's inputs and `verify-cassettes` said nothing.
+    ...(!opts?.omitProjects && cfg.projects.length
+      ? { projects: [...cfg.projects].map((pr) => ({ uuid: pr.uuid, from: pr.from })).sort((a, b) => a.uuid.localeCompare(b.uuid)) }
+      : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))
@@ -4629,6 +4645,23 @@ export function sessionFingerprintDrift(
       note: "session-fingerprint: could not resolve the current session file to recompute — cannot verify session-shape staleness",
     };
   if (live === cassette.sessionFingerprint) return { drifted: false };
+  // A recording made BEFORE `projects` was folded into the shape carries a hash that says nothing about
+  // `projects[]`. Report that honestly as UNVERIFIABLE, not as a migration-with-all-clear: the recorded
+  // value cannot distinguish "the field was simply never covered" from "the project mount changed since",
+  // because there is nothing about `projects` in it to compare against. Claiming "nothing changed" here
+  // would reintroduce, in the remedy, exactly the false green this field's coverage exists to close.
+  //
+  // The test is an EXACT match on the pre-`projects` shape, which is also why it can run ahead of the
+  // name-lookup downgrade below: a byte-equal legacy hash is strong evidence the resolved file really is
+  // this cassette's session (an unrelated same-named sibling matching exactly is not a coincidence worth
+  // hedging), so the more specific and more actionable message wins.
+  const legacy = buildSessionFingerprint(cassette.scenario.session, cassetteDir, sessionOverride, { omitProjects: true });
+  if (legacy !== undefined && legacy === cassette.sessionFingerprint)
+    return {
+      drifted: false,
+      unverifiable: true,
+      note: "session-fingerprint: this cassette was recorded before `projects` was part of the session shape, so its hash covers everything EXCEPT `projects[]` — and everything it does cover matches. A change to a project mount since record time is therefore not detectable here. Re-record to gain that coverage.",
+    };
   // Only "name-lookup" (a scenario WAS found, but not at its persisted/expected offset — the SAME
   // low-confidence signal scenarioContentDrift downgrades on) is grounds to distrust this mismatch.
   // "none" means "nothing to compare the layout against" (mirrors scenarioContentDrift's own `!src.path`

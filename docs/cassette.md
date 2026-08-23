@@ -134,7 +134,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
     { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
-  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
+  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/projects/plugins/skills/mcp/egress) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "timeline": [ /* … */ ], // harness-observation timeline (see src/agent/timeline.ts): seq/ts/line/type per meaningful in-run event, in total order; `ts` is wall-clock-observation-time, frozen not recomputed on replay — informational only, no verdict impact. ABSENT on a pre-timeline cassette or when timeline.jsonl was empty/unreadable at record time
   "timelineHeader": { "startedAtMono": "…", "startedAtWall": "…" }, // written once as timeline.jsonl's first line; `startedAtMono` is the raw `process.hrtime.bigint()` start value (as a string) that every `timeline[].ts` is milliseconds-elapsed-since; `startedAtWall` is the wall-clock anchor so absolute times are recoverable from the relative `ts` stream
@@ -816,7 +816,7 @@ possible.
   **both** buckets change you get **both** messages — a co-occurring shared change does not mask the skill's
   own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
   matching the hash boundary.)
-- **`session-shape fingerprint differs from the current session file (connected folders/plugin/skill/mcp/egress
+- **`session-shape fingerprint differs from the current session file (connected folders/projects/plugin/skill/mcp/egress
   config changed since record) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
@@ -828,6 +828,13 @@ possible.
   was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout
   and the match could be an unrelated same-named sibling). In that one case `verify-cassettes` downgrades the
   mismatch to a non-failing note instead of a hard fail.
+
+  There is a second downgrade, for a cassette recorded before `projects[]` was part of the shape: its hash
+  covers everything *except* `projects[]`, so if the rest matches exactly, the mismatch is reported as
+  **unverifiable** rather than as drift — *"recorded before `projects` was part of the session shape …
+  re-record to gain that coverage"*. Read that as "this cassette cannot tell you whether a project mount
+  moved", **not** as "nothing moved": a hash that never contained `projects` cannot distinguish the two,
+  and calling it clean would put back the false green the coverage exists to close.
 - **`recorded in '<mode>' file-set mode, verifying in '<mode>'`** — the staleness boundary differs between
   record and verify (e.g. recorded in a git work tree but verified from a non-repo copy); the hashes are not
   comparable, so re-record under the same mode. **This finding REPLACES the skill/shared-root comparison
