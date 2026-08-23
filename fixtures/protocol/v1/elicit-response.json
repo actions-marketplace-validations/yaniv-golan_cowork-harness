@@ -1,0 +1,10 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "req-elicit-1",
+    "response": {
+      "action": "decline"
+    }
+  }
+}

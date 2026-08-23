@@ -7,10 +7,16 @@
     "QSpecOption": {
       "type": "object",
       "description": "One AskUserQuestion choice. Mirrors session.ts's OptionSchema (a `z.looseObject`).",
-      "required": ["label"],
+      "required": [
+        "label"
+      ],
       "properties": {
-        "label": { "type": "string" },
-        "description": { "type": "string" }
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
       },
       "additionalProperties": true
     },
@@ -18,24 +24,36 @@
       "type": "object",
       "description": "One AskUserQuestion question. `question`/`header`/`options` are all OPTIONAL on the wire (session.ts's QSpecSchema deliberately tolerates optionless / header-only gates) — a truly malformed frame is one where `options[]` entries are missing a string `label`, not one missing these top-level fields.",
       "properties": {
-        "question": { "type": "string" },
-        "header": { "type": "string" },
+        "question": {
+          "type": "string"
+        },
+        "header": {
+          "type": "string"
+        },
         "options": {
           "type": "array",
-          "items": { "$ref": "#/definitions/QSpecOption" }
+          "items": {
+            "$ref": "#/definitions/QSpecOption"
+          }
         },
-        "multiSelect": { "type": "boolean" }
+        "multiSelect": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": true
     },
     "AskUserQuestionInput": {
       "type": "object",
       "description": "The `input` body of a `can_use_tool` control_request when `tool_name===\"AskUserQuestion\"` (DESIGN.md §6 point 3).",
-      "required": ["questions"],
+      "required": [
+        "questions"
+      ],
       "properties": {
         "questions": {
           "type": "array",
-          "items": { "$ref": "#/definitions/QSpec" }
+          "items": {
+            "$ref": "#/definitions/QSpec"
+          }
         }
       },
       "additionalProperties": true
@@ -43,18 +61,43 @@
     "ControlRequestInitialize": {
       "type": "object",
       "description": "The driver's FIRST message on the control channel (session.ts `AgentSession.init`), sent before the first user turn. Without it, permissions/questions are auto-handled by the agent instead of routed to the driver.",
-      "required": ["type", "request_id", "request"],
+      "required": [
+        "type",
+        "request_id",
+        "request"
+      ],
       "properties": {
-        "type": { "const": "control_request" },
-        "request_id": { "type": "string", "minLength": 1 },
+        "type": {
+          "const": "control_request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "request": {
           "type": "object",
-          "required": ["subtype"],
+          "required": [
+            "subtype"
+          ],
           "properties": {
-            "subtype": { "const": "initialize" },
-            "appendSubagentSystemPrompt": { "type": "string" },
-            "sdkMcpServers": { "type": "array", "items": { "type": "string" } },
-            "toolAliases": { "type": "object", "additionalProperties": { "type": "string" } },
+            "subtype": {
+              "const": "initialize"
+            },
+            "appendSubagentSystemPrompt": {
+              "type": "string"
+            },
+            "sdkMcpServers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "toolAliases": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
             "hooks": {
               "type": "object",
               "properties": {
@@ -62,10 +105,20 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": ["matcher", "hookCallbackIds"],
+                    "required": [
+                      "matcher",
+                      "hookCallbackIds"
+                    ],
                     "properties": {
-                      "matcher": { "type": "string" },
-                      "hookCallbackIds": { "type": "array", "items": { "type": "string" } }
+                      "matcher": {
+                        "type": "string"
+                      },
+                      "hookCallbackIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
                     },
                     "additionalProperties": true
                   }
@@ -82,19 +135,42 @@
     "ControlRequestCanUseTool": {
       "type": "object",
       "description": "Inbound permission/question gate (DESIGN.md §6 point 3). `input` is AskUserQuestionInput when `tool_name===\"AskUserQuestion\"`, otherwise an arbitrary tool-input object — this schema does not discriminate on tool_name (that's a semantic, not a wire, distinction).",
-      "required": ["type", "request_id", "request"],
+      "required": [
+        "type",
+        "request_id",
+        "request"
+      ],
       "properties": {
-        "type": { "const": "control_request" },
-        "request_id": { "type": "string", "minLength": 1 },
+        "type": {
+          "const": "control_request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "request": {
           "type": "object",
-          "required": ["subtype", "tool_name", "input"],
+          "required": [
+            "subtype",
+            "tool_name",
+            "input"
+          ],
           "properties": {
-            "subtype": { "const": "can_use_tool" },
-            "tool_name": { "type": "string" },
-            "display_name": { "type": "string" },
-            "input": { "type": "object" },
-            "tool_use_id": { "type": "string" }
+            "subtype": {
+              "const": "can_use_tool"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": "string"
+            },
+            "input": {
+              "type": "object"
+            },
+            "tool_use_id": {
+              "type": "string"
+            }
           },
           "additionalProperties": true
         }
@@ -104,18 +180,36 @@
     "ControlRequestHookCallback": {
       "type": "object",
       "description": "A fired PreToolUse hook (e.g. the always-installed Task run_in_background block, or a caller-supplied HookBundle callback like hostloop's path-containment gate). Must be answered or the in-VM agent blocks on the round-trip.",
-      "required": ["type", "request_id", "request"],
+      "required": [
+        "type",
+        "request_id",
+        "request"
+      ],
       "properties": {
-        "type": { "const": "control_request" },
-        "request_id": { "type": "string", "minLength": 1 },
+        "type": {
+          "const": "control_request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "request": {
           "type": "object",
-          "required": ["subtype", "callback_id"],
+          "required": [
+            "subtype",
+            "callback_id"
+          ],
           "properties": {
-            "subtype": { "const": "hook_callback" },
-            "callback_id": { "type": "string" },
+            "subtype": {
+              "const": "hook_callback"
+            },
+            "callback_id": {
+              "type": "string"
+            },
             "input": {},
-            "tool_use_id": { "type": "string" }
+            "tool_use_id": {
+              "type": "string"
+            }
           },
           "additionalProperties": true
         }
@@ -125,17 +219,36 @@
     "ControlRequestMcpMessage": {
       "type": "object",
       "description": "A host-loop MCP JSON-RPC round-trip (e.g. the workspace shell). The only side-effecting control_request — the driver computes and writes the reply itself.",
-      "required": ["type", "request_id", "request"],
+      "required": [
+        "type",
+        "request_id",
+        "request"
+      ],
       "properties": {
-        "type": { "const": "control_request" },
-        "request_id": { "type": "string", "minLength": 1 },
+        "type": {
+          "const": "control_request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "request": {
           "type": "object",
-          "required": ["subtype", "server_name", "message"],
+          "required": [
+            "subtype",
+            "server_name",
+            "message"
+          ],
           "properties": {
-            "subtype": { "const": "mcp_message" },
-            "server_name": { "type": "string" },
-            "message": { "type": "object" }
+            "subtype": {
+              "const": "mcp_message"
+            },
+            "server_name": {
+              "type": "string"
+            },
+            "message": {
+              "type": "object"
+            }
           },
           "additionalProperties": true
         }
@@ -145,63 +258,115 @@
     "ControlRequest": {
       "description": "Any inbound control_request the harness answers — discriminated on `request.subtype`.",
       "oneOf": [
-        { "$ref": "#/definitions/ControlRequestInitialize" },
-        { "$ref": "#/definitions/ControlRequestCanUseTool" },
-        { "$ref": "#/definitions/ControlRequestHookCallback" },
-        { "$ref": "#/definitions/ControlRequestMcpMessage" }
+        {
+          "$ref": "#/definitions/ControlRequestInitialize"
+        },
+        {
+          "$ref": "#/definitions/ControlRequestCanUseTool"
+        },
+        {
+          "$ref": "#/definitions/ControlRequestHookCallback"
+        },
+        {
+          "$ref": "#/definitions/ControlRequestMcpMessage"
+        },
+        {
+          "$ref": "#/definitions/ControlRequestUserDialog"
+        },
+        {
+          "$ref": "#/definitions/ControlRequestElicitation"
+        }
       ]
     },
     "Answers": {
       "type": "object",
       "description": "AskUserQuestion answer map, keyed by the question TEXT (never `header` — the in-VM handler does `questions.map(({question}) => answers[question])`). Values are always strings; a multiSelect answer is a single comma-joined string of the chosen labels (e.g. \"Auth, Audit\"), never an array (binary-verified, session.ts `deserializeDecision`/`questionKey`).",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "QuestionAnswerUpdatedInput": {
       "type": "object",
       "description": "The `updatedInput` body of an AskUserQuestion allow-response. MUST carry `questions` verbatim alongside `answers` — the in-VM handler's `questions.map(...)` throws on a missing `questions` array, silently dropping the answer (session.ts serializeDecision's load-bearing comment).",
-      "required": ["questions", "answers"],
+      "required": [
+        "questions",
+        "answers"
+      ],
       "properties": {
-        "questions": { "type": "array", "items": { "$ref": "#/definitions/QSpec" } },
-        "answers": { "$ref": "#/definitions/Answers" }
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/QSpec"
+          }
+        },
+        "answers": {
+          "$ref": "#/definitions/Answers"
+        }
       },
       "additionalProperties": true
     },
     "AllowBody": {
       "type": "object",
       "description": "A permission/question allow response body (session.ts `allowEnvelope`). `updatedInput` is the (possibly modified) tool input for a permission allow, or QuestionAnswerUpdatedInput for an AskUserQuestion allow.",
-      "required": ["behavior", "updatedInput"],
+      "required": [
+        "behavior",
+        "updatedInput"
+      ],
       "properties": {
-        "behavior": { "const": "allow" },
-        "updatedInput": { "type": "object" }
+        "behavior": {
+          "const": "allow"
+        },
+        "updatedInput": {
+          "type": "object"
+        }
       },
       "additionalProperties": false
     },
     "DenyBody": {
       "type": "object",
       "description": "A permission/question deny response body (session.ts `denyEnvelope`).",
-      "required": ["behavior", "message"],
+      "required": [
+        "behavior",
+        "message"
+      ],
       "properties": {
-        "behavior": { "const": "deny" },
-        "message": { "type": "string" }
+        "behavior": {
+          "const": "deny"
+        },
+        "message": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "McpResponseBody": {
       "description": "The reply body to an mcp_message control_request (session.ts `mcpResponseEnvelope`) — a JSON-RPC 2.0 envelope, or `{}` when the inbound request carried no `id` (a notification, no reply expected).",
       "anyOf": [
-        { "type": "object", "additionalProperties": false },
         {
           "type": "object",
-          "required": ["mcp_response"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "mcp_response"
+          ],
           "properties": {
             "mcp_response": {
               "type": "object",
-              "required": ["jsonrpc", "id"],
+              "required": [
+                "jsonrpc",
+                "id"
+              ],
               "properties": {
-                "jsonrpc": { "const": "2.0" },
+                "jsonrpc": {
+                  "const": "2.0"
+                },
                 "id": {},
                 "result": {},
-                "error": { "type": "object" }
+                "error": {
+                  "type": "object"
+                }
               },
               "additionalProperties": true
             }
@@ -213,40 +378,79 @@
     "HookOutputBody": {
       "description": "The reply body to a hook_callback control_request (session.ts `hookOutput`) — `{}` to allow, or a block decision with a reason.",
       "anyOf": [
-        { "type": "object", "additionalProperties": false },
         {
           "type": "object",
-          "required": ["decision", "reason"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "decision",
+            "reason"
+          ],
           "properties": {
-            "decision": { "const": "block" },
-            "reason": { "type": "string" }
+            "decision": {
+              "const": "block"
+            },
+            "reason": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         }
       ]
     },
     "ControlResponseBody": {
-      "description": "The inner `response.response` payload — its exact shape depends on which control_request it answers (permission/question allow-or-deny, mcp_message reply, or hook_callback output).",
+      "description": "The inner `response.response` payload — its exact shape depends on which control_request it answers (permission/question allow-or-deny, mcp_message reply, hook_callback output, dialog behavior, or elicitation action).",
       "anyOf": [
-        { "$ref": "#/definitions/AllowBody" },
-        { "$ref": "#/definitions/DenyBody" },
-        { "$ref": "#/definitions/McpResponseBody" },
-        { "$ref": "#/definitions/HookOutputBody" }
+        {
+          "$ref": "#/definitions/AllowBody"
+        },
+        {
+          "$ref": "#/definitions/DenyBody"
+        },
+        {
+          "$ref": "#/definitions/McpResponseBody"
+        },
+        {
+          "$ref": "#/definitions/HookOutputBody"
+        },
+        {
+          "$ref": "#/definitions/DialogResponseBody"
+        },
+        {
+          "$ref": "#/definitions/ElicitResponseBody"
+        }
       ]
     },
     "ControlResponse": {
       "type": "object",
       "description": "The NESTED success envelope every control_response shares (session.ts `successEnvelope`, binary-verified — DESIGN.md §6 point 4). The payload sits under an INNER `response` key; a flattened/unnested body is a protocol error the agent rejects with `ZodError: expected object, received undefined`.",
-      "required": ["type", "response"],
+      "required": [
+        "type",
+        "response"
+      ],
       "properties": {
-        "type": { "const": "control_response" },
+        "type": {
+          "const": "control_response"
+        },
         "response": {
           "type": "object",
-          "required": ["subtype", "request_id", "response"],
+          "required": [
+            "subtype",
+            "request_id",
+            "response"
+          ],
           "properties": {
-            "subtype": { "const": "success" },
-            "request_id": { "type": "string" },
-            "response": { "$ref": "#/definitions/ControlResponseBody" }
+            "subtype": {
+              "const": "success"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/ControlResponseBody"
+            }
           },
           "additionalProperties": true
         }
@@ -254,8 +458,172 @@
       "additionalProperties": false
     },
     "Message": {
-      "description": "Any single line the harness itself writes or answers on the control channel.",
-      "oneOf": [{ "$ref": "#/definitions/ControlRequest" }, { "$ref": "#/definitions/ControlResponse" }]
+      "description": "Any single line the harness itself writes or answers on the control channel — a control_request it receives, the success envelope it replies with, or the fail-closed error envelope.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/ControlRequest"
+        },
+        {
+          "$ref": "#/definitions/ControlResponse"
+        },
+        {
+          "$ref": "#/definitions/ControlResponseError"
+        }
+      ]
+    },
+    "ControlRequestUserDialog": {
+      "type": "object",
+      "description": "A `request_user_dialog` round-trip (session.ts `parseControlRequest`). The harness auto-cancels it after ~6s unless a decider answers, so an unanswered dialog surfaces as a typed cancellation rather than a wall-clock hang. `dialogKind` is accepted in BOTH camelCase and snake_case: the agent has emitted each, and the parser reads `dialogKind ?? dialog_kind`, so a schema that admitted only one would reject traffic the harness handles.",
+      "required": [
+        "type",
+        "request_id",
+        "request"
+      ],
+      "properties": {
+        "type": {
+          "const": "control_request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "subtype": {
+              "const": "request_user_dialog"
+            },
+            "dialogKind": {
+              "type": "string"
+            },
+            "dialog_kind": {
+              "type": "string"
+            },
+            "payload": {}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "ControlRequestElicitation": {
+      "type": "object",
+      "description": "An MCP elicitation / side-question round-trip. TWO subtypes reach the same handler — `elicitation` and `side_question` — and each field is read from either of two spellings (`mcp_server_name ?? server`, `message ?? prompt`), so all of them are admitted here rather than guessing which the agent will send. NOTE the fidelity limit this schema does not describe: the harness registers no elicitation-capable tool, so in practice this frame arrives only when a caller supplies one — see docs/fidelity-gaps.md.",
+      "required": [
+        "type",
+        "request_id",
+        "request"
+      ],
+      "properties": {
+        "type": {
+          "const": "control_request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "subtype": {
+              "enum": [
+                "elicitation",
+                "side_question"
+              ]
+            },
+            "mcp_server_name": {
+              "type": "string"
+            },
+            "server": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "requestedSchema": {}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "DialogResponseBody": {
+      "type": "object",
+      "description": "Answer to `request_user_dialog`. `cancelled` is what the ~6s auto-cancel sends.",
+      "required": [
+        "behavior"
+      ],
+      "properties": {
+        "behavior": {
+          "enum": [
+            "ok",
+            "cancelled"
+          ]
+        },
+        "choice": {}
+      },
+      "additionalProperties": true
+    },
+    "ElicitResponseBody": {
+      "type": "object",
+      "description": "Answer to an elicitation / side_question. `decline` is the unattended default.",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "accept",
+            "decline",
+            "cancel"
+          ]
+        },
+        "content": {}
+      },
+      "additionalProperties": true
+    },
+    "ControlResponseError": {
+      "type": "object",
+      "description": "The fail-closed counterpart to the success envelope (session.ts `errorEnvelope`): sent when the harness cannot faithfully answer a control_request — an unrecognized subtype, or an mcp_message with no handler. The agent gets a well-formed reply and unblocks its round-trip instead of waiting forever, so a protocol gap presents as a typed error rather than a wall-clock timeout. Note the shape: the payload is a STRING under `error`, not an object under `response` — a validator that only knew the success envelope rejected every one of these.",
+      "required": [
+        "type",
+        "response"
+      ],
+      "properties": {
+        "type": {
+          "const": "control_response"
+        },
+        "response": {
+          "type": "object",
+          "required": [
+            "subtype",
+            "request_id",
+            "error"
+          ],
+          "properties": {
+            "subtype": {
+              "const": "error"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
     }
   },
   "$ref": "#/definitions/Message"

@@ -1,0 +1,10 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "req-dialog-1",
+    "response": {
+      "behavior": "cancelled"
+    }
+  }
+}

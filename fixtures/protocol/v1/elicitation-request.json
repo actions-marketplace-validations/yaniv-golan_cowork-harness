@@ -1,0 +1,17 @@
+{
+  "type": "control_request",
+  "request_id": "req-elicit-1",
+  "request": {
+    "subtype": "elicitation",
+    "mcp_server_name": "workspace",
+    "message": "Which sheet should I read?",
+    "requestedSchema": {
+      "type": "object",
+      "properties": {
+        "sheet": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
