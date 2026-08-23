@@ -68,6 +68,12 @@ All notable changes to this project are documented here. The format is based on
   gain the coverage. `sessionFingerprintDrift` remains `verify-cassettes`-only: none of this can change a
   `replay` verdict, even under `--strict`.
 
+  Three enumerations of the covered fields gained `projects` — [`docs/cassette.md`](./docs/cassette.md),
+  [`docs/invariants.md`](./docs/invariants.md) and the shipped skill's `task-recipes.md`. `invariants.md`
+  also described this as a hash of the **resolved** session; it is the **authored, pre-resolution** shape,
+  deliberately, so the digest survives a different checkout — the function's own comment says so, and a
+  resolved hash could never match on another clone.
+
 - **The published control-protocol schema rejected five kinds of frame the harness sends and answers.**
   `schema/protocol.v1.json` described four request subtypes; the harness has always answered **six** —
   adding `request_user_dialog` and `elicitation`/`side_question` — and it also sends a fail-closed
