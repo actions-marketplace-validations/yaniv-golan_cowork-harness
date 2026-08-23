@@ -6,7 +6,7 @@ Self-contained reference. Tracks `cowork-harness 2.0.1` (baseline `desktop-1.344
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@main
+- uses: yaniv-golan/cowork-harness@v2
   with:
     command: replay
     path: cassettes/
@@ -43,7 +43,7 @@ jobs:
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
           # Background on the provenance chain: the "Agent-binary provenance" section of
           # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md
-      - uses: yaniv-golan/cowork-harness@main
+      - uses: yaniv-golan/cowork-harness@v2
         with:
           command: run
           path: scenarios/
@@ -113,7 +113,7 @@ Action has no input for, and it creates a coupling nothing checks:
 `version` defaults to `latest`, and accepts **any npm range** — not just an exact pin. So:
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@main
+- uses: yaniv-golan/cowork-harness@v2
   with:
     command: lint
     path: scenarios/
@@ -307,7 +307,7 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
 ## GitHub Actions sketch
 
-The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@main` does
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v2` does
 in one step (see the top of this doc) — reach for this form when you need independent per-command
 gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
 equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary

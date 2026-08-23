@@ -35,18 +35,41 @@ it("parsed a sane action.yml input/command set", () => {
   expect(validCommands).toContain("run");
 });
 
-// No `v1` (or any) tag has been published for this repo's GitHub Action — a doc referencing an
-// unpublished tag would send a copy-pasting reader to a `uses:` that 404s. `main` is the only ref
-// that's actually resolvable today; revisit pinning a moving major-version tag once 1.0.0 ships.
+// The documented `uses:` ref must be the CURRENT major's alias tag — `@v<major of package.json>`.
+//
+// This used to require `@main`, for a good reason at the time: no alias tag had ever been published, so a
+// doc naming one would have sent a copy-pasting reader to a `uses:` that 404s. Its own note said to revisit
+// "once 1.0.0 ships". Two things have since changed, and together they are what make an alias safe to
+// recommend: `v2`/`v2.0` exist and point at a real release, and `release.yml` now MOVES them on every
+// stable release instead of leaving it to a checklist — which is what had let `v1` sit at 1.24.0 for two
+// releases. Recommending a floating tag nobody remembers to move is worse than recommending `@main`; that
+// is no longer the situation.
+//
+// Derived from `package.json` rather than hardcoded, so the next major forces these docs to move with it
+// instead of silently pointing a reader at the previous line. `@main` is deliberately NOT allowed here: a
+// consumer-facing recipe should name a ref that is stable within a major, and permitting both would let the
+// recommendation drift back without anything noticing.
 describe("Action docs: yaniv-golan/cowork-harness ref policy", () => {
   const REF_RE = /yaniv-golan\/cowork-harness@([^\s`"']+)/g;
+  const major = (JSON.parse(readFileSync(resolve("package.json"), "utf8")).version as string).split(".")[0];
+  const expected = `v${major}`;
+
+  it(`derives the expected ref from package.json (currently @${expected})`, () => {
+    // Never go green because the version read produced junk and every ref "matched" nothing.
+    expect(major).toMatch(/^\d+$/);
+  });
 
   for (const file of DOC_FILES) {
-    it(`${file} only references @main`, () => {
+    it(`${file} references only @${expected}`, () => {
       const text = readFileSync(resolve(file), "utf8");
       const refs = [...text.matchAll(REF_RE)].map((m) => m[1]);
-      const bad = refs.filter((r) => r !== "main");
-      expect(bad, `${file} references a yaniv-golan/cowork-harness ref other than "main": ${bad.join(", ")}`).toEqual([]);
+      expect(refs.length, `${file} names the Action nowhere — the ref policy would be vacuous`).toBeGreaterThan(0);
+      const bad = refs.filter((r) => r !== expected);
+      expect(
+        bad,
+        `${file} references a yaniv-golan/cowork-harness ref other than "${expected}" (the current major's ` +
+          `alias, moved automatically by release.yml): ${bad.join(", ")}`,
+      ).toEqual([]);
     });
   }
 });
