@@ -107,3 +107,41 @@ jobs:
           # auto "Full Changelog" compare link below it (softprops pre-pends `body`).
           generate_release_notes: true
           body_path: RELEASE_NOTES.md
+
+      # MOVE THE MARKETPLACE ALIAS TAGS. Manual before this, and it lapsed: `v1` sat at 1.24.0 through two
+      # releases because moving it was a checklist line someone had to remember. The Action's consumers pin
+      # `@v1`/`@v1.0`, so a stale alias is a promise the repo stops keeping silently.
+      #
+      # Runs LAST, after publish and the GitHub Release: an alias is a pointer to a release that already
+      # exists, and a failure here must never be able to half-publish anything.
+      #
+      # Two guards, both of which a hand-run `git tag -f` skips:
+      #   * PRERELEASE tags never move an alias. The trigger accepts `v1.0.4-rc.1`, and pointing `v1` at an
+      #     rc would hand every `@v1` consumer a prerelease.
+      #   * NEVER MOVE BACKWARDS. Releasing a 1.25.1 patch after 2.0.1 exists should move `v1`/`v1.25`
+      #     forward and leave `v2` alone — which falls out of deriving the aliases from the released
+      #     version. But re-releasing an OLDER patch on a line (a 1.20.5 after 1.25.0) must NOT drag `v1`
+      #     back, so each alias only moves when this release is the highest on the line it names.
+      - name: Move the major/minor alias tags (vX, vX.Y)
+        run: |
+          set -euo pipefail
+          V="${GITHUB_REF_NAME#v}"
+          case "$V" in
+            *-*) echo "::notice::$GITHUB_REF_NAME is a prerelease — leaving alias tags untouched"; exit 0 ;;
+          esac
+          MAJOR="${V%%.*}"; MINOR="${V#*.}"; MINOR="${MINOR%%.*}"
+          git fetch --tags --force --quiet
+          highest() { # highest stable release tag matching $1, or empty
+            git tag -l "$1" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+          }
+          for spec in "v${MAJOR}:v${MAJOR}.*.*" "v${MAJOR}.${MINOR}:v${MAJOR}.${MINOR}.*"; do
+            alias="${spec%%:*}"; pattern="${spec#*:}"
+            top="$(highest "$pattern")"
+            if [ "$top" != "$GITHUB_REF_NAME" ]; then
+              echo "::notice::$alias unchanged — $top is the highest on that line, not $GITHUB_REF_NAME"
+              continue
+            fi
+            git tag -f "$alias" "$GITHUB_REF_NAME"
+            git push -f origin "refs/tags/$alias"
+            echo "::notice::$alias -> $GITHUB_REF_NAME"
+          done
