@@ -35,7 +35,10 @@ All notable changes to this project are documented here. The format is based on
   and `redactCassette` passed it through in its `...cassette` spread — so `verify-cassettes` reported
   `ok: true` with `privacyScanned: true` over a real username and directory layout. Fixed at all three
   sites: the scan, the redactor, and `readCassetteForScan`'s malformed-document projection — that last one
-  is the trap, since a fixture built only from a valid cassette passes with half the fix missing.
+  is the trap, since a fixture built only from a valid cassette passes with half the fix missing. **The
+  committed example was re-redacted in the same change** (`examples/replays/example-pdf-skill.cassette.json`
+  — `"/Users/…/examples/data/project"` → `"/redacted/examples/data/project"`), so the path that was already
+  public in this repo is scrubbed rather than merely blocked for future recordings.
 - **`--answer-policy` turned a one-character typo into zero rules, silently.** A document keyed `answer:`
   instead of `answers:` hit `?? []`, and an empty array passes an `Array.isArray` check — so the policy
   loaded as "no rules" and the run spent tokens before whiffing on the first gate. The parser now
