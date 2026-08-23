@@ -6,26 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Changed
+### Fixed
 
-- **The documented Action ref is now `@v2`, not `@main`** — 7 references across `README.md`,
-  `SKILL.md` and `ci-recipe.md`. `@main` was right when it was written: no alias tag had ever been
-  published, so naming one would have sent a copy-pasting reader to a `uses:` that 404s, and the guard's
-  own note said to revisit "once 1.0.0 ships". Two things had to be true first, and now are — `v2`/`v2.0`
-  point at a real release, and `release.yml` moves them on every stable release rather than leaving it to a
-  checklist. Recommending a floating tag nobody remembers to move is worse than recommending `@main`; that
-  was the actual situation while `v1` sat at 1.24.0.
+- **`projects[].from` was missing from two places, and the second was a false green.** A connected project
+  is a host path exactly like a connected folder, and it was:
+  - **not resolved against the session file.** [`docs/session.md`](./docs/session.md) promises, without
+    qualification, that *"relative paths resolve from the session file's own directory"* — and it was true
+    of every path field except this one, which resolved against the **process CWD**. So the same session
+    file mounted different content depending on which directory you invoked from. The doc was right; the
+    resolver had simply skipped the field.
+  - **not part of the session fingerprint.** Swapping which directory is mounted at `.projects/<uuid>`
+    changed the run's inputs and `verify-cassettes` reported nothing — a false green in the gate whose job
+    is to notice that inputs moved. Folded in on the same **non-empty-only** terms as `agent_env`, so a
+    session with no `projects:` (and one with an explicit `projects: []`) hashes byte-identically to
+    before; only sessions that use the feature move. No committed cassette does.
 
-  `action-docs-sync` now derives the expected ref from `package.json`'s major instead of hardcoding it, so
-  the next major forces these docs to move with it rather than silently pointing a reader at the previous
-  line. `@main` is deliberately no longer accepted there: permitting both would let the recommendation
-  drift back with nothing noticing. Verified by mutation — regressing one reference to `@main` fails, and
-  setting the package version to 3.0.0 fails all three files.
-
-  **This changes nothing about which CLI you get.** The ref selects the Action; the CLI still comes from the
-  `version:` input, which still defaults to `latest`. `@v2` looks more like a version pin than `@main` did,
-  so that distinction matters more now, not less — it is spelled out in `README.md`'s Action section and in
-  `action.yml`'s own input description.
+  **A cassette recorded before this is reported `unverifiable`, not clean.** Its hash contains nothing
+  about `projects[]`, so it cannot distinguish "the field was never covered" from "the mount changed since
+  record time" — and reporting the mismatch as a benign migration would put the same false green back in
+  the remedy. When everything else matches exactly, `verify-cassettes` says so and asks for a re-record to
+  gain the coverage. `sessionFingerprintDrift` remains `verify-cassettes`-only: none of this can change a
+  `replay` verdict, even under `--strict`.
 
 ### Documentation
 
