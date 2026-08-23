@@ -235,3 +235,116 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on session-fingerprint
     expect(result.ok).toBe(true); // never checked — backward-compat
   });
 });
+
+// ── O3 / DA#33: `projects[]` is part of the session shape ────────────────────────────────────────────
+//
+// Two defects, in two different files. `projects[].from` is a host path exactly like `folders[].from`,
+// and it was:
+//
+//   1. the one path field `resolveSessionPaths` skipped — so a RELATIVE project path resolved against the
+//      process CWD, not the session file, and the same session mounted different content depending on
+//      which directory you invoked from; and
+//   2. absent from the session fingerprint — so swapping which directory is mounted at
+//      `.projects/<uuid>` changed the run's inputs and `verify-cassettes` reported nothing. A false green
+//      in the gate whose entire job is to notice that inputs moved.
+//
+// Folded in on the same NON-EMPTY-ONLY terms as `agent_env`, so a session without `projects:` hashes
+// byte-identically to before. That bound is what keeps the blast radius to sessions that use the feature.
+
+describe("buildSessionFingerprint — projects[] (O3)", () => {
+  const w = (dir: string, name: string, body: string) => {
+    writeFileSync(join(dir, name), body);
+    return dir;
+  };
+
+  it("a session with NO projects hashes exactly as it did before the field was folded in", () => {
+    // The non-empty bound, stated as a test: this is why the committed corpus and the vast majority of
+    // user cassettes do not move. A regression here is a false-stale wave for everyone.
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-p-"));
+    w(d, "s1.yaml", "model: claude-opus-4-8\n");
+    w(d, "s2.yaml", "model: claude-opus-4-8\nprojects: []\n");
+    // An explicitly-empty `projects: []` must also be a no-op, not a distinct shape.
+    expect(buildSessionFingerprint("s1.yaml", d)).toEqual(buildSessionFingerprint("s2.yaml", d));
+  });
+
+  it("changing projects[].FROM moves the hash — the false green this closes", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-p-"));
+    w(d, "a.yaml", "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n");
+    w(d, "b.yaml", "model: m\nprojects:\n  - uuid: u1\n    from: ./two\n");
+    const a = buildSessionFingerprint("a.yaml", d);
+    const b = buildSessionFingerprint("b.yaml", d);
+    expect(a).toBeDefined();
+    expect(a).not.toEqual(b);
+  });
+
+  it("changing projects[].UUID moves the hash too — it is the mount path", () => {
+    // The AC names both fields deliberately: `uuid` becomes `.projects/<uuid>`, so a change to it
+    // relocates the mount even when the content path is untouched.
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-p-"));
+    w(d, "a.yaml", "model: m\nprojects:\n  - uuid: u1\n    from: ./same\n");
+    w(d, "b.yaml", "model: m\nprojects:\n  - uuid: u2\n    from: ./same\n");
+    expect(buildSessionFingerprint("a.yaml", d)).not.toEqual(buildSessionFingerprint("b.yaml", d));
+  });
+
+  it("project ORDER does not move the hash — declaration order is not shape", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-p-"));
+    w(d, "a.yaml", "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n  - uuid: u2\n    from: ./two\n");
+    w(d, "b.yaml", "model: m\nprojects:\n  - uuid: u2\n    from: ./two\n  - uuid: u1\n    from: ./one\n");
+    expect(buildSessionFingerprint("a.yaml", d)).toEqual(buildSessionFingerprint("b.yaml", d));
+  });
+
+  it("the hash stays relocatable — the same session under a different dir hashes equal", () => {
+    // Guards the property the function's own comment is built on: authored relative paths are hashed,
+    // never absolutized, so a different checkout of the same config still matches.
+    const body = "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n";
+    const d1 = mkdtempSync(join(tmpdir(), "cwh-sfp-p1-"));
+    const d2 = mkdtempSync(join(tmpdir(), "cwh-sfp-p2-"));
+    w(d1, "s.yaml", body);
+    w(d2, "s.yaml", body);
+    expect(buildSessionFingerprint("s.yaml", d1)).toEqual(buildSessionFingerprint("s.yaml", d2));
+  });
+});
+
+describe("sessionFingerprintDrift — a pre-`projects` recording is UNVERIFIABLE, not clean (O3)", () => {
+  const mk = (dir: string, body: string, fp: string): { cassette: Pick<Cassette, "sessionFingerprint" | "scenario">; dir: string } => {
+    writeFileSync(join(dir, "s.yaml"), body);
+    return { cassette: { sessionFingerprint: fp, scenario: { session: "s.yaml" } as Cassette["scenario"] }, dir };
+  };
+
+  it("reports unverifiable — NOT drifted, and NOT a silent all-clear", () => {
+    // The subtle part. A hash recorded before `projects` was covered contains nothing about `projects`,
+    // so it cannot distinguish "never covered" from "the mount changed since". Reporting `drifted:false`
+    // with no signal would put the false green back in the remedy; `unverifiable` says what is true.
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-mig-"));
+    const legacy = buildSessionFingerprint("s.yaml", d, undefined, { omitProjects: true });
+    writeFileSync(join(d, "s.yaml"), "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n");
+    const legacyOfProjectSession = buildSessionFingerprint("s.yaml", d, undefined, { omitProjects: true });
+    expect(legacyOfProjectSession, "the legacy shape must ignore projects entirely").toBeDefined();
+    void legacy;
+
+    const { cassette } = mk(d, "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n", legacyOfProjectSession!);
+    const r = sessionFingerprintDrift(cassette, d);
+    expect(r.drifted, "a coverage gap is not drift").toBe(false);
+    expect(r.unverifiable, "and it must not read as verified-clean").toBe(true);
+    expect(r.note).toMatch(/recorded before `projects`/);
+  });
+
+  it("a REAL change outside projects is still hard drift, not excused by the new branch", () => {
+    // The counterweight: the unverifiable branch must not become a blanket amnesty. If the pre-projects
+    // shape ALSO mismatches, something covered actually changed.
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-mig-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n");
+    const { cassette } = mk(d, "model: m\nprojects:\n  - uuid: u1\n    from: ./one\negress:\n  unrestricted: true\n", "0".repeat(64));
+    const r = sessionFingerprintDrift(cassette, d);
+    expect(r.drifted).toBe(true);
+    expect(r.unverifiable).toBeFalsy();
+  });
+
+  it("a post-`projects` recording that still matches is plain clean", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-mig-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\nprojects:\n  - uuid: u1\n    from: ./one\n");
+    const fp = buildSessionFingerprint("s.yaml", d)!;
+    const r = sessionFingerprintDrift({ sessionFingerprint: fp, scenario: { session: "s.yaml" } as Cassette["scenario"] }, d);
+    expect(r).toEqual({ drifted: false });
+  });
+});

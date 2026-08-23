@@ -1131,6 +1131,10 @@ export function resolveSessionPaths(session: SessionConfig, baseDir: string): Se
     uploads: session.uploads.map(r),
     trusted_folders: session.trusted_folders.map(r),
     folders: session.folders.map((f) => ({ ...f, from: r(f.from) })),
+    // `projects[].from` is a host path like every sibling above, and was the one path field this
+    // resolver skipped — so a RELATIVE project path resolved against the process CWD instead of the
+    // session file, making the same session mount different content depending on where you ran it.
+    projects: session.projects.map((pr) => ({ ...pr, from: r(pr.from) })),
     skills: { ...session.skills, local: session.skills.local.map(r) },
     mcp: { ...session.mcp, config: session.mcp.config ? r(session.mcp.config) : session.mcp.config },
     plugins: {

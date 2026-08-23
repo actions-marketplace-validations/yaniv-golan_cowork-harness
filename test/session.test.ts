@@ -221,6 +221,27 @@ describe("buildLaunchPlan", () => {
     expect(dupMounts).toHaveLength(1); // bare name mounts once, not once-per-marketplace
   });
 
+  it("O3: resolveSessionPaths resolves a relative projects[].from against the session dir", () => {
+    // `projects[].from` was the one path field this resolver skipped, so a relative value resolved
+    // against the PROCESS CWD instead of the session file — the same session file mounted different
+    // content depending on which directory you invoked from. Asserted alongside `folders[].from` so the
+    // two cannot drift apart again: they are the same kind of host path and must resolve the same way.
+    const s = loadSession({
+      folders: [{ from: "./content" }],
+      projects: [{ uuid: "u1", from: "./proj" }],
+    });
+    const r = resolveSessionPaths(s, "/base/dir");
+    expect(r.projects[0].from).toBe("/base/dir/proj");
+    expect(r.folders[0].from).toBe("/base/dir/content");
+    // `uuid` is a mount-path segment, not a host path — resolution must leave it alone.
+    expect(r.projects[0].uuid).toBe("u1");
+  });
+
+  it("O3: an absolute projects[].from is left untouched", () => {
+    const r = resolveSessionPaths(loadSession({ projects: [{ uuid: "u", from: "/abs/proj" }] }), "/base/dir");
+    expect(r.projects[0].from).toBe("/abs/proj");
+  });
+
   it("resolveSessionPaths resolves a relative local marketplace path but leaves a git URL untouched", () => {
     const s = loadSession({ plugins: { marketplaces: ["./local-mkt", "https://example.com/m.git"] } });
     const r = resolveSessionPaths(s, "/base/dir");
