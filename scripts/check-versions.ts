@@ -62,7 +62,9 @@
 //       The canonical form is `@^X.Y.Z`. Placeholder `X.Y.Z` prose is fine (it is not a version);
 //       CHANGELOG.md is exempt, being history. Also checks that every doc carrying a live floor
 //       agrees with SKILL.md's — invariants 3/5/5b covered only SKILL.md and README.md, leaving
-//       ci-recipe.md and examples/replays/README.md to drift unseen.
+//       ci-recipe.md and examples/replays/README.md to drift unseen. Covers the Action's own
+//       `version:` input too: `version: ">=1.11.0"` is the same unbounded floor with no `@` in it,
+//       so the `@>=` pattern could not see it.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -620,6 +622,16 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       // the equality rule — but never from the `>=` rule above: the FORM is the defect, whatever the
       // version. The opt-out is an explicit inline marker on the same line, so the intent is visible in
       // the doc rather than buried in a file list here.
+      // The Action's OWN `version:` input takes the same kind of range, and invariant 13's `@>=` pattern is
+      // blind to it — no `@` in `version: ">=1.11.0"`. Same defect, different syntax: a bare floor there
+      // hands a copy-paster the next major. Anchored ranges (`^2`), exact pins and `latest` are all fine;
+      // only the unbounded floor is not.
+      for (const m of text.matchAll(/version:\s*"(>=[^"]*)"/g))
+        if (!/<\s*\d/.test(m[1]))
+          errors.push(
+            `${path} sets the Action input \`version: "${m[1]}"\` — a bare floor crosses majors. Anchor it at ` +
+              `the current major (\`^${(floor ?? "0").split(".")[0]}\`), pin an exact version, or omit it for \`latest\`.`,
+          );
       if (floor)
         for (const line of text.split("\n")) {
           if (line.includes("floor-historical")) continue;
