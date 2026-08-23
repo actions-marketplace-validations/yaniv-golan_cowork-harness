@@ -53,37 +53,37 @@ describe("rewriteFileContent — JSON version fields", () => {
 });
 
 describe("rewriteFileContent — floors", () => {
-  it("bumps a cowork-harness@>=X.Y.Z floor", () => {
-    const before = 'install once with `npm i -g "cowork-harness@>=0.33.0"`.';
+  it("bumps a cowork-harness@^X.Y.Z floor", () => {
+    const before = 'install once with `npm i -g "cowork-harness@^0.33.0"`.';
     const after = rewriteFileContent(".claude/skills/cowork-harness/references/ci-recipe.md", before, "0.34.0");
-    expect(after).toContain("cowork-harness@>=0.34.0");
+    expect(after).toContain("cowork-harness@^0.34.0");
     expect(after).not.toContain("0.33.0");
   });
 
-  it("bumps a bare `@>=X.Y.Z` floor in README.md (no cowork-harness prefix)", () => {
-    const before = "The companion skill's `@>=0.33.0` floor guidance applies to ad-hoc CLI installs, not this input.";
+  it("bumps a bare `@^X.Y.Z` floor in README.md (no cowork-harness prefix)", () => {
+    const before = "The companion skill's `@^0.33.0` floor guidance applies to ad-hoc CLI installs, not this input.";
     const after = rewriteFileContent("README.md", before, "0.34.0");
-    expect(after).toContain("`@>=0.34.0`");
+    expect(after).toContain("`@^0.34.0`");
     expect(after).not.toContain("0.33.0");
   });
 
-  it("bumps both a cowork-harness@>=X.Y.Z floor and a bare @>=X.Y.Z floor in the same README.md content", () => {
+  it("bumps both a cowork-harness@^X.Y.Z floor and a bare @^X.Y.Z floor in the same README.md content", () => {
     const before =
-      'From a global install (`npm i -g "cowork-harness@>=0.33.0"`)... ' +
-      "the companion skill's `@>=0.33.0` floor guidance applies to ad-hoc CLI installs.";
+      'From a global install (`npm i -g "cowork-harness@^0.33.0"`)... ' +
+      "the companion skill's `@^0.33.0` floor guidance applies to ad-hoc CLI installs.";
     const after = rewriteFileContent("README.md", before, "0.34.0");
-    expect(after).toContain("cowork-harness@>=0.34.0");
-    expect(after).toContain("`@>=0.34.0`");
+    expect(after).toContain("cowork-harness@^0.34.0");
+    expect(after).toContain("`@^0.34.0`");
     expect(after).not.toContain("0.33.0");
   });
 
   it("does NOT touch an unrelated bare-looking floor outside README.md's rewrite rule", () => {
-    // examples/replays/README.md only gets the cowork-harness@>=X.Y.Z rule (per the plan's table);
-    // a bare `@>=X` there (which doesn't currently occur, but hypothetically) should survive.
-    const before = 'npm i -g "cowork-harness@>=0.33.0", or a bare `@>=0.33.0` mention.';
+    // examples/replays/README.md only gets the cowork-harness@^X.Y.Z rule (per the plan's table);
+    // a bare `@^X` there (which doesn't currently occur, but hypothetically) should survive.
+    const before = 'npm i -g "cowork-harness@^0.33.0", or a bare `@^0.33.0` mention.';
     const after = rewriteFileContent("examples/replays/README.md", before, "0.34.0");
-    expect(after).toContain("cowork-harness@>=0.34.0");
-    expect(after).toContain("`@>=0.33.0`"); // bare form untouched — not in this file's rule set
+    expect(after).toContain("cowork-harness@^0.34.0");
+    expect(after).toContain("`@^0.33.0`"); // bare form untouched — not in this file's rule set
   });
 });
 
@@ -107,8 +107,8 @@ describe("rewriteFileContent — SKILL.md", () => {
       "> (baseline `desktop-1.20186.1`). If your checkout is newer, prefer the live `--help`.",
       "",
       "- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 0.33.0**. " +
-        'If missing, run `npx "cowork-harness@>=0.33.0" <cmd>` or `npm i -g "cowork-harness@>=0.33.0"`. ' +
-        "**Pin `@>=0.33.0`, never `@latest`** — the floor fails loud.",
+        'If missing, run `npx "cowork-harness@^0.33.0" <cmd>` or `npm i -g "cowork-harness@^0.33.0"`. ' +
+        "**Pin `@^0.33.0`, never `@latest`** — the floor fails loud.",
       "",
       "  What the ≥ 0.33.0 floor gates, by release:",
       "",
@@ -144,26 +144,26 @@ describe("rewriteFileContent — SKILL.md", () => {
     expect(after).toContain("What the ≥ 0.34.0 floor gates");
   });
 
-  it("bumps every cowork-harness@>=X.Y.Z floor", () => {
+  it("bumps every cowork-harness@^X.Y.Z floor", () => {
     const after = rewriteFileContent(SKILL_MD, fixture(), "0.34.0");
-    expect(after).toContain('npx "cowork-harness@>=0.34.0" <cmd>');
-    expect(after).toContain('npm i -g "cowork-harness@>=0.34.0"');
+    expect(after).toContain('npx "cowork-harness@^0.34.0" <cmd>');
+    expect(after).toContain('npm i -g "cowork-harness@^0.34.0"');
   });
 
-  it("bumps the bare `Pin `@>=X.Y.Z`` floor (no cowork-harness prefix) — the gap that shipped stale in 1.0.0", () => {
-    // Regression: SKILL.md's `Pin `@>=X`` is a bare floor with no `cowork-harness` prefix, so
-    // bumpHarnessFloors misses it and check:versions (which reads only the first cowork-harness@>=
+  it("bumps the bare `Pin `@^X.Y.Z`` floor (no cowork-harness prefix) — the gap that shipped stale in 1.0.0", () => {
+    // Regression: SKILL.md's `Pin `@^X`` is a bare floor with no `cowork-harness` prefix, so
+    // bumpHarnessFloors misses it and check:versions (which reads only the first cowork-harness@^
     // match) can't see it. It rotted from 0.33.0 through 1.0.0 until bumpBareFloors was wired into
     // the SKILL.md case too.
     const after = rewriteFileContent(SKILL_MD, fixture(), "0.34.0");
-    expect(after).toContain("Pin `@>=0.34.0`");
-    expect(after).not.toContain("Pin `@>=0.33.0`");
+    expect(after).toContain("Pin `@^0.34.0`");
+    expect(after).not.toContain("Pin `@^0.33.0`");
   });
 
   it("CRITICAL: leaves a `- **<from-version>:** …` release-note bullet completely unchanged", () => {
     // This is the real regression a naive old->new replace causes: the bullet CONTAINS the
     // bump-from version ("0.33.0"), so it can only survive if the rewrite is pattern-scoped to the
-    // surrounding context (tracks-harness:, needs **≥**, cowork-harness@>=, etc.) rather than a blind
+    // surrounding context (tracks-harness:, needs **≥**, cowork-harness@^, etc.) rather than a blind
     // substring swap of every "0.33.0" occurrence.
     const before = fixture();
     const after = rewriteFileContent(SKILL_MD, before, "0.34.0");
@@ -208,12 +208,12 @@ describe("rewriteFileContent — ci-recipe.md", () => {
       "",
       'release; pin an exact version (e.g. `version: "0.33.0"`) for reproducible CI.',
       "",
-      '- run: npm i -g "cowork-harness@>=0.33.0"',
+      '- run: npm i -g "cowork-harness@^0.33.0"',
     ].join("\n");
     const after = rewriteFileContent(CI_RECIPE, before, "0.34.0");
     expect(after).toContain("Tracks `cowork-harness 0.34.0`");
     expect(after).toContain('e.g. `version: "0.34.0"`');
-    expect(after).toContain("cowork-harness@>=0.34.0");
+    expect(after).toContain("cowork-harness@^0.34.0");
     expect(after).not.toContain("0.33.0");
   });
 });

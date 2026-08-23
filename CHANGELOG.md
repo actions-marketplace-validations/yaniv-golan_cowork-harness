@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
-## [Unreleased]
+## [2.0.1] — 2026-08-23
 
 ### Added
 
@@ -18,6 +18,22 @@ All notable changes to this project are documented here. The format is based on
   (`/mnt/uploads/x`, `https://…`, `/deck.pdf`, `8/22`) do not trigger it.
 
 ### Fixed
+
+- **Every published version floor was unbounded, so it resolved across a major.** The skill and the CI
+  recipes advertised `cowork-harness@>=X.Y.Z`; `>=` does not stop at a major boundary — measured,
+  `cowork-harness@>=1.0.0` matches 2.0.0 — so a consumer following the documented floor was handed the
+  next **breaking** release automatically. That is not hypothetical: it is how `@>=2.0.0` resolved the
+  deprecated 2.0.0. All 12 live floors across `README.md`, `SKILL.md`, `ci-recipe.md` and
+  `examples/replays/README.md` are now `@^X.Y.Z`, which resolves the newest release **within the same
+  major**, and the docs that teach the pattern teach the bounded form.
+
+  `check:versions` gains invariant 13, which is what keeps it that way: **no shipped doc may advertise
+  `@>=` with a real version**, and every doc carrying a live floor must agree with `SKILL.md`'s. It scans
+  the whole shipped-doc corpus rather than a hand-listed set — `ci-recipe.md` and
+  `examples/replays/README.md` had drifted out of the previous checks precisely by not being on such a
+  list. A doc that deliberately cites an OLD floor to illustrate a past feature gate opts out of the
+  equality rule with an inline `floor-historical` marker; it does **not** opt out of the `>=` rule, since
+  the form is the defect whatever the version.
 
 - **Twenty authored objects silently STRIPPED unknown keys instead of rejecting them** (11 in
   `src/types.ts`, 9 in `src/session.ts`, all `z.object` → `z.strictObject`). For an authored document a

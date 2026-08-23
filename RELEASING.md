@@ -130,7 +130,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 3. `.claude/skills/cowork-harness/.claude-plugin/plugin.json` → `"version"`.
 4. `.claude/skills/cowork-harness/SKILL.md` → frontmatter `version:`, the `tracks-harness:` line,
    the "**Version note**" block, and the **version floor** in §0 (`needs ≥ X.Y.Z`,
-   `npx "cowork-harness@>=X.Y.Z"`).
+   `npx "cowork-harness@^X.Y.Z"`).
 5. `.claude/skills/cowork-harness/references/scenario-schema.md` → the
    "Tracks `cowork-harness X.Y.Z`" line.
 6. `.claude/skills/cowork-harness/references/fidelity-and-answers.md`,
@@ -140,10 +140,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 7. The baseline these track (`tracks-harness … (baseline desktop-<ver>)`) — keep in sync with the
    newest `baselines/desktop-*.json`. The `check:versions` guard enforces this for SKILL.md, every
    `references/*.md` baseline pin, and DESIGN.md's current-state sentence — a lagging pin reds CI.
-8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g "cowork-harness@>=X.Y.Z"` floors
+8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g "cowork-harness@^X.Y.Z"` floors
    (currently 3 occurrences).
-9. `examples/replays/README.md` → the `npm i -g "cowork-harness@>=X.Y.Z"` floor.
-10. `README.md` → every `cowork-harness@>=X.Y.Z` floor (the bootstrap-fallback `npx`/`npm i -g` lines
+9. `examples/replays/README.md` → the `npm i -g "cowork-harness@^X.Y.Z"` floor.
+10. `README.md` → every `cowork-harness@^X.Y.Z` floor (the bootstrap-fallback `npx`/`npm i -g` lines
     plus the Action-inputs "companion skill's floor guidance" mention). The `check:versions` lockstep
     guard enforces these match the SKILL.md floor and will red CI otherwise.
 
