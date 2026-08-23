@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The documented Action ref is now `@v2`, not `@main`** — 7 references across `README.md`,
+  `SKILL.md` and `ci-recipe.md`. `@main` was right when it was written: no alias tag had ever been
+  published, so naming one would have sent a copy-pasting reader to a `uses:` that 404s, and the guard's
+  own note said to revisit "once 1.0.0 ships". Two things had to be true first, and now are — `v2`/`v2.0`
+  point at a real release, and `release.yml` moves them on every stable release rather than leaving it to a
+  checklist. Recommending a floating tag nobody remembers to move is worse than recommending `@main`; that
+  was the actual situation while `v1` sat at 1.24.0.
+
+  `action-docs-sync` now derives the expected ref from `package.json`'s major instead of hardcoding it, so
+  the next major forces these docs to move with it rather than silently pointing a reader at the previous
+  line. `@main` is deliberately no longer accepted there: permitting both would let the recommendation
+  drift back with nothing noticing. Verified by mutation — regressing one reference to `@main` fails, and
+  setting the package version to 3.0.0 fails all three files.
+
+  **This changes nothing about which CLI you get.** The ref selects the Action; the CLI still comes from the
+  `version:` input, which still defaults to `latest`. `@v2` looks more like a version pin than `@main` did,
+  so that distinction matters more now, not less — it is spelled out in `README.md`'s Action section and in
+  `action.yml`'s own input description.
+
+- **The CI recipe no longer pins the Action's `version:` input, and no longer teaches a bare floor.** It
+  carried `version: ">=1.11.0"` — which reads as "at least 1.11.0" and silently means "and every future
+  major too", so a copy-paster gets the next major with no say in it. It was **not** broken today
+  (`--min-severity` still exists in 2.x, and `lint` reads no cassette, so 2.0.0's hash-format epoch never
+  applied to that step) — the defect was latent and in the FORM.
+
+  The pin is dropped rather than corrected. It resolved 2.0.1, exactly as the `latest` default does, so it
+  changed nothing while *looking* like a bound — and the numbered alternatives all rot: `^1.11.0` would
+  have frozen every new copy-paster on 1.25.0, the previous major, and `^2.0.1` needs remembering at each
+  release. The guidance moved to prose instead: if a flag in `extra-args` landed in a specific release,
+  anchor the range at the current major (`^2`), and reach for an exact pin only when you want
+  byte-reproducible CI. [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml)'s own description stops offering `>=1.11.0` and
+  `^1.11.0` as interchangeable — they are not, and it had been recommending the unbounded one.
+
+  `check:versions` invariant 13 now covers the Action's `version:` input, which it could not see before:
+  it keys on `@>=`, and `version: ">=1.11.0"` has no `@` — the same defect in different syntax, with no
+  coverage. Only the **unbounded** floor is rejected; verified against each form, `>=1.11.0 <3`, `^2`,
+  `2.0.1` and `latest` all pass.
+
 ### Fixed
 
 - **`projects[].from` was missing from two places, and the second was a false green.** A connected project
@@ -27,6 +67,47 @@ All notable changes to this project are documented here. The format is based on
   the remedy. When everything else matches exactly, `verify-cassettes` says so and asks for a re-record to
   gain the coverage. `sessionFingerprintDrift` remains `verify-cassettes`-only: none of this can change a
   `replay` verdict, even under `--strict`.
+
+- **The published control-protocol schema rejected five kinds of frame the harness sends and answers.**
+  `schema/protocol.v1.json` described four request subtypes; the harness has always answered **six** —
+  adding `request_user_dialog` and `elicitation`/`side_question` — and it also sends a fail-closed
+  `subtype:"error"` response envelope, whose payload is a *string* under `error` rather than an object
+  under `response`, so a validator that knew only the success envelope rejected every one. Measured
+  against the previous schema: all five representative frames **REJECT**; against the new one, all five
+  accept. Anyone validating real traffic was seeing failures on frames the harness handles correctly.
+
+  Added as new `oneOf`/`anyOf` branches plus one new top-level response shape — **111 insertions, zero
+  deletions** in the surface baseline, so nothing existing was narrowed and no frame the schema already
+  accepted is affected. Both spellings the parser accepts are admitted (`dialogKind`/`dialog_kind`,
+  `mcp_server_name`/`server`, `message`/`prompt`) rather than guessing which the agent sends.
+
+  The golden vector pack grew with it, generated from the **real** envelope builders rather than
+  hand-authored lookalikes. The existing lockstep test — every schema definition must be exercised by a
+  vector — caught all five additions immediately, which is what forced those vectors to exist. One of them
+  asserts the error envelope does **not** validate as a success envelope, so the two shapes cannot be
+  quietly conflated later.
+
+  [`SPEC.md`](./SPEC.md) §12 now states the additive latitude for this surface explicitly. Its silence had
+  read as a prohibition, which is plausibly why three subtypes went undescribed rather than added — while
+  [`docs/protocol.md`](./docs/protocol.md)'s own versioning policy had said all along that an additive
+  variant is a v1 minor note, which is where the dated entry now lives.
+
+- **The Marketplace alias tags are moved by the release workflow instead of by remembering.** `v1` sat at
+  1.24.0 through two releases because moving it was a checklist line. `release.yml`'s last step now points
+  `vX` and `vX.Y` at the release it just published, with two guards a hand-run `git tag -f` skips: a
+  **prerelease** tag moves nothing (the trigger accepts `v1.0.4-rc.1`, and pointing `v1` at an rc would
+  hand every `@v1` consumer a prerelease), and an alias **never moves backwards** — re-releasing an older
+  patch on a line moves `vX.Y` and leaves `vX` alone. Verified by executing the logic against a synthetic
+  tag set rather than by reading it: releasing `v1.20.5` while `v1.25.0` exists correctly skips `v1` and
+  still moves `v1.20`. It runs last, after publish and the GitHub Release, so a failure there cannot
+  half-publish anything.
+
+  Alongside it, the tags are now correct: **`v2` and `v2.0` created** (they did not exist, so nothing
+  pointed at the 2.x Action), and **`v1` moved 1.24.0 → 1.25.0**. Worth recording what that move did and
+  did not fix: the Action's whole surface — `action.yml` plus the `render.js` it loads — is **byte-identical
+  from 1.24.0 through 2.0.1** apart from three lines of input *description*. So a stale `v1` was a promise
+  the repo had stopped keeping, not a functional gap, and the one public `@v1` consumer pins `version:` on
+  every step and was never exposed to the `latest` default at all.
 
 ### Documentation
 
