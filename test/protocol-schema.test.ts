@@ -308,6 +308,19 @@ describe("protocol.v1.json — golden vector pack lockstep (fixtures/protocol/v1
     });
   }
 
+  // docs/protocol.md prose-enumerates the vector pack. That list went stale the moment five vectors were
+  // added — in the SAME file whose definitions table and changelog entry were updated for them, a few
+  // paragraphs apart. An enumeration with no tie to the directory it describes drifts silently, so tie it.
+  it("docs/protocol.md's vector-pack list names every file in fixtures/protocol/v1/", () => {
+    const doc = readFileSync(join(REPO_ROOT, "docs/protocol.md"), "utf8");
+    const start = doc.indexOf("## Golden vector pack");
+    expect(start, "could not locate the 'Golden vector pack' section — did it move or get renamed?").toBeGreaterThan(-1);
+    const section = doc.slice(start, doc.indexOf("\n## ", start + 1) === -1 ? undefined : doc.indexOf("\n## ", start + 1));
+    expect(allFiles.length, "read no vectors — this guard would be vacuous").toBeGreaterThan(5);
+    const unlisted = allFiles.filter((f) => !section.includes(f));
+    expect(unlisted, `docs/protocol.md's vector-pack section does not name: ${unlisted.join(", ")}`).toEqual([]);
+  });
+
   it("every schema definitions entry is exercised by at least one vector (no unexercised definition)", () => {
     // Defs exercised directly by the maps above, PLUS the structural wrapper/union defs that every
     // vector transitively exercises by validating against the root Message schema (oneOf ControlRequest |

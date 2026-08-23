@@ -106,7 +106,11 @@ a supported use.
 One JSON file per message kind — `initialize.json`, `permission-request.json`, `question-request.json`
 (exercises `multiSelect:true`), `allow-response.json`, `deny-response.json`,
 `question-answer-response.json` (the multiSelect comma-joined answer), `hook-callback.json` and
-`mcp-message.json` (request/response round-trip pairs, `{request, response}`).
+`mcp-message.json` (request/response round-trip pairs, `{request, response}`) — plus, for the frames added
+in the 2026-08-23 entry below, `user-dialog-request.json` / `dialog-response.json`,
+`elicitation-request.json` / `elicit-response.json`, and `error-response.json`. That last one is the only
+vector that must **not** validate as a success envelope, which `test/protocol-schema.test.ts` asserts
+explicitly so the two response shapes cannot be quietly conflated.
 
 - `question-request.json` and `question-answer-response.json` come from a real run of the committed,
   redaction-scanned `examples/replays/example-multiselect-gate.cassette.json` scenario — real bytes the
