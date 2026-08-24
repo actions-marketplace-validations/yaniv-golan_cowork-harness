@@ -41,6 +41,45 @@ function csv(v: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/** Pattern ORDER is load-bearing, and nothing used to say so.
+ *
+ *  `redactText` applies patterns sequentially over the ACCUMULATING output, so an earlier pattern can eat
+ *  the very text a later pattern's lookahead exists to preserve. The shipped policy relies on this: the
+ *  `(?=/mnt/)`-anchored rules are ordered ahead of the bare catch-alls precisely so a run-dir path redacts
+ *  to `[REDACTED:…]/mnt/outputs/f.md` and still resolves. Reverse them and the whole path is eaten:
+ *
+ *    as shipped -> [REDACTED:local-path:…]/mnt/outputs/report.md   -> normalizes to `outputs/report.md`
+ *    reordered  -> [REDACTED:local-path:…]                         -> normalizes to `null`
+ *
+ *  i.e. every `computer_links` structural-marker resolution silently stops working — no error, no finding,
+ *  just links that no longer resolve on replay. This detects the one shape that causes it: a bare pattern
+ *  ordered ahead of an otherwise-identical lookahead-anchored one.
+ *
+ *  Deliberately CONSERVATIVE — regex subsumption is undecidable in general, so this fires only when a
+ *  later pattern's source is exactly an earlier one's plus a trailing lookahead (modulo lazy quantifiers).
+ *  A miss is a missed warning; a false positive would train authors to ignore it. */
+export function findShadowedPatterns(sources: string[]): { shadowed: number; by: number; base: string }[] {
+  const norm = (r: string) => r.replace(/\+\?/g, "+").replace(/\*\?/g, "*");
+  const out: { shadowed: number; by: number; base: string }[] = [];
+  for (let j = 0; j < sources.length; j++) {
+    const b = norm(sources[j]);
+    for (let i = 0; i < j; i++) {
+      const a = norm(sources[i]);
+      if (!b.startsWith(a)) continue;
+      // The remainder must be exactly a trailing lookahead. Checked by SHAPE, never by parsing the
+      // lookahead's body: an earlier version matched `\(\?=[^()]*\)`, and the `[^()]*` silently skipped
+      // every lookahead containing a group — so `(?=/mnt(?:/|$|[\s"'\\)\]]))`, the natural way to write
+      // "slash, end, or delimiter" and arguably more correct than a bare `(?=/mnt/)`, went unflagged while
+      // being just as dangerous. Reported against a real third-party policy. Paren-balancing here would
+      // also have to be escape- and char-class-aware (that same policy carries a `\)` inside a class);
+      // not looking inside sidesteps both problems.
+      const rest = b.slice(a.length);
+      if (rest.length > 3 && rest.startsWith("(?=") && rest.endsWith(")")) out.push({ shadowed: j, by: i, base: a });
+    }
+  }
+  return out;
+}
+
 /** Assemble a redaction policy from `.cowork-redact.json` (searched in `searchDirs`, e.g. cwd then the
  *  scenario/cassette dir) merged with `COWORK_HARNESS_REDACT_PATTERNS`/`_KEYS`. No config + no env →
  *  an empty policy (the opt-in default; the scanner is the always-on safety net). A malformed regex
@@ -64,6 +103,12 @@ export function loadRedactionPolicy(searchDirs: string[]): RedactionPolicy {
   }
   for (const src of csv(process.env.COWORK_HARNESS_REDACT_PATTERNS)) patterns.push({ re: new RegExp(src, "g"), label: "redacted" });
   for (const k of csv(process.env.COWORK_HARNESS_REDACT_KEYS)) keyNames.push(k);
+  for (const { shadowed, by, base } of findShadowedPatterns(patterns.map((p) => p.re.source)))
+    process.stderr.write(
+      `cowork-harness: WARNING .cowork-redact.json pattern [${by}] (\`${base}\`) is ordered ahead of the ` +
+        `lookahead-anchored pattern [${shadowed}], so it matches first and eats the text that lookahead ` +
+        `preserves. Move [${shadowed}] before [${by}], or computer:// links will stop resolving on replay.\n`,
+    );
   return { patterns, keyNames };
 }
 
