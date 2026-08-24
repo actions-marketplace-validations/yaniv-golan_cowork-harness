@@ -649,7 +649,8 @@ is never truncated by `process.exit` on a pipe.)
 question" outcome (the deferred `on_unanswered: surface` / `needs_input` Track 2). It is currently
 unused — reserving it now keeps a later addition additive rather than a renumbering of the burned
 `0`/`1`/`2`/`3` space. Exit-code space is **per-command**, not global (`status` uses `0`/`1`/`2`/`3`
-with its own meanings); this reservation applies only to the `run`/`skill` family.
+with its own meanings); this reservation applies only to the `run`/`skill` family. `rehash` does use `4`,
+for partial migration success (above) — a different command, so it does not consume this reservation.
 
 **Per-command exceptions:** `critique` **never gates on findings** — it exits `0` for any finding of any classification, and even when the task run it graded ERRORED (that is a finding about the skill, not a broken instrument). It exits `2` only for a usage error or an **instrument failure**: the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw* — i.e. no critique was produced. Do not gate CI on `critique`; that inverts its design. `lint` exits `127` when `python3` is missing (spawn error); `replay` exits
 `2` on a **whole-cassette operational failure** — anything `readCassette` rejects (unreadable, invalid
@@ -668,6 +669,14 @@ verification could NOT complete (any `unverifiable-*`-class staleness finding, a
 newer harness than this one understands, or a per-file read error/crash — including a
 malformed/unreadable cassette, which is tallied there rather than as a `1` finding). A real finding
 always outranks a could-not-verify signal within the same run, so exit `1` wins if both occur.
+**`rehash` uses its own four-way split:** `0` all migrated (or nothing needed migrating) · **`4` PARTIAL —
+some migrated, some could not** · `1` nothing migrated and at least one could not · `2` usage. The partial
+code is distinct because the two failing shapes demand opposite responses — commit what migrated and budget
+a re-record for the rest, versus nothing here is salvageable — and while both were `1` a shell consumer
+reading only the exit code could not tell them apart (the JSON envelope always carried the split as
+`migrated`/`skipped`/`errors`). `4` rather than `3`: the code space is per-command, and `3`'s "could not
+verify" meaning is load-bearing on `verify-cassettes` — a migration that partly succeeded is not a failed
+verification.
 **Collision warning:** the `run`/`skill` family's exit `3` means *boundary/integrity* (§11 above);
 `verify-cassettes`' exit `3` means *could not verify*. These are unrelated per-command meanings that
 happen to share a number — a CI script that branches on exit code across commands must not conflate
