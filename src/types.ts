@@ -1745,7 +1745,11 @@ export interface RunResult {
    *  it was in the scratchpad but did NOT land there (present_files' own copy-failure branch — the file
    *  "remains in the scratchpad", not deliverable to the user). A path already under a mount
    *  (passthrough) is neither. CONTENT-CLASS: both the tool_use and tool_result live in the ordinary
-   *  events stream, so this is re-derived identically on the replay re-drive — undefined only means no
+   *  events stream, so the replay re-drive reproduces this AT CONTAINER, where the agent's cwd is the session
+   *  root the live lane measures containment from. At hostloop the live lane measures from the session root
+   *  while the re-drive has only the recorded cwd (`mnt/outputs`, inside it), so promoted/leaked are not
+   *  equivalent there — immaterial to `no_scratchpad_leak`, which evaluates at container only, and to
+   *  `present_files_called`, which reads `presentFilesCalls` rather than this list. Undefined means no
    *  `present_files` telemetry was recorded for this run (an older run predating the feature), the
    *  evidence-unavailable signal for `no_scratchpad_leak`; an empty `[]` is a valid "nothing presented"
    *  state and is NOT the same as undefined. */

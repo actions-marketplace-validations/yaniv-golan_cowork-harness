@@ -837,6 +837,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
       promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
       let sdkMcp: SdkMcp | undefined;
+      // The session root as reported BY THE SPAWN that just happened — the dir whose `mnt/` is the
+      // user-visible workspace, in the same path space the agent reports its own paths in. Only the two
+      // tiers that serve present_files supply one; the others keep the cwd fallback (see setSessionRoot).
+      let spawnedSessionRoot: string | undefined;
       if (effectiveFidelity === "hostloop") {
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -857,6 +861,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         hostloopPathGateFired = hl.pathGateFired;
         hostloopInfraErrors = hl.infraErrors;
         hostloopMarkTearingDown = hl.markTearingDown;
+        spawnedSessionRoot = hl.sessionRoot; // HOST tree — the native agent runs there
         logHostWriteNotice(
           plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => ({ from: mt.hostPath, mode: mt.mode })),
           warn,
@@ -878,6 +883,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
         sdkMcp = ct.sdkMcp; // cowork/present_files + the skills/plugins discovery servers (combineSdkMcp)
+        spawnedSessionRoot = ct.sessionRoot; // VM path (`/sessions/<id>`) — what the agent inside reports
       } else if (effectiveFidelity === "microvm") {
         child = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -924,11 +930,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
       const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
-      // The session root — the dir whose `mnt/` IS the user-visible workspace. Given explicitly because
-      // the agent's own cwd only coincides with it on some tiers (at hostloop the agent runs inside
-      // mnt/outputs), and present_files' promoted/leaked classification is measured from it.
-      // `protocol` has no session/mnt layout at all, so it stays unset and keeps the cwd fallback.
-      if (effectiveFidelity !== "protocol") run.setSessionRoot(join(outDir, "work", "session"));
+      // The session root — the dir whose `mnt/` IS the user-visible workspace, and what present_files'
+      // promoted/leaked classification is measured from. Taken from the SPAWN, never re-derived here: the
+      // root and the agent's reported paths must be in the SAME path space, and they are not the same space
+      // on every tier. A host path was passed unconditionally once; at container the agent reports VM paths
+      // (`/sessions/<id>/…`), so nothing was ever inside the root, every presented file classified
+      // `leaked: false`, and `no_scratchpad_leak` — which evaluates at container and nowhere else — passed
+      // vacuously over a real copy-failure leak.
+      //
+      // Unset on the tiers that serve no present_files (`protocol`, `microvm`), where the cwd fallback is
+      // already the session root and there is no delivery to classify.
+      if (spawnedSessionRoot !== undefined) run.setSessionRoot(spawnedSessionRoot);
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.

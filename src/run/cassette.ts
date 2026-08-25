@@ -6333,8 +6333,10 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "task_status",
   "result",
   // content-class, NOT controlOut-gated: both the present_files tool_use and its own tool_result live
-  // in the ordinary events stream, so the re-drive reproduces `RunResult.presentedFiles` exactly like
-  // the other re-derived signals above (skill_triggered, redundantToolCalls, …).
+  // in the ordinary events stream, so the re-drive reproduces the present_files signals like the other
+  // re-derived ones above (skill_triggered, redundantToolCalls, …). `presentFilesCalls` (what
+  // present_files_called reads) reproduces on every tier; `presentedFiles`' promoted/leaked booleans
+  // reproduce at container, where cwd is the session root — no_scratchpad_leak's only tier.
   "no_scratchpad_leak",
   "present_files_called",
   // content-class, NOT controlOut-gated: fileToolAttempts re-derives from frozen tool_use blocks (the

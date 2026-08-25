@@ -158,5 +158,9 @@ export function spawnContainer(
     handle: makePluginsHandler({ mountedPlugins }),
   };
   const sdkMcp = combineSdkMcp(...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
-  return { child, containerName, sdkMcp };
+  // `sessionRoot` is the VM path the agent sees (`-w` above, and the cowork handler's own
+  // `sessionRootVm`). Returned so the caller classifies present_files against the root THIS spawn used,
+  // instead of re-deriving one — the two lived in different path spaces (host vs VM) once, which made
+  // every container leak read as `leaked: false`.
+  return { child, containerName, sdkMcp, sessionRoot };
 }

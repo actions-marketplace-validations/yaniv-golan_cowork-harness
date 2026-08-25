@@ -38,6 +38,27 @@ All notable changes to this project are documented here. The format is based on
   Pinned as an invariant ([docs/invariants.md](./docs/invariants.md)) with the end-to-end record self-check
   as its test anchor — the case that could not be recorded, and so had never run in CI.
 
+- **`no_scratchpad_leak` can see a container leak again — the session root was in the wrong path space.** The
+  root that `presentedFiles`' promoted/leaked classification is measured from was derived by the caller as
+  `<run-dir>/work/session`, a HOST path, and handed to every non-`protocol` tier. But the path space the
+  agent reports in is per-tier: at `container` (the default) it runs inside the sandbox and reports
+  `/sessions/<id>/…`, and only at `hostloop` does it run natively and report host paths. Measured against a
+  host root, no VM path is ever inside the root, so every presented file classified `leaked: false` —
+  including the handler's copy-failure branch, which returns the source path unchanged when a file is
+  blocked-extension, a directory, or absent. `no_scratchpad_leak` evaluates at `container` and nowhere else,
+  so the assertion that exists to catch that leak could not catch it, and `verdict.ts`'s delivery check read
+  the same `leaked: false` as a successful delivery.
+
+  Each runtime now reports the session root it actually launched the agent with, and the run consumes that
+  instead of deriving a second one — the two can no longer drift into different spaces. `chat` sets it on
+  both serving tiers as well; it never did, so a hostloop chat's `presentedFiles` was inverted in its result
+  file. `protocol` and `microvm` serve no `present_files` and keep the cwd fallback.
+
+  Independently, the classifier now fails CLOSED on a space mismatch: if the agent's cwd is not at or inside
+  the session root, the presented batch counts as malformed (`no_scratchpad_leak` → cannot verify) rather
+  than being graded against a root it cannot be compared to. `leaked: true` is not derivable in that state
+  either, and a `leaked: false` verdict there is exactly the vacuous pass the key exists to prevent.
+
 ### Added
 
 - **`RunResult.presentFilesCalls`** — the count of `present_files` invocations that carried a well-formed

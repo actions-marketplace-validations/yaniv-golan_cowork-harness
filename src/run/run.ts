@@ -316,7 +316,9 @@ export interface RunRecord {
   // Files delivered via the cowork `present_files` tool, in call order — derived from each
   // `mcp__cowork__present_files` tool_use (the input file list) paired with its own tool_result (the
   // returned path per file, in the same order). CONTENT-CLASS: both halves live in the ordinary
-  // tool_use/tool_result stream (events.jsonl), so this is re-derived identically on the replay
+  // tool_use/tool_result stream (events.jsonl), so the replay re-drive reproduces it at container (cwd is
+  // the session root there); at hostloop a re-drive measures from the recorded cwd inside `mnt/outputs`, so
+  // the booleans are not equivalent — see the space check in notePresentedFiles. The re-derivation is on the
   // re-drive — no controlOut/onPresent dependency. `promoted` = the file was in the scratchpad and
   // landed under `mnt/outputs`; `leaked` = it was in the scratchpad but did NOT land there (the
   // handler's copy-failure branch — present_files' own "remains in the scratchpad" case). A path
@@ -1130,6 +1132,18 @@ export class Run {
     // genuine leak as fine. This bug over-reports; that one would under-report, and a false green is the
     // worse failure.
     const root = this.sessionRoot !== undefined ? posixPath.normalize(this.sessionRoot) : cwd;
+    // SPACE CHECK, before any classification: the agent's cwd must sit AT or INSIDE the session root. That
+    // holds on every tier that serves present_files — at container cwd IS the root, at hostloop it is
+    // `<root>/mnt/<outputs|folder>` — so a cwd outside the root means the two are in different path spaces
+    // (a host root against VM-reported paths, say) and every containment test below is meaningless. Count
+    // the batch malformed instead of grading it: nothing would be under the root, so the classification
+    // would silently read `leaked: false` for a genuine leak, which is exactly the vacuous pass
+    // `no_scratchpad_leak` exists to prevent. Deliberately NOT "no presented path is under the root" —
+    // a hostloop delivery out of a connected folder legitimately sits outside the session tree.
+    if (root !== undefined && cwd !== undefined && cwd !== root && !cwd.startsWith(`${root}/`)) {
+      this.rec.evidenceErrors.presentFilesMalformed += froms.length;
+      return;
+    }
     const isScratchpad = (p: string): boolean => root !== undefined && p.startsWith(`${root}/`) && !p.startsWith(`${root}/mnt/`);
     for (let i = 0; i < froms.length; i++) {
       const rawTo = tos[i];
