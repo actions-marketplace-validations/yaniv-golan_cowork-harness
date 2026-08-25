@@ -1,0 +1,35 @@
+# L1 end-to-end for the present_files DELIVERY path — the one assertion pair that had no live
+# coverage at all. Both keys read telemetry derived from a real `mcp__cowork__present_files`
+# tool_use/tool_result pair, and both are container-tier (the only tier where the promoted/leaked
+# classification is meaningful), so nothing short of a live container run exercises them:
+#
+#   present_files_called  — reads RunResult.presentFilesCalls, the INVOCATION count
+#   no_scratchpad_leak    — reads presentedFiles[].leaked, the CLASSIFICATION of each path
+#
+# The prompt deliberately writes OUTSIDE `mnt/` first. That is what makes the assertions
+# non-vacuous: the file starts in the scratchpad, so `present_files` must actually promote it into
+# `mnt/outputs` for `no_scratchpad_leak` to pass. A prompt that wrote straight to `outputs/` would be
+# a passthrough — neither promoted nor leaked — and the leak check would go green without ever
+# exercising a promotion.
+baseline: latest
+session: ../sessions/minimal.yaml
+fidelity: container
+prompt: |
+  Write a file named report.md in your current working directory (NOT in any mnt/ subdirectory)
+  containing exactly one line: DELIVERABLE.
+  Then call the present_files tool with that file's absolute path to deliver it to me.
+  Reply with exactly: "Delivered." and nothing else.
+assert:
+  - result: success
+  # Presence and classification are separate questions, and each is a different failure mode:
+  # `no_scratchpad_leak` passes VACUOUSLY when nothing was presented at all, so on its own it would
+  # stay green if the agent stopped calling the tool. Pairing it with the presence floor is what
+  # makes the leak check mean something (the same idiom smoke-l1-container.yaml uses for gates).
+  - present_files_called: true
+  - no_scratchpad_leak: true
+  # The delivered file must also be visible by LOCATION — the promotion actually moved it under a
+  # user-visible root, rather than the tool merely reporting success.
+  - user_visible_artifact: outputs/report.md
+  - artifact_text:
+      artifact: outputs/report.md
+      contains: [DELIVERABLE]
