@@ -4,7 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
-## [Unreleased]
+## [2.2.0] — 2026-08-25
+
+### Upgrade impact
+
+Two behaviour changes can turn a previously-green run red. Neither breaks a covered surface
+([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) — both make an assertion report
+what it always documented — so they ship in a minor:
+
+- **`no_scratchpad_leak` at `container` can now FAIL.** It was measuring containment against a root in a
+  different path space, so every presented file classified `leaked: false` and the check passed
+  vacuously. A scenario whose skill genuinely leaves a presented file in the scratchpad will now red —
+  that is the leak the key exists to catch.
+- **`baseline: desktop-1.11847.5` is now refused at `container`/`hostloop`/`microvm`.** It carries no
+  `spawn` block, so those tiers cannot reproduce Cowork's toolset — a run on it launched an agent with no
+  file or bash tools and still reported a verdict. Use a `sync`-recorded baseline, or `fidelity: protocol`.
 
 ### Fixed
 
@@ -86,6 +100,13 @@ All notable changes to this project are documented here. The format is based on
   either, and a `leaked: false` verdict there is exactly the vacuous pass the key exists to prevent.
 
 ### Added
+
+- **First live coverage for `present_files_called` / `no_scratchpad_leak`.** No scenario in the repo
+  asserted either key, which is how a session root in the wrong path space could record `leaked: false`
+  for every presented file without anything noticing. `e2e/scenarios/smoke-present-files.yaml` writes a
+  file OUTSIDE `mnt/` and delivers it, so the promotion is real and the pair is non-vacuous; it runs in
+  CI's live e2e loop. Measured on a live container run: `presentFilesCalls: 1`, promoted `true`, leaked
+  `false`.
 
 - **`RunResult.presentFilesCalls`** — the count of `present_files` invocations that carried a well-formed
   `file_path`, in `result.json` and [schema/run-result.json](./schema/run-result.json). Content-class, so a
