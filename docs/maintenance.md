@@ -23,9 +23,11 @@ forward from the previous baseline untouched)
 ```
 
 > **`mountLayout.mounts[].mode` is documentary, and older baselines carry a stale `projects` row.**
-> Nothing reads that array at run time: `resolveMounts()` spreads it, but container/microvm/hostloop each
-> take only `cwd` and `mntRoot` from the result, and the one `mode === "r"` filter reads the launch plan's
-> mounts, not the baseline's. The `projects` row reads `mode: "rw"` in every baseline before
+> Nothing reads that array at run time: `resolveMounts()` does not return it at all, and
+> container/microvm/hostloop take only `cwd`, `sessionRoot` and `mntRoot` from the result — where
+> `mntRoot` is DERIVED as `<sessionRoot>/mnt` (the only tree the stagers create) rather than read from
+> `mountLayout.mntRoot`; a recorded value that disagrees is reported as a fidelity divergence at spawn.
+> The one `mode === "r"` filter reads the launch plan's mounts, not the baseline's. The `projects` row reads `mode: "rw"` in every baseline before
 > `desktop-1.25927.0`, which is **not uniformly wrong**: below `MOUNT_BARE_NAME_MIN_VERSION` (1.14271.0)
 > `.projects/<name>` really was the connected-folder namespace, and folders are resolver-driven `rw`. From
 > that boundary on, folders moved to `mnt/<basename>` and `.projects/<uuid>` became the project-attachment

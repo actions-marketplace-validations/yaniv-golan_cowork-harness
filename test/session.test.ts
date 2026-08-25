@@ -94,22 +94,26 @@ describe("mount / path safety", () => {
 });
 
 describe("session-id / resume argv (persistence — leverages the agent's native --resume)", () => {
+  // A SPAWNABLE baseline: these assert argv the sandbox tiers emit, and `baseAgentArgs` refuses a
+  // baseline with no `spawn` block (its toolset/pre-approvals/config-dir would all be empty). The
+  // module-level legacy baseline above is exactly that case, so it cannot stand in here.
+  const spawnable = loadBaseline("desktop-1.19367.0");
   const M = { mntRoot: "/sessions/x/mnt" };
   it("emits NO session flag by default (goldens unchanged)", () => {
     const { plan: p } = plan({});
-    const a = agentArgs(baseline, p, M);
+    const a = agentArgs(spawnable, p, M);
     expect(a).not.toContain("--session-id");
     expect(a).not.toContain("--resume");
   });
   it("pins --session-id <uuid> when a session is requested", () => {
     const { plan: p } = plan({});
-    const a = agentArgs(baseline, { ...p, agentSessionId: "uuid-1" }, M);
+    const a = agentArgs(spawnable, { ...p, agentSessionId: "uuid-1" }, M);
     expect(a[a.indexOf("--session-id") + 1]).toBe("uuid-1");
     expect(a).not.toContain("--resume");
   });
   it("emits --resume <uuid> (not --session-id) when resuming", () => {
     const { plan: p } = plan({});
-    const a = agentArgs(baseline, { ...p, agentSessionId: "uuid-1", resume: true }, M);
+    const a = agentArgs(spawnable, { ...p, agentSessionId: "uuid-1", resume: true }, M);
     expect(a[a.indexOf("--resume") + 1]).toBe("uuid-1");
     expect(a).not.toContain("--session-id");
   });

@@ -108,9 +108,10 @@ describe("hostloop geometry stays correct", () => {
 describe("the session root comes from the spawn, not from a second derivation", () => {
   const src = (p: string) => readFileSync(join(__dirname, "..", "src", p), "utf8");
 
-  it("container reports the VM root it launched the agent with", () => {
+  it("container reports the bind target it launched the agent with", () => {
     const s = src("runtime/container.ts");
-    expect(s).toContain("const sessionRoot = m.cwd;");
+    // The BIND TARGET, not the agent's cwd: guest paths anchor on the dir `sessionHost` is bound at.
+    expect(s).toContain("const sessionRoot = m.sessionRoot;");
     expect(s).toContain("return { child, containerName, sdkMcp, sessionRoot };");
   });
 

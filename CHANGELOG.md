@@ -38,6 +38,32 @@ All notable changes to this project are documented here. The format is based on
   Pinned as an invariant ([docs/invariants.md](./docs/invariants.md)) with the end-to-end record self-check
   as its test anchor — the case that could not be recorded, and so had never run in CI.
 
+- **Guest paths are built from the tree the harness stages, not from a baseline's recorded mount layout.**
+  `resolveMounts` returned `mountLayout.mntRoot` verbatim — or, when that field was absent and the recorded
+  `sessionRoot` already ended in `/mnt`, the session root itself. But the staged tree is always
+  `<sessionRoot>/mnt`: `stageWorkspace` creates it there and `dockerRunArgv` nests its read-only binds
+  there. On a baseline recording anything else, `--plugin-dir` therefore pointed one directory **above**
+  the staged plugin tree, so the plugin under test never loaded. `mntRoot` is now derived from the session
+  root, and a recorded layout the harness cannot stage is reported as a fidelity divergence at spawn
+  instead of silently composing a path no stager creates.
+
+  Guest paths now anchor on `sessionRoot` — the bind target — rather than `cwd`, which is only where the
+  agent's process starts (production's own working directory is a folder mount or `outputs`, so the two are
+  not interchangeable even though every synced baseline records them equal). `dockerRunArgv` takes an
+  explicit `agentCwd` for `-w`.
+
+  Two more derivations of the same rule are gone: `prompt.ts` had a private `/sessions/<id>` +`/mnt`
+  literal (so the prompt could describe a tree the runtimes had not staged), and **microvm** read the
+  agent's root from the baseline when lima structurally mounts it at `/sessions/<sessionId>` — which put
+  `CLAUDE_CONFIG_DIR` and `--mcp-config` at paths nothing stages. A baseline recording a cwd that tier
+  cannot honour is now **refused**, not warned about: the guest `cd` would otherwise succeed at the wrong
+  directory.
+
+- **A baseline with no `spawn` block is refused at the sandbox tiers.** That block carries the tool set,
+  pre-approvals, effort default and config-dir location, and the `?? []` fallbacks meant a run would launch
+  an agent with **no Read/Write/Bash/Skill/Task at all** and still report a verdict. `fidelity: protocol`
+  builds its own argv and is unaffected.
+
 - **`no_scratchpad_leak` can see a container leak again — the session root was in the wrong path space.** The
   root that `presentedFiles`' promoted/leaked classification is measured from was derived by the caller as
   `<run-dir>/work/session`, a HOST path, and handed to every non-`protocol` tier. But the path space the

@@ -367,25 +367,46 @@ function latestBaselineFile(): string {
   return join(BASELINES_DIR, files[files.length - 1]);
 }
 
+/** The one segment the harness's staged session tree always adds under the session root. Every stager
+ *  and every argv builder composes guest paths with it (`stage.ts`/`hostloop-stage.ts` create
+ *  `<sessionHost>/mnt`, `dockerRunArgv` nests `:ro` binds at `<sessionRoot>/mnt/<mountPath>`), so a
+ *  guest mnt root that is anything OTHER than `<sessionRoot>/mnt` cannot be produced. */
+export const GUEST_MNT_SEGMENT = "mnt";
+
 /**
- * Expand the mount layout for a concrete session id.
- * cwd/sessionRoot = the session root (e.g. /sessions/<id>); mounts sit under mntRoot
- * (/sessions/<id>/mnt) and are returned as ABSOLUTE guest paths.
+ * Expand the mount layout for a concrete session id — the layout of the tree THIS HARNESS stages, which
+ * is what every guest path must be built from.
+ *
+ * `mntRoot` is DERIVED as `<sessionRoot>/mnt`, not read from `mountLayout.mntRoot`: the staged tree can
+ * only ever be there (see GUEST_MNT_SEGMENT), so honouring a recorded value that says otherwise emits
+ * guest paths pointing at directories no stager creates. A baseline recording a different mnt root is a
+ * FIDELITY divergence, surfaced by `recordedLayoutDivergence` at spawn, never a path this builds.
+ *
+ * Guest paths anchor on `sessionRoot` (the bind target), never on `cwd`: production's own working dir is
+ * a folder mount or `outputs` rather than the bare session root, so the two are not interchangeable even
+ * though every synced baseline currently records them equal. `cwd` is the agent's working directory and
+ * nothing else.
  */
 export function resolveMounts(baseline: PlatformBaseline, sessionId: string, projectId = "proj1") {
   const subst = (s: string) => s.replace("{sessionId}", sessionId).replace("{projectId}", projectId);
   const cwd = subst(baseline.mountLayout.cwd);
   const sessionRoot = subst(baseline.mountLayout.sessionRoot);
-  // TODO: container.ts:31 computes configGuest independently from sessionRoot and is NOT fixed here;
-  // the legacy desktop-1.11847.5 baseline (sessionRoot ending in /mnt, no spawn block) still produces
-  // a double-mnt configGuest path (/sessions/<id>/mnt/mnt/.claude) — that is a separate out-of-scope issue.
-  const rawSessionRoot = baseline.mountLayout.sessionRoot;
-  const mntRoot = subst(baseline.mountLayout.mntRoot ?? (rawSessionRoot.endsWith("/mnt") ? rawSessionRoot : `${rawSessionRoot}/mnt`));
-  return {
-    cwd,
-    sessionRoot,
-    mntRoot,
-    configDir: `${mntRoot}/.claude`,
-    mounts: baseline.mountLayout.mounts.map((m) => ({ ...m, mountPath: `${mntRoot}/${subst(m.mountPath)}` })),
-  };
+  const mntRoot = `${sessionRoot}/${GUEST_MNT_SEGMENT}`;
+  return { cwd, sessionRoot, mntRoot };
+}
+
+/** Does this baseline RECORD a guest layout the harness cannot stage? Reads the recorded fields only
+ *  (never the derived ones), so it stays a statement about the data: a `mntRoot` that is not
+ *  `<sessionRoot>/mnt`, or a `sessionRoot` that already ends in the mnt segment — the shape that made
+ *  `resolveMounts` return a root one level above the staged tree. Returns the divergence for the caller
+ *  to surface, or undefined when the recording is reproducible. */
+export function recordedLayoutDivergence(baseline: PlatformBaseline): { recorded: string; staged: string } | undefined {
+  // Read STRUCTURALLY: a partially-constructed baseline (`{ spawn: {} }`) is normal at the argv seam, and
+  // this check must never be the thing that throws there. No recorded layout ⇒ nothing to diverge from.
+  const { sessionRoot, mntRoot } = (baseline as Partial<PlatformBaseline>).mountLayout ?? {};
+  if (typeof sessionRoot !== "string") return undefined;
+  const staged = `${sessionRoot}/${GUEST_MNT_SEGMENT}`;
+  if (mntRoot !== undefined && mntRoot !== staged) return { recorded: mntRoot, staged };
+  if (sessionRoot.endsWith(`/${GUEST_MNT_SEGMENT}`)) return { recorded: sessionRoot, staged };
+  return undefined;
 }

@@ -1,3 +1,5 @@
+import { recordedLayoutDivergence } from "../baseline.js";
+import { warn } from "../io.js";
 import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
@@ -43,6 +45,27 @@ export function baseAgentArgs(
   },
 ): string[] {
   const spawn = baseline.spawn;
+  // A baseline with NO `spawn` block cannot be spawned faithfully at a sandbox tier: the tool set,
+  // pre-approvals, effort default and config-dir location all come from it, and the `?? []` fallbacks
+  // below would silently emit an agent with no Read/Write/Bash/Skill/Task at all — a run that cannot
+  // execute the skill under test while still reporting a verdict. Refuse instead. (`protocol` builds its
+  // own argv and inherits the host CLI's toolset, so it is unaffected and stays usable.)
+  if (!spawn)
+    throw new Error(
+      `baseline "${baseline.appVersion}" has no \`spawn\` block, so a sandbox tier cannot reproduce Cowork's ` +
+        `toolset, pre-approvals or config-dir layout — the agent would launch with none of its file/bash tools. ` +
+        `Use a baseline recorded by \`sync\`, or run at \`fidelity: protocol\` (which builds its own argv).`,
+    );
+  // FIDELITY, not correctness: guest paths are always staged at `<sessionRoot>/mnt` (see
+  // GUEST_MNT_SEGMENT), so a baseline recording a different mnt root is reproduced approximately. Say so
+  // once, here, rather than letting the recorded value build a path no stager creates.
+  const divergence = recordedLayoutDivergence(baseline);
+  if (divergence)
+    warn(
+      `::warning:: baseline "${baseline.appVersion}" records a guest mnt root this harness cannot stage ` +
+        `(recorded ${divergence.recorded}, staged ${divergence.staged}) — guest paths use the staged layout, ` +
+        `so mount-path fidelity at this tier is approximate.\n`,
+    );
   // Real Cowork ALWAYS emits `--effort`, for every model class (picker, no-picker, regex-default,
   // unknown) — falling back to the baseline's synced medium default when the session left it unset
   // (per-model validation of an EXPLICIT value already ran in buildLaunchPlan's validateEffort; the
@@ -257,6 +280,11 @@ export interface DockerRunInput {
   network: string;
   lockdown: boolean;
   sessionRoot: string;
+  /** The agent's working directory, when it is not the session root itself. `sessionRoot` is the BIND
+   *  TARGET and the anchor every guest path is composed from; `cwd` is only where the process starts.
+   *  Production's own working dir is a folder mount or `outputs`, so conflating the two would compose
+   *  guest paths under a directory that is not the bind target. Defaults to `sessionRoot`. */
+  agentCwd?: string;
   sessionHost: string;
   // `agentArgv` is absent for hostloop's VM sidecar: the agent is a native macOS spawn, not a container
   // occupant, so no `claude …` argv runs there — the sidecar exists solely as a `docker exec` target for
@@ -290,7 +318,7 @@ export function dockerRunArgv(i: DockerRunInput): string[] {
     i.network,
     ...(i.lockdown ? HARDENING : []),
     "-w",
-    i.sessionRoot,
+    i.agentCwd ?? i.sessionRoot,
     // Render SECRET values by NAME only (`-e KEY`) so the token never lands in `docker run`'s
     // argv (visible via ps / /proc/<pid>/cmdline). Docker inherits the value from its own env — the
     // harness process env, where runtimeAuthEnv read it. Non-secret env keeps the explicit KEY=value.
