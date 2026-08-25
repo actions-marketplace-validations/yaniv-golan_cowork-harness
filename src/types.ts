@@ -519,7 +519,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "at least one file was actually delivered via the present_files tool (presentedFiles is non-empty). The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented, and stays container-only) — pair them to require a delivery AND require it not to leak; CONTAINER + HOSTLOOP TIERS — the harness serves present_files at both, mirroring real Cowork advertising the tool in both its VM and host-loop modes; every other tier is still a harness coverage gap (see docs/fidelity-gaps.md, 'File delivery'). present_files is the DESKTOP-LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
+      "at least one file was actually delivered via the present_files tool (at least one call carried a well-formed file_path). Presence is read from the INVOCATION count, not from the classified presentedFiles list, so it is unaffected by a redaction policy that rewrites host paths; a run that called the tool but whose every call carried an unusable path reports cannot-verify, never 'the tool was never called'. The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented, and stays container-only) — pair them to require a delivery AND require it not to leak; CONTAINER + HOSTLOOP TIERS — the harness serves present_files at both, mirroring real Cowork advertising the tool in both its VM and host-loop modes; every other tier is still a harness coverage gap (see docs/fidelity-gaps.md, 'File delivery'). present_files is the DESKTOP-LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
     ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
@@ -1750,6 +1750,14 @@ export interface RunResult {
    *  evidence-unavailable signal for `no_scratchpad_leak`; an empty `[]` is a valid "nothing presented"
    *  state and is NOT the same as undefined. */
   presentedFiles?: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
+  /** How many `present_files` calls carried at least one well-formed `file_path` — the PRESENCE
+   *  evidence `present_files_called` reads, kept separate from `presentedFiles`' classification.
+   *  Counted from the tool_use input's shape alone, never from a path's content, so it survives
+   *  redaction: a host-path policy rewrites a hostloop presented path to `[REDACTED:…]/mnt/outputs/f`,
+   *  which `presentedFiles` must drop as unclassifiable while this count stays correct. CONTENT-CLASS
+   *  (re-derived on the replay re-drive). Undefined only for a run predating the field — the assertion
+   *  then falls back to `presentedFiles` being non-empty, exactly as it behaved before. */
+  presentFilesCalls?: number;
   /** Resource-usage telemetry sampled while the run executed (peak RSS, avg/peak CPU%). Live + tier-
    *  dependent (container/hostloop/microvm); undefined on protocol/replay, on a run shorter than one
    *  sample interval, and when the tier's probe tool was unavailable — the `max_peak_rss_bytes`

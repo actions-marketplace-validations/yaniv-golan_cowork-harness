@@ -322,6 +322,14 @@ export interface RunRecord {
   // handler's copy-failure branch — present_files' own "remains in the scratchpad" case). A path
   // already under a mount (passthrough) is neither promoted nor leaked.
   presentedFiles: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
+  // How many `present_files` INVOCATIONS carried at least one well-formed `file_path`. Deliberately
+  // counted at the tool_use, from the input's shape alone — never from a path's content — so it is
+  // invariant under redaction. `presentedFiles` is not: its entries are dropped when a path can't be
+  // classified (see notePresentedFiles' `norm`), which a host-path redaction policy guarantees at
+  // hostloop, where a presented path is a real host path that redacts to `[REDACTED:…]/mnt/outputs/f`.
+  // Presence and classification are separate questions; conflating them let a redacted recording report
+  // "the tool was never called" about a run that called it three times.
+  presentFilesCalls: number;
   // Structured WebSearch calls: query (from tool_use.input) + per-result {title,url} (parsed from the
   // paired tool_result's "Web search results for query: ...\n\nLinks: [...]" convention — an
   // AGENT-BINARY convention, verified against a real captured hostloop-fidelity cassette; re-verify the
@@ -468,6 +476,7 @@ export class Run {
       fileToolAttempts: [],
       pathDenials: [],
       presentedFiles: [],
+      presentFilesCalls: 0,
       webSearches: [],
       infraErrors: [],
       evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
@@ -683,6 +692,11 @@ export class Run {
               const pf = presentFilesInput(ev.input);
               this.pendingPresentFiles.set(ev.toolUseId, pf.files);
               this.rec.evidenceErrors.presentFilesMalformed += pf.malformed;
+              // Presence, counted here and NOT from `presentedFiles` below — see the field's comment.
+              // Gated on a well-formed file (not merely on the call) so the count keeps the DELIVERY
+              // meaning `present_files_called` documents: a call whose `files` were unusable delivered
+              // nothing, leaves this at 0, and is reported through the malformed counter instead.
+              if (pf.files.length > 0) this.rec.presentFilesCalls++;
             }
             this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
             break;

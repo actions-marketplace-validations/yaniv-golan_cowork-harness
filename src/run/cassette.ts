@@ -2070,6 +2070,7 @@ function minimalRec(): RunRecord {
     fileToolAttempts: [],
     pathDenials: [],
     presentedFiles: [],
+    presentFilesCalls: 0,
     webSearches: [],
     infraErrors: [],
     evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
@@ -4484,6 +4485,7 @@ function replayErrorResult(file: string): RunResult {
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
     pathDenials: undefined, // no rec to read from on this early-bail lane
     presentedFiles: undefined, // no rec to read from on this early-bail lane
+    presentFilesCalls: undefined, // ditto
     preRunPaths: undefined,
     preRunLinkAware: undefined,
     preRunHashes: undefined,
@@ -6896,6 +6898,7 @@ export async function replayCassette(
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
       // evidence-unavailable.
       presentedFiles: rec.presentedFiles,
+      presentFilesCalls: rec.presentFilesCalls,
       evidenceErrors: rec.evidenceErrors,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
@@ -7264,6 +7267,7 @@ export async function replayCassette(
       // NOT reproduce — this one genuinely re-derives. Uncollapsed (an empty [] is the real "nothing
       // presented" signal no_scratchpad_leak's vacuous pass needs, matching live).
       presentedFiles: rec.presentedFiles,
+      presentFilesCalls: rec.presentFilesCalls,
       preRunPaths: undefined,
       // Report the baseline semantics actually used during evaluation above (not undefined) so the returned
       // result doesn't misrepresent them. Same source of truth as the evaluate() ctx.

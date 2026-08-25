@@ -1329,6 +1329,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Always defined live — an empty array is the real "nothing presented" signal no_scratchpad_leak's
       // vacuous pass needs, distinct from replay's evidence-unavailable undefined on an older cassette.
       presentedFiles: record.presentedFiles,
+      presentFilesCalls: record.presentFilesCalls,
       evidenceErrors: record.evidenceErrors,
       effectiveFidelity,
       // Live lane (this run's own machine) — host-shaped computer:// links (hostloop) are checked
@@ -1606,6 +1607,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
       pathDenials: record.pathDenials, // uncollapsed — content-class, same as fileToolAttempts above
       presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
+      presentFilesCalls: record.presentFilesCalls,
       // The pre-spawn baseline no_unexpected_files diffs against (same single read the evaluate ctx got).
       // undefined = the run didn't capture (key not asserted, microvm, pre-seam) — the assertion then
       // fails evidence-unavailable, loud.
@@ -2054,6 +2056,7 @@ export function buildPartialResult(args: {
     fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
     pathDenials: record.pathDenials, // uncollapsed — content-class, same as fileToolAttempts above
     presentedFiles: record.presentedFiles, // uncollapsed — an empty [] is the real "nothing presented" signal no_scratchpad_leak's vacuous pass needs
+    presentFilesCalls: record.presentFilesCalls,
     preRunPaths: readPreRunManifest(args.outDir),
     preRunLinkAware: readPreRunManifestLinkAware(args.outDir),
     preRunHashes: readPreRunManifestHashes(args.outDir),

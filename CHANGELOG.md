@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
+## [Unreleased]
+
+### Fixed
+
+- **`present_files_called` no longer reports "the tool was never called" about a run that called it, and a
+  hostloop delivery scenario can be recorded with a host-path redaction policy at last.** The assertion
+  read presence off `RunResult.presentedFiles`, which is a *classification* of each presented path
+  (scratchpad? promoted? leaked?) and requires an absolute path to compute. At `hostloop` a presented path
+  is a real host path, so the shipped redaction policy rewrites it to
+  `[REDACTED:local-path:<hash>]/mnt/outputs/report.html` — correct, documented, and deliberately ordered so
+  the mount tail survives — and the classifier then drops every entry as un-normalizable. The list came
+  back empty and the assertion stated, as fact, that the tool had never been called.
+
+  Because `record` replays the base and redacted cassettes and refuses to write when the verdict differs,
+  this was not merely a wrong message: **no cassette asserting `present_files_called` could be recorded at
+  that tier at all**, so the assertion had never executed on the replay lane. The refusal was right — the
+  redacted cassette genuinely could not support the assert — but the defect it was reporting was in the
+  harness, not in the recording.
+
+  Presence now comes from `RunResult.presentFilesCalls`, a new count of the `present_files` invocations
+  that carried a well-formed `file_path`, taken from the tool_use input's shape and never from a path's
+  content, so redaction cannot alter it. Classification is untouched: `presentedFiles` still drops what it
+  cannot resolve, and `no_scratchpad_leak` still reads it. A run recorded before the field falls back to
+  the old `presentedFiles`-non-empty test, so no existing green changes.
+
+  A run whose every `present_files` call carried an unusable path now reports **cannot verify** rather than
+  "never called" — the tool *was* invoked, and the harness already knew it. (The malformed count is
+  deliberately kept out of that message: the record self-check normalizes `[REDACTED…]` tokens out of
+  failing messages but not digits, so an interpolated count that differed between the two replays would
+  refuse a cassette that is otherwise fine to write.)
+
+  Pinned as an invariant ([docs/invariants.md](./docs/invariants.md)) with the end-to-end record self-check
+  as its test anchor — the case that could not be recorded, and so had never run in CI.
+
+### Added
+
+- **`RunResult.presentFilesCalls`** — the count of `present_files` invocations that carried a well-formed
+  `file_path`, in `result.json` and [schema/run-result.json](./schema/run-result.json). Content-class, so a
+  replay re-drive reproduces it; read by `run`, `replay` and `verify-run` alike, and absent (not `0`) on a
+  result written before this release, which is what the assertion's fallback distinguishes. Use it to
+  answer "did the agent deliver anything?" from a result file without interpreting `presentedFiles`'
+  promoted/leaked classification.
+
 ## [2.1.0] — 2026-08-24
 
 ### Changed
