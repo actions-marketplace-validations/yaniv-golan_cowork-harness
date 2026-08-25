@@ -2070,6 +2070,7 @@ function minimalRec(): RunRecord {
     fileToolAttempts: [],
     pathDenials: [],
     presentedFiles: [],
+    presentFilesCalls: 0,
     webSearches: [],
     infraErrors: [],
     evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
@@ -4484,6 +4485,7 @@ function replayErrorResult(file: string): RunResult {
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
     pathDenials: undefined, // no rec to read from on this early-bail lane
     presentedFiles: undefined, // no rec to read from on this early-bail lane
+    presentFilesCalls: undefined, // ditto
     preRunPaths: undefined,
     preRunLinkAware: undefined,
     preRunHashes: undefined,
@@ -6331,8 +6333,10 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "task_status",
   "result",
   // content-class, NOT controlOut-gated: both the present_files tool_use and its own tool_result live
-  // in the ordinary events stream, so the re-drive reproduces `RunResult.presentedFiles` exactly like
-  // the other re-derived signals above (skill_triggered, redundantToolCalls, …).
+  // in the ordinary events stream, so the re-drive reproduces the present_files signals like the other
+  // re-derived ones above (skill_triggered, redundantToolCalls, …). `presentFilesCalls` (what
+  // present_files_called reads) reproduces on every tier; `presentedFiles`' promoted/leaked booleans
+  // reproduce at container, where cwd is the session root — no_scratchpad_leak's only tier.
   "no_scratchpad_leak",
   "present_files_called",
   // content-class, NOT controlOut-gated: fileToolAttempts re-derives from frozen tool_use blocks (the
@@ -6896,6 +6900,7 @@ export async function replayCassette(
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
       // evidence-unavailable.
       presentedFiles: rec.presentedFiles,
+      presentFilesCalls: rec.presentFilesCalls,
       evidenceErrors: rec.evidenceErrors,
       effectiveFidelity: cassette.effectiveFidelity,
       // Replay has no live filesystem — computer_links_resolve normalizes both link shapes against the
@@ -7264,6 +7269,7 @@ export async function replayCassette(
       // NOT reproduce — this one genuinely re-derives. Uncollapsed (an empty [] is the real "nothing
       // presented" signal no_scratchpad_leak's vacuous pass needs, matching live).
       presentedFiles: rec.presentedFiles,
+      presentFilesCalls: rec.presentFilesCalls,
       preRunPaths: undefined,
       // Report the baseline semantics actually used during evaluation above (not undefined) so the returned
       // result doesn't misrepresent them. Same source of truth as the evaluate() ctx.

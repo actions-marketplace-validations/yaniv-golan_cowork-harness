@@ -49,6 +49,7 @@ function minimalChatRecord(): RunRecord {
     fileToolAttempts: [],
     pathDenials: [],
     presentedFiles: [],
+    presentFilesCalls: 0,
     webSearches: [],
     infraErrors: [],
     evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },

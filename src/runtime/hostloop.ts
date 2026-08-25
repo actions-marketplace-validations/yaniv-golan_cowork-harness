@@ -410,7 +410,11 @@ export function spawnHostLoop(
     handle: makePluginsHandler({ mountedPlugins }),
   };
   const sdkMcp = combineSdkMcp(workspaceBundle, ...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
-  return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown };
+  // `sessionRoot` here is the HOST tree (`sessionHost`), not the VM path: the agent runs natively on the
+  // host at this tier (see the `spawn(agentNativeHost, …, { cwd: hostOutputsDir })` above), so the paths
+  // it reports — and the ones its present_files handler validates — are host paths. Returned for the same
+  // reason as container's: the caller must not re-derive it.
+  return { child, sdkMcp, hooks, pathGateFired, containerName, hostEgress, infraErrors, markTearingDown, sessionRoot: sessionHost };
 }
 
 /** The two infra-error emitters a host-loop run needs, sharing one sink and one events.jsonl writer.

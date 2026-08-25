@@ -2281,6 +2281,9 @@
       ".preRunPaths[]": {
         "type": "string"
       },
+      ".presentFilesCalls": {
+        "type": "integer"
+      },
       ".presentedFiles": {
         "type": "array"
       },

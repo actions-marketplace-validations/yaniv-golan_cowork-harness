@@ -543,6 +543,10 @@ export interface AssertContext {
    *  evidence-unavailable signal for no_scratchpad_leak; an empty `[]` is a valid "nothing presented"
    *  state (vacuous pass) and is NOT the same as undefined. */
   presentedFiles?: RunResult["presentedFiles"];
+  /** RunResult.presentFilesCalls — the redaction-invariant PRESENCE count `present_files_called` reads
+   *  (see RunResult's own doc comment). Undefined on a run predating the field; the assertion then falls
+   *  back to `presentedFiles` being non-empty, which is what it always used to read. */
+  presentFilesCalls?: RunResult["presentFilesCalls"];
   /** RunResult.resources — resource-usage telemetry sampled while the run executed. Undefined means the
    *  tier never sampled (protocol/replay, a run shorter than one sample interval, or an unavailable probe
    *  tool) — the evidence-unavailable signal for max_peak_rss_bytes; never a vacuous pass. */
@@ -1602,9 +1606,27 @@ function check(
           `present_files_called: present_files is served only on the container/hostloop tiers (this run: ${ctx.effectiveFidelity ?? "unknown"}) — cannot verify; use fidelity: container or hostloop for present_files-based delivery`,
         ),
       );
-    else if (ctx.presentedFiles === undefined || ctx.presentedFiles.length === 0)
-      results.push(fail(`present_files_called: no file was delivered via present_files (the tool was never called)`));
-    else results.push(ok());
+    // PRESENCE comes from the invocation count, not from `presentedFiles`. The two answer different
+    // questions, and only one of them survives redaction: `presentedFiles` entries are dropped when a
+    // path can't be classified, which a host-path policy guarantees at hostloop (a real host path
+    // redacts to `[REDACTED:…]/mnt/outputs/f`, and the classifier requires an absolute path). Reading
+    // delivery off classification made a redacted recording report "the tool was never called" about a
+    // run that called it three times — and, because record's redaction self-check replays both
+    // cassettes and compares verdicts, no such cassette could be written at all.
+    // `presentedFiles.length` stays as the fallback for a run recorded before the count existed.
+    else if ((ctx.presentFilesCalls ?? 0) > 0 || (ctx.presentedFiles?.length ?? 0) > 0) results.push(ok());
+    // Called, but every call's `files` was unusable — the tool WAS invoked, so "never called" would be a
+    // factual claim the harness knows to be false. Mirrors no_scratchpad_leak's malformed branch above.
+    // The count is deliberately NOT interpolated: record's self-check normalizes [REDACTED…] tokens out
+    // of failing messages but not digits, so a count that differs between the base and redacted replays
+    // would trip its message compare and refuse a record that is otherwise fine to write.
+    else if (ctx.evidenceErrors?.presentFilesMalformed)
+      results.push(
+        fail(
+          `present_files_called: present_files WAS called, but no call carried a usable file path (malformed input) — cannot verify delivery`,
+        ),
+      );
+    else results.push(fail(`present_files_called: no file was delivered via present_files (the tool was never called)`));
   }
   if (a.no_skill_triggered !== undefined) {
     const c = compileUserRegex(a.no_skill_triggered);

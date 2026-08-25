@@ -316,12 +316,22 @@ export interface RunRecord {
   // Files delivered via the cowork `present_files` tool, in call order — derived from each
   // `mcp__cowork__present_files` tool_use (the input file list) paired with its own tool_result (the
   // returned path per file, in the same order). CONTENT-CLASS: both halves live in the ordinary
-  // tool_use/tool_result stream (events.jsonl), so this is re-derived identically on the replay
+  // tool_use/tool_result stream (events.jsonl), so the replay re-drive reproduces it at container (cwd is
+  // the session root there); at hostloop a re-drive measures from the recorded cwd inside `mnt/outputs`, so
+  // the booleans are not equivalent — see the space check in notePresentedFiles. The re-derivation is on the
   // re-drive — no controlOut/onPresent dependency. `promoted` = the file was in the scratchpad and
   // landed under `mnt/outputs`; `leaked` = it was in the scratchpad but did NOT land there (the
   // handler's copy-failure branch — present_files' own "remains in the scratchpad" case). A path
   // already under a mount (passthrough) is neither promoted nor leaked.
   presentedFiles: Array<{ from: string; to: string; promoted: boolean; leaked: boolean }>;
+  // How many `present_files` INVOCATIONS carried at least one well-formed `file_path`. Deliberately
+  // counted at the tool_use, from the input's shape alone — never from a path's content — so it is
+  // invariant under redaction. `presentedFiles` is not: its entries are dropped when a path can't be
+  // classified (see notePresentedFiles' `norm`), which a host-path redaction policy guarantees at
+  // hostloop, where a presented path is a real host path that redacts to `[REDACTED:…]/mnt/outputs/f`.
+  // Presence and classification are separate questions; conflating them let a redacted recording report
+  // "the tool was never called" about a run that called it three times.
+  presentFilesCalls: number;
   // Structured WebSearch calls: query (from tool_use.input) + per-result {title,url} (parsed from the
   // paired tool_result's "Web search results for query: ...\n\nLinks: [...]" convention — an
   // AGENT-BINARY convention, verified against a real captured hostloop-fidelity cassette; re-verify the
@@ -468,6 +478,7 @@ export class Run {
       fileToolAttempts: [],
       pathDenials: [],
       presentedFiles: [],
+      presentFilesCalls: 0,
       webSearches: [],
       infraErrors: [],
       evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
@@ -683,6 +694,11 @@ export class Run {
               const pf = presentFilesInput(ev.input);
               this.pendingPresentFiles.set(ev.toolUseId, pf.files);
               this.rec.evidenceErrors.presentFilesMalformed += pf.malformed;
+              // Presence, counted here and NOT from `presentedFiles` below — see the field's comment.
+              // Gated on a well-formed file (not merely on the call) so the count keeps the DELIVERY
+              // meaning `present_files_called` documents: a call whose `files` were unusable delivered
+              // nothing, leaves this at 0, and is reported through the malformed counter instead.
+              if (pf.files.length > 0) this.rec.presentFilesCalls++;
             }
             this.toolLog.push({ name: ev.name, input: ev.input, synthetic: ev.synthetic, parentToolUseId: ev.parentToolUseId }); // still logged for provenance/trace
             break;
@@ -1116,6 +1132,18 @@ export class Run {
     // genuine leak as fine. This bug over-reports; that one would under-report, and a false green is the
     // worse failure.
     const root = this.sessionRoot !== undefined ? posixPath.normalize(this.sessionRoot) : cwd;
+    // SPACE CHECK, before any classification: the agent's cwd must sit AT or INSIDE the session root. That
+    // holds on every tier that serves present_files — at container cwd IS the root, at hostloop it is
+    // `<root>/mnt/<outputs|folder>` — so a cwd outside the root means the two are in different path spaces
+    // (a host root against VM-reported paths, say) and every containment test below is meaningless. Count
+    // the batch malformed instead of grading it: nothing would be under the root, so the classification
+    // would silently read `leaked: false` for a genuine leak, which is exactly the vacuous pass
+    // `no_scratchpad_leak` exists to prevent. Deliberately NOT "no presented path is under the root" —
+    // a hostloop delivery out of a connected folder legitimately sits outside the session tree.
+    if (root !== undefined && cwd !== undefined && cwd !== root && !cwd.startsWith(`${root}/`)) {
+      this.rec.evidenceErrors.presentFilesMalformed += froms.length;
+      return;
+    }
     const isScratchpad = (p: string): boolean => root !== undefined && p.startsWith(`${root}/`) && !p.startsWith(`${root}/mnt/`);
     for (let i = 0; i < froms.length; i++) {
       const rawTo = tos[i];

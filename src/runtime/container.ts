@@ -45,8 +45,11 @@ export function spawnContainer(
   } = {},
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
-  const sessionRoot = m.cwd; // /sessions/<id>
-  const mntRoot = m.mntRoot; // /sessions/<id>/mnt
+  // BIND TARGET (and the anchor for every guest path), vs the agent's working dir. Equal on every synced
+  // baseline; kept distinct because production's cwd is a folder mount or `outputs`, not the session root.
+  const sessionRoot = m.sessionRoot; // /sessions/<id>
+  const agentCwd = m.cwd;
+  const mntRoot = m.mntRoot; // <sessionRoot>/mnt — the tree stageWorkspace creates
   const configGuest = `${sessionRoot}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
   const AGENT_IN = "/usr/local/bin/claude";
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
@@ -114,6 +117,7 @@ export function spawnContainer(
     lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
     name: containerName,
     sessionRoot,
+    agentCwd,
     sessionHost,
     agentHost,
     agentIn: AGENT_IN,
@@ -158,5 +162,9 @@ export function spawnContainer(
     handle: makePluginsHandler({ mountedPlugins }),
   };
   const sdkMcp = combineSdkMcp(...(coworkBundle ? [coworkBundle] : []), skillsBundle, pluginsBundle);
-  return { child, containerName, sdkMcp };
+  // `sessionRoot` is the VM path the agent sees (`-w` above, and the cowork handler's own
+  // `sessionRootVm`). Returned so the caller classifies present_files against the root THIS spawn used,
+  // instead of re-deriving one — the two lived in different path spaces (host vs VM) once, which made
+  // every container leak read as `leaked: false`.
+  return { child, containerName, sdkMcp, sessionRoot };
 }

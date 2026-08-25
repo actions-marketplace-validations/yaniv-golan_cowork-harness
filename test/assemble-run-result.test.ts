@@ -67,6 +67,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     fileToolAttempts: undefined,
     pathDenials: undefined,
     presentedFiles: undefined,
+    presentFilesCalls: undefined,
     preRunPaths: undefined,
     preRunLinkAware: undefined,
     preRunHashes: undefined,

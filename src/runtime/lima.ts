@@ -8,6 +8,13 @@ import type { PlatformBaseline } from "../types.js";
 /** Host dir mounted writable into the VM at /sessions (the staging area; per-session subdirs). */
 export const VM_WORK_HOST = join(homedir(), ".cowork-harness", "vm-work");
 
+/** Guest mount point of `VM_WORK_HOST` — the literal in the lima template below. The microVM's guest
+ *  session root is `${VM_GUEST_SESSIONS_ROOT}/<sessionId>` STRUCTURALLY: lima mounts the work root here
+ *  and the per-session dirs live inside it, so this tier cannot honour a baseline that records the agent
+ *  running anywhere else. Exported so the runtime anchors on the same string the template mounts, and so
+ *  a test can check that pairing without booting a VM. */
+export const VM_GUEST_SESSIONS_ROOT = "/sessions";
+
 /**
  * L2 microVM provisioning via Lima with `vmType: vz` — Apple Virtualization.framework,
  * the SAME hypervisor Claude Cowork uses. This gives a real Linux kernel (VM-grade
@@ -150,7 +157,7 @@ mounts:
   # the agent persists its session (enabling --resume). Lima creates the mountpoint, writable by the
   # mounting user — no guest /sessions permission problem.
   - location: "${VM_WORK_HOST}"
-    mountPoint: "/sessions"
+    mountPoint: "${VM_GUEST_SESSIONS_ROOT}"
     writable: true
 provision:
   - mode: system

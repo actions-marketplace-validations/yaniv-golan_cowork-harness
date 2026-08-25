@@ -2,6 +2,7 @@ import { warn } from "./io.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveMounts } from "./baseline.js";
 import type { PlatformBaseline } from "./types.js";
 import type { SessionConfig } from "./session.js";
 
@@ -87,8 +88,10 @@ export function renderPrompts(
 ): RenderedPrompts {
   const spawn = baseline.spawn;
   if (!spawn) return {};
-  const sessionRoot = `/sessions/${sessionId}`;
-  const mntRoot = `${sessionRoot}/mnt`;
+  // Through resolveMounts, NOT a local `/sessions/<id>` literal: the prompt tells the agent where its
+  // files are, so it must name the same tree the runtimes stage and bind. A private derivation here was a
+  // fourth copy of this rule, and a fourth place for it to drift.
+  const { sessionRoot, mntRoot } = resolveMounts(baseline, sessionId);
   const workspaceFolder = firstFolderMountPath ? `${mntRoot}/${firstFolderMountPath}` : `${mntRoot}/outputs`;
   // {{currentDateTime}}/{{currentTimezone}} are deliberately render-time-impure (wall clock, host
   // TZ) — that's what the real Desktop builder substitutes, and the rendered append never enters a

@@ -11,6 +11,7 @@ import {
   resolveHostAgentBinary,
   classifyNativeStagingDrift,
   resolveMounts,
+  recordedLayoutDivergence,
   sha256File,
   countStringInFile,
 } from "../src/baseline.js";
@@ -696,17 +697,34 @@ describe("resolveMounts — mntRoot derivation", () => {
       mountLayout: { sessionRoot, cwd: sessionRoot, mntRoot, mounts: [] },
     }) as unknown as PlatformBaseline;
 
-  it("legacy baseline: sessionRoot ending in /mnt + no mntRoot → mntRoot === sessionRoot (no extra /mnt)", () => {
-    const b = mountLayoutWith("/sessions/abc/mnt");
-    const r = resolveMounts(b, "abc");
-    expect(r.mntRoot).toBe("/sessions/abc/mnt");
-    expect(r.configDir).toBe("/sessions/abc/mnt/.claude");
+  // resolveMounts describes the tree the HARNESS stages, so mntRoot is always `<sessionRoot>/mnt` —
+  // the only place any stager creates it. A recorded value saying otherwise is a fidelity divergence
+  // (see recordedLayoutDivergence below), never a path this composes: honouring it emitted a
+  // `--plugin-dir` one directory above the staged plugin tree.
+  it("a sessionRoot already ending in /mnt still stages its mnt tree one level deeper", () => {
+    const r = resolveMounts(mountLayoutWith("/sessions/abc/mnt"), "abc");
+    expect(r.mntRoot).toBe("/sessions/abc/mnt/mnt");
   });
 
-  it("explicit mntRoot is used verbatim (unaffected baseline)", () => {
-    const b = mountLayoutWith("/sessions/abc", "/sessions/abc/mnt");
-    const r = resolveMounts(b, "abc");
+  it("a recorded mntRoot does NOT override the staged layout", () => {
+    // Same recorded value the legacy baseline carries implicitly — the derived answer must ignore it.
+    const r = resolveMounts(mountLayoutWith("/sessions/abc/mnt", "/sessions/abc/mnt"), "abc");
+    expect(r.mntRoot).toBe("/sessions/abc/mnt/mnt");
+  });
+
+  it("explicit mntRoot matching the staged layout is consistent (unaffected baseline)", () => {
+    const r = resolveMounts(mountLayoutWith("/sessions/abc", "/sessions/abc/mnt"), "abc");
     expect(r.mntRoot).toBe("/sessions/abc/mnt");
+  });
+
+  it("recordedLayoutDivergence flags a recording the harness cannot stage, and nothing else", () => {
+    expect(recordedLayoutDivergence(mountLayoutWith("/sessions/abc", "/sessions/abc/mnt"))).toBeUndefined();
+    expect(recordedLayoutDivergence(mountLayoutWith("/sessions/abc/mnt"))).toEqual({
+      recorded: "/sessions/abc/mnt",
+      staged: "/sessions/abc/mnt/mnt",
+    });
+    // Partially-constructed baselines are normal at the argv seam — this must not throw there.
+    expect(recordedLayoutDivergence({ spawn: {} } as never)).toBeUndefined();
   });
 
   it("sessionRoot not ending in /mnt + no mntRoot → sessionRoot + /mnt", () => {

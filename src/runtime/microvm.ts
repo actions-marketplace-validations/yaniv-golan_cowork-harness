@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST } from "./lima.js";
+import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST, VM_GUEST_SESSIONS_ROOT } from "./lima.js";
 import { resolveMounts } from "../baseline.js";
 import { spawnEnv, baseAgentArgs } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
@@ -69,6 +69,28 @@ function parseEnvPortMicroVm(name: string, defaultValue: number): number {
  *
  * Egress: a host-side allowlist proxy + a guest default-deny iptables firewall.
  */
+/** The microVM's guest session root, which is STRUCTURAL rather than baseline-derived: lima mounts the
+ *  work root at `VM_GUEST_SESSIONS_ROOT` with a per-`sessionId` dir inside it, so the agent runs at
+ *  `<VM_GUEST_SESSIONS_ROOT>/<sessionId>` whatever the baseline records. Reading it from
+ *  `mountLayout.cwd` instead put `CLAUDE_CONFIG_DIR` and `--mcp-config` at paths nothing stages whenever
+ *  the two disagreed.
+ *
+ *  A recorded cwd this tier cannot honour THROWS rather than warns: the guest `cd` would otherwise
+ *  succeed at the wrong directory, and a silently-wrong cwd is exactly what the loud `cd` prevents.
+ *
+ *  Pure and exported so this pairing is checkable without booting a VM (`vmInit` needs `limactl`). */
+export function microvmGuestSessionRoot(baseline: PlatformBaseline, sessionId: string): string {
+  const sessionVm = `${VM_GUEST_SESSIONS_ROOT}/${sessionId}`;
+  const recordedCwd = resolveMounts(baseline, sessionId, "proj1").cwd;
+  if (recordedCwd !== sessionVm)
+    throw new Error(
+      `baseline "${baseline.appVersion}" records the agent's cwd as ${recordedCwd}, but the microVM mounts its ` +
+        `session tree at ${sessionVm} and cannot place the agent anywhere else — run this baseline at ` +
+        `fidelity: container/hostloop, or use one whose mountLayout.cwd matches the microVM mount point.`,
+    );
+  return sessionVm;
+}
+
 export function spawnMicroVm(
   _scenario: Scenario,
   baseline: PlatformBaseline,
@@ -78,9 +100,8 @@ export function spawnMicroVm(
   opts: { systemPromptAppend?: string; proxyPort?: number } = {},
 ) {
   const { instance } = vmInit(baseline);
-  const m = resolveMounts(baseline, sessionId, "proj1");
-  const sessionVm = m.cwd; // /sessions/<id>
-  const mntVm = m.mntRoot; // /sessions/<id>/mnt
+  const sessionVm = microvmGuestSessionRoot(baseline, sessionId);
+  const mntVm = `${sessionVm}/mnt`; // the staged tree — see GUEST_MNT_SEGMENT
   const configVm = `${sessionVm}/${baseline.spawn?.configDirInGuest ?? "mnt/.claude"}`;
 
   // Stage into the lima-mounted work dir (host VM_WORK_HOST -> guest /cowork-work) via the shared

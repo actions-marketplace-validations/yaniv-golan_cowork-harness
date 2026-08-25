@@ -137,6 +137,10 @@
       },
       "description": "present_files promotions ({from, to, promoted, leaked}) \u2014 scratch\u2192outputs deliverable surfacing (container tier)."
     },
+    "presentFilesCalls": {
+      "type": "integer",
+      "description": "How many present_files calls carried at least one well-formed file_path \u2014 the presence evidence present_files_called reads, counted from the tool_use input's shape so it survives redaction (presentedFiles entries are dropped when a path can't be classified, which a host-path policy guarantees at hostloop). Absent on pre-field results."
+    },
     "mode": {
       "type": "string",
       "enum": ["run", "chat"],

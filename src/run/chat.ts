@@ -442,6 +442,7 @@ export async function cmdChat(args: string[]) {
         },
       };
       const run = new Run(agent, decider, [renderer, tripwireHook], sessionId);
+      run.setSessionRoot(hl.sessionRoot); // HOST tree — without it cwd (mnt/outputs) stands in for the root
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       if (viaApiOn) {
         run.enableWebFetchGate();
@@ -483,6 +484,7 @@ export async function cmdChat(args: string[]) {
       const decider = Chain(new ScriptedDecider([]), new PermissionDefaultDecider("cowork"), new PromptDecider(ask));
       const renderer = makeRenderer(renderPlan);
       const run = new Run(agent, decider, [renderer], sessionId);
+      run.setSessionRoot(ct.sessionRoot); // VM path — same space the agent reports (see execute.ts)
       stopHeartbeat = startHeartbeat(renderer, renderPlan, start);
       record = await run.drive(withSeedPrompt(seedPrompt, ttyTurns(rl)), chatDriveOpts(prompts, { tier: "container", sdkMcp: ct.sdkMcp }));
     }

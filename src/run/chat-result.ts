@@ -136,6 +136,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     fileToolAttempts: record.fileToolAttempts,
     pathDenials: record.pathDenials,
     presentedFiles: record.presentedFiles,
+    presentFilesCalls: record.presentFilesCalls,
     egress: opts.egress,
     resources,
     stderrLogPath: join(opts.outDir, "agent.stderr.log"),

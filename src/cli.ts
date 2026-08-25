@@ -4225,6 +4225,7 @@ async function cmdVerifyRun(args: string[]) {
     fileToolAttempts: result.fileToolAttempts,
     pathDenials: result.pathDenials,
     presentedFiles: result.presentedFiles,
+    presentFilesCalls: result.presentFilesCalls,
     evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,
     // verify-run re-checks a kept run dir on the SAME machine that ran it — grouped with the live
