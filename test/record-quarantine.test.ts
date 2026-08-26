@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyRecordLeak, quarantineCassette, type ScannableCassette } from "../src/run/cassette.js";
+import { hostInventoryPreflight, classifyRecordLeak, quarantineCassette, type ScannableCassette } from "../src/run/cassette.js";
 
 // Record-time privacy scanning, with a QUARANTINE policy.
 //
@@ -138,6 +138,62 @@ describe("quarantineCassette — where a leaking recording actually goes", () =>
   });
 });
 
+// THE SPLIT, END TO END. Until 2.2.0 `--allow-host-inventory-fixture` did two jobs: it bypassed the
+// pre-flight (whose stated precondition — "use only when the session has no personal MCP servers or
+// plugins" — is not decidable by the operator) AND downgraded the write-time scan's refusal to a warning.
+// So the operator who passed it to get past the undecidable check also disabled the measured net that
+// would have caught a real leak.
+//
+// The two layers run at DIFFERENT TIMES (pre-flight before the spend, scan after the recording exists), so
+// no single function represents the composition and there is nothing to call. This drives both real
+// functions in the order and with the arguments `recordScenarioObject` uses. What keeps that mirror honest
+// is the pair of structural pins in the next describe block, which assert the real call sites pass exactly
+// these arguments — a drift in either one fails there. Weaker than a spawn-driven test; far stronger than
+// the source-text match that was the only coverage of this behaviour.
+describe("the two flags are two decisions — neither substitutes for the other", () => {
+  /** Mirrors recordScenarioObject: pre-flight first (may refuse before any spend), then, if we got past it,
+   *  the write-time scan on the finished recording. */
+  function record(flags: { fixture?: boolean; findings?: boolean }) {
+    const path = join(repoDir(), "x.cassette.json");
+    const scenario = { name: "s", prompt: "go", fidelity: "hostloop", assert: [] } as unknown as Parameters<
+      typeof hostInventoryPreflight
+    >[0];
+    const pre = hostInventoryPreflight(scenario, path, flags.fixture === true);
+    if (pre.kind === "refuse") return { stage: "preflight-refused" as const, detail: pre.message };
+    const leak = classifyRecordLeak(cassette([HOST_INVENTORY_INIT]), path, flags.findings === true);
+    return { stage: leak.kind === "ok" ? ("written" as const) : (leak.kind as string), detail: "detail" in leak ? leak.detail : "" };
+  }
+
+  it("no flags: refused at the pre-flight, before a single token is spent", () => {
+    expect(record({}).stage).toBe("preflight-refused");
+  });
+
+  // THE REGRESSION THIS SPLIT EXISTS FOR. In 2.2.0 this combination WROTE the leaking cassette with a
+  // warning. It must now quarantine.
+  it("--allow-host-inventory-fixture alone: gets past the pre-flight and is then QUARANTINED by the scan", () => {
+    const r = record({ fixture: true });
+    expect(r.stage).toBe("quarantine");
+    expect(r.detail).toMatch(/acme-internal-crm/);
+  });
+
+  it("--allow-host-inventory-findings is the only thing that writes a flagged recording", () => {
+    const r = record({ fixture: true, findings: true });
+    expect(r.stage).toBe("override");
+  });
+
+  // The findings flag is NOT a back door around the pre-flight: it consents to a measured finding, not to
+  // skipping the pre-spend check. Passing it alone must still refuse before spending.
+  it("--allow-host-inventory-findings alone does NOT bypass the pre-flight", () => {
+    expect(record({ findings: true }).stage).toBe("preflight-refused");
+  });
+
+  it("the pre-flight refusal no longer asserts a precondition the operator cannot check", () => {
+    const msg = record({}).detail;
+    expect(msg).not.toMatch(/if this session has no personal MCP servers or plugins/);
+    expect(msg).toMatch(/the scan is the actual gate/);
+  });
+});
+
 describe("the call site — STRUCTURAL only, and deliberately labelled as such", () => {
   // HONEST COVERAGE NOTE. Everything above tests the POLICY (`classifyRecordLeak`) and the EFFECT
   // (`quarantineCassette`) as pure units. What is NOT covered by an executed test is the WIRING: that
@@ -149,10 +205,19 @@ describe("the call site — STRUCTURAL only, and deliberately labelled as such",
   const src = readFileSync(join("src", "run", "cassette.ts"), "utf8");
 
   it("recordScenarioObject consults the policy and handles every verdict kind", () => {
-    expect(src).toMatch(/const leak = classifyRecordLeak\(cassette, cassettePath, opts\.allowHostInventoryFixture === true\)/);
+    expect(src).toMatch(/const leak = classifyRecordLeak\(cassette, cassettePath, opts\.allowHostInventoryFindings === true\)/);
     for (const kind of ["override", "outside-repo", "quarantine"]) {
       expect(src, `verdict kind '${kind}' is unhandled at the call site`).toContain(`leak.kind === "${kind}"`);
     }
+  });
+
+  // THE SPLIT. Until 2.2.0 one flag did both jobs, so an operator who passed it to get past a
+  // precondition they could not check also disabled the measured scan — the escape hatch defeated the
+  // guard that was working. The pre-flight bypass must never reach this call.
+  it("the write-time scan is overridden by --allow-host-inventory-findings, NOT by the pre-flight bypass", () => {
+    const call = src.match(/const leak = classifyRecordLeak\([^)]*\)/)![0];
+    expect(call).toContain("allowHostInventoryFindings");
+    expect(call, "the pre-flight bypass must not wave through a measured finding").not.toContain("allowHostInventoryFixture");
   });
 
   it("scans AFTER redaction and BEFORE the write — order is the whole correctness argument", () => {

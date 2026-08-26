@@ -114,6 +114,7 @@ CONTENT_KEYS = {
 GATE_KEYS = {
     "question_asked",
     "question_options",
+    "question_context",
     "questions_count_max",
     "gate_answers_delivered",
     "gate_answer_count_min",
@@ -284,6 +285,7 @@ def _load_top_level_keys():
 # every valid top-level scenario key (generated from the zod ScenarioObject schema; see _load_top_level_keys)
 TOP_LEVEL_KEYS = _load_top_level_keys()
 REGEX_KEYS = {
+    "matches",
     "transcript_matches",
     "transcript_not_matches",
     "when_question",
@@ -754,7 +756,11 @@ def lint_doc(doc, path, raw_lines):
     # YAML 1.1 but are rejected by the loader as strings — see _numeric for the same dialect gap.)
     delivered_values = _assert_values(items, "gate_answers_delivered")
     if any(v is not False for v in delivered_values):
-        has_companion = "question_asked" in assert_keys or "question_options" in assert_keys or any(
+        has_companion = (
+            "question_asked" in assert_keys
+            or "question_options" in assert_keys
+            or "question_context" in assert_keys
+        ) or any(
             (n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min")
         )
         if not has_companion:
@@ -837,6 +843,7 @@ def lint_doc(doc, path, raw_lines):
                 ),
                 ("question_asked", "question_asked" in assert_keys),
                 ("question_options", "question_options" in assert_keys),
+                ("question_context", "question_context" in assert_keys),
                 ("gate_answers_delivered: false", any(v is False for v in _assert_values(items, "gate_answers_delivered"))),
             ],
             "a delivered gate records at least one question, so requiring a gate to be present contradicts requiring zero questions",

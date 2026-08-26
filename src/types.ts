@@ -627,7 +627,21 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+      "assert the option SET and ORDER a gate offered the user, by LABEL (question_asked matches question text only; option DESCRIPTIONS are not compared here — use question_context for those). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+    ),
+  question_context: z
+    .strictObject({
+      when_question: z
+        .string()
+        .optional()
+        .describe(
+          "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to search EVERY gate — unlike question_options, omitting it is not ambiguous here, because this key asks whether the text was shown at all, not which gate offered which set",
+        ),
+      matches: z.string().describe("regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive)"),
+    })
+    .optional()
+    .describe(
+      "a regex matched against everything a gate put in front of the user: the question label, every option LABEL, and every option DESCRIPTION. Use this when the skill's own wording may land in any of those fields — question_asked sees only the question text and question_options compares only labels, so a sentence delivered in an option's `description` is invisible to both. Evidence is the ask-time AskUserQuestion payload (never a producer's tool_result, which would grade true whether or not the model surfaced anything). Zero gates recorded FAILS; a lane that cannot read the gate payload fails evidence-unavailable, never vacuously",
     ),
   questions_count_max: z
     .number()
@@ -1081,7 +1095,13 @@ export interface RunStatus {
  *  harness — plus `turns`, harness-computed from the SDK result message's `num_turns`. */
 export type UsageInfo = Record<string, unknown> & { turns?: number };
 
-/** `usd` = the SDK result message's `total_cost_usd` for this invocation, when present. THE authoritative
+/** NOT the same number as the critique report's `costUsd.totalUsd`. This is ONE invocation's spend;
+ *  `CritiqueCost.totalUsd` (src/critique/command.ts) is an aggregate over the task turn, the reflection
+ *  turn and both evaluator passes. Reading the wrong key returns `undefined`/`None` rather than erroring,
+ *  which reads as "no cost recorded" — so they are cross-referenced rather than unified: collapsing them
+ *  would destroy the per-phase split the critique report exists to show.
+ *
+ *  `usd` = the SDK result message's `total_cost_usd` for this invocation, when present. THE authoritative
  *  single-run spend — distinct from summing `modelUsage[].costUSD`, a different SDK-side source that
  *  `trace --view usage` reports and which can legitimately disagree.
  *

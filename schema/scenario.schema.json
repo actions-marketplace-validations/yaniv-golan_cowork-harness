@@ -599,7 +599,7 @@
             "type": "string"
           },
           "question_options": {
-            "description": "assert the option SET and ORDER a gate offered the user — the founder-facing half no other gate key covers (question_asked matches question text only). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+            "description": "assert the option SET and ORDER a gate offered the user, by LABEL (question_asked matches question text only; option DESCRIPTIONS are not compared here — use question_context for those). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
             "type": "object",
             "properties": {
               "when_question": {
@@ -629,6 +629,24 @@
                 ]
               }
             },
+            "additionalProperties": false
+          },
+          "question_context": {
+            "description": "a regex matched against everything a gate put in front of the user: the question label, every option LABEL, and every option DESCRIPTION. Use this when the skill's own wording may land in any of those fields — question_asked sees only the question text and question_options compares only labels, so a sentence delivered in an option's `description` is invisible to both. Evidence is the ask-time AskUserQuestion payload (never a producer's tool_result, which would grade true whether or not the model surfaced anything). Zero gates recorded FAILS; a lane that cannot read the gate payload fails evidence-unavailable, never vacuously",
+            "type": "object",
+            "properties": {
+              "when_question": {
+                "description": "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to search EVERY gate — unlike question_options, omitting it is not ambiguous here, because this key asks whether the text was shown at all, not which gate offered which set",
+                "type": "string"
+              },
+              "matches": {
+                "type": "string",
+                "description": "regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive)"
+              }
+            },
+            "required": [
+              "matches"
+            ],
             "additionalProperties": false
           },
           "questions_count_max": {

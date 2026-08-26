@@ -463,10 +463,10 @@ the rules and CI-placement rationale (why each category behaves this way), see
 
 | Assertion key | What it checks |
 |---|---|
-| `transcript_contains` | literal substring in assistant transcript |
-| `transcript_not_contains` | literal absent from transcript |
-| `transcript_matches` | case-insensitive regex matches transcript |
-| `transcript_not_matches` | regex does not match |
+| `transcript_contains` | literal substring in assistant transcript **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
+| `transcript_not_contains` | literal absent from transcript **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
+| `transcript_matches` | case-insensitive regex matches transcript **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
+| `transcript_not_matches` | regex does not match **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `tool_called` | agent invoked the named tool |
 | `tool_not_called` | agent never invoked it |
 | `tool_result_contains` | literal substring in a tool result |
@@ -501,6 +501,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `task_count_min` | at least N tasks were created (`RunResult.tasks.length >= N`) — presence companion for task assertions; evidence-unavailable when `tasks` telemetry is absent |
 | `task_status` | a task whose `subject` OR `id` matches the `match` regex reached the given `status` — evidence-unavailable when `tasks` telemetry is absent |
 | `question_asked` | agent asked an AskUserQuestion matching the regex |
+| `question_context` | a regex matched the gate's founder-visible payload (question label + option labels + option descriptions) |
 | `question_options` | the option set + order that gate offered the user |
 | `questions_count_max` | at most N **sub-questions** asked — a bundled `AskUserQuestion` with K sub-questions counts as K, not 1; `trace --view questions`'s footer total uses the same definition |
 | `gate_answers_delivered: true` | answered gates' answers reached the model — **zero gates fired passes vacuously** (gate firing is model-dependent); pair with `gate_answer_count_min: >= 1` to also require a gate, or drop it and declare `questions_count_max: 0` in a gate-clean scenario |
@@ -522,7 +523,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_delete_in` | verdict modifier — kept on replay → no-op pass (the live per-mount delete scan it waives is zeroed on replay, same as its outputs-scoped sibling) |
 | `allow_undelivered_deliverables` | verdict modifier — kept on replay → no-op pass (suppresses the `undelivered_deliverables` WARN; a replay runs no scratchpad walk of its own, so the signal is evidence-unavailable there regardless) |
 
-**`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
+**`question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
 `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity
 replay). On an old cassette without `controlOut` these keys are excluded from evaluation — not vacuously
 passed — and a loud warning fires (see §Backward compatibility). The hook and path-denial keys need
@@ -645,7 +646,7 @@ When the cassette carries `controlOut`, replay consumes **both** recorded direct
 On replay, the replay decider (built by `buildReplayDecider()`) indexes `controlOut` by `request_id` and serves the recorded response to
 the decision pipeline instead of consulting a live decider or asking the user. This makes the full
 `Run.handleDecision` path execute on replay, which populates `rec.questions`, `rec.gateAnswers`, and
-`rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `question_options`, `questions_count_max`,
+`rec.gateDeliveries` — exactly as in a live run. Consequence: `question_asked`, `question_options`, `question_context`, `questions_count_max`,
 `gate_answers_delivered`, and `gate_answer_count_min` are now genuinely evaluated, not silently skipped
 or vacuously passed.
 
@@ -729,7 +730,7 @@ regressing to the prior false-green behavior:
    ::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions
    are NOT checked; re-record to enable them
    ```
-2. **`question_asked`, `question_options`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
+2. **`question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
    excluded** from the evaluated assertion set for that run — not vacuously passed, absent.
 3. All other content assertions (transcript, tool, subagent, result) evaluate normally.
 
@@ -1029,10 +1030,16 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   **`record` carries its own preflight for the same risk.** Recording at a host-inheriting tier
   (`protocol`, `hostloop`, or `cowork` resolving to hostloop) into a repo-visible cassette path is
   refused by default — that recording would freeze this machine's MCP servers, agents, and account
-  metadata into a committed fixture. `--allow-host-inventory-fixture` is the boolean consent to record
-  anyway; it is distinct from `verify-cassettes`' `--allow-host-inventory <regex>` above (a per-finding
-  suppressor, not a record-time consent) and is appropriate only when the session has no personal MCP
-  servers or plugins.
+  metadata into a committed fixture. `--allow-host-inventory-fixture` bypasses **that pre-flight only**.
+  It does NOT consent to a leak: the finished recording is still scanned (below), and a real finding still
+  refuses the write and quarantines the recording. So you do not have to audit the session by hand to pass
+  it — the scan is the actual gate. Writing a recording the scan DID flag needs the separate, louder
+  `--allow-host-inventory-findings`. Both are distinct from `verify-cassettes`' `--allow-host-inventory
+  <regex>` above (a per-finding suppressor on an already-committed cassette, not a record-time flag).
+
+  **Until 2.2.0 one flag did both jobs**, so an operator who passed it to get past a precondition they
+  could not check also switched off the measured scan that would have caught a real leak — the escape
+  hatch defeated the guard that was working.
   **The preflight is a PREDICTION; `record` now also checks the EVIDENCE.** The preflight reads the tier
   and the destination path before the paid spawn, which is the right place for it — but it never looks at
   the resulting bytes, so it can be wrong in both directions. After redaction and before the write, the
@@ -1046,6 +1053,15 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   the file by accident, so there you get a loud warning instead of a quarantine. If the runs root is itself
   inside a working tree, quarantine falls back to the OS temp dir and says so — moving a leak into another
   committable location would be theatre.
+
+  **There is deliberately no `--dry-run` preview of what would be captured.** It is the obvious ask —
+  "tell me the inventory before I pay" — and it cannot be answered honestly before the run. The pre-flight
+  is a *prediction* from the tier and the destination path; the inventory itself does not exist until the
+  agent has run and the `system/init` frame has been received. A preview would either re-implement the
+  scanner against a hypothetical (a second oracle, free to disagree with the real one — the failure mode
+  this whole layer exists to avoid) or require the spend it was meant to avoid. The scan on the finished
+  bytes is the answer, and it is why you do not have to audit the session by hand to pass
+  `--allow-host-inventory-fixture`.
 
   **The right way out is usually `fidelity: container`**, which is sealed (`HOME=/tmp`) and has nothing
   to leak. Redirecting the *output* elsewhere is not equivalent: a cassette recorded outside the repo

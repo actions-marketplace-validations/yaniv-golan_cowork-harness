@@ -2909,6 +2909,12 @@ interface RecordOpts {
   // distinctly from verify-cassettes' `--allow-host-inventory <regex>` (a value-taking class allow) so the
   // two cannot be confused: this one is a boolean consent to RECORD, not a finding suppressor.
   allowHostInventoryFixture?: boolean;
+  /** --allow-host-inventory-findings: write a recording the WRITE-TIME scan flagged. Deliberately a
+   *  SEPARATE decision from the pre-flight bypass above. Until 2.2.0 one flag did both, so an operator
+   *  who passed it to get past a precondition they could not check (see hostInventoryPreflight) also
+   *  switched off the measured scan that would have caught a real leak — the escape hatch defeated the
+   *  guard that was working. */
+  allowHostInventoryFindings?: boolean;
   // Live-decider plumbing: answer gates DURING the recording instead of pre-scripting them.
   // `onUnanswered` = --on-unanswered fail|first ("llm" when --decider-llm); `externalChannel` = --decider-dir
   // file rendezvous; `llmIntent` = --decider-llm one-line intent; `deciderChannel` labels the authoring stamp.
@@ -3140,7 +3146,10 @@ export function hostInventoryPreflight(
       `relative to its own directory, so one written outside the tree can never resolve them again — ` +
       `verify-cassettes reports it 'unverifiable' for staleness (can't verify ⇒ not green) and only a ` +
       `re-record recovers.\n` +
-      `  Override with --allow-host-inventory-fixture if this session has no personal MCP servers or plugins.`,
+      `  Override with --allow-host-inventory-fixture to proceed to the recording. That is a bypass of THIS ` +
+      `check only: the finished cassette is still scanned for real host-inventory findings before it is ` +
+      `written, and a finding still refuses the write and quarantines the recording. You do not have to ` +
+      `audit the session by hand to pass this flag — the scan is the actual gate.`,
   };
 }
 
@@ -3259,6 +3268,7 @@ export const RECORD_BOOLEAN_FLAGS = [
   "--dry-run",
   "--decider-llm",
   "--allow-host-inventory-fixture",
+  "--allow-host-inventory-findings",
 ] as const;
 export const RECORD_VALUE_FLAGS = [
   "--out",
@@ -3357,8 +3367,9 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture]\n" +
-  "       --allow-host-inventory-fixture: proceed when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette would freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. Use only when the session has no personal MCP servers or plugins.\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
+  "       --allow-host-inventory-findings: write a recording the scan DID flag. The separate, louder decision; needed only when the captured inventory is genuinely part of the fixture.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
   "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
   "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
@@ -3401,6 +3412,7 @@ export async function cmdRecord(args: string[]) {
   }
   const noRedact = p.flags["--no-redact"] ?? false;
   const allowHostInventoryFixture = p.flags["--allow-host-inventory-fixture"] ?? false;
+  const allowHostInventoryFindings = p.flags["--allow-host-inventory-findings"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
   const allowFailing = p.flags["--allow-failing"] ?? false;
   const force = p.flags["--force"] ?? false;
@@ -3797,6 +3809,7 @@ export async function cmdRecord(args: string[]) {
             maxArtifactBytes,
             skipRedactionPreflight: true,
             allowHostInventoryFixture,
+            allowHostInventoryFindings,
           });
         } else if (!fromEmbedded) {
           // No on-disk scenario resolved. Re-recording from the embedded snapshot silently DROPS any edits
@@ -3814,7 +3827,15 @@ export async function cmdRecord(args: string[]) {
           const sessionRef = cassette.scenario.session === "(inline)" ? "(inline)" : join(dirname(cp), cassette.scenario.session);
           r = await recordScenarioObject(
             { ...cassette.scenario, session: sessionRef },
-            { noRedact, allowFailing, cassettePath: cp, maxArtifactBytes, skipRedactionPreflight: true, allowHostInventoryFixture },
+            {
+              noRedact,
+              allowFailing,
+              cassettePath: cp,
+              maxArtifactBytes,
+              skipRedactionPreflight: true,
+              allowHostInventoryFixture,
+              allowHostInventoryFindings,
+            },
           );
         }
         staleBudget.add(budgetFields(r.result).costUsd);
@@ -3924,6 +3945,7 @@ export async function cmdRecord(args: string[]) {
           maxArtifactBytes,
           skipRedactionPreflight: true,
           allowHostInventoryFixture,
+          allowHostInventoryFindings,
           ...liveDecider,
         });
         batchBudget.add(budgetFields(r.result).costUsd);
@@ -3970,6 +3992,7 @@ export async function cmdRecord(args: string[]) {
       cassettePath,
       maxArtifactBytes,
       allowHostInventoryFixture,
+      allowHostInventoryFindings,
       externalChannel: channel,
       ...liveDecider,
     });
@@ -4328,11 +4351,13 @@ async function recordScenarioObject(
   // RECORD-TIME PRIVACY SCAN. Scanned AFTER redaction, deliberately: redaction is the mechanism that is
   // supposed to remove this, so scanning the pre-redaction bytes would quarantine recordings that are clean.
   // The policy itself lives in `classifyRecordLeak` so it is testable without a paid run.
-  const leak = classifyRecordLeak(cassette, cassettePath, opts.allowHostInventoryFixture === true);
+  // The WRITE-TIME override only. `allowHostInventoryFixture` bypasses the pre-flight (a precondition the
+  // operator cannot check); it must NOT also wave through a measured finding.
+  const leak = classifyRecordLeak(cassette, cassettePath, opts.allowHostInventoryFindings === true);
   if (leak.kind === "override") {
     warn(
       `::warning:: [record] host inventory PRESENT in the recording, written anyway because ` +
-        `--allow-host-inventory-fixture was passed:\n${leak.detail}`,
+        `--allow-host-inventory-findings was passed:\n${leak.detail}`,
     );
   } else if (leak.kind === "outside-repo") {
     warn(
@@ -4351,7 +4376,8 @@ async function recordScenarioObject(
           : "") +
         `Fix it by re-recording at a SEALED tier (--fidelity container), or from an environment without your ` +
         `personal MCP servers/agents configured. If this inventory is genuinely part of the fixture, re-run ` +
-        `with --allow-host-inventory-fixture.`,
+        `with --allow-host-inventory-findings (NOT --allow-host-inventory-fixture, which only bypasses the ` +
+        `pre-flight and deliberately leaves this scan in force).`,
     );
   }
 
@@ -6357,10 +6383,53 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   ...VERDICT_MODIFIER_KEYS,
 ];
 
+/** Keys whose evidence CANNOT SEE A `tool_use`.
+ *
+ *  They read `ctx.transcript`, which `run.ts` builds from top-level `assistant_text` events only — every
+ *  `tool_use` and `tool_result` is a different event `case` and contributes nothing. So a phrase the agent
+ *  only ever emitted inside a tool call (an `AskUserQuestion` gate, a `computer://` link in a tool result)
+ *  can never match, at any phrasing, no matter what the agent did.
+ *
+ *  This cost a consumer a paid recording: a `transcript_matches` was written against text that lives in a
+ *  gate question, and it could not have matched. `semantic_matches` carried the ⚠️ in its docs row from the
+ *  start; the transcript and computer-link keys did not, and nothing enforced the asymmetry.
+ *
+ *  Membership is by BLINDNESS, not by corpus. `semantic_matches` grades a strict superset (final message +
+ *  transcript + optional sub-agent text + authored files) and still belongs: the shared, guarded property is
+ *  that no member can see a tool call. `transcript_no_host_path` is deliberately ABSENT — it reads
+ *  `ctx.hostPathLeaked`, a post-run scan, not the transcript string.
+ *
+ *  Consumed by `test/tool-use-blind-docs-sync.test.ts`, which requires every member's docs row to carry the
+ *  exclusion sentence. That guard is satisfiable by pasting the sentence onto a row — which is exactly the
+ *  intended action. The rot mode it exists to catch is a NEW blind key added with no caveat at all, and an
+ *  enumerable set catches that. */
+export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
+  "transcript_contains",
+  "transcript_not_contains",
+  "transcript_matches",
+  "transcript_not_matches",
+  "computer_links_resolve",
+  "computer_links_resolve_if_present",
+  "semantic_matches",
+];
+
+/** Keys that match text the MODEL composed, and which therefore red on rewording alone.
+ *
+ *  Gate question text and option labels/descriptions are written by the model per run. Measured across three
+ *  live runs of one scenario, the same producer-supplied sentence arrived verbatim in the question, reworded
+ *  inside it, and relocated into an option's `description` — three reds, one behaviour. The advice is to pin
+ *  producer-authored constants rather than model prose, and to prefer `question_context` when the placement
+ *  may move.
+ *
+ *  The `choose:`/answers side of this already carried the caveat (stable leading anchor, 1-based index); the
+ *  ASSERT side carried it nowhere. Consumed by `test/model-authored-docs-sync.test.ts`. */
+export const MODEL_AUTHORED_TEXT_KEYS: (keyof Assertion)[] = ["question_asked", "question_options", "question_context"];
+
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
 export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "question_asked",
   "question_options",
+  "question_context",
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",

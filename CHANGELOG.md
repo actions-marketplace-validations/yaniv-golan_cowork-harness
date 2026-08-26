@@ -4,6 +4,66 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
+## [Unreleased]
+
+### Upgrade impact
+
+- **`--allow-host-inventory-fixture` no longer waives a MEASURED host-inventory finding.** It was one flag
+  doing two jobs: bypassing the pre-flight refusal (a precondition the operator cannot check — "use only
+  when the session has no personal MCP servers or plugins") *and* downgrading the write-time scan's refusal
+  to a warning. So an operator who passed it to get past the undecidable precondition also switched off the
+  scan that would have caught a real leak. It is now the pre-flight bypass only; the finished recording is
+  still scanned, and a finding still refuses the write and quarantines the recording. Writing a flagged
+  recording needs the new, narrower `--allow-host-inventory-findings`. **A batch recorder that passes the
+  old flag on a new-fixture path will now abort on a genuine finding where it previously warned and wrote.**
+
+  A `--dry-run` that reports what *would* be captured was considered and declined: the inventory does not
+  exist until the agent has run, so a preview would either re-implement the scanner against a hypothetical
+  (a second oracle free to disagree with the real one) or require the spend it was meant to avoid. Reasoning
+  is in [docs/cassette.md](./docs/cassette.md).
+
+### Added
+
+- **`question_context: {when_question?, matches}` — assert what a gate actually put in front of the user.**
+  A regex over the union of a gate's founder-visible payload: the question label, every option **label**,
+  and every option **description**. `question_asked` matches question text only and `question_options`
+  compares labels only, so a sentence the model delivered inside an option's `description` was invisible to
+  every assertion key — a false-negative generator for any skill that puts context there, which the tool's
+  own schema invites. Measured on a consumer's paid run: a producer-authored sentence arrived verbatim in
+  the question, reworded inside it, and relocated into the proceed option's `description` across three runs
+  of one scenario; the third redded a lane on a run where the founder had in fact been told.
+
+  Evidence is the **ask-time** `AskUserQuestion` payload, never a `tool_result` — a skill's producer
+  typically also writes the same sentence into its own gate-state file, so `tool_result_matches` on that
+  phrase grades true whether or not the model ever surfaced it. Unlike `question_options`, omitting
+  `when_question` on a multi-gate run is **not** ambiguous: this key asks whether the text was shown at all.
+  Zero gates recorded fails; unreadable gate evidence fails evidence-unavailable, never vacuously.
+
+### Changed
+
+- **The `tool_use` blindness of `transcript_contains`/`_not_contains`/`_matches`/`_not_matches` and
+  `computer_links_resolve`/`_if_present` is now documented and guarded.** `semantic_matches` has carried a
+  ⚠️ spelling out that its corpus excludes every `tool_use` — "a rubric claim about whether a tool was
+  called is unassertable" — while the six keys with the identical blindness said only "the assistant
+  transcript". A consumer wrote a `transcript_matches` against text living in a gate question; it could not
+  have matched at any phrasing, and the recording fail-closed after the spend. The caveat is now a property
+  of an enumerable set (`TOOL_USE_BLIND_KEYS`) enforced by a docs-sync test, so a newly-added blind key
+  cannot ship without it.
+- **`question_asked`/`question_options`/`question_context` now warn that they match model-authored text.**
+  Gate question text and option labels are composed by the model and reworded run to run. The `choose:`
+  side already documented this (stable leading anchor, 1-based index); the assert side documented it
+  nowhere. Guarded by `MODEL_AUTHORED_TEXT_KEYS`.
+- **`lint`'s double-quoted-regex warning now covers nested `matches:` leaves** (`question_context.matches`
+  and, newly, `artifact_text.matches`), and `run`/`skill`/`record` pre-compile those and
+  `question_options.when_question` at load — a bad regex in a nested leaf previously reached the evaluator.
+- **`diff` with a single positional now names the missing operand** instead of printing bare usage. There is
+  deliberately no one-argument form: `diff` is polymorphic over baselines, run dirs and cassettes, so it
+  would need type dispatch plus a defined source for "the committed version".
+- **The two cost keys are cross-referenced.** `RunResult.cost.usd` is one invocation's SDK
+  `total_cost_usd`; the critique report's `costUsd.totalUsd` aggregates the task turn, the reflection turn
+  and both evaluator passes. Reading the wrong one returns `undefined` rather than erroring, which reads as
+  "no cost recorded". Kept as two shapes on purpose — collapsing them would destroy the per-phase split.
+
 ## [2.2.0] — 2026-08-25
 
 ### Upgrade impact

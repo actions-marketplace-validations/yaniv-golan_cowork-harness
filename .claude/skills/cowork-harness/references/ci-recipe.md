@@ -237,12 +237,14 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   (`hostloop`, `protocol`) has an **empty** redaction policy — that combination commits real host paths
   the `path` scanner then hard-fails at `verify-cassettes` time. The always-on scanner remains the
   universal net (container-tier recordings can trip it too).
-- **Host-inheriting record refused by default — `--allow-host-inventory-fixture` is the consent.** A
-  `protocol`/`hostloop`/`cowork`-resolving-to-hostloop record into a repo-visible cassette path would
-  freeze THIS machine's MCP server names, agents, and account metadata into a committed fixture, so
-  `record` refuses **before the paid spawn**. Pass `--allow-host-inventory-fixture` only when the
-  recording session genuinely has no personal MCP servers or plugins to leak — it is a per-record
-  boolean consent, not a pattern.
+- **Host-inheriting record refused by default — `--allow-host-inventory-fixture` bypasses the
+  PRE-FLIGHT, not the scan.** A `protocol`/`hostloop`/`cowork`-resolving-to-hostloop record into a
+  repo-visible cassette path would freeze THIS machine's MCP server names, agents, and account metadata
+  into a committed fixture, so `record` refuses **before the paid spawn**. `--allow-host-inventory-fixture`
+  proceeds past that check — and nothing more: the finished recording is still scanned, and a real finding
+  still refuses the write and quarantines it. **You do not need to audit the session by hand to pass this
+  flag**; that precondition was never decidable by the operator, and the scan is the real gate. Writing a
+  recording the scan DID flag is the separate `--allow-host-inventory-findings`.
 
   Two details that matter for a re-record loop. The pre-spend check **warns rather than refuses when the
   cassette already exists**, deliberately: refusing there would fire on every `--rerecord-stale` pass and

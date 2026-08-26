@@ -4104,7 +4104,7 @@ async function cmdVerifyRun(args: string[]) {
   // asserting option order with no scripted answers (`on_unanswered: first`, an LLM-decided gate, a
   // post-hoc check on a kept run) would silently reach the evaluator with no evidence at all. Parsed only
   // when the key is asserted — a full events.jsonl read is not free on a long run.
-  const wantsGateOptions = scenario.assert.some((a) => a.question_options !== undefined);
+  const wantsGateOptions = scenario.assert.some((a) => a.question_options !== undefined || a.question_context !== undefined);
   const parsedGates = wantsGateOptions ? parseGatesFromEvents(join(runDir, "events.jsonl")) : undefined;
   // Absent file OR any unparseable frame ⇒ evidence-missing, never a partial set graded as complete:
   // a present-but-corrupt events.jsonl is otherwise indistinguishable from "these were all the gates".
@@ -4876,7 +4876,20 @@ function cmdDiff(args: string[]) {
   if (!["tools", "transcript", "artifacts", "meta", "all"].includes(view))
     return void fail("diff", "usage", `--view must be one of tools|transcript|artifacts|meta|all (got "${view}")`, undefined, json);
   const allPositionals = positionals(args, ["--output-format", "--view"]);
-  if (allPositionals.length !== 2) return void fail("diff", "usage", SUBCOMMAND_USAGE.diff, undefined, json);
+  if (allPositionals.length !== 2) {
+    // A single positional is the common typo AND a reasonable intent ("compare this cassette to the
+    // committed one"). That intent is not implementable as a default: `diff` is polymorphic over
+    // baselines, run dirs and cassettes, so a one-arg form needs type dispatch plus a defined source for
+    // "the committed version" (git HEAD, tracked path, inside a repo). Until that exists, say what the
+    // missing operand is instead of printing bare usage at someone who gave us most of what we needed.
+    const hint =
+      allPositionals.length === 1
+        ? `diff needs TWO things to compare; got one (${allPositionals[0]}). Pass the other side explicitly — ` +
+          `e.g. the previously committed cassette (\`git show HEAD:<path> > /tmp/before.cassette.json\`), the ` +
+          `other run dir, or the other baseline. There is no one-argument form.\n\n`
+        : "";
+    return void fail("diff", "usage", hint + SUBCOMMAND_USAGE.diff, undefined, json);
+  }
   const [aName, bName] = allPositionals;
 
   const aKind = detectDiffKind(aName);

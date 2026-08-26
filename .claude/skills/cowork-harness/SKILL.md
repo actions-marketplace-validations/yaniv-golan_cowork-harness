@@ -309,6 +309,7 @@ them by what you're trying to prove:
 | no authored interactive artifact silently loses its Submit under Cowork | `no_lost_write_back: true` (**live-only**; static Tier A over the run's authored `.html`/`.py`/`.js`; per-scenario gate for the same class `analyze-skill` scans) |
 | a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
 | the user was **shown** the right choices, in order | `question_options: {when_question, equals}` — the option SET/ORDER a gate offered (`question_asked` matches the text only); order is compared by default |
+| the user was **told something specific** at a gate | `question_context: {when_question, matches}` — a regex over the question label + option labels + option **descriptions**. Reach for this when the wording may land in an option's `description`, which `question_asked` and `question_options` cannot see |
 | a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
 | every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
 | a context compaction happened | `compaction_occurred: true` |
@@ -821,7 +822,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    channel: scripted `choose:` list, in-band `--decider-dir` via a repeated `--choose` / a JSON-array
    reply, and `--decider-cmd` via a JSON-array reply — all deliver the same `", "`-joined wire shape.
    Free-text "Other" via `answer:`. Do NOT hand-write a multiSelect reply as a bare comma-joined
-   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` /
+   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` / `question_context` /
    `questions_count_max` / `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
    old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).
@@ -1034,11 +1035,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     ([`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)
     → "File delivery" has the binary-verified detail; repo-only.)
 
-25. **Two distinct host-inventory consent flags — a record-time one and a verify-time one.** `record
-    --allow-host-inventory-fixture` is the boolean consent to proceed recording a host-inheriting
+25. **Three host-inventory flags — two on `record`, one on `verify-cassettes`.** `record
+    --allow-host-inventory-fixture` proceeds past the PRE-FLIGHT refusal when recording a host-inheriting
     (`protocol`/`hostloop`/`cowork`-resolving-to-hostloop) cassette into a repo-visible path — otherwise
     `record` refuses before it spends (freezing this machine's MCP servers/agents/account into a committed
-    fixture is the risk). That pre-spend check **warns rather than refuses when the cassette already
+    fixture is the risk). It bypasses that check and **nothing else**: the finished recording is still
+    scanned, and a real finding still quarantines it, so you never have to audit the session by hand to
+    pass it. Writing a recording the scan DID flag is the separate `record
+    --allow-host-inventory-findings`. That pre-spend check **warns rather than refuses when the cassette already
     exists** — refusing would fire on every `--rerecord-stale` pass — and it reads the tier and the
     destination path, never the bytes. So `record` also scans the FINISHED recording, after redaction and
     before the write: a `host-inventory`/`machine-inventory` finding on a repo-visible path is

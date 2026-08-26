@@ -3138,6 +3138,17 @@
       ".assert[].question_asked": {
         "type": "string"
       },
+      ".assert[].question_context": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].question_context.matches": {
+        "type": "string",
+        "required": true
+      },
+      ".assert[].question_context.when_question": {
+        "type": "string"
+      },
       ".assert[].question_options": {
         "type": "object",
         "closed": true

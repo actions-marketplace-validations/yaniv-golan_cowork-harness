@@ -297,6 +297,8 @@ const CONTRADICTION_GROUPS: {
       // Same reasoning as question_asked: asserting WHICH options a gate offered requires a gate to have
       // fired, which contradicts requiring zero sub-questions.
       { label: "`question_options`", test: (a) => a.question_options !== undefined },
+      // Same again: matching text a gate SHOWED requires a gate to have fired.
+      { label: "`question_context`", test: (a) => a.question_context !== undefined },
       // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
       // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
       // inert alongside the declaration (lint says so; not worth refusing a run over).
@@ -1795,6 +1797,17 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
       if (pattern !== undefined) {
         const c = compileUserRegex(pattern);
         if ("error" in c) throw new Error(`bad regex in ${key} in ${context}: ${c.error}`);
+      }
+    }
+    // Nested regex leaves, which the flat `a[key]` loop above cannot reach.
+    for (const [label, pattern] of [
+      ["question_context.matches", a.question_context?.matches],
+      ["question_context.when_question", a.question_context?.when_question],
+      ["question_options.when_question", a.question_options?.when_question],
+    ] as const) {
+      if (pattern !== undefined) {
+        const c = compileUserRegex(pattern);
+        if ("error" in c) throw new Error(`bad regex in ${label} in ${context}: ${c.error}`);
       }
     }
     // (Empty / regex-ish / brace-expansion tool globs are rejected by the `toolGlob` schema in types.ts —

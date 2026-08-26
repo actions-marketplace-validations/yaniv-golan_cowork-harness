@@ -34,7 +34,14 @@ describe("assertions --list families", () => {
   it("puts the gate keys where someone hunting for a gate floor would look", () => {
     const gates = groupAssertionKeys(keys).find((g) => g.title.startsWith("Gates"));
     expect(gates?.members.map((m) => m.key).sort()).toEqual(
-      ["gate_answer_count_min", "gate_answers_delivered", "question_asked", "question_options", "questions_count_max"].sort(),
+      [
+        "gate_answer_count_min",
+        "gate_answers_delivered",
+        "question_asked",
+        "question_context",
+        "question_options",
+        "questions_count_max",
+      ].sort(),
     );
   });
 

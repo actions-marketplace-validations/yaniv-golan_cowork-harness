@@ -55,6 +55,11 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       'assert:\n  - questions_count_max: 0\n  - question_asked: "x"\n',
     ],
     [
+      "questions_count_max: 0 + question_context",
+      [{ questions_count_max: 0 }, { question_context: { matches: "x" } }],
+      'assert:\n  - questions_count_max: 0\n  - question_context:\n      matches: "x"\n',
+    ],
+    [
       "questions_count_max: 0 + gate_answers_delivered: false",
       [{ questions_count_max: 0 }, { gate_answers_delivered: false }],
       "assert:\n  - questions_count_max: 0\n  - gate_answers_delivered: false\n",
