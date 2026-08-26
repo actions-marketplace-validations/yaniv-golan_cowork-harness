@@ -53,6 +53,17 @@ function describeOf(key: string): string | undefined {
   return shape[key]?.description;
 }
 
+/** Every documented key whose row carries `sentinel` — the docs → set direction. */
+function rowsCarrying(doc: string, sentinel: string): string[] {
+  const out: string[] = [];
+  for (const line of doc.split("\n")) {
+    if (!line.startsWith("| `")) continue;
+    if (!carries(line, sentinel)) continue;
+    out.push(line.slice(3).split(/[`:]/)[0]);
+  }
+  return out;
+}
+
 describe("keys blind to tool_use carry the exclusion in their docs row", () => {
   it("the sets are non-empty and every member is a real assertion key (an anchor that rots must fail HERE)", () => {
     expect(TOOL_USE_BLIND_KEYS.length).toBeGreaterThan(0);
@@ -103,6 +114,29 @@ describe("keys blind to tool_use carry the exclusion in their docs row", () => {
     const r = row(skillRef, key as string);
     if (r === undefined) return; // that table covers a subset; where it describes the key, the caveat travels
     expect(carries(r, TOOL_USE_SENTINEL), `references/scenario-schema.md's ${key} row must say it ${TOOL_USE_SENTINEL}`).toBe(true);
+  });
+
+  // THE DIRECTION THAT ACTUALLY ROTS. Everything above runs set → docs: it catches a member whose row lost
+  // the caveat, but NOT a key quietly REMOVED from the set — nothing forces a key into it (the replay-bucket
+  // exhaustiveness throw covers the replay-class arrays only, and these sets have no other consumer). Dropping
+  // `transcript_matches` from TOOL_USE_BLIND_KEYS was measured as a zero-failure mutation. Running docs → set
+  // closes it: the row keeps the sentence, so the key must still be claimed.
+  it("every row carrying the tool_use sentinel belongs to TOOL_USE_BLIND_KEYS", () => {
+    const claimed = new Set((TOOL_USE_BLIND_KEYS as string[]).map((k) => k));
+    const orphans = rowsCarrying(scenarioDoc, TOOL_USE_SENTINEL).filter((k) => !claimed.has(k));
+    expect(
+      orphans,
+      `docs/scenario.md documents the tool_use exclusion for keys missing from TOOL_USE_BLIND_KEYS: ${orphans.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("every row carrying the drift sentinel belongs to MODEL_AUTHORED_TEXT_KEYS", () => {
+    const claimed = new Set((MODEL_AUTHORED_TEXT_KEYS as string[]).map((k) => k));
+    const orphans = rowsCarrying(scenarioDoc, DRIFT_SENTINEL).filter((k) => !claimed.has(k));
+    expect(
+      orphans,
+      `docs/scenario.md documents model-authored drift for keys missing from MODEL_AUTHORED_TEXT_KEYS: ${orphans.join(", ")}`,
+    ).toEqual([]);
   });
 
   // BOTH DIRECTIONS, or this file is decorative: a guard that only ever checks the rows that already pass

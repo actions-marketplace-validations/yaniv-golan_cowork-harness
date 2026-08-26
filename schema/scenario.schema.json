@@ -641,7 +641,8 @@
               },
               "matches": {
                 "type": "string",
-                "description": "regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive)"
+                "minLength": 1,
+                "description": "regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive). NON-EMPTY: an empty pattern compiles to //i and matches every field of every gate, so it would green any run that fired one — a required field whose empty value asserts nothing is worse than an absent one"
               }
             },
             "required": [

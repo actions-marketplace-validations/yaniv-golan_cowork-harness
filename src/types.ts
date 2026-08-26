@@ -664,7 +664,12 @@ export const Assertion = z.strictObject({
         .describe(
           "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to search EVERY gate — unlike question_options, omitting it is not ambiguous here, because this key asks whether the text was shown at all, not which gate offered which set",
         ),
-      matches: z.string().describe("regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive)"),
+      matches: z
+        .string()
+        .min(1)
+        .describe(
+          "regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive). NON-EMPTY: an empty pattern compiles to //i and matches every field of every gate, so it would green any run that fired one — a required field whose empty value asserts nothing is worse than an absent one",
+        ),
     })
     .optional()
     .describe(

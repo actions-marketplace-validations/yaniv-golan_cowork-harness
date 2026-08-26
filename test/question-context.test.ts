@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluate, gateVisibleText, type AssertContext } from "../src/assert.js";
+import { evaluate, gateVisibleFields, type AssertContext } from "../src/assert.js";
 import { QUESTION_GATE_KEYS } from "../src/run/cassette.js";
 import { assertContradiction } from "../src/run/execute.js";
 import { ScenarioObject, type Assertion } from "../src/types.js";
@@ -112,12 +112,36 @@ describe("question_context — everything a gate put in front of the user", () =
   });
 });
 
-describe("gateVisibleText — the evidence, and what it deliberately excludes", () => {
-  it("joins question, labels and descriptions with newlines so a regex cannot straddle two fields", () => {
-    const t = gateVisibleText(gate("Q?", [{ label: "A", description: "d1" }, { label: "B" }]));
-    expect(t).toBe("Q?\nA\nd1\nB");
-    // "A d1" was never contiguous on screen; a space-join would have made this match.
-    expect(/A d1/.test(t)).toBe(false);
+describe("gateVisibleFields — one entry per field, so a straddle is impossible by construction", () => {
+  it("returns the question, then each option's label and description, as separate strings", () => {
+    expect(gateVisibleFields(gate("Q?", [{ label: "A", description: "d1" }, { label: "B" }]))).toEqual(["Q?", "A", "d1", "B"]);
+  });
+
+  // THE REGRESSION. The first version joined these with "\n" and its docstring claimed the newline stopped a
+  // regex spanning two fields. It did not — measured on the committed multiselect example, where
+  // `invoicing[\s\S]*Audit logging` stitched one option's description to the NEXT option's label and passed.
+  // The old test asserted only that `/A d1/` fails, which proves the join is not a SPACE and cannot fail for
+  // the claim in its own title. These are the patterns that actually defeated it.
+  it("a pattern spanning two fields does NOT match, including via [\\s\\S] and an explicit newline", () => {
+    const g = gate("Which features?", [
+      { label: "Billing", description: "Payments, subscriptions, and invoicing." },
+      { label: "Audit", description: "Audit logging and retention." },
+    ]);
+    const c = ctx({ gateOptions: [g] });
+    for (const straddle of ["invoicing[\\s\\S]*Audit logging", "invoicing\\.\nAudit", "Billing[\\s\\S]*Audit"]) {
+      const r = run({ question_context: { matches: straddle } }, c);
+      expect(r.pass, `pattern ${straddle} matched text that spans two fields`).toBe(false);
+    }
+    // ...while each field on its own still matches, so the fix did not just break matching.
+    expect(run({ question_context: { matches: "Payments, subscriptions, and invoicing" } }, c).pass).toBe(true);
+    expect(run({ question_context: { matches: "Audit logging and retention" } }, c).pass).toBe(true);
+  });
+
+  // A description can itself contain a newline, which is why the join was never a field boundary. Matching
+  // ACROSS that newline inside ONE field is correct — it was contiguous on screen.
+  it("a newline INSIDE one description is still matchable — the field is the boundary, not the character", () => {
+    const g = gate("Q?", [{ label: "A", description: "line one\nline two" }]);
+    expect(run({ question_context: { matches: "line one[\\s\\S]*line two" } }, ctx({ gateOptions: [g] })).pass).toBe(true);
   });
 });
 

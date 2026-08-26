@@ -48,24 +48,28 @@ function resolveContainedManifestPath(workRoot: string, p: string): string | nul
  *  scenario asserting any of these CANNOT take. A hand-copied list there would rot exactly the way the
  *  `--out`-outside-the-repo advice it replaces did. `test/hostloop-only-keys.test.ts` pins this array
  *  against the `hostloopOnly("…")` call sites by scanning this file's source. */
-/** Everything one gate put in front of the user: its question label, then every option's label and
- *  description. The evidence behind `question_context`.
+/** The founder-visible strings of one gate, as SEPARATE fields: its question label, then every option's
+ *  label and description. The evidence behind `question_context`.
  *
- *  Sourced from RunRecord.gateOptions, i.e. the ASK-TIME AskUserQuestion payload the model emitted —
- *  never from a tool_result. That distinction is the key's whole value: a skill's producer script
- *  typically also writes the same sentence into its own gate-state file, so a `tool_result_matches` on
- *  that phrase grades true whether or not the model ever surfaced it. This function can only ever see
- *  what was actually offered.
+ *  Sourced from RunRecord.gateOptions, i.e. the ASK-TIME AskUserQuestion payload the model emitted — never
+ *  from a tool_result. That distinction is the key's whole value: a skill's producer script typically also
+ *  writes the same sentence into its own gate-state file, so a `tool_result_matches` on that phrase grades
+ *  true whether or not the model ever surfaced it. This function can only ever see what was actually
+ *  offered.
  *
- *  Joined with newlines (not spaces/empty) so a user regex cannot straddle two fields and match a
- *  sentence that was never contiguous on screen. */
-export function gateVisibleText(g: { question: string; options: { label: string; description?: string }[] }): string {
+ *  RETURNS A LIST, and the evaluator tests each entry separately, so a pattern can never match text spanning
+ *  two fields. An earlier version returned one newline-joined string and claimed the newline prevented that.
+ *  It did not, and it was measured doing the opposite: on the committed multiselect example,
+ *  `invoicing[\s\S]*Audit logging` stitched one option's DESCRIPTION to the next option's LABEL and passed —
+ *  a "sentence" no one was ever shown. The neighbouring transcript keys' docs actively teach `[\s\S]` for
+ *  spanning turns, so that is the habit an author brings to this key. Structure beats a documented caveat. */
+export function gateVisibleFields(g: { question: string; options: { label: string; description?: string }[] }): string[] {
   const parts = [g.question];
   for (const o of g.options) {
     parts.push(o.label);
     if (o.description !== undefined) parts.push(o.description);
   }
-  return parts.join("\n");
+  return parts;
 }
 
 /** Order-insensitive multiset equality over option labels — `question_options` with `order: "any"`.
@@ -2104,7 +2108,7 @@ function check(
         } else {
           // The founder-visible payload, in the order it is presented: question label, then each option's
           // label and description. Joined with newlines so a regex cannot straddle two fields by accident.
-          const hit = pool.find((g) => c.re.test(gateVisibleText(g)));
+          const hit = pool.find((g) => gateVisibleFields(g).some((f) => c.re.test(f)));
           results.push(
             hit
               ? ok(`question_context: gate ${JSON.stringify(hit.question)} showed text matching /${qc.matches}/i`)

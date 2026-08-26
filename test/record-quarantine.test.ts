@@ -147,9 +147,12 @@ describe("quarantineCassette — where a leaking recording actually goes", () =>
 // The two layers run at DIFFERENT TIMES (pre-flight before the spend, scan after the recording exists), so
 // no single function represents the composition and there is nothing to call. This drives both real
 // functions in the order and with the arguments `recordScenarioObject` uses. What keeps that mirror honest
-// is the pair of structural pins in the next describe block, which assert the real call sites pass exactly
-// these arguments — a drift in either one fails there. Weaker than a spawn-driven test; far stronger than
-// the source-text match that was the only coverage of this behaviour.
+// is the pair of structural pins in the next describe block, which assert that BOTH real call sites pass
+// exactly these arguments — a drift in either one fails there. (The first version of this comment claimed a
+// pair while only one pin existed: `classifyRecordLeak`'s. Swapping the pre-flight's argument to the
+// findings flag then made `--allow-host-inventory-fixture` a dead flag and quietly turned the findings
+// consent into a pre-spend bypass too — one flag doing two jobs again — with a fully green suite. Measured.)
+// Weaker than a spawn-driven test; far stronger than the source-text match that was the only coverage.
 describe("the two flags are two decisions — neither substitutes for the other", () => {
   /** Mirrors recordScenarioObject: pre-flight first (may refuse before any spend), then, if we got past it,
    *  the write-time scan on the finished recording. */
@@ -214,6 +217,18 @@ describe("the call site — STRUCTURAL only, and deliberately labelled as such",
   // THE SPLIT. Until 2.2.0 one flag did both jobs, so an operator who passed it to get past a
   // precondition they could not check also disabled the measured scan — the escape hatch defeated the
   // guard that was working. The pre-flight bypass must never reach this call.
+  // The OTHER half of the split, and the one that was unpinned. Without this, moving the pre-flight to the
+  // findings flag passes every test: the fixture flag becomes inert and the findings flag silently becomes a
+  // pre-spend bypass as well as a write-time override.
+  it("the pre-flight is bypassed by --allow-host-inventory-fixture, NOT by the findings flag", () => {
+    // Anchor on the ARGUMENTS, not the name: a bare /hostInventoryPreflight\(...\)/ matches the function
+    // DEFINITION first (whose third parameter is `allowed`), so the pin passes and fails for reasons that
+    // have nothing to do with the call site. Caught by mutation-testing this very assertion.
+    const call = src.match(/hostInventoryPreflight\(\s*scenario,\s*plannedCassettePath,[^)]*\)/)![0];
+    expect(call).toContain("allowHostInventoryFixture");
+    expect(call, "the findings consent must never become a pre-spend bypass").not.toContain("allowHostInventoryFindings");
+  });
+
   it("the write-time scan is overridden by --allow-host-inventory-findings, NOT by the pre-flight bypass", () => {
     const call = src.match(/const leak = classifyRecordLeak\([^)]*\)/)![0];
     expect(call).toContain("allowHostInventoryFindings");
