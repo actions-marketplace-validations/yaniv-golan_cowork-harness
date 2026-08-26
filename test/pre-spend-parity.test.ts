@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { preSpendVerdicts } from "../src/run/cassette.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 
@@ -102,6 +102,24 @@ describe("the batch preview advises, and never gates, on a path it is guessing",
     expect(r.code, "a guessed verdict must not gate the batch").toBe(0);
     expect(r.text).toMatch(/would-refuse \(advisory\)/);
     expect(r.text, "must say what it assumed, or a reader cannot tell a guess from a verdict").toMatch(/ADVISORY, not this run's verdict/);
+  });
+
+  // The label must follow the VERDICT KIND, not just "this is a note". `cassettePortabilityPreflight`
+  // returns only ok|warn — it can never refuse — and `hostInventoryPreflight` returns warn whenever the
+  // target cassette already EXISTS, which is every re-record corpus sitting at the default path. Labelling
+  // those "would-refuse" told the reader the real record would refuse a run it would in fact accept, on the
+  // one arm whose whole design principle is "do not assert what you cannot know".
+  it("a WARN-kind verdict is labelled would-warn, not would-refuse", () => {
+    const w = repo();
+    mkdirSync(join(w, "scen"), { recursive: true });
+    writeFileSync(join(w, "scen", "a.yaml"), HOSTLOOP("alpha"));
+    // Pre-create the default cassette target: that is what flips hostInventoryPreflight refuse -> warn.
+    const existing = join(w, "cassettes", "alpha.cassette.json");
+    mkdirSync(dirname(existing), { recursive: true });
+    writeFileSync(existing, "{}");
+    const r = cli(["record", join(w, "scen"), "--dry-run"], w);
+    expect(r.code, "still advisory, still non-gating").toBe(0);
+    expect(r.text, "a warn-kind verdict must not claim the real record would refuse").toMatch(/would-warn \(advisory\)/);
   });
 
   it("--quiet suppresses the advisory notes but never a refusal", () => {

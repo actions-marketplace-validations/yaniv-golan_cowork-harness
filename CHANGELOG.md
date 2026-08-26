@@ -150,6 +150,15 @@ All notable changes to this project are documented here. The format is based on
   anchor, because a suffix rename still satisfies a substring regex — a mutation that cannot fail is not
   evidence — and asserts that the mutation actually applied.
 
+- **`record --dry-run <dir/>` no longer announces a WARN as a refusal.** The batch arm labelled every
+  advisory note `⚠ would-refuse (advisory)`, but `cassettePortabilityPreflight` can only ever return
+  `ok`/`warn` — it has no refuse path at all — and `hostInventoryPreflight` returns `warn` whenever the
+  target cassette already exists, which is every re-record corpus sitting at the default path. So the
+  preview told operators the real `record` would refuse runs it would in fact accept, on the one arm whose
+  design principle is that a guess must not gate. The label now follows the verdict kind
+  (`⚠ would-warn (advisory)`), the "ADVISORY, not this run's verdict" footer is unchanged, and exit codes
+  were never affected either way.
+
 - **The 3p-branch rule refuses to blank W1.** W1 is the window every modeled first-party key is derived
   from, so a branch marker appearing there hard-fails instead of blanking; deleting real pinned keys from
   the derived env with nothing failing is the worse of the two outcomes.

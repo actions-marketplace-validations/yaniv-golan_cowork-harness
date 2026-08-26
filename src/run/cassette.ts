@@ -3371,7 +3371,7 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 export const RECORD_USAGE =
   "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
   "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
-  "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse' notes instead (a dir target takes no --out, so the destination is a guess) and gates only on the path-independent ones.\n" +
+  "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse'/'would-warn' notes instead, labelled by verdict kind (a dir target takes no --out, so the destination is a guess), and gates only on the path-independent ones.\n" +
   "       --allow-host-inventory-findings: write a recording the scan DID flag. The separate, louder decision; needed only when the captured inventory is genuinely part of the fixture.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
   "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
@@ -3608,7 +3608,7 @@ export async function cmdRecord(args: string[]) {
       // `--out` path (dir targets reject it) nor the per-item flags, so its verdict is a GUESS — and a guess
       // must not gate. A preview that refuses what the real path allows is worse than one that stays quiet:
       // it teaches operators to stop trusting the preview.
-      const notes: { file: string; message: string }[] = [];
+      const notes: { file: string; message: string; kind: "refuse" | "warn" }[] = [];
       for (const f of disc.scenarios) {
         let sc;
         try {
@@ -3627,7 +3627,13 @@ export async function cmdRecord(args: string[]) {
           scenarioSourceFile: f,
         })) {
           if (v.message === why) continue;
-          notes.push({ file: f, message: v.message });
+          // Carry the VERDICT KIND, not just the message. Labelling every note "would-refuse" was a false
+          // claim on the one arm whose design principle is "do not assert what you cannot know":
+          // `cassettePortabilityPreflight` never returns `refuse` at all (only `ok`/`warn`), and
+          // `hostInventoryPreflight` returns `warn` whenever the target cassette already exists — which is
+          // every re-record corpus sitting at the default path. Those were announced as refusals the real
+          // record would make, and it would not.
+          notes.push({ file: f, message: v.message, kind: v.kind });
         }
       }
       // The real dir-batch refuses this before its first spawn (see duplicateCassetteTargets). It is
@@ -3672,7 +3678,7 @@ export async function cmdRecord(args: string[]) {
         // say what this arm actually knows — otherwise the reader sees "refusing" beside exit 0 and cannot
         // tell which one is true.
         if (!quiet) {
-          for (const n of notes) log(`⚠ would-refuse (advisory): ${n.file}: ${n.message}`);
+          for (const n of notes) log(`⚠ would-${n.kind === "warn" ? "warn" : "refuse"} (advisory): ${n.file}: ${n.message}`);
           if (notes.length)
             log(
               `  ↑ ADVISORY, not this run's verdict: computed against the DEFAULT cassette path because a ` +

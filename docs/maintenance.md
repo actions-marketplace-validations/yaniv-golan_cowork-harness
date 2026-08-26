@@ -77,6 +77,20 @@ git commit -m "parity: sync to Desktop <new>"
 cowork-harness run examples/scenarios/   # regression — drift shows as test diffs (this repo's scenarios live under examples/)
 ```
 
+> **The live-asar tripwires are macOS-local ONLY — CI cannot run them, so a green CI is not evidence the
+> baseline still matches the installed Desktop.** Every oracle that reads the real bundle gates on
+> `process.platform !== "darwin"` (`test/baseline.test.ts`), and `ci.yml` has **no macOS runner** — all
+> its jobs are `ubuntu-latest` / `ubuntu-24.04-arm`. So the golden spawn-env oracle, the
+> `checkSpawnContractFacts` real-asar regression and every mutation case built on the live bundle
+> **skip in CI, silently**. Measured on this release: Desktop 1.37937.0 added a construction site the
+> resolver could not parse, and both `ci.yml` and `release.yml` would have gone green with that drift
+> unfixed — only running `sync` on a Mac surfaced it.
+>
+> Practical consequence: **the per-release runbook above is the only thing that catches parity drift.**
+> Do not defer it on the strength of a green pipeline. A committed-asar fixture tier (so the oracles have
+> something to run against off-macOS), or at minimum a loud skip in the CI job summary rather than a
+> `console.warn` nobody reads, is open work.
+
 If the agent version bumped, there is no image rebuild: the agent ELF is bind-mounted at runtime from the staged Desktop install (`resolveAgentBinary`, `src/baseline.ts`), not baked into the container image. A bumped `agentVersion` only updates `agentBinary.stagedPath` in the baseline (`src/cli.ts`); the container picks up the new binary from that path.
 
 ### Agent-binary provenance (`sha256`)
