@@ -11,6 +11,11 @@
 [![Built with Skill Creator Plus](https://img.shields.io/badge/Built_with-Skill_Creator_Plus-4ecdc4)](https://github.com/yaniv-golan/skill-creator-plus)
 [![Agent Skills compatible](https://img.shields.io/badge/Agent_Skills-compatible-4A90D9)](https://agentskills.io)
 
+> **Unofficial.** An independent project, not affiliated with, endorsed by, or supported by Anthropic.
+> "Claude" and "Claude Cowork" are Anthropic's. This harness emulates Cowork's *observable runtime
+> contract* and drives Anthropic's own agent binary from your local Claude Desktop install — it
+> bundles no Anthropic code, and it is not Cowork.
+
 Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observable runtime contract** closely enough to test the skills you write — across many scenarios, headless, in CI — without the (locked) Desktop app. It reproduces not just Cowork's *behavior* but its *limitations*: sealed filesystem, default-deny egress, MCP-only cross-boundary — so a green test has cleared the constraints that break skills in Cowork. That is a far stronger signal than a bare `claude -p` run, and it is not a guarantee: this is an emulator of the contract, and the deliberate divergences are catalogued in [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
 
 And because every run is recorded, you get the thing a transcript can't give you: **evidence of what the agent actually did, not what it said it did** — which skill was invoked (if any), which files a sub-agent really read, which hosts it reached, which options a person was really shown. See [Why not just `claude -p` or the Agent SDK?](#why-not-just-claude--p-or-the-agent-sdk).

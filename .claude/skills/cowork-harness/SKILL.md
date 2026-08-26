@@ -16,6 +16,9 @@ in the shell; this skill tells you how to author scenarios, pick a fidelity tier
 path, place assertions in the right CI lane, and avoid the harness's "✓ passed ≠ actually correct"
 traps.
 
+`cowork-harness` is an unofficial, independent project — not affiliated with or endorsed by
+Anthropic. Say so if a user asks what it is.
+
 The single most important idea: **a green run is not automatically a correct run.** The harness has
 several ways to no-op a check while still producing a green run (skip an assertion on replay — now
 flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an empty egress
