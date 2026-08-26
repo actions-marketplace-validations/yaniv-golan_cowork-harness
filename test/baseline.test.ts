@@ -49,7 +49,7 @@ import {
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
-import { checkNormalizationSanity } from "../src/sync/cowork-sync.js";
+import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
@@ -335,15 +335,20 @@ describe("checkMountModeFacts (mount-mode drift guard for the hand-authored base
   // mount whose mode is hardcoded `"ro"` at the spawn-time builder. Widened from two facts to five once
   // the builder was read in full — `.claude/skills`, `.claude/projects` and the per-uuid project
   // ATTACHMENT mount are all pinned read-only there.
+  // TWO resolver sites, because the real bundle has had two since Desktop 1.37937.0 — the VM-loop
+  // mount-set builder and host-loop `computeBashMounts`. The checker guards a FLOOR on that count, so a
+  // one-site fixture would red on the floor rather than on the fact each case is actually about.
   const ok =
-    'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}' +
+    'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"}' +
+    'function IXbash(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}' +
     ';l[Es(".claude/skills")]={path:x,mode:"ro"};l[Es(".claude/projects")]={path:y,mode:"ro"}' +
     ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}';
   it("returns no flags when every mode fact is present", () => {
     expect(checkMountModeFacts(ok)).toEqual([]);
   });
   it("flags when the IX delete-deny resolver is gone (outputs/projects default may have changed)", () => {
-    const drifted = ok.replace('?"rwd":"rw"', '?"rwd":"rwd"'); // delete now allowed by default
+    // BOTH lanes, so the floor sees 0 sites. Mutating one lane is a different case — covered below.
+    const drifted = ok.split('?"rwd":"rw"').join('?"rwd":"rwd"'); // delete now allowed by default
     const flags = checkMountModeFacts(drifted);
     expect(flags.some((f) => f.includes("delete-deny resolver"))).toBe(true);
   });
@@ -787,7 +792,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     'sessionPath:`/sessions/${sid}/mnt/.claude`,settingSources:["user"],permissionMode:S?"default":(I==null?void 0:I.permissionMode)??"default",' +
     'maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0},effortCfg:{level:z.effort,fallback:"medium"},' +
     'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType==="agent"?["SendUserMessage"]:[],...FKm?[FKproj]:[]],' +
-    'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"],' +
+    'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__mcp-registry__search_mcp_registry","mcp__mcp-registry__suggest_connectors","mcp__mcp-registry__list_connectors","mcp__plugins__search_plugins","mcp__plugins__search_connectors","mcp__plugins__suggest_plugin_install","mcp__plugins__list_plugins","mcp__skills__list_skills","mcp__skills__suggest_skills","mcp__scheduled-tasks__list_scheduled_tasks","mcp__computer-use"],' +
     'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
     "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:jXe(V.env,pf)},FnA(V.env)," +
     'sysP:{type:"preset",preset:"claude_code",append:ap},appendSubagentSystemPrompt:FKgen({vm:i,hostLoopMode:E})';
@@ -851,7 +856,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     // Same live tail as STIER, but the alias reaches "Projects" through the export-alias hop
     // (o.PROJECTS_TOOL → wProj) — proving S8's alias resolution follows the same hop S7 does.
     'tools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch",...z.sessionType==="agent"?["SendUserMessage"]:[],...FKm?[o.PROJECTS_TOOL]:[]],' +
-    'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"],' +
+    'allowedTools:["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch",...o.TASK_TOOL_NAMES,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__mcp-registry__search_mcp_registry","mcp__mcp-registry__suggest_connectors","mcp__mcp-registry__list_connectors","mcp__plugins__search_plugins","mcp__plugins__search_connectors","mcp__plugins__suggest_plugin_install","mcp__plugins__list_plugins","mcp__skills__list_skills","mcp__skills__suggest_skills","mcp__scheduled-tasks__list_scheduled_tasks","mcp__computer-use"],' +
     'function FnA(V){for(const q of ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"])V[q]===""&&delete V[q]}' +
     "V.env={...V.env,ANTHROPIC_CUSTOM_HEADERS:o.appendCoworkTelemetryHeaders(V.env??{},ie.app.getVersion())},o.dropEmptyAuthEnvSentinels(V.env)," +
     'sysP:{type:"preset",preset:"claude_code",append:ap},appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vm:i})';
@@ -1184,8 +1189,11 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     ['NotebookEdit","WebFetch",...FKtt,"WebSearch","Skill","REPL","JavaScript","AskUserQuestion","ToolSearch"', '"nope"', "S6"],
     ['FKtt=["TaskCreate","TaskUpdate","TaskGet","TaskList","TaskStop"]', "FKtt=[]", "S7"],
     ['"ToolSearch",...z.sessionType===', '"ToolSearch",...NOPE===', "S8"],
-    ['...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__srv__tool"', '...FKtt,"nope"]', "S9"],
-    ['"ToolSearch","mcp__srv__tool"', '"ToolSearch","builtin__x"', "S10"],
+    ['...FKtt,"WebSearch","Skill","REPL","JavaScript","ToolSearch","mcp__mcp-registry__search_mcp_registry"', '...FKtt,"nope"]', "S9"],
+    ['"ToolSearch","mcp__mcp-registry__search_mcp_registry"', '"ToolSearch","builtin__x"', "S10"],
+    // S10b: an ADDITION deep inside the mcp__ region — the exact shape (Desktop 1.37937.0's
+    // mcp__plugins__search_connectors) that S9's head anchor and S10's boundary anchor both let through.
+    ['"mcp__skills__list_skills"', '"mcp__skills__list_skills","mcp__newserver__new_tool"', "S10b"],
     ['CLAUDE_CODE_ENTRYPOINT:"local-agent"', 'CLAUDE_CODE_ENTRYPOINT:"other"', "S11"],
     ["disableCron:!0,localAgent:!0", "wrong:!0", "S12"],
     ['CLAUDE_CODE_DISABLE_CRON:A.disableCron?"1":""', 'CLAUDE_CODE_DISABLE_CRON:"x"', "S13"],
@@ -1353,6 +1361,75 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(deltas).toEqual([]); // NOTEs must not block the baseline write
     expect(notes.some((n) => n.includes("CLAUDE_CODE_HOST_AUTH_ENV_VAR") && n.includes("prune"))).toBe(true);
     expect(notes.every((n) => !n.startsWith("NOTE:"))).toBe(true);
+  });
+
+  // 9c. Desktop 1.37937.0: the 3p-only deployment branch is classified PER SITE, not per key.
+  //     The trigger was MCP_TOOL_TIMEOUT gaining a second construction site inside that branch while
+  //     staying 1p-pinned from W1 — the per-key allowlist/pin dichotomy cannot express "pinned on one
+  //     site, ignorable on another", and allowlisting it would have DROPPED the key from the env.
+  describe("3p-only branch: classified by SITE (Desktop 1.37937.0)", () => {
+    // The fixture's W3 really does carry the branch — asserting this first keeps every case below from
+    // passing vacuously against a fixture that lost its `...t&&{DISABLE_GROWTHBOOK:...}` literal.
+    it("the fixture carries a 3p branch for these cases to bite on", () => {
+      expect(fixture()).toContain('...t&&{DISABLE_GROWTHBOOK:"1"');
+    });
+
+    it("a PINNED key with an unresolvable expression inside the 3p branch does NOT flag, and its 1p value survives", () => {
+      // Exactly the live shape: `...i!==void 0&&{MCP_TOOL_TIMEOUT:String(i)}` appended to the 3p literal,
+      // `i` a binding the const resolver cannot reach. W1 still builds MCP_TOOL_TIMEOUT from FKe().
+      const withThirdPartySite = fixture().replace(
+        'CLAUDE_CODE_ENABLE_AUTO_MODE:A.auto?"1":""}',
+        'CLAUDE_CODE_ENABLE_AUTO_MODE:A.auto?"1":"",...i!==void 0&&{MCP_TOOL_TIMEOUT:String(i)}}',
+      );
+      expect(withThirdPartySite).not.toEqual(fixture()); // the mutation applied
+      const { env, flags } = deriveSpawnEnv(withThirdPartySite, greenGates());
+      expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(env?.MCP_TOOL_TIMEOUT).toBe("60000"); // the W1 site's value, untouched by the 3p one
+    });
+
+    it("REGRESSION: without the per-site rule that same shape hard-fails — the rule is what is being tested", () => {
+      // Same unresolvable expression placed OUTSIDE the 3p branch (top level of W3) must still flag, so
+      // the case above is passing because of the branch, not because `String(i)` became resolvable.
+      const topLevel = fixture().replace('return{DISABLE_AUTOUPDATER:"1",', 'return{DISABLE_AUTOUPDATER:"1",MCP_TOOL_TIMEOUT:String(i),');
+      const { env, flags } = deriveSpawnEnv(topLevel, greenGates());
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("MCP_TOOL_TIMEOUT") && f.includes("unrecognized value expression"))).toBe(true);
+    });
+
+    it("an UNKNOWN key inside the 3p branch still hard-fails — the branch is not an amnesty", () => {
+      const withNewKey = fixture().replace('DISABLE_GROWTHBOOK:"1",', 'DISABLE_GROWTHBOOK:"1",CLAUDE_CODE_BRAND_NEW_3P_KEY:"1",');
+      const { env, flags } = deriveSpawnEnv(withNewKey, greenGates());
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("CLAUDE_CODE_BRAND_NEW_3P_KEY") && f.includes("3p-only deployment branch"))).toBe(true);
+    });
+
+    it("3p-branch keys stay ENUMERATED, so their allowlist entries do not read as stale prune candidates", () => {
+      const { keys, flags } = deriveSpawnEnv(fixture(), greenGates());
+      expect(keys).toContain("DISABLE_GROWTHBOOK");
+      expect(keys).toContain("CLAUDE_CODE_ENABLE_AUTO_MODE");
+      expect(flags.some((f) => f.startsWith("NOTE:") && f.includes("DISABLE_GROWTHBOOK"))).toBe(false);
+    });
+
+    it("the branch marker appearing in W1 flags instead of blanking — a silent key deletion is the worse failure", () => {
+      // W1 is where every modeled 1p key comes from. If the marker ever shows up there, blanking would
+      // delete real pinned keys from the derived env with nothing failing, so W1 refuses to blank.
+      const inW1 = fixture().replace(
+        'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"',
+        '...q&&{DISABLE_GROWTHBOOK:"1"},CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"',
+      );
+      expect(inW1).not.toEqual(fixture());
+      const { env, flags } = deriveSpawnEnv(inW1, greenGates());
+      expect(flags.some((f) => f.includes("now appears in W1"))).toBe(true);
+      expect(env).toBeNull(); // hard-fail, not a partial env
+    });
+
+    it("blanking the branch does not eat the 1p keys around it", () => {
+      const { env } = deriveSpawnEnv(fixture(), greenGates());
+      // Immediately before the 3p literal in W3; the only pinned key W3 contributes.
+      expect(env?.DISABLE_AUTOUPDATER).toBe("1");
+      // Set in the sibling non-3p spread that shares the `...<ident>&&{` shape.
+      expect(env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    });
   });
 
   // 10. Golden-map correctness oracle (non-circular): the generator over the REAL asar must deep-equal
@@ -2463,7 +2540,9 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     'p[r.a("uploads")]={path:x,mode:"ro"},p[r.a(".claude/skills")]={path:y,mode:"ro"};' +
     'p[r.a(".claude/projects")]={path:z,mode:"ro"};' +
     'p[r.a(`.projects/${e.uuid}`)]={path:w,mode:"ro"};' +
-    'let m=n?"rw":t?.includes(e)?"rwd":"rw";';
+    'let m=n?"rw":t?.includes(e)?"rwd":"rw";' +
+    // Second lane (host-loop computeBashMounts) — the checker floors on the SITE COUNT, see `ok` above.
+    'let mb=n?"rw":t?.includes(e)?"rwd":"rw";';
 
   it("clean bundle → no flags", () => {
     expect(checkMountModeFacts(CLEAN)).toEqual([]);
@@ -2474,6 +2553,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     [".claude/projects", '(".claude/projects")]', '(".claude/projectsX")]'],
     [".claude/skills", '(".claude/skills")]', '(".claude/skillsX")]'],
     ["uploads", '("uploads")]', '("uploadsX")]'],
+    // Both lanes — the floor is a count, so removing one site is the SEPARATE case pinned below.
     ["delete-deny resolver", '?"rwd":"rw"', '?"rw":"rw"'],
   ])("MUTATION: %s moving → flags", (_label, from, to) => {
     const mutated = CLEAN.split(from).join(to);
@@ -2485,6 +2565,126 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     const files = readRealBundleFilesOrSkip();
     if (!files) return;
     expect(checkMountModeFacts([...files.values()].join(""))).toEqual([]);
+  });
+
+  // The real bundle builds each of these mounts at TWO sites — the VM-loop mount-set builder and
+  // host-loop `computeBashMounts`. A `regex.test(bundle)` is satisfied by EITHER, so a one-lane
+  // `ro`→`rw` flip (a containment change on exactly one execution tier) used to pass green. These pin
+  // the every-site rule; the single-site CLEAN fixture above cannot express the case at all.
+  describe("both lanes: one-site flips are caught (single-anchor hole)", () => {
+    const TWO_LANE = CLEAN + CLEAN.replace('let m=n?"rw":t?.includes(e)?"rwd":"rw";', "");
+
+    it("a two-lane bundle with both sites read-only is clean", () => {
+      expect(checkMountModeFacts(TWO_LANE)).toEqual([]);
+    });
+
+    it.each([
+      ["uploads", '("uploads")]'],
+      [".claude/skills", '(".claude/skills")]'],
+      [".projects/<uuid>", ".projects/${e.uuid}`)]"],
+    ])("MUTATION: %s writable on the FIRST lane only → flags", (_label, anchor) => {
+      const i = TWO_LANE.indexOf(anchor);
+      const j = TWO_LANE.indexOf('mode:"ro"', i);
+      const mutated = TWO_LANE.slice(0, j) + 'mode:"rw"' + TWO_LANE.slice(j + 'mode:"ro"'.length);
+      expect(mutated).not.toBe(TWO_LANE);
+      expect(checkMountModeFacts(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
+    });
+
+    it.each([
+      ["uploads", '("uploads")]'],
+      [".claude/skills", '(".claude/skills")]'],
+      [".projects/<uuid>", ".projects/${e.uuid}`)]"],
+    ])("MUTATION: %s writable on the SECOND lane only → flags", (_label, anchor) => {
+      const i = TWO_LANE.lastIndexOf(anchor);
+      const j = TWO_LANE.indexOf('mode:"ro"', i);
+      const mutated = TWO_LANE.slice(0, j) + 'mode:"rw"' + TWO_LANE.slice(j + 'mode:"ro"'.length);
+      expect(mutated).not.toBe(TWO_LANE);
+      expect(checkMountModeFacts(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
+    });
+
+    // The delete-deny resolver had the same single-anchor shape and the same two-lane reality. The
+    // whole-string mutation in STRUCT_MUT removes BOTH sites; this is the case that motivated the floor.
+    it("MUTATION: ONE lane loses the delete-deny resolver → flags on the floor", () => {
+      const i = CLEAN.indexOf('?"rwd":"rw"');
+      const mutated = CLEAN.slice(0, i) + '?"rw":"rw"' + CLEAN.slice(i + '?"rwd":"rw"'.length);
+      expect(mutated).not.toBe(CLEAN);
+      expect(mutated.split('?"rwd":"rw"').length - 1).toBe(1); // exactly one site left — a one-lane loss
+      expect(checkMountModeFacts(mutated).some((f) => f.includes("below the pinned floor"))).toBe(true);
+    });
+
+    it("a lane GAINING the resolver is benign and must not flag", () => {
+      const extra = CLEAN + 'let mc=n?"rw":t?.includes(e)?"rwd":"rw";';
+      expect(checkMountModeFacts(extra)).toEqual([]);
+    });
+  });
+});
+
+// ==========================================================================================
+// Failability of the remaining asar sentinels.
+//
+// `extractFromAsar` runs eight checkers over the bundle and they are ALL green on both the current
+// baseline's asar and the previous one — so a green carries no release-specific information unless the
+// checker is known to bite. checkSpawnContractFacts, checkPathHookFacts and checkMountModeFacts each
+// have a mutation suite above; these are the other five, which had none.
+//
+// Two traps these are written around:
+//   - A SUFFIX rename is not a mutation. `buildRequestWebFetchApproval` -> `…ApprovalZ` still satisfies
+//     a substring regex, so the "mutation" passes while proving nothing. Every edit below changes an
+//     INNER character.
+//   - Every case asserts the mutation actually applied (`mut` throws on a no-op), because a mutation
+//     that silently matched nothing reads as "the checker is redundant".
+// ==========================================================================================
+describe("asar sentinels — the remaining five are failable", () => {
+  const realFiles = () => readRealBundleFilesOrSkip();
+
+  const mutate = (files: Map<string, string>, from: string, to: string): Map<string, string> => {
+    const out = new Map([...files].map(([k, v]) => [k, v.split(from).join(to)] as [string, string]));
+    const before = [...files.values()].join("");
+    const after = [...out.values()].join("");
+    expect(after, `mutation was a no-op — "${from}" is not in the bundle`).not.toBe(before);
+    return out;
+  };
+
+  it.each([
+    ["checkCodeTripwires", "getMcpSkillSources()", "getMcpSkillSXurces()", /getMcpSkillSources not found/],
+    ["checkWebFetchFacts", "buildRequestWebFetchApproval", "buildRequestWebFXtchApproval", /per-domain approval/],
+    [
+      "checkEgressContractFacts (E1)",
+      "vmEgressPolicy(){return null}",
+      "vmEgressPolicy(){return nXll}",
+      /1p .*vmEgressPolicy.* branch is gone/,
+    ],
+    ["checkSyspromptMapFacts", "coworkSyspromptMap", "coworkSyspromptMXp", /channel anchor missing/],
+  ])("MUTATION: %s flags", (name, from, to, expected) => {
+    const files = realFiles();
+    if (!files) return;
+    const mutated = mutate(files, from, to);
+    const bundle = [...mutated.values()].join("");
+    const flags =
+      name === "checkCodeTripwires"
+        ? checkCodeTripwires(bundle)
+        : name === "checkWebFetchFacts"
+          ? checkWebFetchFacts(bundle)
+          : name === "checkSyspromptMapFacts"
+            ? checkSyspromptMapFacts(mutated)
+            : checkEgressContractFacts(bundle);
+    expect(
+      flags.some((f) => expected.test(f)),
+      `flags were: ${JSON.stringify(flags)}`,
+    ).toBe(true);
+  });
+
+  // checkNormalizationSanity needs no real bundle: its whole contract is the RAW/NORMALIZED pair, and it
+  // is deliberately FAIL-SOFT — it reports only when the raw parses and the normalized does not, so that
+  // syntax this acorn cannot parse reads as "not our damage" instead of blocking every sync.
+  it("MUTATION: checkNormalizationSanity flags a normalized chunk that stopped parsing", () => {
+    expect(checkNormalizationSanity(new Map([["x.js", "const a=1;"]]), new Map([["x.js", "const a=;"]]))).toHaveLength(1);
+  });
+  it("checkNormalizationSanity stays silent when the RAW chunk does not parse either (fail-soft)", () => {
+    expect(checkNormalizationSanity(new Map([["x.js", "const a=;"]]), new Map([["x.js", "const b=;"]]))).toEqual([]);
+  });
+  it("checkNormalizationSanity ignores a chunk normalization left untouched", () => {
+    expect(checkNormalizationSanity(new Map([["x.js", "const a=;"]]), new Map([["x.js", "const a=;"]]))).toEqual([]);
   });
 });
 

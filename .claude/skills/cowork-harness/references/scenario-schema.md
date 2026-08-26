@@ -1,7 +1,7 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 2.2.0`
-(baseline `desktop-1.34493.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 2.3.0`
+(baseline `desktop-1.37937.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` is the only required field:
@@ -546,7 +546,8 @@ reference omits). Neither list is a strict superset of the other — reach for t
    `egress_denied` is dropped. Both now warn loudly. → put egress/live-only checks on a live gate; one
    concern per item; run the linter. (`LIVE_ONLY_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`.)
 
-2. **Gate keys need a `controlOut` cassette.** `question_asked`, `questions_count_max`,
+2. **Gate keys need a `controlOut` cassette.** `question_asked`, `question_options`, `question_context`,
+   `questions_count_max`,
    `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` only evaluate on
    replay with `controlOut`; on an old cassette they warn and are excluded (not passed).
    `gate_answers_delivered` **fails on

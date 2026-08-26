@@ -335,6 +335,33 @@
         "working_with_user_files"
       ],
       "note": "Cowork system prompt BYTE-IDENTICAL to 1.32352.0 on both the raw and the decoded hash (38505 raw / 37811 decoded code points, 43 tags, same 10 placeholders); only the minifier-assigned constant id rotated umt -> Zlt. Raw retained locally per localRawRetention."
+    },
+    "1.34493.1": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "tpt",
+      "note": "BACK-FILLED 2026-08-26 from the retained asar backup — the entry was owed at the 1.34493.1 pass and was never written, which is why the raw was also missing from ~/cowork-agent-backup/desktop-asar/1.34493.1/ until now. Cowork system prompt BYTE-IDENTICAL to 1.32885.1 on both the raw and the decoded hash (38505 raw / 37811 decoded code points, 43 tags, same 10 placeholders); only the minifier-assigned constant id rotated Zlt -> tpt."
+    },
+    "1.37937.0": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "Qgt",
+      "note": "Cowork system prompt BYTE-IDENTICAL to 1.34493.1; only the constant id rotated tpt -> Qgt. Corroborated by a SECOND source rather than by re-running the same extractor: the retained raw files for 1.32885.1, 1.34493.1, 1.37937.0 and 1.37937.1 are byte-identical to each other on disk (cmp), so the prompt has not moved since 1.20186.0."
+    },
+    "1.37937.1": {
+      "sha256": "e62bd9fa1eefc153ddcbd7e56cc6406a2950965e691b96b8d79dd0dbd7032f07",
+      "codePoints": 38505,
+      "decodedSha256": "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf",
+      "decodedCodePoints": 37811,
+      "sectionTags": 43,
+      "constantId": "Qgt",
+      "note": "Desktop self-updated 1.37937.0 -> 1.37937.1 mid-pass. Prompt BYTE-IDENTICAL to 1.37937.0, same constant id Qgt. Recorded separately because provenance.asarFingerprint is the SAME 16-char value on both builds (it hashes only the cowork slices), so the baseline's own fingerprint cannot distinguish them and this file is where that distinction is kept."
     }
   },
   "subagentAppendMethod": "Independent of the single-text `versions` fingerprints above: the sub-agent environment append is a TWO-BRANCH generator selected on hostLoopMode. In the SINGLE bundle module that references buildSubagentEnvironmentPrompt AND contains both branch discriminators, slice each branch's raw backtick-template body by scanning outward from its discriminator fragment (escaped backticks are decoded to bare backticks; other escapes left intact); DECODE escapes (same decoder as decodedSha256 -- 1.32352.0's codegen escape change moved BOTH branch fingerprints while the rendered branch text was byte-identical), then normalize every ${...} interpolation to the literal token ${} ; sha256 the UTF-8 bytes; keep the first 16 hex chars. The hl (host-loop) branch is discriminated by the fragment 'on the user's machine' (anchored to the occurrence immediately preceding the vm branch, since the phrase also occurs in unrelated prose), the vm (sandbox) branch by 'exist only in the sandbox'. BOTH fingerprints are mandatory per version entry. Consumed by checkSubagentPromptFacts in src/sync/cowork-sync.ts; re-derive with readMainBundleFiles + extractSubagentBranchSlices + subagentBranchFingerprint (see docs/maintenance.md). Raw texts retained locally only (see localRawRetention).",
