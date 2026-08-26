@@ -41,6 +41,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`trace --view questions` now renders each gate's offered options — labels AND `description`s** — under
+  an `offered:` block, sub-question-labelled on a bundled gate. It previously printed the question label
+  alone, so the option `description` a skill routinely puts the deciding sentence in was reachable only by
+  hand-reading `events.jsonl`; a reader who found nothing in the view could reasonably conclude the text was
+  never delivered. The payload was always recorded — this was purely a rendering gap, and the same run dir
+  answers the question either way. The row (`--output-format json`) gains `subQuestions[]` carrying the
+  untruncated ask-time options; the text view caps each description at 240 chars, so nothing is lost, only
+  wrapped. This pairs with `question_context`: the view is how you *find* the text, that key is how you
+  *gate* on it.
+
 - **The `tool_use` blindness of `transcript_contains`/`_not_contains`/`_matches`/`_not_matches` and
   `computer_links_resolve`/`_if_present` is now documented and guarded.** `semantic_matches` has carried a
   ⚠️ spelling out that its corpus excludes every `tool_use` — "a rubric claim about whether a tool was
@@ -63,6 +73,32 @@ All notable changes to this project are documented here. The format is based on
   `total_cost_usd`; the critique report's `costUsd.totalUsd` aggregates the task turn, the reflection turn
   and both evaluator passes. Reading the wrong one returns `undefined` rather than erroring, which reads as
   "no cost recorded". Kept as two shapes on purpose — collapsing them would destroy the per-phase split.
+
+### Documentation
+
+Five gaps found by asking a consumer which harness properties actually changed an outcome on a real
+working day, then checking whether the docs said so. Four of the five were documented only as features,
+never as the failure they prevent — the sentence a reader needs to recognise their own situation.
+
+- **The blocking gate is now stated as a blocker.** `AskUserQuestion` *blocks*: it is a question to a
+  human and `claude -p` has no human, so a gated skill under a plain CLI run stalls or never reaches the
+  code behind the gate. That made half the skill untestable, not merely awkward to test — the README had
+  only "untestable headless unless something answers it", buried as the last of two afterthought bullets.
+- **"Assert on the run, not the output"** — a new README section naming the class of claim the harness
+  exists for (`subagent_tool_absent`, `dispatch_count_max`, `no_delete_in_outputs`, `subagent_file_write`)
+  and why no output diff can reach it: a correct run and one that quietly handed a restricted sub-agent
+  shell access produce byte-identical files. `subagent_tool_absent` did not appear in the README at all.
+- **The raw-`events.jsonl` escape hatch is documented**, with verified `jq` recipes, in
+  [docs/debugging.md](./docs/debugging.md). Every documented route into the event log went through
+  `trace`, whose views are a digest — so the run dir's *evidence* surface is wider than any view's
+  *observation* surface, and wider still than the assertion catalog. Concluding "it never happened" from
+  a view that doesn't render the field is a false negative, and the doc now says so and shows the read.
+- **Sub-agent delivery has a route.** The tier-qualified outputs contract — the reason a hand-off path
+  that works on one loop lands in sandbox scratch on the other — was correctly documented in
+  [docs/subagents.md](./docs/subagents.md) but filed under "read on demand", reachable only by someone
+  who already knew the answer. It now has a "Common tasks" row keyed to the symptom.
+- **Replay's cost claim carries a number.** "Zero spend" is the price; the wall-clock is what makes an
+  always-on per-PR gate obviously affordable, and no doc stated it (well under a second per cassette).
 
 ## [2.2.0] — 2026-08-25
 

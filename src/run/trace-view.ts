@@ -344,9 +344,22 @@ export function buildTrace(file: string, opts: BuildTraceOptions = {}): TraceRow
   return buildTraceFromEvents(eventsOf(file), opts);
 }
 
+/** One sub-question exactly as it was put in front of the user — the ask-time payload, options and all.
+ *  This is the same evidence `question_context` asserts over (`gateVisibleText` in src/assert.ts); the
+ *  view renders it so the *inspection* surface is as wide as the *assertion* surface. It previously was
+ *  not: this view showed only the question label, so an option's `description` — where a skill routinely
+ *  puts the sentence the user is actually deciding on — was reachable only by hand-reading
+ *  events.jsonl. A field no command renders is a field nobody knows the run recorded. */
+export interface GateSubQuestion {
+  question: string; // `question`, falling back to `header` — the same string `question_asked` matches
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
+
 export interface GateTraceRow {
   question: string;
   requestId?: string; // the gate's request_id (from the events.jsonl decision) — used to pair provenance by id
+  subQuestions: GateSubQuestion[]; // every sub-question this gate bundled, with the options it offered (see GateSubQuestion)
   subQuestionCount: number; // req.questions.length — the number `questions_count_max` counts THIS gate as (a bundled AskUserQuestion with K sub-questions counts as K, not 1)
   injectedAnswer?: string; // what the harness answered (from control-out.jsonl)
   delivered: "ok" | "error" | "unobserved"; // the tool_result outcome
@@ -397,6 +410,13 @@ export function buildGateTrace(file: string): GateTraceRow[] {
     rows.push({
       question: req.questions.map((q) => q.question ?? q.header ?? "").join(" / "),
       requestId: req.id,
+      // The ask-time options ride along unmodified — no truncation here, only at render time, so a JSON
+      // consumer (`--output-format json`) gets the full offered text and the text view stays readable.
+      subQuestions: req.questions.map((q) => ({
+        question: q.question ?? q.header ?? "",
+        options: q.options ?? [],
+        ...(q.multiSelect !== undefined ? { multiSelect: q.multiSelect } : {}),
+      })),
       subQuestionCount: req.questions.length,
       injectedAnswer: answers.get(req.id),
       delivered: tr ? (tr.isError ? "error" : "ok") : "unobserved",
@@ -453,6 +473,35 @@ export function buildGateTrace(file: string): GateTraceRow[] {
   return rows;
 }
 
+/** Per-option description cap in the TEXT view only. Long enough for the producer-authored sentence a
+ *  founder is deciding on; short enough that a gate offering four options stays one screen. The JSON
+ *  envelope carries the untruncated text, so nothing is lost — only wrapped. */
+const GATE_OPTION_DESC_CAP = 240;
+
+/** The offered options of one gate, indented under it. Rendered for EVERY gate that recorded options —
+ *  not only bundled ones — because the whole point is that this text was previously invisible. A gate
+ *  whose payload carried no options at all renders nothing extra rather than an empty `offered:` header. */
+function formatGateOptions(subs: GateSubQuestion[]): string {
+  if (!subs.some((s) => s.options.length)) return "";
+  const multi = subs.length > 1;
+  const out: string[] = [];
+  for (const s of subs) {
+    if (!s.options.length) continue;
+    // The sub-question label is repeated only on a bundled gate; on a single-sub-question gate it is
+    // already the row's headline and repeating it is noise.
+    if (multi) out.push(`    ${s.question}${s.multiSelect ? " (multi-select)" : ""}:`);
+    else if (s.multiSelect) out.push(`    (multi-select)`);
+    for (const o of s.options) {
+      const desc =
+        o.description === undefined || o.description === ""
+          ? ""
+          : ` — ${o.description.length > GATE_OPTION_DESC_CAP ? o.description.slice(0, GATE_OPTION_DESC_CAP) + "…" : o.description}`;
+      out.push(`    ${multi ? "  " : ""}• ${o.label}${desc}`);
+    }
+  }
+  return out.length ? `\n    offered:\n${out.join("\n")}` : "";
+}
+
 export function formatGateTrace(rows: GateTraceRow[]): string {
   if (!rows.length) return "(no AskUserQuestion gates in this run)";
   const mark = { ok: "✓", error: "✗", unobserved: "?" } as const;
@@ -461,7 +510,8 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
     // sub-question count is shown only when the gate bundled more than one — reconciles this row
     // against questions_count_max, which counts sub-questions, not gates.
     const subCount = r.subQuestionCount > 1 ? ` (${r.subQuestionCount} sub-questions)` : "";
-    return `${mark[r.delivered]} gate "${r.question}"${subCount}\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}${prov}`;
+    const offered = formatGateOptions(r.subQuestions ?? []);
+    return `${mark[r.delivered]} gate "${r.question}"${subCount}${offered}\n    answered: ${r.injectedAnswer ?? "(none)"}\n    delivered: ${r.delivered}${r.error ? ` — ${r.error}` : ""}${prov}`;
   });
   const totalSubQuestions = rows.reduce((sum, r) => sum + r.subQuestionCount, 0);
   lines.push(

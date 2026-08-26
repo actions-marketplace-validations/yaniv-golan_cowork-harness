@@ -83,8 +83,8 @@ Both are excellent, and if you're building an *agent* you should use them. This 
 
 Two more that matter in practice:
 
-- **Token-free CI.** Record a run once, commit the cassette, and every PR re-runs it deterministically at **zero spend** — assertions, tool stream, gate answers and all. That's what makes an always-on gate affordable. See [cassette.md](./docs/cassette.md).
-- **Deterministic answers to questions and permission prompts.** A skill that asks the user something is untestable headless unless something answers it the way the UI would. The harness answers over the same `can_use_tool` control protocol Desktop uses, from your scenario's scripted `answers:` — or from a live decider when you're still discovering what it asks. See [scenario.md](./docs/scenario.md), [decider-dir.md](./docs/decider-dir.md).
+- **A blocking gate you can actually answer.** `AskUserQuestion` *blocks*: it is a question to a human, and `claude -p` has no human. A gated skill under a plain CLI run either stalls at the gate or never reaches the code behind it — so the half of your skill that lives past the first question is untestable, not merely awkward to test. The harness answers over the same `can_use_tool` control protocol Desktop uses, from your scenario's scripted `answers:` — or from a live decider when you're still discovering what it asks — so the gate genuinely fires and is answered deterministically. `on_unanswered:` decides what an *un*scripted gate does (fail loud by default). See [scenario.md](./docs/scenario.md), [decider-dir.md](./docs/decider-dir.md).
+- **Token-free CI.** Record a run once, commit the cassette, and every PR re-runs it deterministically at **zero spend** — assertions, tool stream, gate answers and all. A cassette replays in well under a second with no token, no Docker and no model call (the three shipped examples replay in ~0.6s total), which is what makes an always-on per-PR gate affordable. See [cassette.md](./docs/cassette.md).
 
 **What it doesn't do.** It runs and records; it does not design your experiment. Comparing "with skill" against "without skill" credibly — scrubbing tells, shuffling, judging blind, unblinding after grading — is still yours to build; the harness contributes the run execution and the control arm (`--ablate-skill`, one arm per invocation). And it emulates the *contract*, not the Desktop runtime: see [Limitations](#limitations) and [fidelity-gaps.md](./docs/fidelity-gaps.md) for what it deliberately does not reproduce.
 
@@ -572,6 +572,31 @@ egress:
 ```
 
 Multiple scenarios × sessions × platform baselines = your regression matrix. Drop YAML in `scenarios/` and CI runs them all.
+
+### Assert on the run, not the output
+
+The assertions above that check a file or a phrase are the familiar half. The half that's hard to get any
+other way asserts on **how the run behaved** — a property of the execution that leaves no trace in the
+deliverable:
+
+| Claim | Key |
+|---|---|
+| no sub-agent ever got `Bash` (a deliberately tool-restricted dispatch stayed restricted) | `subagent_tool_absent: Bash` |
+| nothing was deleted from the outputs mount | `no_delete_in_outputs: true` |
+| the dispatch count stayed bounded — no fan-out blow-up | `dispatch_count_max: <N>` |
+| a sub-agent wrote the file, rather than the main loop doing it for them | `subagent_file_write: {path}` |
+| the skill actually ran, rather than the model answering from its mounted source | `skill_triggered: <rx>` |
+| the sandbox really blocked the network | `egress_denied: <host>` |
+
+**You cannot diff your way to "no sub-agent used `Bash`."** A correct run and a run that quietly gave a
+restricted sub-agent shell access produce byte-identical outputs; the difference exists only in the event
+stream. This is the class of property that matters most for a skill whose sub-agents are deliberately
+tool-restricted, or whose safety story is "it can't reach X" — and it is exactly what an output-diffing
+test, or a human reading the final answer, will always report as fine.
+
+The full catalog is `cowork-harness assertions --list`; [scenario.md → Which assertion for which question](./docs/scenario.md#which-assertion-for-which-question-goal--key)
+is the goal-first chooser. Mind the two axes in each key's row: which **tier** it needs, and whether it
+**survives `replay`** (several of the above are live-only — keep them in a periodic live `run`).
 
 ## Sandboxing: container vs. the real VM
 
