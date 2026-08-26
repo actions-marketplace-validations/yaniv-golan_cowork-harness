@@ -71,6 +71,31 @@ already happened.
 2. **`trace` — what did it actually do?** Digests the run's `events.jsonl` into the tools it called, the
    questions (gates) it was asked and how they were answered, and the sub-agent dispatch tree. This is how
    you answer "how many sub-agents *really* dispatched?" or "which gate fired, with what offered labels?"
+   — `--view questions` prints each gate's full ask-time payload, every option's **label and
+   `description`**, which is where a skill routinely puts the sentence the user is actually deciding on.
+
+   **When `trace` doesn't render the field you need, read `events.jsonl` directly.** The views are a
+   digest, not the record: the run dir's *evidence* surface is wider than any view's *observation*
+   surface, and wider still than the assertion catalog. Nothing in the pipeline discards an event, so a
+   field no command prints is still on disk — and concluding "it never happened" from a view that
+   doesn't render it is a false negative, not a finding. The file is one JSON object per line:
+
+   ```bash
+   RUN=~/.cowork-harness/runs/<scenario>/<session>          # `--keep` printed this path
+   # every AskUserQuestion payload, exactly as the model emitted it — options, descriptions and all
+   jq -c 'select(.type=="control_request" and .request.tool_name=="AskUserQuestion") | .request.input' "$RUN/events.jsonl"
+   # what the harness answered, keyed by request_id (the other half of the gate). Note the DOUBLE
+   # `.response.response` — the outer is the control envelope, the inner is the tool decision.
+   jq -c 'select(.response.response.updatedInput.answers)
+          | {request_id: .response.request_id, answers: .response.response.updatedInput.answers}' "$RUN/control-out.jsonl"
+   # the raw line behind a `trace` row you want to see unabridged
+   sed -n '204p' "$RUN/events.jsonl" | jq .
+   ```
+
+   If what you find there is worth *gating* on rather than just reading, promote it to an assertion:
+   [`question_context`](./scenario.md#full-schema) matches a regex against everything a gate put in front
+   of the user (question label, option labels, option descriptions), and `tool_result_contains` /
+   `artifact_json` cover most of the rest. An assertion is the version of the finding that survives you.
 3. **`verify-run` — re-assert cheaply.** If the run itself was fine and only an *assertion* is wrong,
    re-check the scenario's assertions against the kept run dir with no live re-record (~1s). When the
    scenario scripts answers, it also re-checks they still match the run's actual gates — so a reworded gate

@@ -898,7 +898,11 @@ The remote lane also has an internal MCP server the harness does not model at al
 `internal__remote-devices__<tool>` (note the `internal__` prefix, not `mcp__`). Agent-facing tools include
 `device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
 `device_request_folder_access`, `get_device_info`, and device-artifact tools; `device_commit_files` is the
-remote lane's write-to-disk leg and consumes a `file_uuid` from a prior `SendUserFile`. Desktop advertises
+remote lane's write-to-disk leg and consumes a `file_uuid` from a prior `SendUserFile`. Desktop 1.37937.0
+added `device_fs` and `device_request_delete_permission` to that set, plus a folder-access announce mode
+(`card` / `dialog` / `off`) — the Desktop half of the six `cowork_*` risk categories that had appeared in
+agent 2.1.237's auto-mode permission rubric. **This list is illustrative, not an inventory** (see the
+feature-gating note below), so it is not kept exhaustive; it is updated when a release moves the shape. Desktop advertises
 these *outward* to a cloud session over a device-OAuth bridge; every handler logs
 `session_type: "cowork-remote"`, and no `internal__*` name appears in the local spawn's tool list.
 

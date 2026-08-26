@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 2.2.0
-  tracks-harness: cowork-harness 2.2.0 (baseline desktop-1.34493.1)
+  version: 2.3.0
+  tracks-harness: cowork-harness 2.3.0 (baseline desktop-1.37937.1)
 ---
 
 # cowork-harness
@@ -16,14 +16,17 @@ in the shell; this skill tells you how to author scenarios, pick a fidelity tier
 path, place assertions in the right CI lane, and avoid the harness's "✓ passed ≠ actually correct"
 traps.
 
+`cowork-harness` is an unofficial, independent project — not affiliated with or endorsed by
+Anthropic. Say so if a user asks what it is.
+
 The single most important idea: **a green run is not automatically a correct run.** The harness has
 several ways to no-op a check while still producing a green run (skip an assertion on replay — now
 flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an empty egress
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 2.2.0` (baseline
-> `desktop-1.34493.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 2.3.0` (baseline
+> `desktop-1.37937.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -39,7 +42,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 2.2.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^2.2.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^2.2.0"`. **Pin `@^2.2.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 2.3.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^2.3.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^2.3.0"`. **Pin `@^2.3.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -309,6 +312,7 @@ them by what you're trying to prove:
 | no authored interactive artifact silently loses its Submit under Cowork | `no_lost_write_back: true` (**live-only**; static Tier A over the run's authored `.html`/`.py`/`.js`; per-scenario gate for the same class `analyze-skill` scans) |
 | a resource ceiling held | `max_peak_rss_bytes: <N>` (**live-only**) |
 | the user was **shown** the right choices, in order | `question_options: {when_question, equals}` — the option SET/ORDER a gate offered (`question_asked` matches the text only); order is compared by default |
+| the user was **told something specific** at a gate | `question_context: {when_question, matches}` — a regex over the question label + option labels + option **descriptions**. Reach for this when the wording may land in an option's `description`, which `question_asked` and `question_options` cannot see |
 | a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
 | every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
 | a context compaction happened | `compaction_occurred: true` |
@@ -402,8 +406,15 @@ the discovery/encode/record dance entirely and answer gates **live during the re
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, use
 `cowork-harness record <file.yaml> --dry-run` — it runs the real loader AND the same scenario-level
 refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing) **plus the
-cassette-portability pre-flight below**, so it cannot green something a paid run would reject. On a directory it reports every offender and the batch
-cost estimate. `lint` checks the assertion invariants (both above).
+cassette-portability pre-flight below**, so it cannot green something a paid run would reject. **That binding
+guarantee is the SINGLE-FILE form only** — it takes the real `--out` and the real flags, so its verdict is the
+one a paid run would give. On a **directory** the path-dependent verdicts (host-inventory, cassette
+portability) are reported as `⚠ would-refuse (advisory)` / `⚠ would-warn (advisory)` notes — the label follows
+the verdict kind, and portability can only ever warn — that do NOT affect the exit code — a dir target
+takes no `--out`, so the destination is a guess — and only the path-independent ones (prompt policy, assert
+contradiction, duplicate cassette target) gate the batch. So a directory dry-run CAN exit 0 on a scenario the
+real `record` would refuse; re-run that one file with its real flags for a binding answer. A directory also
+reports every offender and the batch cost estimate. `lint` checks the assertion invariants (both above).
 
 **Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
 Without `--out`, `record` writes `cassettes/<scenario-name-slug>.cassette.json` (gitignored by
@@ -426,7 +437,12 @@ for a cassette that cannot verify staleness from its own location — recoverabl
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
-(and `verify-run`) read the gates + offered option labels out of that run's `events.jsonl` for free. Iterate
+(and `verify-run`) read the gates + every offered option's **label and `description`** out of that run's
+`events.jsonl` for free — a skill routinely puts the sentence the user is actually deciding on in a
+`description`, and `question_context:` is the key that gates on it (`question_options:` compares labels
+only). When a view renders no field you need, read `events.jsonl` directly rather than concluding the text
+was never delivered — the views are a digest, and the record is wider (`jq` recipes in
+[`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md)). Iterate
 your `answers:` against that kept run, then record once. **But the kept run is a snapshot:** if you change the
 skill's gate phrasing afterward, re-`--keep` — verify-run's answer-coverage *refuses* (exit 2, "predates the
 current skill") rather than vouch against stale labels, but the trace/inspect path can't warn you, so re-keep
@@ -821,7 +837,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
    channel: scripted `choose:` list, in-band `--decider-dir` via a repeated `--choose` / a JSON-array
    reply, and `--decider-cmd` via a JSON-array reply — all deliver the same `", "`-joined wire shape.
    Free-text "Other" via `answer:`. Do NOT hand-write a multiSelect reply as a bare comma-joined
-   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` /
+   string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` / `question_context` /
    `questions_count_max` / `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
    old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).
@@ -1034,11 +1050,14 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
     ([`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)
     → "File delivery" has the binary-verified detail; repo-only.)
 
-25. **Two distinct host-inventory consent flags — a record-time one and a verify-time one.** `record
-    --allow-host-inventory-fixture` is the boolean consent to proceed recording a host-inheriting
+25. **Three host-inventory flags — two on `record`, one on `verify-cassettes`.** `record
+    --allow-host-inventory-fixture` proceeds past the PRE-FLIGHT refusal when recording a host-inheriting
     (`protocol`/`hostloop`/`cowork`-resolving-to-hostloop) cassette into a repo-visible path — otherwise
     `record` refuses before it spends (freezing this machine's MCP servers/agents/account into a committed
-    fixture is the risk). That pre-spend check **warns rather than refuses when the cassette already
+    fixture is the risk). It bypasses that check and **nothing else**: the finished recording is still
+    scanned, and a real finding still quarantines it, so you never have to audit the session by hand to
+    pass it. Writing a recording the scan DID flag is the separate `record
+    --allow-host-inventory-findings`. That pre-spend check **warns rather than refuses when the cassette already
     exists** — refusing would fire on every `--rerecord-stale` pass — and it reads the tier and the
     destination path, never the bytes. So `record` also scans the FINISHED recording, after redaction and
     before the write: a `host-inventory`/`machine-inventory` finding on a repo-visible path is

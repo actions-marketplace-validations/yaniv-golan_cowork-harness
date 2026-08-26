@@ -1236,11 +1236,25 @@ export function checkCodeTripwires(bundle: string): string[] {
   return flags;
 }
 
+/** Sites building the delete-deny resolver on the newest baseline (Desktop 1.37937.1): the VM-loop
+ *  mount-set builder and host-loop `computeBashMounts`. A FLOOR, not an equality — see its use site. */
+const MOUNT_DELETE_DENY_MIN_SITES = 2;
+
 export function checkMountModeFacts(bundle: string): string[] {
   const flags: string[] = [];
-  if (!/\?"rwd":"rw"/.test(bundle))
+  // The delete-deny resolver. A bare `.test()` was the same single-anchor hole the per-mount checks below
+  // just closed: the resolver is now built on BOTH lanes (1 site in Desktop 1.34493.1, 2 from 1.37937.0),
+  // so once one lane has it, `.test()` cannot see the other lane losing it. Guard a FLOOR rather than an
+  // exact count — a lane gaining the resolver is benign and must not red a sync, a lane losing it is the
+  // containment change. The floor is the count observed on the newest baseline; raise it deliberately
+  // when a release adds a lane. Running `sync` against a Desktop OLDER than the floor's release will
+  // flag, which is correct: that install does not build what the pinned baseline describes.
+  const denySites = (bundle.match(/\?"rwd":"rw"/g) ?? []).length;
+  if (denySites < MOUNT_DELETE_DENY_MIN_SITES)
     flags.push(
-      'mountLayout: the delete-deny resolver (IX `…?"rwd":"rw"`) is gone from the asar — outputs/projects default mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)',
+      `mountLayout: the delete-deny resolver (IX \`…?"rwd":"rw"\`) is built at ${denySites} site(s), below the pinned floor of ` +
+        `${MOUNT_DELETE_DENY_MIN_SITES} — an execution lane lost delete-deny resolution, so outputs/projects default mode may have ` +
+        "changed on that lane; re-derive mountLayout.mounts[].mode per lane (see baselines $comment_modes)",
     );
   // Every mount whose mode is HARDCODED at the mount-set builder, rather than resolved through
   // NOTE the lane difference, because "spawn-time" is wrong for half of it: the VM-loop builder runs
@@ -1251,20 +1265,34 @@ export function checkMountModeFacts(bundle: string): string[] {
   // outputs and each connected folder go through the resolver (`rw`, or `rwd` once approved) while these
   // are pinned `"ro"`. Worth pinning individually because a mount silently moving from `ro` to a
   // writable mode is a containment change we would otherwise model wrongly with nothing failing.
-  const hardcodedRo: [string, RegExp][] = [
-    ["uploads", /\("uploads"\)\][^}]{0,90}mode:\s*"ro"/],
-    [".claude/skills", /\("\.claude\/skills"\)\][^}]{0,120}mode:\s*"ro"/],
-    [".claude/projects", /\("\.claude\/projects"\)\][^}]{0,120}mode:\s*"ro"/],
+  //
+  // EVERY SITE must carry the mode, not merely one of them. Each of these names is built at TWO sites —
+  // the VM-loop mount-set builder and host-loop `computeBashMounts` — and an `re.test(bundle)` is
+  // satisfied by either, so a one-lane `ro`→`rw` flip (a real containment change on exactly one
+  // execution tier) passed green. Comparing the site count to the with-mode count closes that: the
+  // `site` pattern locates the mount irrespective of its mode, `ro` requires the mode too.
+  const hardcodedRo: [string, RegExp, RegExp][] = [
+    ["uploads", /\("uploads"\)\]/g, /\("uploads"\)\][^}]{0,90}mode:\s*"ro"/g],
+    [".claude/skills", /\("\.claude\/skills"\)\]/g, /\("\.claude\/skills"\)\][^}]{0,120}mode:\s*"ro"/g],
+    [".claude/projects", /\("\.claude\/projects"\)\]/g, /\("\.claude\/projects"\)\][^}]{0,120}mode:\s*"ro"/g],
     // Project ATTACHMENTS (`userSelectedProjectUuids`) — one mount per uuid, read-only. This is the fact
     // that settles whether a project mount belongs in the delete-denied set: it does not, because it is
     // not writable at all.
-    [".projects/<uuid>", /\(`\.projects\/\$\{[^}]+\}`\)\][^}]{0,90}mode:\s*"ro"/],
+    [".projects/<uuid>", /\(`\.projects\/\$\{[^}]+\}`\)\]/g, /\(`\.projects\/\$\{[^}]+\}`\)\][^}]{0,90}mode:\s*"ro"/g],
   ];
-  for (const [name, re] of hardcodedRo)
-    if (!re.test(bundle))
+  for (const [name, siteRe, roRe] of hardcodedRo) {
+    const sites = (bundle.match(siteRe) ?? []).length;
+    const ro = (bundle.match(roRe) ?? []).length;
+    if (sites === 0)
       flags.push(
         `mountLayout: the read-only ("ro") mount for ${name} is gone from the asar — its mode may have changed; re-derive mountLayout.mounts[].mode (see baselines $comment_modes)`,
       );
+    else if (ro !== sites)
+      flags.push(
+        `mountLayout: ${name} is built at ${sites} site(s) but only ${ro} carry mode:"ro" — one execution lane's mount became writable; ` +
+          `re-derive mountLayout.mounts[].mode per lane (see baselines $comment_modes)`,
+      );
+  }
   return flags;
 }
 
@@ -2280,7 +2308,22 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   // what is new is the Cowork spawn setting it outright.
   "CLAUDE_PREVIEW_CLASSIFIER_FLOOR",
   "DISABLE_AUTOUPDATER",
+  // Desktop 1.37937.0. MCP_TOOL_TIMEOUT is the first key that is BOTH 1p-pinned and 3p-constructed:
+  // W1 builds it unconditionally (`String(<getter>())` → the `??18e4` default), and the 3p-only branch
+  // in W3 gained a second, settings-conditional site (`...i!==void 0&&{MCP_TOOL_TIMEOUT:String(i)}`,
+  // `i` a chunk-local `let`). It stays PINNED here, on its W1 site. Allowlisting it instead would be a
+  // silent contract loss: resolveInto checks SPAWN_ENV_ALLOWLIST BEFORE this list, so the key would
+  // vanish from the generated env entirely — and it is not in REQUIRED_SPAWN_KEYS, so nothing would
+  // hard-fail. The 3p site is handled per-SITE by the branch rule in applyWindow, not per-key here.
   "MCP_TOOL_TIMEOUT",
+  // Desktop 1.37937.0. Both UNCONDITIONAL in W1 (no gate, no session/deployment branch), constructed as
+  // plain string literals between ENABLE_APPEND_SUBAGENT_PROMPT and ENABLE_PROMPT_CACHING_1H — which is
+  // still set, so these are ADDITIVE rather than its replacement. Same call as
+  // CLAUDE_PREVIEW_CLASSIFIER_FLOOR above: unconditional in W1 ⇒ every first-party Cowork session
+  // receives them ⇒ pin, so a later gate or value change is a --diff line, not a silent shift. They read
+  // 0 times in agent 2.1.241 and 6 times each in 2.1.246, so this is a live contract, not a dormant one.
+  "CLAUDE_CODE_PROMPT_CACHE_TTL",
+  "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL",
   "USE_LOCAL_OAUTH",
   "USE_STAGING_OAUTH",
 ];
@@ -2467,6 +2510,98 @@ function braceScanWindow(bundle: string, anchor: string): string | null {
   return null;
 }
 
+/**
+ * The literal that marks the 3p-only deployment branch. Anchoring on CONTENT rather than on the
+ * predicate identifier is deliberate: the branch reads `...n&&{…}` where `n=<deployment>().type==="3p"`
+ * is bound in the enclosing FUNCTION HEADER, which sits before every window's start anchor — so `n`
+ * cannot be resolved from inside the window, and hard-coding `n` would be exactly the minified-name
+ * anchoring that has broken sentinels three releases running (S6c, Cg, S14b). DISABLE_GROWTHBOOK has
+ * been the first key of that literal in every build on record, and SPAWN_ENV_ALLOWLIST already treats
+ * it as the branch's canonical marker in prose.
+ */
+const THIRD_PARTY_BRANCH_MARKER = "DISABLE_GROWTHBOOK:";
+
+/**
+ * The `mcp__` membership of the spawn's `allowedTools[]`, pinned as a SET (S10b). Read from Desktop
+ * 1.37937.1; `mcp__plugins__search_connectors` is the entry that was new in 1.37937.0 and that S9/S10
+ * could not see. Note this array is the pre-approval list only — a name here does not mean the tool is
+ * OFFERED: `search_connectors` is declared solely on the 3p deployment
+ * (`getDynamicTools:()=>…type==="3p"?[…]:[]`, and its handler branch re-checks the same predicate), so
+ * the first-party inventory the harness serves is unaffected. Re-classify, then re-pin, on any delta.
+ */
+const SPAWN_ALLOWED_MCP_TOOLS: readonly string[] = [
+  "mcp__mcp-registry__search_mcp_registry",
+  "mcp__mcp-registry__suggest_connectors",
+  "mcp__mcp-registry__list_connectors",
+  "mcp__plugins__search_plugins",
+  "mcp__plugins__search_connectors",
+  "mcp__plugins__suggest_plugin_install",
+  "mcp__plugins__list_plugins",
+  "mcp__skills__list_skills",
+  "mcp__skills__suggest_skills",
+  "mcp__scheduled-tasks__list_scheduled_tasks",
+  "mcp__computer-use",
+];
+
+/**
+ * Slice the SPAWN's balanced `allowedTools:[…]` array text (bracket-aware, so a nested `[]` cannot end
+ * it early). Anchored on the built-in head S9 pins, NOT on the bare `allowedTools:[` — the joined bundle
+ * holds several unrelated `allowedTools` arrays (settings schemas, the bundled CLI) and the first one is
+ * not the spawn's. A first-match slice reported all 11 pinned tools as removed at once, which is what a
+ * mis-anchored window looks like: a total, implausible delta rather than a plausible one.
+ */
+function sliceAllowedToolsArray(bundle: string): string | null {
+  const a = bundle.search(/allowedTools:\["Task","Bash","Glob","Grep","Read","Edit","Write","NotebookEdit","WebFetch"/);
+  if (a < 0) return null;
+  const open = bundle.indexOf("[", a);
+  let depth = 0;
+  for (let i = open; i < bundle.length; i++) {
+    const c = bundle[i];
+    if (c === "[") depth++;
+    else if (c === "]") {
+      depth--;
+      if (depth === 0) return bundle.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Slice the `...<pred>&&{…}` spread whose balanced body contains the 3p marker, or null when the window
+ * carries no such branch (W1/W2 today). Returns the WHOLE spread text (`...<pred>&&{…}`) so the caller
+ * can blank it wholesale. Brace matching is string-aware, since the body holds nested spreads and
+ * quoted values.
+ */
+function sliceThirdPartyBranch(text: string): string | null {
+  for (const m of text.matchAll(/\.\.\.[^{}]{0,80}?&&\{/g)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    let q: string | null = null;
+    for (let i = open; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === "\\") i++;
+        else if (c === q) q = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        q = c;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          const body = text.slice(open, i + 1);
+          if (body.includes(THIRD_PARTY_BRANCH_MARKER)) return text.slice(m.index, i + 1);
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /** Parse `K:"v"`-style inner pairs of a `{…}` object body (used for gate-conditional spread inners). */
 function enumSpawnKeys(text: string): { key: string; valueStart: number }[] {
   const out: { key: string; valueStart: number }[] = [];
@@ -2574,6 +2709,26 @@ export function deriveSpawnEnv(
     }
   };
 
+  // Inner key of the 3p-only branch (`...<deploymentType==="3p">&&{…}` — located by CONTENT, see
+  // THIRD_PARTY_BRANCH_MARKER). Classify by NAME ONLY: the branch is the classifier, and the harness
+  // models a FIRST-PARTY session, so no value inside it can ever reach the modeled env.
+  //
+  //  - allowlisted → fine (this is what every "3p-provider-only branch" entry already means);
+  //  - PINNED → fine, and deliberately NOT resolved. A pinned key earns its value from its 1p site in
+  //    W1/W2; a 3p-only expression says nothing about it. Resolving here would (a) flag on shapes that
+  //    are irrelevant to the modeled session — Desktop 1.37937.0's `String(i)`, where `i` is a
+  //    chunk-local `let` — and (b) be actively dangerous if it DID resolve: `resolveConst` hops a
+  //    1-char name against a whole 2 MB chunk, so a build whose first `i=` happened to be numeric would
+  //    silently write a 3p value. W1 is applied last and would win either way, so nothing is lost.
+  //  - unknown → still a hard-fail. A brand-new key must be classified even here, which is the whole
+  //    point of keeping the branch enumerated rather than discarding it.
+  const classifyThirdPartyInner = (rawKey: string) => {
+    if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return;
+    if ((SPAWN_PIN_KEYS as readonly string[]).includes(rawKey)) return;
+    flags.push(`spawn.env: unknown key ${rawKey} constructed in the 3p-only deployment branch — ${SPAWN_ADVICE}`);
+    hardFail = true;
+  };
+
   // A window's non-gate-spread keys. Gate-conditional spreads (…<helper>("id")&&{…}) are handled first
   // (they must be resolved against gate STATE, not read as plain literals — an off-gate NONBLOCKING:"0"
   // must not override W2's "true"), then blanked so the generic pass never sees them. Helper name is
@@ -2581,6 +2736,32 @@ export function deriveSpawnEnv(
   const applyWindow = (text: string, target: Record<string, string>, isW1: boolean) => {
     let work = text;
     const scope = chunkFor(text);
+    // The 3p-only branch (W3 today; W2 would be handled the same way). Blanked BEFORE the generic pass so
+    // it never reads the branch's inner keys as unconditional 1p literals.
+    //
+    // NOT applied to W1, deliberately. W1 is the window every modeled 1p key comes from, so a marker
+    // appearing there is either a Desktop restructure or a false positive — and blanking on either would
+    // silently delete real pinned keys from the derived env, an all-or-nothing contract violated
+    // quietly. Flag and let the generic pass run instead: worst case the branch's keys read as
+    // unconditional (loud, diff-visible), never a silent deletion.
+    if (isW1) {
+      if (sliceThirdPartyBranch(work) !== null) {
+        flags.push(
+          `spawn.env: the 3p-only deployment branch (marker \`${THIRD_PARTY_BRANCH_MARKER}\`) now appears in W1, the window the ` +
+            `modeled first-party env is derived from — re-derive which window owns the deployment split before trusting this env; ${SPAWN_NO_BYPASS}`,
+        );
+        hardFail = true;
+      }
+    } else {
+      const tp = sliceThirdPartyBranch(work);
+      if (tp) {
+        for (const k of enumSpawnKeys(tp)) {
+          enumerated.add(k.key);
+          classifyThirdPartyInner(k.key);
+        }
+        work = work.replace(tp, "");
+      }
+    }
     if (isW1) {
       // B6: the gate helper acquired an `o.`-style receiver here too (`...o.isFeatureEnabled("id")&&{…}`);
       // without this widening the block is never blanked and the generic pass below reads its inner keys
@@ -2934,6 +3115,26 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   )
     miss("S9 allowedTools head", "the allowedTools[] head list moved (AskUserQuestion is tools-only)");
   if (!has(/allowedTools:\[[^\]]{0,400}"ToolSearch","mcp__/)) miss("S10 allowedTools tail-guard", "the built-in→mcp__ boundary moved");
+  // S10b (Desktop 1.37937.0): S9 pins the built-in HEAD and S10 only the built-in→mcp__ BOUNDARY, so the
+  // `mcp__` region between the boundary and the closing bracket was unguarded — and a real addition
+  // (`mcp__plugins__search_connectors`) shipped through both of them green. Pin the membership itself.
+  // A set comparison, not a literal regex, so the flag NAMES the delta instead of just saying "moved".
+  {
+    const arr = sliceAllowedToolsArray(bundle);
+    if (arr == null) miss("S10b allowedTools mcp__ membership", "the allowedTools[] array could not be sliced");
+    else {
+      const seen = new Set((arr.match(/"mcp__[^"]*"/g) ?? []).map((s) => s.slice(1, -1)));
+      const pinned = new Set(SPAWN_ALLOWED_MCP_TOOLS);
+      const added = [...seen].filter((t) => !pinned.has(t)).sort();
+      const gone = [...pinned].filter((t) => !seen.has(t)).sort();
+      if (added.length > 0 || gone.length > 0)
+        miss(
+          "S10b allowedTools mcp__ membership",
+          `the allowedTools[] mcp__ set changed${added.length ? ` (+${added.join(", ")})` : ""}${gone.length ? ` (-${gone.join(", ")})` : ""}` +
+            " — classify each entry (which server serves it, and whether it is offered on the 1p deployment) before re-pinning SPAWN_ALLOWED_MCP_TOOLS",
+        );
+    }
+  }
 
   // S11/S12 scoped to W1; S13 scoped to W2 — the earn-the-pin assertions for local-agent / cron / provider.
   if (!w1 || !has(/CLAUDE_CODE_ENTRYPOINT:"local-agent"/, w1))

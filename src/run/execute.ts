@@ -297,6 +297,8 @@ const CONTRADICTION_GROUPS: {
       // Same reasoning as question_asked: asserting WHICH options a gate offered requires a gate to have
       // fired, which contradicts requiring zero sub-questions.
       { label: "`question_options`", test: (a) => a.question_options !== undefined },
+      // Same again: matching text a gate SHOWED requires a gate to have fired.
+      { label: "`question_context`", test: (a) => a.question_context !== undefined },
       // `: false` asserts a CONFIRMED delivery failure, which needs a gate to have fired — a presence
       // requirement in disguise. `: true` is NOT one: it passes vacuously at zero gates, so it is merely
       // inert alongside the declaration (lint says so; not worth refusing a run over).
@@ -1744,6 +1746,53 @@ export function parseScenarioFile(path: string): Scenario {
   return scenario;
 }
 
+/** Every nested `{ …: <regex> }` leaf in the Assertion schema, derived from zod rather than enumerated.
+ *
+ *  A leaf qualifies when it is a string field of a nested object whose own `.describe()` says "regex" — the
+ *  same declaration the docs and JSON schema are generated from, so a new nested regex field is covered the
+ *  moment it is declared. `test/nested-regex-leaves.test.ts` pins the derivation against the evaluator: every
+ *  leaf `assert.ts` compiles with `compileUserRegex` must appear here, so a load-time gap cannot reopen.
+ *
+ *  Computed once — walking the schema per assertion per run would be pointless work on a hot path. */
+/** Every nested `{ …: <regex> }` leaf in the Assertion schema.
+ *
+ *  It is an explicit table on purpose, after a derivation from zod internals was tried and rejected: the
+ *  `.describe()` text is not reachable the same way across the src and dist builds, so the walk silently
+ *  returned ZERO leaves under one of them — validation that looks present and checks nothing, which is
+ *  strictly worse than the hand list it replaced.
+ *
+ *  What makes the table safe is not how it was written but `test/nested-regex-leaves.test.ts`, which reads
+ *  `assert.ts` and fails if the evaluator compiles a nested leaf this table does not carry. The previous
+ *  version of this code was a hand list of THREE under a comment claiming to cover them all, with no guard —
+ *  the list was not the defect; the missing guard was.
+ *
+ *  A bad regex in any of these used to surface inside the evaluator, i.e. after the paid spawn. */
+const NESTED_REGEX_LEAVES: [parent: keyof Assertion, child: string][] = [
+  ["artifact_text", "matches"],
+  ["artifact_text", "not_matches"],
+  ["path_denied", "path_matches"],
+  ["question_context", "matches"],
+  ["question_context", "when_question"],
+  ["question_options", "when_question"],
+  ["skill_tool_used", "skill"],
+  ["skill_tool_used", "tool"],
+  ["subagent_dispatch_healthy", "type"],
+  ["subagent_output_contains", "match"],
+  ["task_status", "match"],
+];
+
+/** The `[label, pattern]` pairs to validate for one authored assertion. Exported for the coverage test. */
+export function nestedRegexLeaves(a: Assertion): [label: string, pattern: string][] {
+  const out: [string, string][] = [];
+  for (const [parent, child] of NESTED_REGEX_LEAVES) {
+    const holder = (a as Record<string, unknown>)[parent];
+    if (holder === undefined || holder === null || typeof holder !== "object") continue;
+    const v = (holder as Record<string, unknown>)[child];
+    if (typeof v === "string") out.push([`${parent}.${child}`, v]);
+  }
+  return out;
+}
+
 /** Validate all user-supplied regex patterns in a scenario at load time. Throws on the first bad pattern. */
 function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void {
   const context = `scenario "${scenario.name ?? scenarioPath}"`;
@@ -1796,6 +1845,15 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
         const c = compileUserRegex(pattern);
         if ("error" in c) throw new Error(`bad regex in ${key} in ${context}: ${c.error}`);
       }
+    }
+    // Nested regex leaves — DERIVED from the schema, never hand-listed. The flat `a[key]` loop above
+    // reaches only top-level string keys, so every regex that lives one level down (`artifact_text.matches`,
+    // `path_denied.path_matches`, `question_context.matches`, …) was compiled for the first time inside the
+    // evaluator, i.e. AFTER the paid spawn. A hand list is how the previous version of this got it wrong: it
+    // covered 3 of the 11 leaves while its comment claimed to cover them all.
+    for (const [label, pattern] of nestedRegexLeaves(a)) {
+      const c = compileUserRegex(pattern);
+      if ("error" in c) throw new Error(`bad regex in ${label} in ${context}: ${c.error}`);
     }
     // (Empty / regex-ish / brace-expansion tool globs are rejected by the `toolGlob` schema in types.ts —
     // enforced on EVERY parse path including a recorded cassette's frozen asserts, not just here. )

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
-function gateFrame(question: string, optionLabels: string[]) {
+function gateFrame(question: string, optionLabels: string[], descriptions?: Record<string, string>) {
   return {
     type: "control_request",
     request_id: "req-1",
@@ -17,12 +17,24 @@ function gateFrame(question: string, optionLabels: string[]) {
       subtype: "can_use_tool",
       tool_name: "AskUserQuestion",
       tool_use_id: "toolu_1",
-      input: { questions: [{ question, options: optionLabels.map((label) => ({ label })) }] },
+      input: {
+        questions: [
+          {
+            question,
+            options: optionLabels.map((label) =>
+              descriptions?.[label] === undefined ? { label } : { label, description: descriptions[label] },
+            ),
+          },
+        ],
+      },
     },
   };
 }
 
-function keptRun(gate?: { question: string; options: string[] }, opts: { corruptEvents?: boolean; noEvents?: boolean } = {}): string {
+function keptRun(
+  gate?: { question: string; options: string[]; descriptions?: Record<string, string> },
+  opts: { corruptEvents?: boolean; noEvents?: boolean } = {},
+): string {
   const root = mkdtempSync(join(tmpdir(), "cwh-qo-"));
   const workDir = join(root, "work", "session", "mnt");
   mkdirSync(join(workDir, "outputs"), { recursive: true });
@@ -55,8 +67,8 @@ function keptRun(gate?: { question: string; options: string[] }, opts: { corrupt
   writeFileSync(join(t1, "trace.json"), JSON.stringify({ questions: gate ? [gate.question] : [], steps: [] }));
   if (gate && !opts.noEvents) {
     const lines = opts.corruptEvents
-      ? ["{ this is not json", JSON.stringify(gateFrame(gate.question, gate.options))]
-      : [JSON.stringify(gateFrame(gate.question, gate.options))];
+      ? ["{ this is not json", JSON.stringify(gateFrame(gate.question, gate.options, gate.descriptions))]
+      : [JSON.stringify(gateFrame(gate.question, gate.options, gate.descriptions))];
     writeFileSync(join(root, "events.jsonl"), lines.join("\n") + "\n");
   }
   return root;
@@ -121,6 +133,53 @@ describe.skipIf(!can)("verify-run grades question_options from events.jsonl", ()
       run,
       `assert:\n  - question_options:\n      when_question: "rubric"\n      equals: ["Stop review", "Proceed anyway"]\n`,
     );
+    const r = verifyRun(run, sc);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/evidence unavailable/);
+  });
+});
+
+// `question_context` reads the SAME events.jsonl evidence on this lane, through the same `wantsGateOptions`
+// switch in cli.ts. Reverting that switch to `question_options`-only was measured as a ZERO-failure
+// mutation: the key would silently fail evidence-unavailable on every verify-run — a false RED nothing
+// caught. These are the four cases `question_options` already pins, for the key that most needs them: the
+// text it matches lives in an option `description`, which no other assert key can reach.
+describe.skipIf(!can)("verify-run grades question_context from events.jsonl", () => {
+  const DESC = { "Stop review": "The deck states: Seed. This review reads it as Pre-seed." };
+  const withDesc = () => keptRun({ question: Q, options: OPTS, descriptions: DESC });
+
+  it("matches text that lives ONLY in an option description, with an EMPTY answers: block", () => {
+    const run = withDesc();
+    const sc = scenarioFile(run, `assert:\n  - question_context:\n      matches: 'reads it as Pre-seed'\n  - result: success\n`);
+    expect(verifyRun(run, sc).code).toBe(0);
+  });
+
+  // The pair. A one-sided green would also be produced by a key matching the question text.
+  it("...where question_asked on the same regex FAILS", () => {
+    const run = withDesc();
+    const sc = scenarioFile(run, `assert:\n  - question_asked: 'reads it as Pre-seed'\n`);
+    expect(verifyRun(run, sc).code).not.toBe(0);
+  });
+
+  it("FAILS when the text was never shown", () => {
+    const run = withDesc();
+    const sc = scenarioFile(run, `assert:\n  - question_context:\n      matches: 'never shown to anyone'\n`);
+    const r = verifyRun(run, sc);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/question_context/);
+  });
+
+  it("fails evidence-unavailable when events.jsonl is absent", () => {
+    const run = keptRun({ question: Q, options: OPTS, descriptions: DESC }, { noEvents: true });
+    const sc = scenarioFile(run, `assert:\n  - question_context:\n      matches: 'reads it as Pre-seed'\n`);
+    const r = verifyRun(run, sc);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/evidence unavailable/);
+  });
+
+  it("fails evidence-unavailable when events.jsonl has an unparseable line", () => {
+    const run = keptRun({ question: Q, options: OPTS, descriptions: DESC }, { corruptEvents: true });
+    const sc = scenarioFile(run, `assert:\n  - question_context:\n      matches: 'reads it as Pre-seed'\n`);
     const r = verifyRun(run, sc);
     expect(r.code).not.toBe(0);
     expect(r.text).toMatch(/evidence unavailable/);

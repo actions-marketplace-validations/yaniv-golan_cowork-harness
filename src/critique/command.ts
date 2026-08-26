@@ -858,6 +858,11 @@ type SelfReportStatus = "captured" | "unavailable";
 /** Per-critique cost rollup: the four model workloads, each priced from its own usage record when
  *  available. `complete` is true ONLY when all four are priced — a partial total must never present
  *  itself as the full spend. */
+/** NOT the same number as a run's `RunResult.cost.usd` (src/types.ts), which is ONE invocation's
+ *  SDK-reported `total_cost_usd`. `totalUsd` here aggregates the task turn, the reflection turn and both
+ *  evaluator passes. Reading the wrong key returns `undefined`/`None` rather than erroring, which reads as
+ *  "no cost recorded"; the two shapes are deliberately kept distinct because the per-phase split is the
+ *  reason this report exists. */
 export interface CritiqueCost {
   taskTurnUsd?: number;
   reflectionTurnUsd?: number;

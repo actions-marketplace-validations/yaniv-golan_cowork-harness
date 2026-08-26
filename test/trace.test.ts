@@ -225,6 +225,94 @@ describe("trace view", () => {
       "1 gate(s), 3 sub-question(s) total — questions_count_max counts sub-questions (assert with `questions_count_max: 3`)",
     );
   });
+
+  // The observation surface must be at least as wide as the evidence surface. A skill routinely puts the
+  // sentence the user is actually deciding on in an option's `description`; before this, `--view questions`
+  // rendered only the question label, so that sentence was reachable ONLY by hand-reading events.jsonl —
+  // and a reader who found nothing in the view could reasonably conclude it was never delivered.
+  it("--view questions renders the offered option labels AND descriptions, not just the question", () => {
+    const f = eventsFile([
+      {
+        type: "control_request",
+        request_id: "uuid-opts",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_opts",
+          input: {
+            questions: [
+              {
+                question: "How should we treat the 2024 revenue line?",
+                options: [
+                  { label: "As booked", description: "Your deck shows $1.2M booked but $380K recognized — investors will ask." },
+                  { label: "As recognized" },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      userResult("toolu_opts", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    const gates = buildGateTrace(f);
+    expect(gates[0].subQuestions).toHaveLength(1);
+    expect(gates[0].subQuestions[0].options).toEqual([
+      { label: "As booked", description: "Your deck shows $1.2M booked but $380K recognized — investors will ask." },
+      { label: "As recognized" },
+    ]);
+    const text = formatGateTrace(gates);
+    expect(text).toContain("offered:");
+    expect(text).toContain("• As booked — Your deck shows $1.2M booked but $380K recognized — investors will ask.");
+    // an option with no description renders its label alone, not a dangling em dash
+    expect(text).toContain("• As recognized\n");
+    expect(text).not.toContain("As recognized —");
+  });
+
+  it("--view questions truncates a long option description in text but keeps it whole in the row", () => {
+    const long = "x".repeat(400);
+    const f = eventsFile([
+      {
+        type: "control_request",
+        request_id: "uuid-long",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_long",
+          input: { questions: [{ question: "Proceed?", options: [{ label: "Yes", description: long }] }] },
+        },
+      },
+      userResult("toolu_long", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    const gates = buildGateTrace(f);
+    // the row (what `--output-format json` serializes) keeps the FULL text — truncation is a rendering
+    // concern only, so a grader reading the JSON never gets a silently clipped quote
+    expect(gates[0].subQuestions[0].options[0].description).toBe(long);
+    const text = formatGateTrace(gates);
+    expect(text).toContain("…");
+    expect(text).not.toContain(long);
+  });
+
+  it("--view questions omits the `offered:` block for a gate that recorded no options", () => {
+    const f = eventsFile([
+      {
+        type: "control_request",
+        request_id: "uuid-noopts",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_noopts",
+          input: { questions: [{ question: "Proceed?" }] },
+        },
+      },
+      userResult("toolu_noopts", false, "delivered"),
+      { type: "result", is_error: false },
+    ]);
+    const text = formatGateTrace(buildGateTrace(f));
+    expect(text).toContain('gate "Proceed?"');
+    expect(text).not.toContain("offered:");
+  });
 });
 
 describe("trace — thinking rows", () => {

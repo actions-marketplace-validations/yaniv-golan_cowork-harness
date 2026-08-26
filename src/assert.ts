@@ -48,6 +48,30 @@ function resolveContainedManifestPath(workRoot: string, p: string): string | nul
  *  scenario asserting any of these CANNOT take. A hand-copied list there would rot exactly the way the
  *  `--out`-outside-the-repo advice it replaces did. `test/hostloop-only-keys.test.ts` pins this array
  *  against the `hostloopOnly("…")` call sites by scanning this file's source. */
+/** The founder-visible strings of one gate, as SEPARATE fields: its question label, then every option's
+ *  label and description. The evidence behind `question_context`.
+ *
+ *  Sourced from RunRecord.gateOptions, i.e. the ASK-TIME AskUserQuestion payload the model emitted — never
+ *  from a tool_result. That distinction is the key's whole value: a skill's producer script typically also
+ *  writes the same sentence into its own gate-state file, so a `tool_result_matches` on that phrase grades
+ *  true whether or not the model ever surfaced it. This function can only ever see what was actually
+ *  offered.
+ *
+ *  RETURNS A LIST, and the evaluator tests each entry separately, so a pattern can never match text spanning
+ *  two fields. An earlier version returned one newline-joined string and claimed the newline prevented that.
+ *  It did not, and it was measured doing the opposite: on the committed multiselect example,
+ *  `invoicing[\s\S]*Audit logging` stitched one option's DESCRIPTION to the next option's LABEL and passed —
+ *  a "sentence" no one was ever shown. The neighbouring transcript keys' docs actively teach `[\s\S]` for
+ *  spanning turns, so that is the habit an author brings to this key. Structure beats a documented caveat. */
+export function gateVisibleFields(g: { question: string; options: { label: string; description?: string }[] }): string[] {
+  const parts = [g.question];
+  for (const o of g.options) {
+    parts.push(o.label);
+    if (o.description !== undefined) parts.push(o.description);
+  }
+  return parts;
+}
+
 /** Order-insensitive multiset equality over option labels — `question_options` with `order: "any"`.
  *  A multiset, not a Set: a gate that offered the same label twice is a different offer from one that
  *  offered it once, and collapsing them would green a duplicated option. */
@@ -2044,6 +2068,58 @@ function check(
       const c = compileUserRegex(a.question_asked);
       if ("error" in c) results.push(fail(`question_asked: bad regex "${a.question_asked}": ${c.error}`));
       else results.push(ctx.questions.some((q) => c.re.test(q)) ? ok() : fail(`no question matched: ${a.question_asked}`));
+    }
+  }
+  if (a.question_context !== undefined) {
+    const qc = a.question_context;
+    // Fail CLOSED on every "we cannot see the gates" path, exactly as question_options does: an absent or
+    // partial gate payload must never satisfy a key whose whole job is to prove what a person was shown.
+    if (ctx.gateOptionsMissing || ctx.gateOptions === undefined) {
+      results.push(fail("evidence unavailable: gate-option evidence absent for this run — cannot evaluate question_context"));
+    } else {
+      const c = compileUserRegex(qc.matches);
+      if ("error" in c) {
+        results.push(fail(`question_context: bad regex "${qc.matches}": ${c.error}`));
+      } else {
+        const all = ctx.gateOptions;
+        let pool = all;
+        let selector = "";
+        let badSelector = false;
+        if (qc.when_question !== undefined) {
+          const w = compileUserRegex(qc.when_question);
+          if ("error" in w) {
+            results.push(fail(`question_context: bad regex "${qc.when_question}": ${w.error}`));
+            badSelector = true;
+          } else {
+            pool = all.filter((g) => w.re.test(g.question));
+            selector = ` matching /${qc.when_question}/i`;
+          }
+        }
+        // NOTE: deliberately NO ambiguity refusal here, unlike question_options. That key pins WHICH gate
+        // offered WHICH set, so silently taking the first would make it depend on gate order. This key asks
+        // whether the founder was shown a phrase at a decision point at all, for which "some selected gate's
+        // payload matches" is the whole semantic — there is nothing to disambiguate. Mirroring the refusal
+        // would red a multi-gate run on which the founder WAS told (measured: the deck-review fixture fires
+        // 5 sub-questions across 2 gates).
+        if (badSelector) {
+          /* already reported */
+        } else if (pool.length === 0) {
+          results.push(fail(`question_context: no question${selector} was asked (${all.length} gate(s) recorded)`));
+        } else {
+          // The founder-visible payload, in the order it is presented: question label, then each option's
+          // label and description. Joined with newlines so a regex cannot straddle two fields by accident.
+          const hit = pool.find((g) => gateVisibleFields(g).some((f) => c.re.test(f)));
+          results.push(
+            hit
+              ? ok(`question_context: gate ${JSON.stringify(hit.question)} showed text matching /${qc.matches}/i`)
+              : fail(
+                  `question_context: no gate${selector} showed text matching /${qc.matches}/i (searched ${pool.length} gate(s): ${pool
+                    .map((g) => JSON.stringify(g.question))
+                    .join(", ")})`,
+                ),
+          );
+        }
+      }
     }
   }
   if (a.question_options !== undefined) {
