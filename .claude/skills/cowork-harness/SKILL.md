@@ -427,7 +427,12 @@ for a cassette that cannot verify staleness from its own location — recoverabl
 
 **Author answers WITHOUT re-paying — the cheap loop.** You don't need a fresh paid record to discover a
 scenario's gates or their labels: `--keep` ONE run, then `cowork-harness trace <run-dir> --view questions`
-(and `verify-run`) read the gates + offered option labels out of that run's `events.jsonl` for free. Iterate
+(and `verify-run`) read the gates + every offered option's **label and `description`** out of that run's
+`events.jsonl` for free — a skill routinely puts the sentence the user is actually deciding on in a
+`description`, and `question_context:` is the key that gates on it (`question_options:` compares labels
+only). When a view renders no field you need, read `events.jsonl` directly rather than concluding the text
+was never delivered — the views are a digest, and the record is wider (`jq` recipes in
+[`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md)). Iterate
 your `answers:` against that kept run, then record once. **But the kept run is a snapshot:** if you change the
 skill's gate phrasing afterward, re-`--keep` — verify-run's answer-coverage *refuses* (exit 2, "predates the
 current skill") rather than vouch against stale labels, but the trace/inspect path can't warn you, so re-keep

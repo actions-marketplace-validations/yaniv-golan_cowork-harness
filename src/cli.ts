@@ -532,7 +532,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   // flags any physical line naming an artifact next to something that looks like a path-join call).
   trace: `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--output-format json]
        --view tools              tool call / result rows
-       --view questions          gate lifecycle (question → answer → delivered)
+       --view questions          gate lifecycle (question → offered options, incl. each option's description → answer → delivered)
        --view dispatches         sub-agent dispatch tree + dispatch_count_max
        --view tool-durations     per-tool call-count/timing table, folded from the sibling timeline.jsonl ({} when the run has no timing data)
        --view tool-errors        one row per errored tool call, with the full command + full multi-line stderr (each capped at 4KB); the tools view shows only the first 120 chars

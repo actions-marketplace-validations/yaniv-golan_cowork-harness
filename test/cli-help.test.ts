@@ -363,3 +363,38 @@ describe("every trace --view list derives from TRACE_VIEWS", () => {
     expect(interpolated.length).toBe(3);
   });
 });
+
+// The help text and the renderer are two descriptions of ONE capability, and nothing but this test
+// couples them. `--view questions` gained option rendering while its help line still read "gate
+// lifecycle (question → answer → delivered)" — a surface that under-claims is how a reader concludes
+// the harness cannot show them something it has been recording all along.
+//
+// Asserted as an EQUALITY, not two independent truths, so it fails in both directions: rip the
+// `offered:` block out of the renderer and the help now over-claims; drop `description` from the help
+// and it under-claims. Either way this reds.
+describe.skipIf(!can)("cli --help: `trace --view questions` help matches what the renderer prints", () => {
+  it("help claims option descriptions exactly when the renderer emits them", async () => {
+    const { formatGateTrace } = await import("../src/run/trace-view.js");
+    const DESC = "Your deck shows $1.2M booked but $380K recognized.";
+    const rendered = formatGateTrace([
+      {
+        question: "How should we treat the 2024 revenue line?",
+        subQuestionCount: 1,
+        subQuestions: [{ question: "How should we treat the 2024 revenue line?", options: [{ label: "As booked", description: DESC }] }],
+        delivered: "ok",
+      },
+    ]);
+    const rendererEmitsDescriptions = rendered.includes(DESC);
+
+    const { code, text } = help("trace");
+    expect(code).toBe(0);
+    // the questions row of the usage block, not the whole help (another view could mention "description")
+    const row = text.split("\n").find((l) => l.includes("--view questions")) ?? "";
+    expect(row, "no `--view questions` row in `trace --help`").not.toBe("");
+    const helpClaimsDescriptions = /description/i.test(row);
+
+    expect(helpClaimsDescriptions).toBe(rendererEmitsDescriptions);
+    // …and pin the direction, so "both false" is not a passing state
+    expect(rendererEmitsDescriptions).toBe(true);
+  });
+});
