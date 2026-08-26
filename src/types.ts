@@ -238,10 +238,32 @@ const toolGlob = z
 // `cowork-harness assertions --list` (which reads `Assertion.shape[k].description`) — the list can never drift
 // from the schema. Keep descriptions one line.
 export const Assertion = z.strictObject({
-  transcript_contains: z.string().min(1).optional().describe("the transcript contains this literal substring"),
-  transcript_not_contains: z.string().min(1).optional().describe("the transcript does NOT contain this literal substring"),
-  transcript_matches: z.string().optional().describe("regex (case-insensitive) over the transcript — fuzzy content for stochastic prose"),
-  transcript_not_matches: z.string().optional().describe("regex (case-insensitive) that must NOT match the transcript"),
+  transcript_contains: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "the transcript contains this literal substring. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so text the agent emitted inside a tool call (an AskUserQuestion gate question, an option label or description) can never match at any phrasing",
+    ),
+  transcript_not_contains: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "the transcript does NOT contain this literal substring. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so text the agent emitted inside a tool call (an AskUserQuestion gate question, an option label or description) can never match at any phrasing",
+    ),
+  transcript_matches: z
+    .string()
+    .optional()
+    .describe(
+      "regex (case-insensitive) over the transcript — fuzzy content for stochastic prose. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so text the agent emitted inside a tool call (an AskUserQuestion gate question, an option label or description) can never match at any phrasing",
+    ),
+  transcript_not_matches: z
+    .string()
+    .optional()
+    .describe(
+      "regex (case-insensitive) that must NOT match the transcript. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so text the agent emitted inside a tool call (an AskUserQuestion gate question, an option label or description) can never match at any phrasing",
+    ),
   tool_result_contains: z
     .string()
     .min(1)
@@ -586,15 +608,20 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip)",
+      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip). Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here",
     ),
   computer_links_resolve_if_present: z
     .literal(true)
     .optional()
     .describe(
-      "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid",
+      "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here",
     ),
-  question_asked: z.string().optional().describe("a question matching this regex was asked"),
+  question_asked: z
+    .string()
+    .optional()
+    .describe(
+      "a question matching this regex was asked. This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose",
+    ),
   question_options: z
     .strictObject({
       when_question: z
@@ -627,7 +654,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "assert the option SET and ORDER a gate offered the user, by LABEL (question_asked matches question text only; option DESCRIPTIONS are not compared here — use question_context for those). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously",
+      "assert the option SET and ORDER a gate offered the user, by LABEL (question_asked matches question text only; option DESCRIPTIONS are not compared here — use question_context for those). Exactly one of equals|contains is required. Evidence is captured at ask time, so it covers a gate that was shown and then denied/stalled/unanswered; a run whose gate evidence is absent fails evidence-unavailable, never vacuously. This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose",
     ),
   question_context: z
     .strictObject({
@@ -641,7 +668,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "a regex matched against everything a gate put in front of the user: the question label, every option LABEL, and every option DESCRIPTION. Use this when the skill's own wording may land in any of those fields — question_asked sees only the question text and question_options compares only labels, so a sentence delivered in an option's `description` is invisible to both. Evidence is the ask-time AskUserQuestion payload (never a producer's tool_result, which would grade true whether or not the model surfaced anything). Zero gates recorded FAILS; a lane that cannot read the gate payload fails evidence-unavailable, never vacuously",
+      "a regex matched against everything a gate put in front of the user: the question label, every option LABEL, and every option DESCRIPTION. Use this when the skill's own wording may land in any of those fields — question_asked sees only the question text and question_options compares only labels, so a sentence delivered in an option's `description` is invisible to both. Evidence is the ask-time AskUserQuestion payload (never a producer's tool_result, which would grade true whether or not the model surfaced anything). Zero gates recorded FAILS; a lane that cannot read the gate payload fails evidence-unavailable, never vacuously. This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose",
     ),
   questions_count_max: z
     .number()
@@ -770,7 +797,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*). The judged document is finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — no tool_use/tool_result, and no sub-agent text (even fork-scoped) unless include_subagent_text is set. A rubric claim about whether a TOOL was called can therefore never grade true; use tool_called/present_files_called/subagent_dispatched for that",
+      "LIVE-ONLY: a pinned LLM judge grades the rubric against the run's answer; skipped-loud on replay (like egress_*). The judged document is finalMessage + transcript + authored files. NOTE the transcript is TOP-LEVEL assistant_text ONLY — it excludes every tool_use/tool_result, and no sub-agent text (even fork-scoped) unless include_subagent_text is set. A rubric claim about whether a TOOL was called can therefore never grade true; use tool_called/present_files_called/subagent_dispatched for that",
     ),
 });
 export type Assertion = z.infer<typeof Assertion>;

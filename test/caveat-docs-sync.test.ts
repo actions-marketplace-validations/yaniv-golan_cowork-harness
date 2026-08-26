@@ -18,10 +18,18 @@ import { Assertion } from "../src/types.js";
 // caveat at all — and an enumerable set catches exactly that.
 
 const scenarioDoc = readFileSync("docs/scenario.md", "utf8");
+const skillRef = readFileSync(".claude/skills/cowork-harness/references/scenario-schema.md", "utf8");
 const cassetteDoc = readFileSync("docs/cassette.md", "utf8");
 
 const TOOL_USE_SENTINEL = "excludes every `tool_use`/`tool_result`";
 const DRIFT_SENTINEL = "model-composed and is reworded run to run";
+
+/** Backticks are markdown, not meaning: the same sentence is written with them in a docs table and without
+ *  them in a zod `.describe()` (which is rendered as plain text by `assertions --list`). Compare on the
+ *  words. Without this the guard silently exempts every non-markdown surface — which is how the first
+ *  version of this file ended up covering only the two docs it read. */
+const words = (s: string) => s.replace(/`/g, "");
+const carries = (text: string, sentinel: string) => words(text).includes(words(sentinel));
 
 /** The one table row documenting `key`, or undefined. Rows open with `| \`key` — matching the backtick
  *  prevents `transcript_matches` from being satisfied by `transcript_not_matches`' row. */
@@ -32,6 +40,17 @@ function row(doc: string, key: string): string | undefined {
     if (name === key) return line;
   }
   return undefined;
+}
+
+/** The user-facing help text for one key, read exactly as `cli.ts` reads it (`Assertion.shape[k].description`
+ *  — zod's PUBLIC getter, and the single source both `assertions --list` and the generated JSON schema use).
+ *
+ *  Deliberately not `._def.description`: that internal is not populated the same way across the src and dist
+ *  builds, so a guard written against it reports "no describe" for every key and fails for the wrong reason.
+ *  Measured while writing this file. */
+function describeOf(key: string): string | undefined {
+  const shape = Assertion.shape as Record<string, { description?: string } | undefined>;
+  return shape[key]?.description;
 }
 
 describe("keys blind to tool_use carry the exclusion in their docs row", () => {
@@ -46,7 +65,7 @@ describe("keys blind to tool_use carry the exclusion in their docs row", () => {
   it.each(TOOL_USE_BLIND_KEYS)("docs/scenario.md documents %s with the tool_use exclusion", (key) => {
     const r = row(scenarioDoc, key as string);
     expect(r, `docs/scenario.md has no table row for ${key}`).toBeDefined();
-    expect(r, `docs/scenario.md's ${key} row must say it ${TOOL_USE_SENTINEL}`).toContain(TOOL_USE_SENTINEL);
+    expect(carries(r!, TOOL_USE_SENTINEL), `docs/scenario.md's ${key} row must say it ${TOOL_USE_SENTINEL}`).toBe(true);
   });
 
   // cassette.md's replay table covers a subset; where it DOES describe one of these keys, the caveat has to
@@ -54,13 +73,36 @@ describe("keys blind to tool_use carry the exclusion in their docs row", () => {
   it.each(TOOL_USE_BLIND_KEYS)("docs/cassette.md's row for %s, where it has one, carries it too", (key) => {
     const r = row(cassetteDoc, key as string);
     if (r === undefined) return;
-    expect(r, `docs/cassette.md's ${key} row must say it ${TOOL_USE_SENTINEL}`).toContain(TOOL_USE_SENTINEL);
+    expect(carries(r, TOOL_USE_SENTINEL), `docs/cassette.md's ${key} row must say it ${TOOL_USE_SENTINEL}`).toBe(true);
   });
 
   it.each(MODEL_AUTHORED_TEXT_KEYS)("docs/scenario.md warns that %s matches model-authored text", (key) => {
     const r = row(scenarioDoc, key as string);
     expect(r, `docs/scenario.md has no table row for ${key}`).toBeDefined();
-    expect(r, `docs/scenario.md's ${key} row must say the text is ${DRIFT_SENTINEL}`).toContain(DRIFT_SENTINEL);
+    expect(carries(r!, DRIFT_SENTINEL), `docs/scenario.md's ${key} row must say the text is ${DRIFT_SENTINEL}`).toBe(true);
+  });
+
+  // THE SURFACES THE FIRST VERSION OF THIS GUARD MISSED. It read `docs/scenario.md` and `docs/cassette.md`
+  // and nothing else — so the caveat was added to exactly the two files the guard checked, while
+  // `assertions --list` (the CLI's own help), `schema/scenario.schema.json` (the editor surface) and the
+  // packaged skill reference (billed into every agent's context) kept the pre-commit asymmetry. A guard
+  // whose scope is narrower than the claim it enforces IS the bug it is meant to prevent.
+  it.each(TOOL_USE_BLIND_KEYS)("the zod describe for %s — the `assertions --list` and JSON-schema surface — carries it", (key) => {
+    const d = describeOf(key as string);
+    expect(d, `no zod .describe() found for ${key}`).toBeDefined();
+    expect(carries(d!, TOOL_USE_SENTINEL), `${key}'s describe() must say it ${TOOL_USE_SENTINEL}`).toBe(true);
+  });
+
+  it.each(MODEL_AUTHORED_TEXT_KEYS)("the zod describe for %s warns about model-authored text", (key) => {
+    const d = describeOf(key as string);
+    expect(d, `no zod .describe() found for ${key}`).toBeDefined();
+    expect(carries(d!, DRIFT_SENTINEL), `${key}'s describe() must say the text is ${DRIFT_SENTINEL}`).toBe(true);
+  });
+
+  it.each(TOOL_USE_BLIND_KEYS)("the packaged skill reference documents %s with the exclusion", (key) => {
+    const r = row(skillRef, key as string);
+    if (r === undefined) return; // that table covers a subset; where it describes the key, the caveat travels
+    expect(carries(r, TOOL_USE_SENTINEL), `references/scenario-schema.md's ${key} row must say it ${TOOL_USE_SENTINEL}`).toBe(true);
   });
 
   // BOTH DIRECTIONS, or this file is decorative: a guard that only ever checks the rows that already pass

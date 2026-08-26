@@ -57,15 +57,21 @@ All notable changes to this project are documented here. The format is based on
   called is unassertable" — while the six keys with the identical blindness said only "the assistant
   transcript". A consumer wrote a `transcript_matches` against text living in a gate question; it could not
   have matched at any phrasing, and the recording fail-closed after the spend. The caveat is now a property
-  of an enumerable set (`TOOL_USE_BLIND_KEYS`) enforced by a docs-sync test, so a newly-added blind key
-  cannot ship without it.
+  of an enumerable set (`TOOL_USE_BLIND_KEYS`) enforced across every surface that documents a key — the
+  docs tables, the zod `.describe()` behind `assertions --list` and the generated JSON schema, and the
+  packaged skill reference — so a newly-added blind key cannot ship without it.
 - **`question_asked`/`question_options`/`question_context` now warn that they match model-authored text.**
   Gate question text and option labels are composed by the model and reworded run to run. The `choose:`
   side already documented this (stable leading anchor, 1-based index); the assert side documented it
   nowhere. Guarded by `MODEL_AUTHORED_TEXT_KEYS`.
-- **`lint`'s double-quoted-regex warning now covers nested `matches:` leaves** (`question_context.matches`
-  and, newly, `artifact_text.matches`), and `run`/`skill`/`record` pre-compile those and
-  `question_options.when_question` at load — a bad regex in a nested leaf previously reached the evaluator.
+- **A bad regex in a NESTED assertion field is now caught at load, not after the paid spawn.** The pre-compile
+  pass reached only top-level string keys, so every regex one level down — `artifact_text.matches`,
+  `artifact_text.not_matches`, `path_denied.path_matches`, `skill_tool_used.skill`/`.tool`,
+  `subagent_dispatch_healthy.type`, `subagent_output_contains.match`, `task_status.match`,
+  `question_options.when_question`, and the new `question_context.*` — was first compiled inside the
+  evaluator. All eleven are now validated at load, and `test/nested-regex-leaves.test.ts` reads `assert.ts`
+  and fails if the evaluator compiles a nested leaf the load-time table does not carry, so the gap cannot
+  reopen silently. `lint`'s double-quoted-regex warning also now covers nested `matches:` leaves.
 - **`diff` with a single positional now names the missing operand** instead of printing bare usage. There is
   deliberately no one-argument form: `diff` is polymorphic over baselines, run dirs and cassettes, so it
   would need type dispatch plus a defined source for "the committed version".

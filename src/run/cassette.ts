@@ -3132,8 +3132,10 @@ export function hostInventoryPreflight(
   const blocked = HOSTLOOP_ONLY_KEYS.filter((k) => (scenario.assert ?? []).some((a) => a[k] !== undefined));
   const fix = blocked.length
     ? `  Fix: this scenario asserts ${blocked.join(", ")}, which only evaluate at hostloop — 'container' is not ` +
-      `available to it. Audit the session (personal MCP servers, plugins, account metadata) and re-run with ` +
-      `--allow-host-inventory-fixture once you're satisfied the recording carries none.\n`
+      `available to it. Re-run with --allow-host-inventory-fixture to get past THIS check — you do not have ` +
+      `to audit the session by hand: the finished recording is still scanned, and a real finding still ` +
+      `refuses the write and quarantines it (--allow-host-inventory-findings is the separate consent to ` +
+      `write a flagged one).\n`
     : `  Fix: record at 'container' fidelity (sealed, HOME=/tmp) — it inherits nothing from this machine, so the ` +
       `cassette stays committable AND verifiable.\n`;
   return {
@@ -6399,8 +6401,9 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
  *  that no member can see a tool call. `transcript_no_host_path` is deliberately ABSENT — it reads
  *  `ctx.hostPathLeaked`, a post-run scan, not the transcript string.
  *
- *  Consumed by `test/tool-use-blind-docs-sync.test.ts`, which requires every member's docs row to carry the
- *  exclusion sentence. That guard is satisfiable by pasting the sentence onto a row — which is exactly the
+ *  Consumed by `test/caveat-docs-sync.test.ts`, which requires every member's docs row, zod `.describe()` and
+ *  packaged skill-reference row to carry the exclusion sentence. That guard is satisfiable by pasting the
+ *  sentence onto a row — which is exactly the
  *  intended action. The rot mode it exists to catch is a NEW blind key added with no caveat at all, and an
  *  enumerable set catches that. */
 export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
@@ -6422,7 +6425,7 @@ export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
  *  may move.
  *
  *  The `choose:`/answers side of this already carried the caveat (stable leading anchor, 1-based index); the
- *  ASSERT side carried it nowhere. Consumed by `test/model-authored-docs-sync.test.ts`. */
+ *  ASSERT side carried it nowhere. Consumed by `test/caveat-docs-sync.test.ts`. */
 export const MODEL_AUTHORED_TEXT_KEYS: (keyof Assertion)[] = ["question_asked", "question_options", "question_context"];
 
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
