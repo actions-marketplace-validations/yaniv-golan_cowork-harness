@@ -3371,6 +3371,7 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 export const RECORD_USAGE =
   "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
   "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
+  "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse' notes instead (a dir target takes no --out, so the destination is a guess) and gates only on the path-independent ones.\n" +
   "       --allow-host-inventory-findings: write a recording the scan DID flag. The separate, louder decision; needed only when the captured inventory is genuinely part of the fixture.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
   "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x.\n" +
@@ -3599,6 +3600,15 @@ export async function cmdRecord(args: string[]) {
       // one scenario-level refusal but not its sibling.
       const parsedNames: string[] = [];
       const refusals: { file: string; message: string }[] = [];
+      // Path-dependent verdicts are ADVISORY on this arm, never refusals. Measured on a real consumer:
+      // running the host-inventory pre-flight here against `defaultCassettePath(sc.name)` refused 26 of 27
+      // scenarios that the real record accepts — because their CI dry-runs the directory from the repo root
+      // while the real record writes elsewhere with `--out`, and decides the override PER SCENARIO from the
+      // filesystem (`[ -f cassettes/$n… ] || --allow-host-inventory-fixture`). This arm knows neither the
+      // `--out` path (dir targets reject it) nor the per-item flags, so its verdict is a GUESS — and a guess
+      // must not gate. A preview that refuses what the real path allows is worse than one that stays quiet:
+      // it teaches operators to stop trusting the preview.
+      const notes: { file: string; message: string }[] = [];
       for (const f of disc.scenarios) {
         let sc;
         try {
@@ -3607,9 +3617,24 @@ export async function cmdRecord(args: string[]) {
           continue; // already classified as `broken` by discoverScenarios
         }
         parsedNames.push(sc.name);
+        // Path-INDEPENDENT: these are the real verdicts on any path, so they still refuse.
         const why = promptPolicyRejection(sc) ?? assertContradiction(sc);
         if (why) refusals.push({ file: f, message: why });
+        // Path-dependent: reported, never gating. `preSpendVerdicts` re-runs promptPolicyRejection, which is
+        // already covered above — drop that one here rather than reporting it twice.
+        for (const v of preSpendVerdicts(sc, defaultCassettePath(sc.name), {
+          allowHostInventoryFixture,
+          scenarioSourceFile: f,
+        })) {
+          if (v.message === why) continue;
+          notes.push({ file: f, message: v.message });
+        }
       }
+      // The real dir-batch refuses this before its first spawn (see duplicateCassetteTargets). It is
+      // path-independent on both arms — a dir target rejects `--out` — so the preview refuses too rather
+      // than merely noting it.
+      for (const d of duplicateCassetteTargets(disc.scenarios))
+        refusals.push({ file: d.split(" ↔ ")[0], message: `two scenarios share a cassette output path: ${d}` });
       // Free by construction (a run-history lookup), so it is reported whether or not a cap was passed.
       const estimate = estimateBatchCost(parsedNames);
       if (asJson) {
@@ -3621,6 +3646,9 @@ export async function cmdRecord(args: string[]) {
             skipped: disc.skipped,
             broken: disc.broken,
             refusals,
+            // Advisory; deliberately a separate key from `refusals` so automation cannot mistake a guess
+            // for a verdict, and does not gate on it.
+            notes,
             estimatedCostUsd: estimate.known,
             unpricedScenarios: estimate.unpriced,
             // The basis for `estimatedCostUsd`, so automation need not treat it as a bound. It is
@@ -3636,6 +3664,23 @@ export async function cmdRecord(args: string[]) {
         // `--quiet` mutes the readiness PREVIEW only; a refusal is the loud half of "silent on success,
         // loud on failure" and must survive it, exactly as `broken:` does.
         for (const r of refusals) log(`✗ refused: ${r.file}: ${r.message}`);
+        // Advisory only, and SUPPRESSED BY --quiet: unlike a refusal, a note is part of the preview, and a
+        // batch of 26 would otherwise bury a real refusal in a CI log that asked for quiet. (Measured on a
+        // real consumer: their `--dry-run --quiet` CI step produces exactly that many.)
+        //
+        // The underlying messages are written for the REAL path, so they say "refusing". Prefixed here to
+        // say what this arm actually knows — otherwise the reader sees "refusing" beside exit 0 and cannot
+        // tell which one is true.
+        if (!quiet) {
+          for (const n of notes) log(`⚠ would-refuse (advisory): ${n.file}: ${n.message}`);
+          if (notes.length)
+            log(
+              `  ↑ ADVISORY, not this run's verdict: computed against the DEFAULT cassette path because a ` +
+                `directory target takes no --out. A real record's --out/--force/--allow-host-inventory-fixture ` +
+                `may change every one of them, so they do NOT affect this exit code. Dry-run a single scenario ` +
+                `file with the real flags to get a binding answer.`,
+            );
+        }
       }
       if (disc.scenarios.length === 0) {
         if (disc.broken.length === 0) {
@@ -3675,15 +3720,32 @@ export async function cmdRecord(args: string[]) {
     } catch (e) {
       return fail("record", "usage", `record --dry-run: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
     }
-    const promptReject = promptPolicyRejection(scenario);
-    if (promptReject) return fail("record", "usage", promptReject, undefined, asJson);
-    // Same rule as promptPolicyRejection directly above, and as the budget gate below: a refusal the
-    // real `record` would raise has to raise here too, or this preview is false. Pure and spend-free.
+    // `assertContradiction` is NOT in preSpendVerdicts: on the real path it fires from inside
+    // `executeScenario` (execute.ts), which every lane funnels through — including library callers that
+    // never touch this file. Checked here explicitly so the preview matches.
     const contradiction = assertContradiction(scenario);
     if (contradiction) return fail("record", "usage", contradiction, undefined, asJson);
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
+    // THE SHARED BLOCK, on the arm that can preview it faithfully. This arm knows the exact `--out` path
+    // and the exact flags the real record will get, so its verdicts ARE the real ones — it refuses.
+    // (The BATCH arm cannot; see the advisory note there.) `target` IS the scenario source here, so the
+    // portability reference root resolves exactly as it will on the real record.
+    //
+    // Computed BEFORE the payload envelope below: emitting `ok: true` and then a refusal would put two
+    // envelopes on stdout with the first one green — a false green for any JSON consumer that reads the
+    // first line. (Caught by writing it the other way round first.)
+    const verdicts = preSpendVerdicts(scenario, cassettePath, {
+      force,
+      explicitOutPath: p.options["--out"] !== undefined,
+      allowHostInventoryFixture,
+      scenarioSourceFile: target,
+    });
+    const dryRefusal = verdicts.find((v) => v.kind === "refuse");
+    // Warnings ride along with the preview in both modes; a refusal replaces it.
+    if (!dryRefusal) for (const v of verdicts) warn(v.message);
+    if (dryRefusal) return fail("record", "usage", dryRefusal.message, undefined, asJson);
     if (asJson) {
       out(
         jsonPayloadEnvelope("record", true, {
@@ -3705,11 +3767,6 @@ export async function cmdRecord(args: string[]) {
       log(tokenLine);
       log(agentLine);
     }
-    // Part of the preview for the same reason the budget gate is: a rehearsal whose whole job is "tell me
-    // what this would do before I spend" must surface the thing that cannot be undone afterwards. `target`
-    // IS the scenario source here, so the reference root resolves exactly as it will on the real record.
-    const dryPort = cassettePortabilityPreflight(scenario, cassettePath, target);
-    if (dryPort.kind === "warn") warn(dryPort.message);
     // See the dir branch above: the budget gate is part of the preview, not skipped by it.
     if (maxBudgetUsd !== undefined) preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
     return process.exit(0);
@@ -3872,19 +3929,7 @@ export async function cmdRecord(args: string[]) {
     // (last-wins sequentially; a write RACE under --concurrency). Detect up front and fail loud — applies at
     // any concurrency since the sequential clobber is itself a latent bug. (`--out` is dir-rejected above, so
     // every item uses its default path.)
-    const targets = new Map<string, string>();
-    const dupes: string[] = [];
-    for (const f of disc.scenarios) {
-      let cp: string;
-      try {
-        cp = defaultCassettePath(parseScenarioFile(f).name);
-      } catch {
-        continue; // unparseable here would have been classified `broken`; let the record path report it
-      }
-      const prev = targets.get(cp);
-      if (prev) dupes.push(`${f} ↔ ${prev} → ${cp}`);
-      else targets.set(cp, f);
-    }
+    const dupes = duplicateCassetteTargets(disc.scenarios);
     if (dupes.length) {
       return fail(
         "record",
@@ -4040,6 +4085,95 @@ export function nullOutScrubbedPreRunHashes(
 /** The live-record TAIL shared by the file (batch/single) and in-memory (re-record) paths: run live, refuse
  *  a failing run unless opted in, snapshot + secret-scrub bodies, opt-in redact + verdict-preserve,
  *  then write. `extraPolicyDirs` adds the scenario-file dir to the .cowork-redact.json search. */
+
+/** Scenario files in a batch whose `name:` slugifies to the SAME default cassette path — they would clobber
+ *  each other (last-wins sequentially, a write RACE under `--concurrency`).
+ *
+ *  Shared by the real dir-batch and its `--dry-run` preview. Path-INDEPENDENT in the sense that matters: a
+ *  dir target rejects `--out`, so every item genuinely uses its default path on both arms — which is why
+ *  this one REFUSES in the preview while the host-inventory/portability notes only advise. */
+function duplicateCassetteTargets(files: string[]): string[] {
+  const targets = new Map<string, string>();
+  const dupes: string[] = [];
+  for (const f of files) {
+    let cp: string;
+    try {
+      cp = defaultCassettePath(parseScenarioFile(f).name);
+    } catch {
+      continue; // unparseable here would have been classified `broken`; let the record path report it
+    }
+    const prev = targets.get(cp);
+    if (prev) dupes.push(`${f} ↔ ${prev} → ${cp}`);
+    else targets.set(cp, f);
+  }
+  return dupes;
+}
+
+/** Every pre-spend check `record` applies to ONE scenario, in one place, returning verdicts instead of
+ *  acting on them.
+ *
+ *  WHY THIS EXISTS. `record --dry-run` is the token-free rehearsal, and it used to re-implement this list
+ *  by hand — so it drifted. `hostInventoryPreflight` shipped 2026-08-04; `bbd5bf5` (2026-08-07), whose
+ *  commit title is literally "make --dry-run refuse what the real record refuses", swept in the two checks
+ *  that returned `string | undefined` and missed the one returning a `{kind}` verdict, which was already
+ *  wired into `recordScenarioObject`. It stayed missing for 19 days.
+ *
+ *  A registry of check objects was designed and rejected: it guarantees every REGISTERED check runs
+ *  everywhere, but nothing stops the next check being called inline and never registered — which is
+ *  exactly how the gap happened. One function that both the real path and the preview call cannot have
+ *  that failure mode, and `test/pre-spend-parity.test.ts` scans this file to keep it the only site.
+ *
+ *  ORDER IS PRESERVED from the historical inline sequence, because the FIRST refusal is the one the
+ *  operator sees and changing which one that is changes the error they get.
+ *
+ *  NOT here, deliberately — these are whole-BATCH checks, and forcing them per-scenario would emit N
+ *  warnings where the real path emits one: `redactionPreflightMessage` (batch-shaped, and gated on
+ *  `!skipRedactionPreflight && !noRedact`), `preflightBatchBudget`, and the duplicate-slug batch guard. */
+export function preSpendVerdicts(
+  scenario: Scenario,
+  cassettePath: string,
+  opts: {
+    force?: boolean;
+    explicitOutPath?: boolean;
+    allowHostInventoryFixture?: boolean;
+    scenarioSourceFile?: string;
+  },
+): ({ kind: "warn"; message: string } | { kind: "refuse"; message: string })[] {
+  const out: ({ kind: "warn"; message: string } | { kind: "refuse"; message: string })[] = [];
+
+  const promptReject = promptPolicyRejection(scenario);
+  if (promptReject) out.push({ kind: "refuse", message: promptReject });
+
+  // A host-inheriting tier freezes the recording machine's own inventory into the transcript, so writing
+  // that to a repo-tracked path publishes the operator's tool stack (this has happened).
+  const inv = hostInventoryPreflight(scenario, cassettePath, opts.allowHostInventoryFixture === true);
+  if (inv.kind !== "ok") out.push(inv);
+
+  // Warn-only: after the run the tokens are gone and the only remedy is to spend them again at the right path.
+  const port = cassettePortabilityPreflight(scenario, cassettePath, opts.scenarioSourceFile);
+  if (port.kind === "warn") out.push(port);
+
+  // Slug collision. Two DIFFERENT scenario names can slugify to the same default path and silently clobber
+  // each other. `--out`/`--force` opt out — a preview that ignored either would refuse what the real path
+  // allows, which is worse than not previewing at all.
+  if (!opts.explicitOutPath && !opts.force && existsSync(cassettePath)) {
+    try {
+      const existing = JSON.parse(readFileSync(cassettePath, "utf8")) as { scenario?: { name?: string } };
+      const existingName = existing.scenario?.name;
+      if (existingName && existingName !== scenario.name)
+        out.push({
+          kind: "refuse",
+          message:
+            `refusing to overwrite ${cassettePath}: it belongs to scenario "${existingName}", but this record is "${scenario.name}" ` +
+            `(their names slugify to the same default path — pass --out <file> to disambiguate, or --force to overwrite).`,
+        });
+    } catch {
+      /* an unreadable/malformed existing cassette is not a collision signal — let the write proceed */
+    }
+  }
+  return out;
+}
+
 /** `on_unanswered: prompt` blocks on a TTY. `run` rejects it outright (it breaks determinism), and
  *  `record`'s own `--on-unanswered` enum excludes `prompt` for the same reason — but the SCENARIO field
  *  outranks the flag (`scenario.on_unanswered ?? opts.onUnanswered` in executeScenario), so the enum
@@ -4056,34 +4190,36 @@ async function recordScenarioObject(
   opts: RecordOpts,
   extraPolicyDirs: string[] = [],
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string }> {
-  // Same guard as the --dry-run path, on the funnel every real record passes through (dir batches and
-  // --rerecord-stale never touch the dry-run branch).
-  const promptReject = promptPolicyRejection(scenario);
-  if (promptReject) throw new Error(promptReject);
+  // ONE pre-spend block, shared with `record --dry-run` via `preSpendVerdicts` — see its doc comment for
+  // why the preview must not re-implement this list.
+  //
+  // Every refusal THROWS. It used to be split: `promptPolicyRejection` threw while `hostInventoryPreflight`
+  // called `fail()`, which `process.exit`s. The dir-batch loop catches a throw per item and continues, so
+  // the exiting one abandoned concurrent runs already paid for, mid-batch, uncatchably. Throwing uniformly
+  // keeps "report every offender" true for the whole set.
+  {
+    const plannedCassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
+    for (const v of preSpendVerdicts(scenario, plannedCassettePath, {
+      force: opts.force,
+      explicitOutPath: opts.cassettePath !== undefined,
+      allowHostInventoryFixture: opts.allowHostInventoryFixture,
+      scenarioSourceFile: opts.scenarioSourceFile,
+    })) {
+      if (v.kind === "refuse") throw new Error(v.message);
+      warn(v.message);
+    }
+  }
   // Redaction preflight — MUST fire BEFORE the (paid) agent spawn below; the historical policy-load
   // point after the live run is exactly the after-the-fact discovery this exists to prevent. Same search
   // set as the post-run load. `--no-redact` skips it (explicit known-synthetic opt-out); the batch paths
-  // skip it here because they preflight once for the whole batch (skipRedactionPreflight).
+  // skip it here because they preflight once for the whole batch (skipRedactionPreflight). BATCH-shaped,
+  // so it stays out of preSpendVerdicts — see that function's doc comment.
   if (!opts.skipRedactionPreflight && !opts.noRedact) {
     const plannedCassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
     const preflight = redactionPreflightMessage([
       { scenario, policyDirs: [process.cwd(), ...extraPolicyDirs, dirname(plannedCassettePath)] },
     ]);
     if (preflight) warn(preflight);
-  }
-  // Host-inventory preflight — ALSO before the paid spawn. A host-inheriting tier freezes the recording
-  // machine's own inventory into the transcript, so writing that to a repo-tracked path publishes the
-  // operator's tool stack (this has happened). Refusing after the run would be strictly worse: the tokens
-  // are already spent and the tempting fix is to commit it anyway.
-  {
-    const plannedCassettePath = opts.cassettePath ?? defaultCassettePath(scenario.name);
-    const verdict = hostInventoryPreflight(scenario, plannedCassettePath, opts.allowHostInventoryFixture === true);
-    if (verdict.kind === "refuse") return fail("record", "usage", verdict.message, undefined, isJsonOutput(process.argv)) as never;
-    if (verdict.kind === "warn") warn(verdict.message);
-    // Portability — also pre-spend, and for the same reason: after the run the tokens are gone and the
-    // only remedy is to spend them again at the right path.
-    const port = cassettePortabilityPreflight(scenario, plannedCassettePath, opts.scenarioSourceFile);
-    if (port.kind === "warn") warn(port.message);
   }
   // Thread the live-decider opts. All undefined for a plain `record` → identical to the
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
@@ -4320,24 +4456,11 @@ async function recordScenarioObject(
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassettePath));
     cassette = redacted;
   }
-  // Slug-collision guard (findings 19/20): a DEFAULT path is derived from `slugForPath(scenario.name)`, so
-  // two DIFFERENT scenario names that slugify identically would silently clobber the same cassette. Refuse to
-  // overwrite when the existing cassette on the default path was recorded for a DIFFERENT scenario name (a
-  // routine same-scenario re-record — or a moved scenario, same name — is unaffected). `--out`/`--force` opt out.
-  if (!opts.cassettePath && !opts.force && existsSync(cassettePath)) {
-    try {
-      const existing = JSON.parse(readFileSync(cassettePath, "utf8")) as { scenario?: { name?: string } };
-      const existingName = existing.scenario?.name;
-      if (existingName && existingName !== scenario.name)
-        throw new Error(
-          `refusing to overwrite ${cassettePath}: it belongs to scenario "${existingName}", but this record is "${scenario.name}" ` +
-            `(their names slugify to the same default path — pass --out <file> to disambiguate, or --force to overwrite).`,
-        );
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith("refusing to overwrite")) throw e;
-      /* an unreadable/malformed existing cassette is not a collision signal — let the write proceed */
-    }
-  }
+  // The slug-collision refusal used to live HERE, after the paid run. It moved into `preSpendVerdicts`
+  // (pre-spawn) — it is a pure function of (path, --force, the existing cassette's scenario name), so
+  // paying for a run and only then refusing to write it was the exact failure `hostInventoryPreflight`'s
+  // own comment argues against. Nothing re-checks it here: a second process writing a colliding cassette
+  // mid-run is not a case this ever detected (the old check read the file before the write too).
   // Behaviour delta vs the cassette this one REPLACES. Re-recording is the only moment where "did my edit
   // change what the agent does?" is observable at all — replay re-checks a frozen transcript and is
   // structurally blind to it. Without this the answer is discarded every time: you pay for a re-record and

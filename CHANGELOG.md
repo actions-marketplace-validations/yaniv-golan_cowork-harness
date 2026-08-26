@@ -22,6 +22,29 @@ All notable changes to this project are documented here. The format is based on
   (a second oracle free to disagree with the real one) or require the spend it was meant to avoid. Reasoning
   is in [docs/cassette.md](./docs/cassette.md).
 
+### Fixed
+
+- **`record --dry-run` now runs every pre-spend refusal the real record runs, and one refusal moved from
+  after the paid run to before it.** The rehearsal re-implemented the checks by hand, so it drifted:
+  `hostInventoryPreflight` shipped 2026-08-04 and the commit three days later titled *"make `--dry-run`
+  refuse what the real record refuses"* swept in the two checks returning `string | undefined` and missed
+  the one returning a `{kind}` verdict — for 19 days an operator could not discover that refusal without
+  spending. Separately, the slug-collision refusal (*"refusing to overwrite … it belongs to scenario X"*)
+  sat **after** `executeScenario`: you paid for the run and were then refused, though it is a pure function
+  of path + `--force` + the existing cassette's name. Both now run in one shared pre-spend block.
+
+  Refusals are also uniform now. `promptPolicyRejection` threw while `hostInventoryPreflight` called
+  `fail()`, which `process.exit`s — and the dir-batch loop catches a throw per item but cannot catch an
+  exit, so a host-inventory refusal mid-batch abandoned concurrent runs already paid for.
+
+  **On a directory, the path-dependent verdicts are ADVISORY (`⚠ would-refuse`) and do not affect the exit
+  code**, because a directory target takes no `--out`: the preview would have to guess the destination, and
+  a guess must not gate. Measured on a real consumer, gating on that guess would have refused 26 of 27
+  scenarios the real record accepts. Dry-run a single scenario file with the real flags for a binding
+  answer. `--quiet` suppresses the notes; it never suppresses a refusal.
+
+  Also new in the batch preview: the duplicate-cassette-path refusal the real batch already had.
+
 ### Added
 
 - **`question_context: {when_question?, matches}` — assert what a gate actually put in front of the user.**

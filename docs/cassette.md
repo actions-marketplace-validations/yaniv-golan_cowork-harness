@@ -896,6 +896,8 @@ real filesystem selection work `--dry-run` doesn't do, so the combination is rej
 (`cowork-harness record scenarios/ --dry-run`): a superset of what actually gets re-recorded (every
 committed cassette's source scenario, not just the ones whose fingerprint drifted), so it's conservative in
 the right direction.
+>
+> **The path-dependent advisory notes in that preview do NOT describe `--rerecord-stale`.** The preview computes each scenario's DEFAULT cassette path, while `--rerecord-stale` writes to the committed cassette it found — a different path, so a different host-inventory/portability verdict. (A `--rerecord-stale` target always exists, so `hostInventoryPreflight` warns there rather than refusing.) The scenario LIST is still a conservative superset; only the notes are not transferable.
 
 Each cassette is written **atomically** — to a same-directory temp file, then `rename`d over the target
 (atomic on POSIX). An interrupted, failed, or OOM-killed batch therefore never leaves a partial or corrupt
@@ -1054,7 +1056,14 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   inside a working tree, quarantine falls back to the OS temp dir and says so — moving a leak into another
   committable location would be theatre.
 
-  **There is deliberately no `--dry-run` preview of what would be captured.** It is the obvious ask —
+  **The pre-flight IS previewable, and is previewed.** `record --dry-run` on a SINGLE scenario file runs
+  the same refusal the real record does, from the same `--out` path and the same flags, and refuses
+  identically — it is a pure function of tier and destination path, so it costs nothing to answer.
+  On a **directory** the same verdicts are reported as `⚠ would-refuse (advisory)` notes and do **not**
+  affect the exit code: a directory target takes no `--out`, so the preview must guess the destination, and
+  a guess must not gate a batch. Dry-run the single file with the real flags to get a binding answer.
+
+  **What is deliberately NOT previewed is what the scan would FIND.** It is the obvious ask —
   "tell me the inventory before I pay" — and it cannot be answered honestly before the run. The pre-flight
   is a *prediction* from the tier and the destination path; the inventory itself does not exist until the
   agent has run and the `system/init` frame has been received. A preview would either re-implement the

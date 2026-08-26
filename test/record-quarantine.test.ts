@@ -224,7 +224,11 @@ describe("the call site — STRUCTURAL only, and deliberately labelled as such",
     // Anchor on the ARGUMENTS, not the name: a bare /hostInventoryPreflight\(...\)/ matches the function
     // DEFINITION first (whose third parameter is `allowed`), so the pin passes and fails for reasons that
     // have nothing to do with the call site. Caught by mutation-testing this very assertion.
-    const call = src.match(/hostInventoryPreflight\(\s*scenario,\s*plannedCassettePath,[^)]*\)/)![0];
+    //
+    // The call moved into `preSpendVerdicts` (the one pre-spend block shared with `record --dry-run`), so
+    // the anchor moved with it. It failed loudly on that refactor rather than silently matching the
+    // definition again — which is the whole reason it is argument-anchored.
+    const call = src.match(/hostInventoryPreflight\(\s*scenario,\s*cassettePath,[^)]*\)/)![0];
     expect(call).toContain("allowHostInventoryFixture");
     expect(call, "the findings consent must never become a pre-spend bypass").not.toContain("allowHostInventoryFindings");
   });
