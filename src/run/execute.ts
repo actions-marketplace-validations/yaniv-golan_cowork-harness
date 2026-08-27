@@ -32,7 +32,7 @@ import {
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
+import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { warnUnservedHookEvents } from "./hook-events.js";
@@ -969,7 +969,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             subagentAppend: prompts.subagentAppend,
             sdkMcp,
             hooks: hostloopHooks,
-            ...(effectiveFidelity === "hostloop" ? { toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
+            // Host-loop aliases Bash+WebFetch; the VM loop aliases WebFetch alone, and only when the
+            // gate that put the workspace server there is on. Tied to the SAME `viaApiOn` that drives the
+            // disallow in spawnContainer — an alias to a server this run never registered would resolve a
+            // bare WebFetch onto nothing.
+            ...(effectiveFidelity === "hostloop"
+              ? { toolAliases: WORKSPACE_TOOL_ALIASES }
+              : effectiveFidelity === "container" && viaApiOn
+                ? { toolAliases: VM_LOOP_TOOL_ALIASES }
+                : {}),
           });
         } catch (e) {
           // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can

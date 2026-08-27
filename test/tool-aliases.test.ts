@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { baseAgentArgs } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
-import { WORKSPACE_TOOL_ALIASES } from "../src/runtime/hostloop.js";
+import { WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../src/runtime/hostloop.js";
 import { LiveAgentSession } from "../src/agent/session.js";
 import type { LaunchPlan } from "../src/session.js";
 
@@ -29,6 +29,21 @@ function minimalPlan(over: Partial<LaunchPlan> = {}): LaunchPlan {
 describe("toolAliases + bash-only pre-approval (production hostloop contract)", () => {
   it("the alias map is exactly the production pair", () => {
     expect(WORKSPACE_TOOL_ALIASES).toEqual({ Bash: "mcp__workspace__bash", WebFetch: "mcp__workspace__web_fetch" });
+  });
+
+  // "Bash is the only tool that truly diverges between loops": the VM loop keeps the built-in shell.
+  // Aliasing Bash here would invent a replacement production does not perform — and would resolve onto a
+  // workspace server the VM-loop registration never exposes bash on.
+  it("the VM-loop map aliases web_fetch ONLY — Bash is untouched there", () => {
+    expect(VM_LOOP_TOOL_ALIASES).toEqual({ WebFetch: "mcp__workspace__web_fetch" });
+    expect(VM_LOOP_TOOL_ALIASES.Bash).toBeUndefined();
+  });
+
+  // The disallow and the alias are two halves of one behaviour. Disallowing `WebFetch` while aliasing
+  // nothing turns a fidelity fix into a regression: the bare name stops resolving instead of landing on
+  // the workspace tool, which is what production does.
+  it("every name the VM loop disallows has an alias to land on", () => {
+    expect(Object.keys(VM_LOOP_TOOL_ALIASES)).toContain("WebFetch");
   });
 
   it("baseAgentArgs: extraAllowedTools decouples --allowedTools from --tools", () => {

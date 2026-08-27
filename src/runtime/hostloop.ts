@@ -39,9 +39,20 @@ export const HOSTLOOP_PATH_GATE_ID = "hostloop-path-gate";
 /** Production's host-loop tool aliases (asar `et()`; single-hop, deny rules do NOT expand across the
  *  alias). An alias never GRANTS a tool — it resolves only when the target is already in the caller's
  *  bound set, so a bare Bash/WebFetch from a sub-agent without the workspace tool bound still fails.
- *  Host-loop-only: the container/microvm tiers register no workspace server to alias to (see
- *  docs/fidelity-gaps.md). */
+ *  BOTH names are host-loop-only. The VM loop replaces web_fetch alone and never touches Bash — use
+ *  `VM_LOOP_TOOL_ALIASES` there, not this map. */
 export const WORKSPACE_TOOL_ALIASES: Record<string, string> = { Bash: "mcp__workspace__bash", WebFetch: "mcp__workspace__web_fetch" };
+
+/** The VM loop's alias set: web_fetch ONLY, applied when `coworkWebFetchViaApi` is on.
+ *
+ *  "Bash is the only tool that truly diverges between loops" — the VM loop keeps the built-in shell and
+ *  aliases only WebFetch, so aliasing Bash here would invent a tool production does not replace.
+ *
+ *  Without this, disallowing `WebFetch` at container is a REGRESSION rather than a fidelity fix: the
+ *  built-in stops resolving and nothing catches the bare name, so a model that emits `WebFetch` hard-fails
+ *  where production silently resolves it to the workspace tool. The disallow and the alias are two halves
+ *  of one behaviour and must ship together. */
+export const VM_LOOP_TOOL_ALIASES: Record<string, string> = { WebFetch: "mcp__workspace__web_fetch" };
 
 /**
  * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output

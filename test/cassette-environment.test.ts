@@ -234,6 +234,14 @@ describe("replaced-builtin note — a fixture naming a tool this build no longer
     expect(notesFor({ events: [init(undefined), result], effectiveFidelity: "hostloop" })).not.toContain("replaced-builtin");
   });
 
+  // Pins the tier the IMPLEMENTATION does not cover. spawnMicroVm never receives `webFetchViaApi`, so
+  // that tier still offers the built-in WebFetch — a note here would tell users to re-record a cassette
+  // that faithfully describes what this build produces. Delete this only alongside wiring microvm up.
+  it("is SILENT at microvm — that tier still offers the built-in WebFetch", () => {
+    const n = notesFor({ events: [init(["Bash", "WebFetch", ...D]), result], effectiveFidelity: "microvm" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+
   it("is SILENT at protocol, which has no workspace server to replace anything with", () => {
     const n = notesFor({ events: [init(["Bash", "WebFetch", ...D]), result], effectiveFidelity: "protocol" });
     expect(n).not.toContain("replaced-builtin");

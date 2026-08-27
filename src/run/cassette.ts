@@ -1814,7 +1814,9 @@ function computeDiscoverySurfaceNote(cassette: Cassette): string[] {
 const REPLACED_BUILTINS_BY_TIER: Record<string, string[]> = {
   hostloop: ["Bash", "WebFetch"],
   container: ["WebFetch"],
-  microvm: ["WebFetch"],
+  // microvm is deliberately ABSENT, not an oversight: spawnMicroVm never receives `webFetchViaApi`
+  // (execute.ts), so that tier still offers the built-in WebFetch. Listing it here would tell users to
+  // re-record a cassette that faithfully describes what this build produces.
 };
 
 /** A cassette whose recorded init inventory names a built-in this build no longer offers at that tier.
