@@ -909,10 +909,15 @@ from a script always resolves against the session root and cannot be `cd`-ed awa
 
 Two consequences for anyone reading a green run:
 
-1. **A relative bash write is a FALSE-GREEN.** Production discards anything outside `mnt/`; the harness
-   bind-mounts the whole session dir, so the same write persists into the run dir and can satisfy an
-   artifact assertion. Measured 2026-08-27 — `printf > rel.txt` from a shell tool landed at
-   `/sessions/<id>/rel.txt` on `container` and **persisted** to the run dir as `session/rel.txt`. A skill whose bundled scripts take relative output paths passes here and delivers
+1. **A relative bash write persists here and is discarded there — a narrow FALSE-GREEN.** Production
+   throws away anything outside `mnt/`; the harness bind-mounts the whole session dir, so the same write
+   survives into the run dir. Measured 2026-08-27: `printf > rel.txt` from a shell tool landed at
+   `/sessions/<id>/rel.txt` on `container` and **persisted** as `session/rel.txt`.
+
+   **Scope, so this is not over-read:** `file_exists`, `user_visible_artifact` and
+   `computer_links_resolve` are all bounded by `workRoot` (`…/session/mnt`) and **cannot** reach such a
+   file. The exposure is `semantic_matches` and `no_lost_write_back`, which grade the *authored* set —
+   so a rubric like "the report was written" grades TRUE on a file the user would never receive. A skill whose bundled scripts take relative output paths passes here and delivers
    nothing in production — and **no current tier reproduces the real failure**: `hostloop` puts the write
    in `mnt/outputs` where it looks fine, `container` puts it in the right place but keeps it.
 2. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
