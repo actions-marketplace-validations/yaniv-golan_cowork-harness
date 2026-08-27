@@ -464,11 +464,28 @@ read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
 `web_fetch` (gate `coworkWebFetchViaApi`, live true) — "Bash is the only tool that truly diverges
 between loops."
 
-**Harness behaviour:** host-loop sets both aliases (`WORKSPACE_TOOL_ALIASES`, hostloop.ts) on the
-`initialize` control_request. The container/microvm tiers register only the `cowork` SDK server — no
-workspace `web_fetch` server exists there to alias to — so they set NO aliases. Consequence: a VM-tier
-model emitting a bare `WebFetch` errors in the harness where production resolves it. Host-loop is the
-production-default loop; use hostloop for alias-sensitive scenarios.
+**Harness behaviour:** CLOSED at `container`, still OPEN at `microvm`.
+
+Host-loop sets both aliases (`WORKSPACE_TOOL_ALIASES`, hostloop.ts) on the `initialize`
+control_request. `container` now models the VM-loop registration: when `coworkWebFetchViaApi` resolves
+on (true in every shipped baseline), it registers a workspace server exposing **web_fetch only**,
+disallows the built-in `WebFetch`, and aliases the name via `VM_LOOP_TOOL_ALIASES`. Bash is deliberately
+untouched there — "Bash is the only tool that truly diverges between loops" — which is why `container`
+keeps the built-in shell while host-loop replaces it.
+
+The three parts ship together on purpose. Disallowing the built-in **without** the alias would turn a
+fidelity fix into a regression: the bare name would stop resolving instead of landing on the workspace
+tool. Registering the tool without pre-approving it would trip the off-registry auto-allow guard.
+
+**`microvm` is still unaliased** — `spawnMicroVm` does not receive the gate, so that tier continues to
+offer the built-in `WebFetch` and a bare emission there does not reach a workspace server. Use
+`container` or `hostloop` for alias-sensitive scenarios.
+
+**Consequence for existing scenarios:** at `container`, `WebFetch` is no longer in the offered tool set.
+An assertion naming it (`tool_called: WebFetch`, `tool_not_called: WebFetch`) no longer describes a tool
+that can be called — `tool_not_called` in particular passes **vacuously** rather than failing loudly.
+Name `mcp__workspace__web_fetch` instead. `verify-cassettes` emits a `replaced-builtin` note when a
+recorded init inventory still names a built-in the tier no longer offers.
 
 ## Skill/plugin discovery SDK-MCP servers — modeled on container/hostloop; microvm/protocol pending
 

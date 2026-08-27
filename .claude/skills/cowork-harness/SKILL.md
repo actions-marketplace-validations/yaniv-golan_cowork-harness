@@ -147,9 +147,9 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 | Tier | What it gives you | Use when |
 |---|---|---|
 | `protocol` | Fastest; no sandbox, no egress | Pure protocol/answer-shape tests. **Rejected** if the scenario asserts egress. |
-| `container` | Real sandbox + real default-deny egress (**default**) | Most functional + boundary tests. |
-| `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity | Testing untrusted code escape, not network behavior. |
-| `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with native Bash/WebFetch disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
+| `container` | Real sandbox + real default-deny egress (**default**). Models the **VM loop**: keeps the built-in `Bash`, but `WebFetch` is replaced by `mcp__workspace__web_fetch` — assert on that name, not `WebFetch` | Most functional + boundary tests. |
+| `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity. Unlike `container`, still offers the built-in `WebFetch` | Testing untrusted code escape, not network behavior. |
+| `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with **both** native `Bash` and `WebFetch` disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar (the VM loop replaces web_fetch only) | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
 
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
 (it's a `skill`/`chat` flag; `run` takes fidelity only from the scenario). See
