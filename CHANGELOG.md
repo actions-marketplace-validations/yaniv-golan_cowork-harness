@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-08-27
+
 ### Fidelity
 
 - **Path resolution: the shell and the file tools use DIFFERENT roots, and the harness now models that.**
