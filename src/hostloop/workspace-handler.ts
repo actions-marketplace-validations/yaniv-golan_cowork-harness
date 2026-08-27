@@ -377,6 +377,8 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
             dedup,
           ),
         };
+      // Unreachable: the dispatch gate above rejects every name outside `exposed`, and `exposed` is a
+      // subset of the two handled here. Kept as a total-function backstop if that gate is ever loosened.
       return { error: { code: -32602, message: `unknown tool: ${name}` } };
     }
     return { result: {} }; // ping / notifications

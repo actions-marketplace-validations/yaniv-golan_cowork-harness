@@ -50,9 +50,22 @@ describe("workspace handler tool selection (host-loop vs VM-loop registration)",
     expect(r.result?.content?.[0]?.text ?? "").toMatch(/unknown tool "bash"/);
   });
 
-  it("the advertised tool still dispatches when the set is narrowed", async () => {
+  // This one actually exercises what its name says. The previous version dispatched `"nope"` — a second
+  // copy of the unknown-name case above — so NOTHING verified that narrowing the set leaves the surviving
+  // tool working. An over-broad gate (refusing everything) would have passed both.
+  it("the advertised tool STILL dispatches when the set is narrowed", async () => {
+    const r = await call(
+      { ...base, tools: ["web_fetch"], webFetchAllow: [] },
+      { method: "tools/call", params: { name: "web_fetch", arguments: { url: "https://example.com/x" } } },
+    );
+    // Reached the tool: a deny-all allowlist is the web_fetch tool's OWN refusal, not the dispatch gate's.
+    expect(r.result?.content?.[0]?.text ?? "").not.toMatch(/unknown tool/);
+  });
+
+  it("an unrecognised name is an error rather than a crash", async () => {
     const r = await call({ ...base, tools: ["web_fetch"] }, { method: "tools/call", params: { name: "nope", arguments: {} } });
-    expect(r.result?.isError, "an unknown name is still an error, not a crash").toBe(true);
+    expect(r.result?.isError).toBe(true);
+    expect(r.result?.content?.[0]?.text ?? "").toMatch(/unknown tool "nope"/);
   });
 });
 
