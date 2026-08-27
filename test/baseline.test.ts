@@ -51,6 +51,7 @@ import {
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
 import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
+import { fidelityWasDefaulted, defaultedFidelityNotice } from "../src/run/execute.js";
 import { renderPrompts } from "../src/prompt.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
@@ -1791,6 +1792,38 @@ describe("prompt drift guard (H1-H3)", () => {
 // Do NOT "fix" the agent cwd to match the shell. That was this investigation's first instinct and it is
 // backwards: the file-tool base is correct, the shell was the wrong one.
 // ==========================================================================================
+// The deprecation window before `fidelity` becomes REQUIRED. The default models VM-LOOP while production
+// runs HOST-LOOP (gate 1143815894 force-ON), so an omitted key silently measures the wrong lane. Warn now,
+// fail at the next major — consumers get told before they get an error.
+describe("defaulted fidelity — the deprecation notice", () => {
+  it("detects the OMITTED key, and does not fire when the tier was chosen deliberately", () => {
+    expect(fidelityWasDefaulted({ prompt: "x" })).toBe(true);
+    // The load-bearing half: Zod's .default() makes these two indistinguishable AFTER parse, so the
+    // detector must read the RAW document. An author who wrote `fidelity: container` has made the choice
+    // and must not be nagged.
+    expect(fidelityWasDefaulted({ prompt: "x", fidelity: "container" })).toBe(false);
+    expect(fidelityWasDefaulted({ prompt: "x", fidelity: "hostloop" })).toBe(false);
+  });
+
+  it("is inert on a non-object document rather than throwing", () => {
+    expect(fidelityWasDefaulted(null)).toBe(false);
+    expect(fidelityWasDefaulted("not-a-doc")).toBe(false);
+  });
+
+  // A deprecation notice that does not say what to do, or why, trains people to ignore it.
+  it("names the lane mismatch, the gate, every remedy, and the deprecation", () => {
+    const m = defaultedFidelityNotice("my-scenario");
+    expect(m).toContain("my-scenario");
+    expect(m, "must say which lane the default models").toMatch(/VM-LOOP/);
+    expect(m, "must say which lane production runs").toMatch(/HOST-LOOP/);
+    expect(m, "must cite the gate, so the claim is checkable").toMatch(/1143815894/);
+    expect(m, "must offer the production-matching tier").toMatch(/fidelity: hostloop/);
+    expect(m, "must offer the auto-picking tier").toMatch(/fidelity: cowork/);
+    expect(m, "must let an author keep today's behaviour deliberately").toMatch(/fidelity: container/);
+    expect(m, "must announce the removal, or it is just a nag").toMatch(/REQUIRED in the next major/);
+  });
+});
+
 describe("host-loop cwd split (agent at outputs, shell at the session root)", () => {
   const ROOT = "/sessions/abc";
   const OUT = "/run/work/session/mnt/outputs";

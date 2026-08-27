@@ -1737,10 +1737,39 @@ const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.s
  * file's directory (not the cwd), so a scenario+session bundle is self-contained and
  * relocatable. Use this everywhere a scenario is read from disk (`run`, `record`).
  */
+/** True when the YAML did not name a tier, so `fidelity` came from the schema default.
+ *
+ *  Must be read from the RAW document: Zod's `.default("container")` makes the parsed object
+ *  indistinguishable from one that said `fidelity: container` on purpose, and those two cases deserve
+ *  different treatment — an author who chose the tier has made the choice, one who omitted it has not.
+ *
+ *  Why anyone cares: the default models the VM-LOOP lane, and production runs HOST-LOOP (gate 1143815894
+ *  is force-ON in every shipped baseline). So a scenario that omits the key is measured against the lane
+ *  real users are not on — silently. Measured 2026-08-27; see docs/fidelity-gaps.md, "Path resolution". */
+export function fidelityWasDefaulted(raw: unknown): boolean {
+  return typeof raw === "object" && raw !== null && !("fidelity" in (raw as Record<string, unknown>));
+}
+
+/** The deprecation notice for a defaulted tier. `fidelity` becomes REQUIRED in the next major; until
+ *  then this warns rather than failing, so consumers get told before they get an error. */
+export function defaultedFidelityNotice(name: string): string {
+  return (
+    `::warning:: [scenario] ${name}: no \`fidelity:\` — defaulting to \`container\`, which models the ` +
+    `VM-LOOP lane. Production runs HOST-LOOP (gate 1143815894 is force-ON), so this scenario is measured ` +
+    `against a lane your users are not on: the file tools resolve a bare relative path differently, the ` +
+    `shell starts somewhere else, and the offered tool set differs. Name a tier explicitly — ` +
+    `\`fidelity: hostloop\` to match production, \`fidelity: cowork\` to auto-pick the way Cowork does, ` +
+    `or \`fidelity: container\` to keep today's behaviour deliberately. ` +
+    `DEPRECATION: the default is being removed — \`fidelity:\` becomes REQUIRED in the next major.`
+  );
+}
+
 export function parseScenarioFile(path: string): Scenario {
   let scenario: Scenario;
+  let rawDoc: unknown;
   try {
-    scenario = Scenario.parse(parseYaml(readFileSync(path, "utf8")));
+    rawDoc = parseYaml(readFileSync(path, "utf8"));
+    scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
     // not a harness bug — rethrow as UsageError so main().catch maps it to category `usage`, not
@@ -1750,6 +1779,8 @@ export function parseScenarioFile(path: string): Scenario {
   }
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
+  // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
+  if (fidelityWasDefaulted(rawDoc)) process.stderr.write(defaultedFidelityNotice(scenario.name) + "\n");
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT
