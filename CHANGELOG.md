@@ -31,8 +31,23 @@ All notable changes to this project are documented here. The format is based on
   harness bug), so an unrecognized category is treated as an instrument failure rather than assumed
   ordinary.
 
+- **A turn that exited 1 was reported as a bare exit code, so an exhausted quota looked like a crash.**
+  A turn that RAN and errored exits `1` with a full result envelope whose top-level `error` is `null` —
+  its cause lives in `results[0]`, not in an error object. Reading only the error object left the report
+  saying `reflection turn exited with code 1 (expected 0)` and nothing more, for a run whose actual cause
+  was an exhausted seven-day quota; it was findable only by opening `events.jsonl` by hand. The failed
+  turn's `resultErrorKind` / `errorSource` / `resultSubtype` are now read and rendered — `usage_limit`
+  as "the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect",
+  `transport` as a retryable tail-end drop — matching how the run renderer has always shown them.
+  `usage_limit` and `transport` join the ordinary/actionable set; `agent` does not, because for
+  critique's own protocol turn an agent-level failure *is* the instrument breaking.
+
 ### Added
 
+- **`critique` names why the GRADED turn errored** — `gradedErrorReason` in the JSON report and inline in
+  the text NOTE. `taskResult: "error"` is a legitimate **gradeable** outcome and the critique still runs,
+  but the report said only "the task run ended in error", so an exhausted quota or a dropped connection
+  read as a defect in the skill under review.
 - **`critique` reports which model produced the GRADED run** — `gradedModels` in the JSON report and
   `graded model(s):` in the text header, read back from the graded turn's own `result.json` and filtered
   of the agent's locally-fabricated `<synthetic>` entries. The report named the *evaluator's* resolved

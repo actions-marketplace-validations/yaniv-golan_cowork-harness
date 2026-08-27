@@ -249,21 +249,32 @@ you at the wrong subsystem. Two fields carry that, in `--output-format json` and
 | Field | Says |
 |---|---|
 | `infraFailurePhase` | which turn failed — `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
-| `infraFailureKind` | the harness error category the failed turn reported for itself. **Absent** = the turn was killed or exited with no envelope at all |
+| `infraFailureKind` | why the turn failed — a harness `ErrCategory` when it printed an error envelope, **or** a `resultErrorKind` (`usage_limit` / `transport` / `agent`) when it RAN and reported an errored result. **Absent** = killed, or exited with no envelope at all |
 
 **A category alone does not mean the instrument is healthy.** `cli.ts`'s top-level catch funnels every
 unexpected throw into category `internal` — a Docker daemon that is down, a container that fails to
 start, a missing staged agent, a harness bug — and `runtime` carries a refused run dir. Only three
 categories are the caller's problem, and the header is keyed on exactly that split:
 
-- **`RUN FAILED (<turn>, <kind>): …`** — `unanswered`, `usage` or `boundary`. An ordinary, actionable
+A turn that **ran and errored** exits `1` with a full result envelope whose top-level `error` is `null` —
+so its cause lives in `results[0]`, not in an error object. That is where an exhausted quota shows up:
+`usage_limit` renders as *"the account's quota is exhausted; retry after the reset"*, not as a broken
+instrument and not as a skill defect.
+
+- **`RUN FAILED (<turn>, <kind>): …`** — `unanswered`, `usage`, `boundary`, `usage_limit` or `transport`.
+  An ordinary, actionable
   failure the harness already diagnosed, with a healthy instrument underneath. The reason carries the
   harness's own message and hint verbatim; **follow those** rather than a category-level guess — an
   `unanswered` can be an unscripted gate, a mis-typed `--answer` label, malformed `--answer-policy` YAML,
   a crashed `--decider-cmd` helper or an out-of-set `--decider-llm` reply, and the remedy differs.
-- **`INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …`** — everything else: `internal`, `runtime`, a category
-  this build has not been taught, a killed turn (timeout, byte cap), or no envelope at all. This wording
-  means the instrument itself may be broken. It fails **closed**: an unrecognized category lands here.
+- **`INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …`** — everything else: `internal`, `runtime`, `agent` (for
+  critique's own protocol turn, an agent-level failure *is* the instrument breaking), a kind this build has
+  not been taught, a killed turn (timeout, byte cap), or no envelope at all. This wording means the
+  instrument itself may be broken. It fails **closed**: an unrecognized kind lands here.
+
+The graded turn gets the same treatment from the other side. `taskResult: "error"` is a **gradeable**
+outcome — the critique proceeds and the findings stand — but `gradedErrorReason` now names *why*, so an
+exhausted quota or a dropped connection is not read as a defect in the skill under review.
 
 ## Reading the report
 

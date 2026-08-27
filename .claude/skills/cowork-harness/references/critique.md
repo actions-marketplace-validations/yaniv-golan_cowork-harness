@@ -43,16 +43,23 @@ carry that; read all three before touching anything.
 |---|---|
 | `infraFailure` | the reason |
 | `infraFailurePhase` | `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
-| `infraFailureKind` | the harness error category the failed turn reported for itself. **Absent** = killed, or exited with no envelope |
+| `infraFailureKind` | why it failed — a harness `ErrCategory` (error envelope, exit 2/3) **or** a `resultErrorKind` (`usage_limit`/`transport`/`agent`) from a turn that RAN and errored (exit 1, top-level `error: null`). **Absent** = killed, or no envelope |
+| `gradedErrorReason` | on a `taskResult: "error"` run (still gradeable, exit 0): why the GRADED turn errored, so a quota exhaustion is not read as a skill defect |
 
 **Do NOT read "has a kind" as "the instrument is fine".** The CLI's top-level catch turns every
 unexpected throw into category **`internal`** — Docker down, container start failure, missing staged
 agent, harness bug — and `runtime` carries a refused run dir. Only **`unanswered`, `usage`, `boundary`**
-are the caller's problem. The header encodes exactly that split and fails closed (an unrecognized
-category renders as infrastructure):
+and, from the result-row taxonomy, **`usage_limit`** (quota exhausted — retry after reset) and
+**`transport`** (a tail-end drop) are the caller's problem. `agent` is not: for critique's own protocol
+turn that IS the instrument breaking. The header encodes exactly that split and fails closed (an
+unrecognized kind renders as infrastructure):
 
 - `RUN FAILED (<turn>, <kind>): …` → ordinary, actionable, instrument healthy.
-- `INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …` → `internal`/`runtime`/unknown/killed/no-envelope.
+- `INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …` → `internal`/`runtime`/`agent`/unknown/killed/no-envelope.
+
+**A turn that exits 1 is not a crash.** It RAN and reported an errored result, with `error: null` and a
+full `results[0]` — an exit-code-only reading of that path is what leaves an exhausted quota looking like
+a broken instrument.
 
 **Read the reason, not the category.** The reason carries the failed turn's own message *and* hint
 verbatim. That matters most for `unanswered`, which is 36 distinct throw sites and only ONE of them is

@@ -337,7 +337,11 @@
     },
     "infraFailureKind": {
       "type": "string",
-      "description": "the harness error category (ErrCategory: unanswered | usage | boundary | runtime | internal) when the failed turn printed a structured error envelope. Absent = killed or exited with no envelope at all. DO NOT read a present kind as \"the instrument is fine\": cli.ts's top-level catch funnels every unexpected throw (Docker down, container start failure, missing staged agent, a harness bug) into category `internal`, and LegacyRunDirError into `runtime`. Only `unanswered`, `usage` and `boundary` are ordinary/actionable; every other value — including one added after this text — is an instrument failure, which is how the text report's header renders it."
+      "description": "the failed turn's own classification of WHY it failed. Either a harness ErrCategory (unanswered | usage | boundary | runtime | internal) when it printed a `fail()` error envelope, or a RunResult.resultErrorKind (usage_limit | transport | agent) when it RAN and reported an errored result (exit 1, top-level error null). Absent = killed, or exited with no envelope at all. DO NOT read a present kind as \"the instrument is fine\": cli.ts's top-level catch funnels every unexpected throw (Docker down, container start failure, missing staged agent, a harness bug) into `internal`, and LegacyRunDirError into `runtime`. Ordinary/actionable = unanswered, usage, boundary, usage_limit, transport; every other value — including one added after this text — renders as an instrument failure, which is how the text header treats it."
+    },
+    "gradedErrorReason": {
+      "type": "string",
+      "description": "why a graded turn that ended in result:\"error\" errored — its `resultErrorKind` (usage_limit / transport / agent) plus the finer termination source. An errored task turn is a GRADEABLE outcome and the critique still runs, so this is what separates a skill defect from an exhausted quota or a dropped connection. Absent when the run did not error or recorded no classification."
     }
   },
   "dependencies": {

@@ -5,6 +5,7 @@ import type { Complete } from "../src/decide/decider";
 import {
   boundedSpawn,
   validateReflectionTurn,
+  isOrdinaryFailureKind,
   taskTurnInfraFailure,
   buildTextReport,
   buildJsonReport,
@@ -546,6 +547,90 @@ describe("validateReflectionTurn carries the failed turn's own diagnosis, not ju
     expect(v.reason).toMatch(/see --help/);
   });
 
+  it("names an EXHAUSTED QUOTA on a turn that RAN and errored — the exit-1 path with `error: null`", () => {
+    // The case a consumer actually hit. A turn that completed a run and errored exits 1 with a FULL
+    // result envelope whose top-level `error` is null, so reading only that object left the report saying
+    // "reflection turn exited with code 1 (expected 0)" and nothing more. The real cause — an exhausted
+    // seven-day quota — was in `results[0]` the whole time, and is already rendered this way by the run
+    // renderer; they found it only by opening events.jsonl by hand.
+    const turn = {
+      stdout: JSON.stringify({
+        ok: false,
+        error: null,
+        results: [{ result: "error", resultErrorKind: "usage_limit", errorSource: "result", resultSubtype: "error_during_execution" }],
+      }),
+      stderr: "",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    };
+    const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/usage-limit/);
+    expect(v.reason).toMatch(/quota is exhausted/);
+    expect(v.reason).toMatch(/NOT a harness or skill defect/);
+    expect(v.reason).toMatch(/error_during_execution/);
+    expect(v.kind).toBe("usage_limit");
+  });
+
+  it("renders an exhausted quota as RUN FAILED, not as a broken instrument", () => {
+    const text = buildTextReport({
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container",
+      taskResult: undefined,
+      selfReportStatus: "unavailable",
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      infraFailure: "reflection turn exited with code 1 (expected 0) — usage-limit …",
+      infraFailurePhase: "reflection turn",
+      infraFailureKind: "usage_limit",
+    });
+    // Nothing is broken — the account is out of quota. Naming it INFRASTRUCTURE sends the reader to the
+    // same wrong subsystem, just via the other taxonomy.
+    expect(text).toMatch(/RUN FAILED \(reflection turn, usage_limit\)/);
+    expect(text).not.toMatch(/INFRASTRUCTURE/);
+  });
+
+  it("keeps `agent` on the INFRASTRUCTURE side — for critique's own protocol turn that IS the instrument breaking", () => {
+    const turn = {
+      stdout: JSON.stringify({ ok: false, error: null, results: [{ result: "error", resultErrorKind: "agent", errorSource: "agent" }] }),
+      stderr: "",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    };
+    const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
+    if (v.ok) throw new Error("expected failure");
+    expect(v.kind).toBe("agent");
+    expect(isOrdinaryFailureKind(v.kind)).toBe(false);
+  });
+
+  it("names WHY the GRADED turn errored — an errored task is gradeable, but a quota exhaustion is not a skill defect", () => {
+    // The same information gap on the other turn: `taskResult:"error"` is a legitimate gradeable outcome
+    // and the critique proceeds, but the NOTE said only "ended in error" — so a reader would attribute an
+    // exhausted quota or a dropped connection to the skill under review.
+    const state = {
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: "error" as const,
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      gradedErrorReason: "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect",
+    };
+    expect(buildTextReport(state)).toMatch(/ended in error \(usage-limit/);
+    expect(buildJsonReport(state).gradedErrorReason).toMatch(/quota is exhausted/);
+    // Absent reason ⇒ the original wording, unchanged.
+    expect(buildTextReport({ ...state, gradedErrorReason: undefined })).toMatch(/ended in error — recommendations/);
+  });
+
   it("leaves `kind` absent for a nonzero exit with no envelope — the case that really is an instrument failure", () => {
     const turn = { stdout: "junk", stderr: "", code: 1, timedOut: false, truncated: false };
     const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
@@ -666,7 +751,7 @@ describe("F37 residual (part 2): taskTurnInfraFailure gates a killed TASK turn b
       timedOut: false,
       truncated: false,
     };
-    expect(taskTurnInfraFailure(distinct)?.reason).toMatch(/bad flag — put it before the subcommand/);
+    expect(taskTurnInfraFailure(distinct)?.reason).toMatch(/bad flag\nput it before the subcommand/);
   });
 
   it("still reports a structured NON-gate error (e.g. usage) by its own category rather than as a crash", () => {

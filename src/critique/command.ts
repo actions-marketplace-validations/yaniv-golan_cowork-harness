@@ -689,6 +689,11 @@ interface SkillEnvelope {
     finalMessage?: string;
     result?: "success" | "error";
     resultSubtype?: string;
+    /** Why an errored run errored. `resultErrorKind` is the harness's own classification (a tail-end
+     *  transport drop / a genuine agent failure / an exhausted quota); `errorSource` is the finer
+     *  termination source. Both ride in the envelope because it spreads the whole `RunResult`. */
+    resultErrorKind?: "transport" | "agent" | "usage_limit";
+    errorSource?: string;
     /** 1-based turn number within a `--session-id`+`--resume` session (see src/types.ts's `RunResult.turn`).
      *  1 for a fresh/single-shot run; >1 only for a genuine resume. F37 uses this as the mechanical proof
      *  that the reflection turn actually continued the SAME session rather than silently starting fresh. */
@@ -781,10 +786,12 @@ export function validateReflectionTurn(
     // harness's own structured diagnosis, and reporting only the exit code throws it away — leaving a
     // reader to guess between a crashed instrument and an ordinary usage/boundary error the harness
     // already named.
-    const diag = envelopeDiagnosis(turn);
+    // `fail()`'s error envelope first (exit 2/3), then the result row of a turn that RAN and errored
+    // (exit 1, `error: null`) — the path that used to report a bare exit code and nothing else.
+    const diag = envelopeDiagnosis(turn) ?? resultRowDiagnosis(turn);
     return {
       ok: false,
-      reason: `reflection turn exited with code ${turn.code ?? "null"} (expected 0)${diag ? ` ${diag.text}` : ""}`,
+      reason: `reflection turn exited with code ${turn.code ?? "null"} (expected 0)${diag ? ` — ${diag.text}` : ""}`,
       kind: diag?.kind,
     };
   }
@@ -848,7 +855,19 @@ export interface TurnFailure {
  *  category, therefore it is ordinary" is exactly wrong for those, and wrong in the dangerous direction:
  *  it tells a reader the instrument is healthy while it is not. Only these three are ordinary; anything
  *  else — including a category added later that this list has not been taught — stays INFRASTRUCTURE. */
-const ORDINARY_ERROR_KINDS = new Set(["unanswered", "usage", "boundary"]);
+const ORDINARY_ERROR_KINDS = new Set([
+  // Harness `ErrCategory` values (from a `fail()` error envelope).
+  "unanswered",
+  "usage",
+  "boundary",
+  // `RunResult.resultErrorKind` values, from a turn that RAN and reported an errored result. Both
+  // taxonomies answer the same question — why did this turn fail — and both land in `infraFailureKind`.
+  // `usage_limit` (quota exhausted, retry after reset) and `transport` (a tail-end connection drop) leave
+  // a healthy instrument behind. `agent` deliberately does NOT: for critique's own protocol turn, an
+  // agent-level failure IS the instrument breaking.
+  "usage_limit",
+  "transport",
+]);
 
 export function isOrdinaryFailureKind(kind: string | undefined): boolean {
   return kind !== undefined && ORDINARY_ERROR_KINDS.has(kind);
@@ -867,6 +886,36 @@ export function isOrdinaryFailureKind(kind: string | undefined): boolean {
  *  `--decider-llm` reply, an unanswered dialog/elicit, even a self-declared harness bug. Advice keyed on
  *  the CATEGORY is wrong for nearly all of them, and each site already carries a hint written for its own
  *  case. Carry that hint; do not re-derive it from the category. */
+/** Why a turn that RAN reported an errored result — read off its envelope's result row.
+ *
+ *  Distinct from `envelopeDiagnosis`: that reads the top-level `error` object, which only `fail()` writes
+ *  (exit 2/3). A turn that completed a run and errored exits 1 with `error: null` and a full result row,
+ *  so the exit-code-only report said "exited with code 1 (expected 0)" and stopped — the reader learned
+ *  nothing about a quota exhaustion, a transport drop or a turn-limit. Every field here already existed
+ *  and was already rendered this way by the run renderer; critique simply never read them.
+ *
+ *  Subtype precedence matches `src/run/renderer.ts`: prefer the SDK subtype ONLY when the terminal error
+ *  actually came from a result event, so a stale subtype from an earlier turn cannot mislabel a later
+ *  exit/timeout/no_result error. */
+function resultRowDiagnosis(turn: TurnOutcome): { text: string; kind?: string } | undefined {
+  const r0 = parseEnvelope(turn.stdout)?.results?.[0];
+  if (!r0 || r0.result !== "error") return undefined;
+  const subtype = r0.errorSource === "result" && r0.resultSubtype && r0.resultSubtype !== "success" ? r0.resultSubtype : undefined;
+  const detail = [subtype ?? r0.errorSource].filter(Boolean).join("");
+  const label =
+    r0.resultErrorKind === "usage_limit"
+      ? "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect"
+      : r0.resultErrorKind === "transport"
+        ? "transport error — a tail-end connection drop, not a skill defect; retry"
+        : r0.resultErrorKind === "agent"
+          ? "agent error"
+          : "error";
+  // The bare reason, with no framing of its own — the two callers wrap it differently (a failed turn's
+  // sentence vs. a parenthetical on the graded run's NOTE), and a shared prefix that one of them stripped
+  // back off with a regex would couple them through a string shape.
+  return { kind: r0.resultErrorKind, text: `${label}${detail ? ` (${detail})` : ""}` };
+}
+
 function envelopeDiagnosis(turn: TurnOutcome): { text: string; kind?: string } | undefined {
   const err = parseEnvelope(turn.stdout)?.error;
   if (!err || typeof err.message !== "string" || !err.message) return undefined;
@@ -874,7 +923,7 @@ function envelopeDiagnosis(turn: TurnOutcome): { text: string; kind?: string } |
   const kind = typeof err.category === "string" && err.category ? err.category : undefined;
   return {
     kind,
-    text: `reporting ${kind ?? "an error"}: ${err.message}` + (hint && !err.message.includes(hint) ? ` — ${hint}` : ""),
+    text: `${kind ?? "error"}: ${err.message}` + (hint && !err.message.includes(hint) ? `\n${hint}` : ""),
   };
 }
 
@@ -906,7 +955,7 @@ export function taskTurnInfraFailure(task: TurnOutcome): TurnFailure | undefined
     // with no scripted answer. Prefer the envelope's own diagnosis; keep the crash wording strictly for
     // the case where there is genuinely no envelope to read.
     const diag = envelopeDiagnosis(task);
-    if (diag) return { kind: diag.kind, reason: `task turn exited ${task.code} ${diag.text}` };
+    if (diag) return { kind: diag.kind, reason: `task turn exited ${task.code} — ${diag.text}` };
     return {
       reason:
         "task turn exited nonzero without a parseable result envelope — it crashed before completing a gradeable task, so its evidence cannot be trusted",
@@ -1057,6 +1106,12 @@ interface ReportState {
    *  `--model` grades whatever the spawned agent defaults to, silently and without a trace in the report.
    *  Absent when no result.json was readable or it recorded no live id. */
   gradedModels?: string[];
+  /** WHY a graded turn that ended in `result:"error"` errored — the run's own `resultErrorKind` plus its
+   *  finer termination source. An errored task turn is a GRADEABLE outcome (the critique proceeds), but
+   *  the report said only "ended in error", so a reader could not tell a skill defect from an exhausted
+   *  quota or a dropped connection without opening a turn file — and would read the findings as being
+   *  about the skill either way. Absent when the run did not error, or recorded no classification. */
+  gradedErrorReason?: string;
   selfReportStatus: SelfReportStatus;
   items: CritiqueItem[];
   /** F35: the TRANSPORT-RESOLVED evaluator model, present only when the evaluator actually completed and
@@ -1209,7 +1264,10 @@ export function buildTextReport(state: ReportState): string {
   else if (infraFailure || evaluatorError)
     out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
   if (taskResult === "error")
-    out.push(`  NOTE: the task run ended in error — recommendations below reflect whatever happened before the failure.`);
+    out.push(
+      `  NOTE: the task run ended in error${state.gradedErrorReason ? ` (${state.gradedErrorReason})` : ""} — ` +
+        `recommendations below reflect whatever happened before the failure.`,
+    );
   if (state.skillInvocationObserved === false)
     out.push(
       `  NOTE: the graded run's recorded skillActivity never mentions the selected skill — this critique may be grading a run that did not actually invoke it.`,
@@ -1434,6 +1492,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     gradedOutcome,
     gradedSkillHash,
     gradedModels: state.gradedModels,
+    gradedErrorReason: state.gradedErrorReason,
     selfReportStatus,
     evaluatorIntegrity,
     // On `base` for the same reason as evaluatorIntegrity: a reply with dropped items is exactly where
@@ -1722,6 +1781,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // WHICH model produced the graded behaviour — read back from the run's own record, never assumed from
     // the caller's context. `<…>`-wrapped entries are the agent's locally-fabricated turns, not answerers.
     const gradedModels = readGradedModels(outDir, taskRaw);
+    // Why an errored graded turn errored — same helper as the reflection turn's, read off the same
+    // envelope. A quota exhaustion and a skill defect both render as `result:"error"` otherwise.
+    const gradedErrorReason = taskResult === "error" ? resultRowDiagnosis(task)?.text : undefined;
     // Graded-run validity (advisory): when a specific plugin skill was selected, check the run's own
     // skillActivity actually mentions it — packaging can be perfectly plugin-aware and still be grading a
     // run that never invoked the selected skill. Best-effort string scan of the recorded activity;
@@ -1955,6 +2017,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedOutcome,
       gradedSkillHash,
       gradedModels,
+      gradedErrorReason,
       selfReportStatus,
       items,
       evaluatorModel,

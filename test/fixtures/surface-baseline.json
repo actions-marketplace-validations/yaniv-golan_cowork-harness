@@ -1105,6 +1105,9 @@
       ".gradedEffectiveFidelity": {
         "type": "string"
       },
+      ".gradedErrorReason": {
+        "type": "string"
+      },
       ".gradedModels": {
         "type": "array"
       },

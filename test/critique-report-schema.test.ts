@@ -45,6 +45,7 @@ const FULL_STATE = {
   gradedOutcome: "delivered_clean",
   gradedSkillHash: "abc123def4567890",
   gradedModels: ["claude-opus-5"],
+  gradedErrorReason: "usage-limit — the account's quota is exhausted; retry after the reset",
   selfReportStatus: "captured" as const,
   evaluatorIntegrity: { pass1Canary: true, pass2Canary: true },
   droppedEvaluatorItems: { pass1: 1, pass2: 0 },
