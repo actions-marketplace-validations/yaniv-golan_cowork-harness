@@ -856,7 +856,7 @@ export const ScenarioObject = z.strictObject({
     .enum(FIDELITY_TIERS)
     .default("container")
     .describe(
-      "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
+      "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic). DEPRECATION: omitting this key is deprecated and the field becomes REQUIRED in the next major. The `container` default models the VM loop, while production runs the host loop by default (gate 1143815894), so an omitted key likely measures the scenario against a lane your users are not on — a bare relative path lands elsewhere, the shell starts elsewhere, and the offered tool set differs. Name a tier: hostloop to match production, cowork to auto-pick the way Cowork does, or container to keep the current behaviour deliberately.",
     ),
   // execution LOCATION, orthogonal to `fidelity` (a local privilege tier) — do NOT collapse the two.
   // `cloud-describe` is RESERVED: no runner exists yet, so authoring it is a load-time error (see

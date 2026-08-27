@@ -279,6 +279,13 @@ export interface WorkspaceHandlerOptions {
    *  ALL connected folders live), not as the exec cwd (see `execCwd`). */
   vmMnt: string;
   runner?: string;
+  /** The session's egress allowlist for PATH B (provenance not enforced). Defaults to `[]` — DENY-ALL.
+   *
+   *  It used to default to `["*"]`, which `compile()` turns into `() => true`. Because this fetch runs in
+   *  the harness's own Node process — outside the container network namespace, so the sidecar proxy never
+   *  sees it — a caller that forgot this option got a completely unrestricted fetcher while its tier
+   *  advertised default-deny egress. `spawnContainer` forgot it, and only an adversarial review caught it.
+   *  Every real caller passes `plan.egressAllow`; an omitted allowlist now denies rather than allows. */
   webFetchAllow?: string[];
   onEgress?: (entry: EgressEntry) => void;
   onInfraError?: (message: string) => void;
@@ -295,6 +302,13 @@ export interface WorkspaceHandlerOptions {
    *  `outputs` — never the bare mnt root. Defaults to `vmMnt` for callers that don't care about the
    *  distinction (e.g. tests exercising a single generic mount). */
   execCwd?: string;
+  /** Which workspace tools to expose. Defaults to BOTH (the host-loop shape).
+   *
+   *  Production registers different sets per loop, and the difference is not cosmetic: the host-loop
+   *  patch replaces `Bash` AND `WebFetch`, while the VM-loop site registers **web_fetch only** — gated on
+   *  `!hostLoopMode && coworkWebFetchViaApi` — and never touches Bash, which is why `container` correctly
+   *  keeps the built-in shell. Passing `["web_fetch"]` models the VM-loop registration. */
+  tools?: ("bash" | "web_fetch")[];
 }
 
 export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler {
@@ -302,7 +316,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
     containerName,
     vmMnt,
     runner = "docker",
-    webFetchAllow = ["*"],
+    webFetchAllow = [], // DENY-ALL when unset — see the option doc; an open default was a real hole
     onEgress,
     onInfraError,
     provenanceRef,
@@ -314,6 +328,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
   // Per-handler (per-spawn) latch for the provenance-unenforced warning — was module-level, which
   // silenced the gap after the first run in a long-lived process. Each fresh handler warns once.
   const provWarned = { value: false };
+  const exposed = opts.tools ?? ["bash", "web_fetch"];
   const tools = [
     {
       name: "bash",
@@ -325,7 +340,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
       description: FETCH_DESC,
       inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
     },
-  ];
+  ].filter((td) => exposed.includes(td.name as "bash" | "web_fetch"));
   return async (_server, jr) => {
     const method = jr.method;
     if (method === "initialize")
@@ -340,6 +355,11 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
     if (method === "tools/call") {
       const name = jr.params?.name;
       const a = jr.params?.arguments ?? {};
+      // Gate the DISPATCH on the same set as the advertisement, not just the tools/list response. An
+      // unadvertised tool that still executes when named is a real hole: the VM-loop registration exposes
+      // web_fetch ONLY, and a `bash` call arriving there must be refused, not quietly exec'd into the
+      // container.
+      if (!exposed.includes(name as "bash" | "web_fetch")) return { result: textResult(`error: unknown tool "${String(name)}"`, true) };
       if (name === "bash")
         return {
           result: await execInContainer(runner, containerName, execCwd, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
@@ -357,6 +377,8 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
             dedup,
           ),
         };
+      // Unreachable: the dispatch gate above rejects every name outside `exposed`, and `exposed` is a
+      // subset of the two handled here. Kept as a total-function backstop if that gate is ever loosened.
       return { error: { code: -32602, message: `unknown tool: ${name}` } };
     }
     return { result: {} }; // ping / notifications

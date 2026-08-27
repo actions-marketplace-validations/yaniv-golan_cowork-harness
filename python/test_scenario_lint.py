@@ -881,6 +881,45 @@ def test_zero_gate_declaration_switches_the_message_to_drop_it(tmp_path):
     assert "inert" in f.message.lower() or "asserts nothing" in f.message.lower()
 
 
+# --- fidelity-defaulted -------------------------------------------------------
+# The schema default (`container`) models VM-LOOP; production runs HOST-LOOP by default (gate 1143815894 —
+# per-account, read from the fcache, so the warning must not assert it as a live fact).
+# So an omitted `fidelity:` measures the scenario against a lane real users are not on — silently. This is
+# the deprecation warning before the key becomes REQUIRED at the next major.
+
+
+def _mk(tmp_path, body):
+    f = tmp_path / "sc.yaml"
+    f.write_text(body, encoding="utf-8")
+    return [x for x in scenario.lint_file(str(f)) if x.rule == "fidelity-defaulted"]
+
+
+def test_fidelity_defaulted_warns_when_the_key_is_absent(tmp_path):
+    found = _mk(tmp_path, "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n")
+    assert len(found) == 1
+    assert found[0].severity == "WARN"
+
+
+# The load-bearing half. Reading the RESOLVED value would fire on `fidelity: container` too — an author
+# who named the tier has made the choice and must not be nagged. The rule must read the KEY.
+@pytest.mark.parametrize("tier", ["container", "hostloop", "cowork", "microvm", "protocol"])
+def test_fidelity_defaulted_silent_when_a_tier_is_named(tmp_path, tier):
+    body = "name: t\nbaseline: latest\nsession: (inline)\nfidelity: %s\nprompt: hi\n" % tier
+    assert _mk(tmp_path, body) == []
+
+
+# A deprecation notice that does not say what to do, or why, trains people to ignore it.
+def test_fidelity_defaulted_message_names_the_lanes_the_gate_and_the_removal(tmp_path):
+    f = _mk(tmp_path, "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n")[0]
+    assert "VM-LOOP" in f.message
+    assert "HOST-LOOP" in f.message
+    assert "1143815894" in f.message, "cite the gate, so the claim is checkable"
+    assert "fidelity: hostloop" in f.fix, "offer the production-matching tier"
+    assert "fidelity: cowork" in f.fix, "offer the auto-picking tier"
+    assert "fidelity: container" in f.fix, "let an author keep today's behaviour deliberately"
+    assert "REQUIRED in the next major" in f.fix, "announce the removal, or it is just a nag"
+
+
 # --- prompt-slash-not-leading -------------------------------------------------
 # A slash command is expanded only when the TRIMMED prompt starts with `/`; named mid-sentence it reaches
 # the model as prose and the skill is never preloaded. The negative cases are the point of the rule: an

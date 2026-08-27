@@ -709,7 +709,7 @@ function capForJudge(text: string, cap: number): string {
   return `${text.slice(0, cap)}\n…[${text.length - cap} chars truncated for the judge input budget — evidence beyond this point was NOT shown; do not infer absence from this cut]`;
 }
 
-function buildJudgedDocument(ctx: AssertContext, includeSubagentText = false): string {
+export function buildJudgedDocument(ctx: AssertContext, includeSubagentText = false): string {
   // SCRUB BEFORE CAP: scrub is exact-string replacement, so a secret straddling a cap boundary would
   // be truncated mid-token and slip past scrub into the doc sent to the (external) judge. Scrub each raw
   // section FIRST, then cap the already-redacted text — capping redacted content can never re-expose a secret.
@@ -739,8 +739,35 @@ function buildJudgedDocument(ctx: AssertContext, includeSubagentText = false): s
       parts.push(`## Sub-agent output: ${s(label)}\n${capForJudge(s(text), JUDGE_SUBAGENT_CAP)}`);
     }
   }
-  for (const f of ctx.authoredFiles ?? [])
-    parts.push(`## Authored file: ${s(f.path)}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
+  // AUTHORED is not DELIVERED. The capture deliberately includes the scratchpad (the run DID write those
+  // files, and production's sandbox would too), but production DISCARDS anything outside `mnt/` — its own
+  // sub-agent prompt: "never reaches the user or your file tools". Unlabelled, a rubric like "the report
+  // was written" grades TRUE on a file the user never receives — the harness's own false-green, inside the
+  // one evaluator that reads free-form prose and cannot infer the convention.
+  //
+  // The distinction is already carried in the path: the scratchpad walk emits a synthetic `scratchpad/`
+  // prefix (run/artifacts.ts). This only makes it legible to the judge, rather than restructuring the set.
+  // `scratchpad` is NOT in RESERVED_MOUNT_NAMES, so a user may connect a folder with that exact name.
+  // Its files then arrive workRoot-relative as `scratchpad/…` — indistinguishable by prefix from the
+  // synthetic walk. Labelling those would hand the judge a FALSE statement ("NOT delivered" about a file
+  // the user does receive) and false-RED a "was the report delivered?" rubric. A wrong claim is worse
+  // than a missing one, so the collision disables the label rather than guessing.
+  // `?? []` because a partial AssertContext (tests, and any caller building one by hand) may omit this;
+  // an absent prefix list means "nothing is user-visible", which keeps the label ON — the safe direction.
+  const scratchIsUserVisible = (ctx.userVisiblePrefixes ?? []).some((p) => p === "scratchpad" || p === SCRATCHPAD_PREFIX);
+  let sawScratch = false;
+  for (const f of ctx.authoredFiles ?? []) {
+    const scratch = !scratchIsUserVisible && f.path.startsWith(SCRATCHPAD_PREFIX);
+    sawScratch ||= scratch;
+    const tag = scratch ? " — SCRATCH, NOT delivered to the user" : "";
+    parts.push(`## Authored file: ${s(f.path)}${tag}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);
+  }
+  if (sawScratch)
+    parts.push(
+      "## Note on scratch files\nFiles marked SCRATCH were written to the session's scratch area, which is " +
+        "discarded and never reaches the user. Treat them as working intermediates: they are evidence of what " +
+        "the run DID, and are NOT evidence that anything was delivered, saved, shared, or produced for the user.",
+    );
   // Surface authored-file incompleteness to the judge so it never reads an omitted/unreadable file's
   // ABSENCE as evidence the skill didn't produce it (#14/#16). The verdict is separately forced to
   // evidence-unavailable in the semantic_matches check; this note keeps a still-produced grade honest.

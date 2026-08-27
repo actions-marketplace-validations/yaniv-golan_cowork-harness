@@ -83,8 +83,11 @@ export const PINNED_GATES: Record<string, string> = {
   // replaces the hardcoded subagent_env_hl / subagent_env_vm fallback texts (resolveSection). OFF live
   // (source defaultValue) -> the hardcoded texts are the wire text the committed paraphrase assets
   // model. An ON flip is invisible to the text sentinel (the hardcoded template is unchanged), so
-  // checkSubagentOverrideGate additionally emits a HARD-STOP unknown delta on ON — a pinned drift
-  // alone is a non-blocking warning.
+  // checkSubagentOverrideGate emits a non-blocking WARNING on ON (downgraded from a hard delta
+  // 2026-08-27): gate-ON only enables the lookup, and the payload that would actually override is
+  // delivered per-session by the server — invisible to every input sync reads. A guard that can never
+  // clear itself from its own inputs blocks forever rather than tripping. Settled by a live sub-agent
+  // probe instead; see the message body.
   "124685897": "subagentPromptServerOverride",
   // Spawn-env conditional gates: each controls a key in the Desktop→agent spawn env
   // (SPAWN_GATES). Pinned so a production flip surfaces BOTH as a provenance.gates diff AND as the
@@ -402,10 +405,23 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
 export function checkSubagentOverrideGate(gates: Record<string, GateState> | null): string[] {
   if (!gates?.["124685897"]?.on) return [];
   return [
-    "gate subagentPromptServerOverride:124685897 reads ON — a server-delivered spSectionPrompts override " +
-      "is active for the sub-agent append; the harness has no captured override text, so the committed " +
-      "fallback assets would ship as if verified. Capture the override text, update the subagent-append " +
-      "assets + fingerprints, then re-sync.",
+    "gate subagentPromptServerOverride:124685897 reads ON — the sub-agent append MAY be server-overridden " +
+      "and this sync CANNOT TELL from its own inputs. Gate-ON only enables the lookup: the asar reads the " +
+      "section entry and, when it is missing or empty, logs `using hardcoded fallback` and returns the " +
+      "built-in text anyway. The entry is delivered PER SESSION by the server — it is in neither the asar, " +
+      "the fcache nor config.json — so gate state alone cannot separate 'override active' from 'gate on, " +
+      "no payload, fallback still correct'. " +
+      "This gate is SERVER-SIDE and Desktop-version-INDEPENDENT (it flipped off->on via " +
+      '`source:"defaultValue"` with the asar byte-identical, 1.37937.1 -> .3) — do NOT go looking for a ' +
+      "Desktop change. " +
+      "WARNING, not a refusal: probed live 2026-08-27 on desktop-local Cowork (agent 2.1.246, hl branch, " +
+      "no folder connected). A real sub-agent's environment section matched the committed asset on all " +
+      "four load-bearing claims — host cwd, mcp__workspace__bash in an isolated Linux env, folders under " +
+      "<vmCwd>/mnt/, and shell starting in <vmCwd> with non-mnt writes reaching neither the user nor the " +
+      "file tools — so NO override was reaching that account and the committed paraphrase is faithful. " +
+      "That is EVIDENCE, NOT PROOF: one account, one session, and a server rule can be segment-targeted. " +
+      "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
+      "for its environment section verbatim, diff the four claims) rather than trusting this note.",
   ];
 }
 
@@ -511,7 +527,10 @@ export function sync(): SyncResult {
     );
   }
 
-  for (const f of checkSubagentOverrideGate(gates)) flag(unknown, f);
+  // WARNING, not a hard delta — downgraded 2026-08-27 on MEASURED evidence, see checkSubagentOverrideGate.
+  // It blocked the write while being unable to distinguish the two states it names; a guard that can
+  // never clear itself from its own inputs is a permanent block, not a tripwire.
+  notes.push(...checkSubagentOverrideGate(gates));
 
   return {
     appVersion,

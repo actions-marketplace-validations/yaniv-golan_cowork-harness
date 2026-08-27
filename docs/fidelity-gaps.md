@@ -181,6 +181,46 @@ The `--help` text notes this at runtime. If you need to test egress policy, use 
 
 ---
 
+## Browser tools are not served — and egress assertions say nothing about that path
+
+**Real Cowork behaviour:** Desktop `1.37937.1` serves an in-app browser to Cowork agent sessions as
+`mcp__Claude_Browser__*` — 16 tools (`browser_batch`, `computer`, `find`, `form_input`, `get_page_text`,
+`javascript_tool`, `navigate`, `preview_start`, `read_console_messages`, `read_network_requests`,
+`read_page`, `resize_window`, `tabs_close`, `tabs_context`, `tabs_create`, `tabs_select`). Two gates
+carry it, `17519066` and `3990395613`; both read `on:true source:"force"` in the live fcache
+(2026-08-27). Chat mode does not receive them. The tool list comes from real sessions' `system/init`
+arrays; the browser's *behaviour* is unprobed, so treat the limits Anthropic's prompt text describes
+(no `file://`, no Claude-started `localhost`) as documentation rather than observation.
+
+**Harness behaviour:** none of the 16 are served, and neither gate is in `PINNED_GATES`. A skill that
+calls one gets an unknown-tool error — a false-RED, and the cheaper half of this gap.
+
+**The half that matters is what a GREEN does not cover.** Egress entries have exactly two sources: the
+sidecar proxy's `onDecision` (container traffic, which is what `bash` uses) and the workspace
+`web_fetch`'s `onEgress`. In production the browser pane runs Desktop-side — it traverses neither the
+container nor the harness's proxy. So this tier of the contract has a hole that no assertion reports:
+
+> **`egress_denied` and the other `egress_*` assertions do not cover browser-tool traffic.** They are
+> evidence about `bash` and `web_fetch` only. A run where they pass is silent about whether the skill
+> could reach the network through the browser in production — not proof that it could not.
+
+That silence is easy to over-read, because "default-deny egress held" is exactly the sentence a reader
+wants from a green egress assertion. It is true of the paths the harness models and says nothing about
+the one it does not.
+
+**Why the tools are not modelled:** driving a real browser pane is disproportionate to the value.
+Declaring the 16 names so calls resolve is a much smaller step than serving behaviour, and the
+declaration-vs-rendered distinction elsewhere in this document covers the difference — worth doing if a
+real skill needs it, not before. Anything added must be gate-conditional: this is per-account
+(force-ON here, not necessarily elsewhere), so it needs both gate ids pinned first.
+
+**One sync trap, latent today.** `preview_start` is served in Cowork with a **different input schema**
+than its base definition — `{url}` (open a tab; explicitly no dev server on that surface) versus
+`{name}` (start a dev server from `.claude/launch.json`). Same tool name, no shared field, chosen by
+session kind at tool-list construction. Nothing in the harness reasons about that tool, so nothing is
+wrong today; if a sentinel or `deriveSpawnEnv` ever does, the surface qualifier is load-bearing and a
+name-only match would silently pick the wrong schema.
+
 ## No session resume in `chat`
 
 **Real Cowork behaviour:** Sessions persist and can be resumed across launches.
@@ -464,11 +504,39 @@ read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
 `web_fetch` (gate `coworkWebFetchViaApi`, live true) — "Bash is the only tool that truly diverges
 between loops."
 
-**Harness behaviour:** host-loop sets both aliases (`WORKSPACE_TOOL_ALIASES`, hostloop.ts) on the
-`initialize` control_request. The container/microvm tiers register only the `cowork` SDK server — no
-workspace `web_fetch` server exists there to alias to — so they set NO aliases. Consequence: a VM-tier
-model emitting a bare `WebFetch` errors in the harness where production resolves it. Host-loop is the
-production-default loop; use hostloop for alias-sensitive scenarios.
+**Harness behaviour:** CLOSED at `container`, still OPEN at `microvm`.
+
+Host-loop sets both aliases (`WORKSPACE_TOOL_ALIASES`, hostloop.ts) on the `initialize`
+control_request. `container` now models the VM-loop registration: when `coworkWebFetchViaApi` resolves
+on (true in every shipped baseline), it registers a workspace server exposing **web_fetch only**,
+disallows the built-in `WebFetch`, and aliases the name via `VM_LOOP_TOOL_ALIASES`. Bash is deliberately
+untouched there — "Bash is the only tool that truly diverges between loops" — which is why `container`
+keeps the built-in shell while host-loop replaces it.
+
+The three parts ship together on purpose. Disallowing the built-in **without** the alias would turn a
+fidelity fix into a regression: the bare name would stop resolving instead of landing on the workspace
+tool. Registering the tool without pre-approving it would trip the off-registry auto-allow guard.
+
+**`chat` does not do the swap.** `chat --fidelity container` spawns without the gate, so it still offers
+the built-in `WebFetch` and no `mcp__workspace__web_fetch`. The swap is a `run`/`record` property today.
+Debugging a skill in `chat` and then running it as a scenario therefore presents two different tool sets
+at the same declared tier — check the tier's inventory in the run's `system/init` rather than assuming
+`chat` matches.
+
+**`microvm` is still unaliased** — `spawnMicroVm` does not receive the gate, so that tier continues to
+offer the built-in `WebFetch` and a bare emission there does not reach a workspace server. Use
+`container` or `hostloop` for alias-sensitive scenarios.
+
+**Consequence for scenarios:** at `container` the offered set contains `mcp__workspace__web_fetch`, and
+not `WebFetch`. An assertion naming the built-in (`tool_called: WebFetch`, `tool_not_called: WebFetch`)
+therefore names a tool that does not exist at this tier — and `tool_not_called` passes **vacuously**
+rather than failing loudly, which is the harder direction to notice. Name `mcp__workspace__web_fetch`
+instead — **but that name is itself tier-dependent**: `microvm` and `protocol` never offer it, so the same
+assertion is permanently vacuous THERE. There is no single spelling that is meaningful at every tier,
+because the tiers genuinely differ; switching a scenario's `fidelity:` can silently turn a web-fetch
+assertion into a tautology in either direction. Pair it with a positive assertion that fails if the tool
+set is not what you assumed, or keep the scenario on the tier it was written for. `verify-cassettes` emits a `replaced-builtin` note when a recorded init inventory names a
+built-in absent from the tier's current set.
 
 ## Skill/plugin discovery SDK-MCP servers — modeled on container/hostloop; microvm/protocol pending
 
@@ -891,6 +959,61 @@ branch never promotes, so there is no scratch→outputs copy to leak there.
 **Still unmodeled at `microvm` and `protocol`.** `protocol` has no `/sessions/` layout for the handler's
 path model to work against; `microvm` stages into a different tree than the artifact scan walks. Both
 report can't-verify rather than passing vacuously.
+
+### Path resolution: the shell and the file tools use DIFFERENT roots (measured 2026-08-27)
+
+**The two roots are modeled; what remains divergent is whether the write SURVIVES.** On the
+desktop-local lane, production resolves a relative path differently depending on which tool writes it:
+
+| | production (host-loop) | `container`/`microvm` (VM-loop) | `hostloop` |
+|---|---|---|---|
+| file tools (`Write`/`Read`) base | `mnt/outputs` | session root | `mnt/outputs` ✓ |
+| `mcp__workspace__bash` cwd | session root | session root ✓ | session root ✓ |
+
+Both cwds come from a single function (`hostLoopCwds`, `src/runtime/hostloop.ts`) and are pinned together
+in one test, because a single-value assertion cannot express "the shell and the file tools disagree, on
+purpose" — and collapsing them into one value is the mistake this arrangement exists to prevent.
+
+Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; anything written outside
+`<vmCwd>/mnt/` (including `/tmp`) stays in that environment and never reaches the user or your file
+tools."* Bash also **resets its cwd between every call** (*"no cwd/env carryover"*), so a relative path
+from a script always resolves against the session root and cannot be `cd`-ed away from.
+
+Three consequences — the first for anyone reading a green run, the other two for anyone writing a skill
+or an assertion against these tools:
+
+1. **A relative bash write lands in the right place but PERSISTS, where production discards it.**
+   Production throws away anything outside `mnt/`; the harness bind-mounts the whole session dir, so the
+   same write survives into the run dir. Measured 2026-08-27: `printf > rel.txt` from a shell tool landed
+   at `/sessions/<id>/rel.txt` on `container` and **persisted** as `session/rel.txt`.
+
+   **Scope, so this is not over-read:** `file_exists`, `user_visible_artifact` and
+   `computer_links_resolve` are all bounded by `workRoot` (`…/session/mnt`) and **cannot** reach such a
+   file. The exposure is `semantic_matches` and `no_lost_write_back`, which grade the *authored* set. That
+   set still contains the file — capturing it is correct, since the run did write it — but every entry
+   from the scratchpad walk is labelled `— SCRATCH, NOT delivered to the user` in the judged document,
+   with a note saying such files are evidence of what the run DID and not that anything was delivered.
+   That label is what keeps a rubric like "the report was written" from grading TRUE on a file the user
+   would never receive.
+
+   **What is still divergent:** production would have discarded the file entirely, so a skill whose
+   bundled scripts take relative output paths still gets further here than it would there. The location
+   half is now faithful on both tiers; the survival half is not, and removing it would mean unpicking a
+   bind-mount every tier's artifact capture, `--resume` and the microvm snapshot depend on.
+2. **`Write`'s tool result echoes the RAW path it was given — it never absolutizes.** Structural, read
+   from the agent binary. A bare `Write foo.md` comes back as `foo.md`, not
+   `/sessions/<id>/mnt/outputs/foo.md`. Nothing in the harness parses a path out of a `Write` result
+   today, and this note exists so nothing starts: an assertion or doc that reads an absolute path out of
+   one is reading something production does not emit. Cowork's own chat-surface prompt asserts the
+   opposite ("Write's result shows the file's full path"), so the product's documentation of its own tool
+   is wrong here — do not take it as a spec.
+3. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
+   invisible), and **`<folder>/x` builds a same-named decoy inside `outputs`** rather than reaching the
+   connected folder — silently, with a success result. No relative path from the file tools reaches a
+   connected folder. See [scenario.md](./scenario.md), "Where a relative path actually lands".
+
+The **cloud** lane shares none of this: cwd is `/home/claude`, there is no `mnt/` tree, and the shell and
+file tools share one root.
 
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 

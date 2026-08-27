@@ -32,7 +32,7 @@ import {
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
+import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { warnUnservedHookEvents } from "./hook-events.js";
@@ -700,6 +700,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
+  // Container's web_fetch is host-routed too, so its decisions cannot come from the proxy log and must
+  // survive the `egress = eg.entries` teardown assignment. Kept separate for exactly that reason.
+  const containerWebFetchEgress: { host: string; decision: "allow" | "deny" }[] = [];
   let hostloopHooks: HookBundle | undefined; // hostloop's PreToolUse path-gate bundle
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
@@ -881,6 +884,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           runToken,
           suggestSkillsEnabled,
           proactiveSkillSuggestEnabled,
+          // Same gate production reads for its VM-loop web_fetch registration. Read once above and shared
+          // with the hostloop branch so the two tiers cannot drift apart on it.
+          webFetchViaApi: viaApiOn,
+          provenanceRef,
+          dedup,
+          onEgress: (e) => containerWebFetchEgress.push(e),
         });
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
@@ -946,7 +955,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
-      if (effectiveFidelity === "hostloop" && viaApiOn) {
+      // BOTH loops, not just host-loop: production's VM-loop factory calls the provenance path
+      // unconditionally and has no allowlist fallback in it at all. Leaving `ref.current` undefined at
+      // container drops the handler onto PATH B — the gate-OFF path — even though the tool exists only
+      // BECAUSE the gate is on, which is the inverse of production.
+      if ((effectiveFidelity === "hostloop" || effectiveFidelity === "container") && viaApiOn) {
         run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
@@ -963,7 +976,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             subagentAppend: prompts.subagentAppend,
             sdkMcp,
             hooks: hostloopHooks,
-            ...(effectiveFidelity === "hostloop" ? { toolAliases: WORKSPACE_TOOL_ALIASES } : {}),
+            // Host-loop aliases Bash+WebFetch; the VM loop aliases WebFetch alone, and only when the
+            // gate that put the workspace server there is on. Tied to the SAME `viaApiOn` that drives the
+            // disallow in spawnContainer — an alias to a server this run never registered would resolve a
+            // bare WebFetch onto nothing.
+            ...(effectiveFidelity === "hostloop"
+              ? { toolAliases: WORKSPACE_TOOL_ALIASES }
+              : effectiveFidelity === "container" && viaApiOn
+                ? { toolAliases: VM_LOOP_TOOL_ALIASES }
+                : {}),
           });
         } catch (e) {
           // An unanswered gate is recoverable: grab the in-progress record so the work done before the whiff can
@@ -1002,8 +1023,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         egressMalformedLines += eg.malformedLines; // applied to record.evidenceErrors after the finally, where `record` is assigned (#39)
         sidecar.teardown();
       }
-      // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
+      // merge host-routed web_fetch decisions so they're visible to egress assertions. This MUST come
+      // after the `egress = eg.entries` above, which replaces the array wholesale with the proxy log —
+      // a log that can never contain a host-side fetch. Both loops route web_fetch off-container, so
+      // both need the merge; container's decisions were being discarded by that assignment.
       if (hostEgress?.length) egress = [...egress, ...hostEgress];
+      if (containerWebFetchEgress.length) egress = [...egress, ...containerWebFetchEgress];
       hostProxy?.close();
     }
 
@@ -1260,9 +1285,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
     // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
     // added/modified files. (`[]` when there's no manifest, e.g. a --resume run.)
-    // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
-    // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
-    // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
+    // F12, CORRECTED 2026-08-27: the old text said "at container/hostloop the agent's cwd is the SESSION
+    // ROOT". True at CONTAINER only. At hostloop the agent process sits at `mnt/outputs` (see
+    // `hostLoopCwds` in src/runtime/hostloop.ts), so a bare `Write` there lands INSIDE `workRoot` and needs
+    // no scratchpad walk to be seen. The branch is still right, but for two different reasons per tier:
+    //   container — agent cwd IS the session root, so a relative `Write` lands outside `workRoot`;
+    //   hostloop  — the agent writes inside `mnt`, but `mcp__workspace__bash` starts at the session root,
+    //               so a relative SHELL write lands outside `workRoot`.
+    // Either way `workRoot` ends `/session/mnt` and its parent is the root, so passing it captures what the
+    // run actually authored.
+    //
+    // KNOWN FALSE-GREEN, deliberately not fixed here (see docs/fidelity-gaps.md, "Path resolution"):
+    // production DISCARDS anything written outside `mnt/` — "never reaches the user or your file tools" —
+    // while the harness bind-mounts the whole session dir, so these files persist and can be graded as
+    // authored. That is correct for the semantic judge (the run did write them) and wrong as a model of
+    // delivery. `user_visible_artifact` is unaffected: it checks user-visible ROOTS, not this set.
     const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
     // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
     // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
@@ -1725,10 +1762,41 @@ const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.s
  * file's directory (not the cwd), so a scenario+session bundle is self-contained and
  * relocatable. Use this everywhere a scenario is read from disk (`run`, `record`).
  */
+/** True when the YAML did not name a tier, so `fidelity` came from the schema default.
+ *
+ *  Must be read from the RAW document: Zod's `.default("container")` makes the parsed object
+ *  indistinguishable from one that said `fidelity: container` on purpose, and those two cases deserve
+ *  different treatment — an author who chose the tier has made the choice, one who omitted it has not.
+ *
+ *  Why anyone cares: the default models the VM-LOOP lane, and production runs HOST-LOOP (gate 1143815894
+ *  is force-ON in every shipped baseline). So a scenario that omits the key is measured against the lane
+ *  real users are not on — silently. Measured 2026-08-27; see docs/fidelity-gaps.md, "Path resolution". */
+export function fidelityWasDefaulted(raw: unknown): boolean {
+  return typeof raw === "object" && raw !== null && !("fidelity" in (raw as Record<string, unknown>));
+}
+
+/** The deprecation notice for a defaulted tier. `fidelity` becomes REQUIRED in the next major; until
+ *  then this warns rather than failing, so consumers get told before they get an error. */
+export function defaultedFidelityNotice(name: string): string {
+  return (
+    `::warning:: [scenario] ${name}: no \`fidelity:\` — defaulting to \`container\`, which models the ` +
+    `VM-LOOP lane. Production runs HOST-LOOP by default (gate 1143815894), so this scenario is likely ` +
+    `measured against a lane your users are not on: the file tools resolve a bare relative path ` +
+    `differently, the shell starts somewhere else, and the offered tool set differs. Name a tier ` +
+    `explicitly — \`fidelity: hostloop\` to match production, \`fidelity: cowork\` to auto-pick the way ` +
+    `Cowork does, or \`fidelity: container\` to keep today's behaviour deliberately. Switching tiers can ` +
+    `COST you assertions: \`no_scratchpad_leak\` is container-only (a lint error elsewhere) and ` +
+    `\`transcript_no_host_path\` fails by design at hostloop/protocol. ` +
+    `DEPRECATION: the default is being removed — \`fidelity:\` becomes REQUIRED in the next major.`
+  );
+}
+
 export function parseScenarioFile(path: string): Scenario {
   let scenario: Scenario;
+  let rawDoc: unknown;
   try {
-    scenario = Scenario.parse(parseYaml(readFileSync(path, "utf8")));
+    rawDoc = parseYaml(readFileSync(path, "utf8"));
+    scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
     // not a harness bug — rethrow as UsageError so main().catch maps it to category `usage`, not
@@ -1738,6 +1806,8 @@ export function parseScenarioFile(path: string): Scenario {
   }
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
+  // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
+  if (fidelityWasDefaulted(rawDoc)) process.stderr.write(defaultedFidelityNotice(scenario.name) + "\n");
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT

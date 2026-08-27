@@ -50,6 +50,10 @@ import {
 } from "../src/sync/cowork-sync.js";
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
 import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
+import { hostLoopCwds } from "../src/runtime/hostloop.js";
+import { fidelityWasDefaulted, defaultedFidelityNotice } from "../src/run/execute.js";
+import { buildJudgedDocument } from "../src/assert.js";
+import { renderPrompts } from "../src/prompt.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
@@ -1775,6 +1779,146 @@ describe("prompt drift guard (H1-H3)", () => {
   });
 });
 
+// ==========================================================================================
+// The host-loop cwd SPLIT. Production keeps the agent process and the shell at DIFFERENT roots, and a
+// single-value assertion cannot express that — which is how the harness ran bash at the outputs dir for
+// two releases while believing it faithful. All three values are pinned in one place so a future edit
+// cannot move one and leave the others.
+//
+// MEASURED on desktop-local Cowork 2026-08-27:
+//   agent process / bare `Write` base : mnt/outputs      (Probes A, A2, B)
+//   mcp__workspace__bash cwd          : /sessions/<id>   (Probes A and B — with AND without a folder)
+//   {{cwd}} prompt token at hostloop  : mnt/outputs      (src/prompt.ts)
+//
+// Do NOT "fix" the agent cwd to match the shell. That was this investigation's first instinct and it is
+// backwards: the file-tool base is correct, the shell was the wrong one.
+// ==========================================================================================
+// The deprecation window before `fidelity` becomes REQUIRED. The default models VM-LOOP while production
+// runs HOST-LOOP by default (gate 1143815894 — per-account, read from the fcache, so never state it as a
+// live fact), so an omitted key silently measures the wrong lane. Warn now,
+// fail at the next major — consumers get told before they get an error.
+// AUTHORED is not DELIVERED. The authored-file capture deliberately includes the scratchpad — the run did
+// write those files — but production DISCARDS anything outside `mnt/` ("never reaches the user or your file
+// tools"). Unlabelled, a rubric like "the report was written" grades TRUE on a file the user never receives.
+// The distinction already rides in the synthetic `scratchpad/` path prefix; this makes it legible to the
+// one evaluator that reads free-form prose and cannot infer the convention.
+describe("judged document — scratch files are labelled as undelivered", () => {
+  const doc = (files: { path: string; content: string }[]) =>
+    buildJudgedDocument({
+      transcript: [],
+      finalMessage: "done",
+      toolsCalled: [],
+      result: "success",
+      workRoot: "/w/session/mnt",
+      authoredFiles: files,
+    } as never);
+
+  // `scratchpad` is not in RESERVED_MOUNT_NAMES, so a user can connect a folder with that exact name and
+  // its files arrive as `scratchpad/…` — byte-identical to the synthetic walk prefix. Labelling those
+  // tells the judge something FALSE about a file the user really does receive, which false-REDs a
+  // "was it delivered?" rubric. A wrong claim is worse than a missing one.
+  it("does NOT label when `scratchpad` is a real connected folder — the prefix collides", () => {
+    const d = buildJudgedDocument({
+      transcript: [],
+      finalMessage: "done",
+      toolsCalled: [],
+      result: "success",
+      workRoot: "/w/session/mnt",
+      userVisiblePrefixes: ["outputs", "scratchpad"],
+      authoredFiles: [{ path: "scratchpad/report.md", content: "the report" }],
+    } as never);
+    expect(d).toContain("scratchpad/report.md");
+    expect(d).not.toContain("NOT delivered to the user");
+    expect(d).not.toContain("## Note on scratch files");
+  });
+
+  it("marks a scratchpad file NOT delivered, and leaves a real deliverable unmarked", () => {
+    const d = doc([
+      { path: "outputs/report.md", content: "DELIVERED" },
+      { path: "scratchpad/notes.txt", content: "SCRATCH" },
+    ]);
+    expect(d).toMatch(/## Authored file: scratchpad\/notes\.txt — SCRATCH, NOT delivered/);
+    expect(d, "a real deliverable must not be tagged").toMatch(/## Authored file: outputs\/report\.md\n/);
+  });
+
+  it("explains the tag, so the judge cannot read SCRATCH as delivery evidence", () => {
+    const d = doc([{ path: "scratchpad/notes.txt", content: "x" }]);
+    expect(d).toMatch(/Note on scratch files/);
+    expect(d, "must say what it is NOT evidence of").toMatch(/NOT evidence that anything was delivered/);
+  });
+
+  it("adds no note when nothing was written to scratch — no noise on the common case", () => {
+    expect(doc([{ path: "outputs/report.md", content: "x" }])).not.toMatch(/Note on scratch files/);
+  });
+});
+
+describe("defaulted fidelity — the deprecation notice", () => {
+  it("detects the OMITTED key, and does not fire when the tier was chosen deliberately", () => {
+    expect(fidelityWasDefaulted({ prompt: "x" })).toBe(true);
+    // The load-bearing half: Zod's .default() makes these two indistinguishable AFTER parse, so the
+    // detector must read the RAW document. An author who wrote `fidelity: container` has made the choice
+    // and must not be nagged.
+    expect(fidelityWasDefaulted({ prompt: "x", fidelity: "container" })).toBe(false);
+    expect(fidelityWasDefaulted({ prompt: "x", fidelity: "hostloop" })).toBe(false);
+  });
+
+  it("is inert on a non-object document rather than throwing", () => {
+    expect(fidelityWasDefaulted(null)).toBe(false);
+    expect(fidelityWasDefaulted("not-a-doc")).toBe(false);
+  });
+
+  // A deprecation notice that does not say what to do, or why, trains people to ignore it.
+  it("names the lane mismatch, the gate, every remedy, and the deprecation", () => {
+    const m = defaultedFidelityNotice("my-scenario");
+    expect(m).toContain("my-scenario");
+    expect(m, "must say which lane the default models").toMatch(/VM-LOOP/);
+    expect(m, "must say which lane production runs").toMatch(/HOST-LOOP/);
+    expect(m, "must cite the gate, so the claim is checkable").toMatch(/1143815894/);
+    expect(m, "must offer the production-matching tier").toMatch(/fidelity: hostloop/);
+    expect(m, "must offer the auto-picking tier").toMatch(/fidelity: cowork/);
+    expect(m, "must let an author keep today's behaviour deliberately").toMatch(/fidelity: container/);
+    expect(m, "must announce the removal, or it is just a nag").toMatch(/REQUIRED in the next major/);
+  });
+});
+
+describe("host-loop cwd split (agent at outputs, shell at the session root)", () => {
+  const ROOT = "/sessions/abc";
+  const OUT = "/run/work/session/mnt/outputs";
+
+  it("the agent process resolves relative file-tool paths at OUTPUTS", () => {
+    expect(hostLoopCwds(ROOT, OUT).agentProcessCwd).toBe(OUT);
+  });
+
+  it("mcp__workspace__bash starts at the bare SESSION ROOT — not outputs, not a connected folder", () => {
+    expect(hostLoopCwds(ROOT, OUT).workspaceBashCwd).toBe(ROOT);
+  });
+
+  it("the two are DIFFERENT — collapsing them is the defect, so assert the split itself", () => {
+    const { agentProcessCwd, workspaceBashCwd } = hostLoopCwds(ROOT, OUT);
+    expect(agentProcessCwd).not.toBe(workspaceBashCwd);
+  });
+
+  // The pre-2026-08-27 value. Pinned as a NEGATIVE so a revert cannot pass quietly: it was derived from
+  // the asar's `cwd: c.vmCwd` spawn argument, which is not load-bearing on the cowork path (only the
+  // `chat` branch prepends an explicit `cd`, which would be redundant if it worked).
+  it("REGRESSION: the shell cwd is never a connected folder or outputs, with or without folders", () => {
+    expect(hostLoopCwds(ROOT, OUT).workspaceBashCwd).not.toMatch(/\/mnt\//);
+    expect(hostLoopCwds(ROOT, `${ROOT}/mnt/outputs`).workspaceBashCwd).toBe(ROOT);
+    expect(hostLoopCwds(ROOT, `${ROOT}/mnt/project`).workspaceBashCwd).toBe(ROOT);
+  });
+
+  // The third value. `{{cwd}}` must track the AGENT cwd, not the shell — a swap is the sentinel-failing
+  // drift the sub-agent asset calls out explicitly.
+  it("the {{cwd}} prompt token tracks the AGENT cwd at hostloop, not the shell", () => {
+    const rendered = renderPrompts(loadBaseline("latest") as never, { model: "claude-opus-4-8" } as never, "abc", undefined, {
+      effectiveFidelity: "hostloop",
+      hostCwd: OUT,
+    } as never);
+    const sys = JSON.stringify(rendered);
+    expect(sys).toContain(OUT);
+  });
+});
+
 describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server override)", () => {
   const gate = (on: boolean) => ({
     "124685897": { id: "124685897", name: "subagentPromptServerOverride", on, source: "defaultValue", value: undefined },
@@ -1786,11 +1930,37 @@ describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server o
     expect(checkSubagentOverrideGate(null)).toEqual([]);
     expect(checkSubagentOverrideGate({})).toEqual([]);
   });
-  it("ON → a HARD-STOP unknown delta (a pinned-gate drift alone only warns)", () => {
+  it("ON → exactly one message (routed to notes, non-blocking — see the severity test below)", () => {
     const flags = checkSubagentOverrideGate(gate(true));
     expect(flags).toHaveLength(1);
     expect(flags[0]).toMatch(/subagentPromptServerOverride/);
     expect(flags[0]).toMatch(/override/i);
+  });
+
+  // The message must not overclaim. Gate-ON is NECESSARY but NOT SUFFICIENT: the asar reads the section
+  // entry and falls back to the built-in text when it is missing or empty, and the entry is delivered
+  // per-session by the server — invisible to every input `sync` reads. The old wording asserted the
+  // override "is active", a fact this command cannot establish, which sends the reader hunting for a
+  // Desktop change that does not exist (the gate flipped via source:"defaultValue" with the asar
+  // byte-identical, 1.37937.1 -> .3).
+  // The downgrade to a warning is only defensible while the message carries the evidence that justified
+  // it AND its limits. A future edit that trims either turns a measured judgement back into a guess.
+  it("ON → the message carries the live-probe evidence AND states it is not proof", () => {
+    const m = checkSubagentOverrideGate(gate(true))[0];
+    expect(m, "the downgrade must cite what was measured").toMatch(/probed live 2026-08-27/);
+    expect(m, "must name the tier/branch probed — a vm-branch probe would not license this").toMatch(/hl branch/);
+    expect(m, "one account is not a population").toMatch(/EVIDENCE, NOT PROOF/);
+    expect(m, "must say a server rule can be segment-targeted").toMatch(/segment-targeted/);
+    expect(m, "must tell the reader how to re-establish it").toMatch(/re-probe/);
+  });
+
+  it("ON → the message says CANNOT TELL, not 'is active', and names the fallback + the live-probe remedy", () => {
+    const m = checkSubagentOverrideGate(gate(true))[0];
+    expect(m, "must not assert an unestablished fact").not.toMatch(/override is active/i);
+    expect(m, "must say the sync cannot distinguish the two states").toMatch(/CANNOT TELL/);
+    expect(m, "must name the fallback path, or the reader over-reads the gate").toMatch(/hardcoded fallback/);
+    expect(m, "must say it is server-side so nobody diffs asars for it").toMatch(/version-INDEPENDENT/);
+    expect(m, "must name the only remedy that can settle it").toMatch(/dispatch a sub-agent/);
   });
 });
 

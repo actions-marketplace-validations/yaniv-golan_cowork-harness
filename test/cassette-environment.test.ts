@@ -195,7 +195,73 @@ describe("imageProvenanceMismatch — did this replay use the rootfs the recordi
   });
 });
 
-describe("discovery-surface note — answers 'does this cassette predate the discovery tools?'", () => {
+// --- replaced-builtin note ------------------------------------------------------------------------
+// The gap this closes, hit for real: example-pdf-skill recorded `WebFetch` at container and asserted
+// `tool_not_called: WebFetch`. When the harness started modelling production's VM-loop swap, that tool
+// stopped existing there — the assertion could never be violated and passed VACUOUSLY, while
+// verify-cassettes exited 0 throughout. Staleness keys on baseline/skillHash, so a fixture can describe a
+// tool surface the harness no longer produces and nothing notices.
+describe("replaced-builtin note — a fixture naming a tool this build no longer offers at that tier", () => {
+  const notesFor = (o: Record<string, any>) => computeStaleness(makeMinimalCassette(o) as any, undefined).notes.join(" | ");
+  const init = (tools?: unknown) =>
+    JSON.stringify(tools === undefined ? { type: "system", subtype: "init" } : { type: "system", subtype: "init", tools });
+  const result = JSON.stringify({ type: "result", subtype: "success", is_error: false });
+  const D = ["mcp__skills__list_skills"]; // silence the sibling discovery note
+
+  it("FIRES on WebFetch at container — VM-loop replaces it with the workspace tool", () => {
+    const n = notesFor({ events: [init(["Bash", "WebFetch", ...D]), result], effectiveFidelity: "container" });
+    expect(n).toContain("replaced-builtin");
+    expect(n).toContain("WebFetch");
+  });
+
+  // The tier asymmetry is the substance, not a detail: the Bash/WebFetch replacement is HOST-LOOP-only,
+  // so a container fixture carrying built-in Bash is FAITHFUL and must not be nagged.
+  it("is SILENT on Bash at container — VM-loop keeps the built-in shell", () => {
+    const n = notesFor({ events: [init(["Bash", ...D]), result], effectiveFidelity: "container" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+
+  it("FIRES on Bash at hostloop — that loop DOES replace it", () => {
+    expect(notesFor({ events: [init(["Bash", ...D]), result], effectiveFidelity: "hostloop" })).toContain("replaced-builtin");
+  });
+
+  it("is SILENT once the inventory carries the workspace tool instead", () => {
+    const n = notesFor({ events: [init(["mcp__workspace__web_fetch", ...D]), result], effectiveFidelity: "container" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+
+  it("is SILENT when the init event carries no tools key — no evidence is not 'stale'", () => {
+    expect(notesFor({ events: [init(undefined), result], effectiveFidelity: "hostloop" })).not.toContain("replaced-builtin");
+  });
+
+  // Pins the tier the IMPLEMENTATION does not cover. spawnMicroVm never receives `webFetchViaApi`, so
+  // that tier still offers the built-in WebFetch — a note here would tell users to re-record a cassette
+  // that faithfully describes what this build produces. Delete this only alongside wiring microvm up.
+  // spawnHostLoop disallows NotebookEdit alongside Bash/WebFetch. It has no workspace replacement — the
+  // tier removes it outright — but `tool_not_called: NotebookEdit` is vacuous there all the same.
+  it("FIRES on NotebookEdit at hostloop, which removes it outright rather than replacing it", () => {
+    const n = notesFor({ events: [init(["NotebookEdit", ...D]), result], effectiveFidelity: "hostloop" });
+    expect(n).toContain("replaced-builtin");
+    expect(n).toContain("NotebookEdit");
+  });
+
+  it("is SILENT on NotebookEdit at container, which still offers it", () => {
+    const n = notesFor({ events: [init(["NotebookEdit", ...D]), result], effectiveFidelity: "container" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+
+  it("is SILENT at microvm — that tier still offers the built-in WebFetch", () => {
+    const n = notesFor({ events: [init(["Bash", "WebFetch", ...D]), result], effectiveFidelity: "microvm" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+
+  it("is SILENT at protocol, which has no workspace server to replace anything with", () => {
+    const n = notesFor({ events: [init(["Bash", "WebFetch", ...D]), result], effectiveFidelity: "protocol" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+});
+
+describe("discovery-surface note — answers \'does this cassette predate the discovery tools?\'", () => {
   const notesFor = (o: Record<string, any>) => computeStaleness(makeMinimalCassette(o) as any, undefined).notes.join(" | ");
   const init = (tools?: unknown) =>
     JSON.stringify(tools === undefined ? { type: "system", subtype: "init" } : { type: "system", subtype: "init", tools });

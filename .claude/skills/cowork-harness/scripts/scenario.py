@@ -488,6 +488,30 @@ def lint_doc(doc, path, raw_lines):
 
     fidelity = (doc.get("fidelity") or "container")
     lane = (doc.get("lane") or "local")
+
+    # W: no `fidelity:` — the default models the WRONG LANE.
+    # `container` (the schema default) models VM-loop; production runs HOST-LOOP, gate 1143815894 is
+    # force-ON in every shipped baseline. So an omitted key measures the scenario against a lane real
+    # users are not on: the file tools resolve a bare relative path differently, the shell starts
+    # somewhere else, and the offered tool set differs (measured 2026-08-27).
+    # Read the KEY, not the resolved value: `fidelity: container` is a deliberate choice and must not warn.
+    # DEPRECATION — `fidelity:` becomes REQUIRED in the next major; this is the warning window.
+    if "fidelity" not in doc:
+        findings.append(
+            Finding(
+                "WARN",
+                "fidelity-defaulted",
+                "no `fidelity:` — defaulting to `container`, which models the VM-LOOP lane. Production "
+                "runs HOST-LOOP by default (gate 1143815894), so this scenario is likely measured "
+                "against a lane your users are not on.",
+                "Name a tier: `fidelity: hostloop` to match production, `fidelity: cowork` to auto-pick "
+                "the way Cowork does, or `fidelity: container` to keep today's behaviour deliberately. "
+                "Switching tiers can COST you assertions: `no_scratchpad_leak` is container-only (an "
+                "error elsewhere) and `transcript_no_host_path` fails by design at hostloop/protocol. "
+                "The default is being removed — `fidelity:` becomes REQUIRED in the next major.",
+                path,
+            )
+        )
     items = _assert_items(doc)
     assert_keys = _all_assert_keys(items)
     has_expect_denied = bool(doc.get("expect_denied"))

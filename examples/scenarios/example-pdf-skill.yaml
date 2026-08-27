@@ -35,4 +35,11 @@ assert:
   - user_visible_artifact: project/outputs/actions.md
   - transcript_contains: "action items"
   - tool_called: Write
-  - tool_not_called: WebFetch
+  # The intent is "this skill reads the LOCAL pdf, it does not fetch from the web". Name the tool that
+  # actually exists on this tier, or the assertion cannot fail.
+  #
+  # It used to read `tool_not_called: WebFetch`. Production's VM-loop disallows the built-in `WebFetch`
+  # and aliases the name to `mcp__workspace__web_fetch`; once the harness modelled that, `WebFetch` was no
+  # longer offered at `container` — so the old line could never be violated and passed VACUOUSLY. That is
+  # the harder failure to notice, because it goes silently green rather than loudly red.
+  - tool_not_called: mcp__workspace__web_fetch

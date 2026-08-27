@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 2.3.0
-  tracks-harness: cowork-harness 2.3.0 (baseline desktop-1.37937.1)
+  version: 2.4.0
+  tracks-harness: cowork-harness 2.4.0 (baseline desktop-1.37937.1)
 ---
 
 # cowork-harness
@@ -25,7 +25,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 2.3.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 2.4.0` (baseline
 > `desktop-1.37937.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -42,7 +42,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 2.3.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^2.3.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^2.3.0"`. **Pin `@^2.3.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 2.4.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^2.4.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^2.4.0"`. **Pin `@^2.4.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -147,9 +147,9 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 | Tier | What it gives you | Use when |
 |---|---|---|
 | `protocol` | Fastest; no sandbox, no egress | Pure protocol/answer-shape tests. **Rejected** if the scenario asserts egress. |
-| `container` | Real sandbox + real default-deny egress (**default**) | Most functional + boundary tests. |
-| `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity | Testing untrusted code escape, not network behavior. |
-| `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with native Bash/WebFetch disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
+| `container` | Real sandbox + real default-deny egress (**default**). Models the **VM loop**: keeps the built-in `Bash`, but `WebFetch` is replaced by `mcp__workspace__web_fetch` — assert on that name, not `WebFetch`. (`run`/`record` only; `chat --fidelity container` still offers the built-in.) **The name is tier-specific**: `microvm`/`protocol` never offer it, so the same `tool_not_called` is vacuous there — moving a scenario between tiers can silently void a web-fetch assertion | Most functional + boundary tests. |
+| `microvm` | VM-grade escape **isolation** (macOS arm64). Egress transport is the *same allowlist proxy as `container`* — not better network fidelity. Unlike `container`, still offers the built-in `WebFetch` | Testing untrusted code escape, not network behavior. |
+| `hostloop` / `cowork` | Production split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production), with **both** native `Bash` and `WebFetch` disabled and routed host-side via the workspace SDK-MCP server into a Docker VM sidecar (the VM loop replaces web_fetch only) | Highest-fidelity / parity runs. A writable connected folder needs `allow_host_writes: true` (see scenario-schema.md). |
 
 Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejects `--fidelity`
 (it's a `skill`/`chat` flag; `run` takes fidelity only from the scenario). See
@@ -550,8 +550,15 @@ Recognize these before "fixing" a non-bug:
   only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
   **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
   scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
-  **The fix is lane-dependent.** On `lane: local`, write deliverables under `outputs/` or a connected
-  folder, or deliver them explicitly. **On `lane: remote`, moving a file under `outputs/` does NOT help** —
+  **The fix is lane-dependent — and so is the PATH.** On `lane: local`, write deliverables where the user
+  can see them, but do **not** hardcode the literal prefix `outputs/`: on the desktop-local host-loop lane
+  (what production runs) the file tools are ALREADY rooted at `outputs/`, so `outputs/x.md` doubles to
+  `outputs/outputs/x.md` and the user never sees it — a **bare filename** is correct there. At
+  `fidelity: container`/`microvm` (VM-loop, the harness default) the base is the session root instead, so a
+  bare name lands in the scratchpad and you want `{{workspaceFolder}}` or an explicit delivery. Addressing
+  a connected folder by name (`<folder>/x.md`) never reaches it on either lane — it builds a same-named
+  decoy inside `outputs`, reports success, and gives no signal. Measured 2026-08-27; see
+  [docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md), "Where a relative path actually lands". **On `lane: remote`, moving a file under `outputs/` does NOT help** —
   nothing is delivered by location there, so only an explicit delivery counts. Assert
   **`allow_undelivered_deliverables: true`** when the leftovers are intentional (intermediates, caches,
   downloaded inputs) rather than a delivery gap.

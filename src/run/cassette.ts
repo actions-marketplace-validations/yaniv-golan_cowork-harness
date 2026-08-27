@@ -1806,6 +1806,52 @@ function computeDiscoverySurfaceNote(cassette: Cassette): string[] {
   ];
 }
 
+/** Built-ins this build REPLACES with a workspace MCP tool, per tier. Production swaps different sets per
+ *  loop, so the expectation is tier-specific:
+ *    host-loop — the patch disallows Bash AND WebFetch and aliases both;
+ *    VM-loop   — the site registers web_fetch ONLY (gated on coworkWebFetchViaApi) and never touches Bash,
+ *                which is why container legitimately keeps the built-in shell. */
+const REPLACED_BUILTINS_BY_TIER: Record<string, string[]> = {
+  // NotebookEdit is in spawnHostLoop's `disallowed` alongside Bash/WebFetch, so a cassette asserting
+  // `tool_not_called: NotebookEdit` at this tier is just as vacuous. It has no workspace replacement —
+  // the tier simply removes it — which the note's wording accommodates.
+  hostloop: ["Bash", "WebFetch", "NotebookEdit"],
+  container: ["WebFetch"],
+  // microvm is deliberately ABSENT, not an oversight: spawnMicroVm never receives `webFetchViaApi`
+  // (execute.ts), so that tier still offers the built-in WebFetch. Listing it here would tell users to
+  // re-record a cassette that faithfully describes what this build produces.
+};
+
+/** A cassette whose recorded init inventory names a built-in this build no longer offers at that tier.
+ *
+ *  The gap this closes, hit for real: `example-pdf-skill` recorded `WebFetch` at `container` and asserted
+ *  `tool_not_called: WebFetch`. When the harness started modelling production's VM-loop swap, that tool
+ *  stopped existing there — so the assertion could never be violated and passed VACUOUSLY, while
+ *  `verify-cassettes` exited 0 throughout. Staleness keys on baseline/skillHash, so a fixture can describe
+ *  a tool surface the harness no longer produces and nothing notices.
+ *
+ *  A NOTE, not a finding, deliberately: the swap is gate-conditional (`coworkWebFetchViaApi`), so a
+ *  cassette recorded with the gate off is legitimately different rather than stale. A false positive costs
+ *  a line of prose; a false FINDING would red a correct fixture. Mirrors computeDiscoverySurfaceNote. */
+function computeReplacedBuiltinNote(cassette: Cassette): string[] {
+  const tools = recordedInitTools(cassette);
+  if (!tools || tools.length === 0) return []; // no evidence — NOT "the tools are missing"
+  const authored = cassette.scenario.fidelity;
+  const tier = cassette.environment?.tier ?? cassette.effectiveFidelity ?? (authored !== "cowork" ? authored : undefined);
+  if (!tier) return [];
+  const replaced = REPLACED_BUILTINS_BY_TIER[tier];
+  if (!replaced) return [];
+  const stale = replaced.filter((name) => tools.includes(name));
+  if (stale.length === 0) return [];
+  return [
+    `replaced-builtin: this cassette's init inventory names ${stale.join(", ")} at ${tier}, which this build ` +
+      `no longer offers there — Bash/WebFetch are replaced by workspace MCP tools (mcp__workspace__*), and ` +
+      `NotebookEdit is removed outright. An assertion naming one of them can no longer be violated: it would ` +
+      `pass VACUOUSLY. Re-record if this scenario asserts on those names; harmless if it does not, and ` +
+      `expected if the recording predates the swap or ran with coworkWebFetchViaApi off.`,
+  ];
+}
+
 export function computeStaleness(
   cassette: Cassette,
   cassetteDir: string | undefined,
@@ -1813,7 +1859,7 @@ export function computeStaleness(
 ): { findings: StalenessFinding[]; notes: string[] } {
   const tier = computeTierStaleness(cassette);
   const findings: StalenessFinding[] = [...tier.findings];
-  const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette)];
+  const notes: string[] = [...tier.notes, ...computeDiscoverySurfaceNote(cassette), ...computeReplacedBuiltinNote(cassette)];
   const fp = cassette.fingerprint;
   // BEFORE the fingerprint guard on purpose — same rationale as the tier check above: fingerprint-less
   // cassettes are the OLDEST, i.e. exactly the population the discovery-surface note targets.
