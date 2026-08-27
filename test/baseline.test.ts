@@ -1786,11 +1786,37 @@ describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server o
     expect(checkSubagentOverrideGate(null)).toEqual([]);
     expect(checkSubagentOverrideGate({})).toEqual([]);
   });
-  it("ON → a HARD-STOP unknown delta (a pinned-gate drift alone only warns)", () => {
+  it("ON → exactly one message (routed to notes, non-blocking — see the severity test below)", () => {
     const flags = checkSubagentOverrideGate(gate(true));
     expect(flags).toHaveLength(1);
     expect(flags[0]).toMatch(/subagentPromptServerOverride/);
     expect(flags[0]).toMatch(/override/i);
+  });
+
+  // The message must not overclaim. Gate-ON is NECESSARY but NOT SUFFICIENT: the asar reads the section
+  // entry and falls back to the built-in text when it is missing or empty, and the entry is delivered
+  // per-session by the server — invisible to every input `sync` reads. The old wording asserted the
+  // override "is active", a fact this command cannot establish, which sends the reader hunting for a
+  // Desktop change that does not exist (the gate flipped via source:"defaultValue" with the asar
+  // byte-identical, 1.37937.1 -> .3).
+  // The downgrade to a warning is only defensible while the message carries the evidence that justified
+  // it AND its limits. A future edit that trims either turns a measured judgement back into a guess.
+  it("ON → the message carries the live-probe evidence AND states it is not proof", () => {
+    const m = checkSubagentOverrideGate(gate(true))[0];
+    expect(m, "the downgrade must cite what was measured").toMatch(/probed live 2026-08-27/);
+    expect(m, "must name the tier/branch probed — a vm-branch probe would not license this").toMatch(/hl branch/);
+    expect(m, "one account is not a population").toMatch(/EVIDENCE, NOT PROOF/);
+    expect(m, "must say a server rule can be segment-targeted").toMatch(/segment-targeted/);
+    expect(m, "must tell the reader how to re-establish it").toMatch(/re-probe/);
+  });
+
+  it("ON → the message says CANNOT TELL, not 'is active', and names the fallback + the live-probe remedy", () => {
+    const m = checkSubagentOverrideGate(gate(true))[0];
+    expect(m, "must not assert an unestablished fact").not.toMatch(/override is active/i);
+    expect(m, "must say the sync cannot distinguish the two states").toMatch(/CANNOT TELL/);
+    expect(m, "must name the fallback path, or the reader over-reads the gate").toMatch(/hardcoded fallback/);
+    expect(m, "must say it is server-side so nobody diffs asars for it").toMatch(/version-INDEPENDENT/);
+    expect(m, "must name the only remedy that can settle it").toMatch(/dispatch a sub-agent/);
   });
 });
 
