@@ -469,6 +469,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `transcript_not_matches` | regex does not match **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `tool_called` | agent invoked the named tool |
 | `tool_not_called` | agent never invoked it |
+| `reference_read` | a skill `references/`/`scripts/` file matching the regex was accessed (Read/Grep/Glob/Bash) — replay re-derives it from the cassette's frozen tool inputs, same as `tool_called` |
+| `no_observed_reference_access` | no observed access matched the regex — under-approximating by design, so it is not proof of non-use |
 | `tool_result_contains` | literal substring in a tool result |
 | `tool_result_not_contains` | literal absent from all tool results |
 | `tool_result_matches` | case-insensitive regex matches a tool result — the regex sibling of `tool_result_contains`, for an error-signature family rather than one literal string |

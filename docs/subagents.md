@@ -574,9 +574,11 @@ threaded onto the synthetic
 `tool_use`/`assistant_text` events as `parentToolUseId`. The recorder uses it to attribute a tool call to
 the dispatch whose `toolUseId` it matches (`Run.drive`'s `case "tool_use"` branch, the sub-agent
 attribution join, in `src/run/run.ts`) — this is the sole channel behind
-both `subagents[].toolsUsed` and the newer `subagents[].referencesRead` (skill reference/script files
-*that sub-agent* Read, same `skillReferenceReadPath()` predicate the main-agent `referencesRead` uses,
-deduped in first-seen order).
+both `subagents[].toolsUsed` and `subagents[].referencesAccessed` (skill reference/script files *that
+sub-agent* reached, with the tool channel each was reached through — `Read`, `Grep`, `Glob`, or a `Bash`
+command naming the path; same `skillReferenceReadPath()` predicate the main-agent list uses, deduped in
+first-seen order). `subagents[].referencesRead` is that list's `read`-channel projection, kept for
+consumers that want the strict tool; **its emptiness is not evidence the sub-agent read nothing.**
 
 HONEST LIMIT, scoped to the **parent SDK stream**: `thinking` blocks arriving on THAT stream are parsed
 **without** a `parentToolUseId` at all. Compare `parseMessage`'s `case "assistant"` branch in

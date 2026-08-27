@@ -80,6 +80,10 @@ CONTENT_KEYS = {
     "tool_result_not_matches",
     "tool_called",
     "tool_not_called",
+    # Replay re-derives these from the SAME frozen tool inputs the live run used (a cassette stores whole
+    # tool inputs), so they are content keys, not live-only.
+    "reference_read",
+    "no_observed_reference_access",
     "subagent_tool_used",
     "subagent_tool_absent",
     "subagent_dispatched",
@@ -294,6 +298,8 @@ REGEX_KEYS = {
     "hook_blocked",
     "tool_result_matches",
     "tool_result_not_matches",
+    "reference_read",
+    "no_observed_reference_access",
 }
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")
@@ -1012,6 +1018,26 @@ def lint_doc(doc, path, raw_lines):
                 "no run can satisfy that, so this would spend a run to fail.",
                 "Drop whichever half the scenario does not mean. If you meant 'this file must be replaced', "
                 "assert the new content with `artifact_text`/`artifact_json` instead.",
+                path,
+            )
+        )
+
+    # Same shape for the reference-access pair: `reference_read: R` and `no_observed_reference_access: R`
+    # with the IDENTICAL regex cannot both hold. Compared as raw pattern strings — two different regexes
+    # that happen to match the same path are NOT a contradiction (the linter cannot know the paths), so
+    # this only fires on the case that is unambiguously self-defeating.
+    read_pats = {v for v in _assert_values(items, "reference_read") if isinstance(v, str)}
+    unread_pats = {v for v in _assert_values(items, "no_observed_reference_access") if isinstance(v, str)}
+    both_refs = sorted(read_pats & unread_pats)
+    if both_refs:
+        findings.append(
+            Finding(
+                "ERROR",
+                "reference-access-contradiction",
+                f"assert requires {both_refs} to be both accessed (`reference_read`) and never observed "
+                "(`no_observed_reference_access`) — no run can satisfy that, so this would spend a run to fail.",
+                "Drop whichever half the scenario does not mean. To check that ONE reference is reached while "
+                "another is not, give the two keys different patterns.",
                 path,
             )
         )

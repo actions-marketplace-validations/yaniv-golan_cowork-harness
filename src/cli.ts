@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
+import { unionReferenceAccesses } from "./run/run.js";
 import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -4200,6 +4201,10 @@ async function cmdVerifyRun(args: string[]) {
     // that the run produced none. Negative/absence assertions then fail loud instead of vacuously green.
     toolResultsMissing: result.toolResults === undefined,
     toolsCalledMissing: result.toolCounts === undefined,
+    // Left `undefined` when result.json carries no list (an older run, or one with no observable tool
+    // stream) — which is exactly what makes both reference keys fail evidence-unavailable here rather
+    // than pass vacuously off a missing field.
+    referencesAccessed: unionReferenceAccesses(result),
     subagentsMissing: result.subagents === undefined,
     // Derive from `result.scan` directly — NOT the `scan` local, which already collapsed undefined into
     // the `{outputsDeletes:[],hostPathLeaked:false,selfHealRan:false}` default above.
@@ -4463,6 +4468,9 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
       title: "Tools",
       match: (k) => k.startsWith("tool_") || k === "no_mcp_error" || k === "max_redundant_tool_calls" || k === "max_tool_errors",
     },
+    // Above "Skills / connectors" only because these two share no substring with it; they ARE a skill
+    // family — progressive disclosure is the question they answer.
+    { title: "Skill references (progressive disclosure)", match: (k) => k === "reference_read" || k === "no_observed_reference_access" },
     { title: "Skills / connectors", match: (k) => k.includes("skill_") || k === "no_skill_triggered" || k === "connector_available" },
     { title: "Tasks", match: (k) => k.startsWith("task_") || k === "all_tasks_completed" },
     { title: "Egress", match: (k) => k.startsWith("egress_") },

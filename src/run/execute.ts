@@ -73,7 +73,7 @@ import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
-import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks } from "./run.js";
+import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -1321,6 +1321,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredFilesHealth: authoredFilesHealthNonEmpty(authored.health) ? authored.health : undefined,
       secrets,
       toolsCalled: record.toolsCalled,
+      referencesAccessed: unionReferenceAccesses(record),
       subagentTools: record.subagentTools,
       egress,
       result: record.result,
@@ -1592,6 +1593,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       turn,
       ablated: opts.ablateSkill || undefined,
       referencesRead: record.filesRead.length ? record.filesRead : undefined,
+      referencesAccessed: record.referencesAccessed,
       finalMessage: record.resultText,
       execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
       scenario: scenario.name,
@@ -1909,6 +1911,8 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
       "subagent_dispatched",
       "tool_result_matches",
       "tool_result_not_matches",
+      "reference_read",
+      "no_observed_reference_access",
     ] as const) {
       const pattern = a[key];
       if (pattern !== undefined) {
@@ -2133,6 +2137,7 @@ export function buildPartialResult(args: {
     turn: args.turn,
     ablated: args.ablated || undefined,
     referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,
+    referencesAccessed: args.record.referencesAccessed,
     finalMessage: args.record.resultText,
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,

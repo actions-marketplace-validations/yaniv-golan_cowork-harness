@@ -79,6 +79,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     turn: undefined,
     ablated: undefined, // chat is exploratory, not an ablation control
     referencesRead: record.filesRead.length ? record.filesRead : undefined,
+    referencesAccessed: record.referencesAccessed,
     finalMessage: record.resultText,
     // Deliberate exception to chat's usual "every verdict/capability field is undefined" convention:
     // execution.location is descriptive provenance, not a verdict, and a chat genuinely knows it ran locally.

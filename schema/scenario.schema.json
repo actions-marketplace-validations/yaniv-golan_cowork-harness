@@ -196,6 +196,16 @@
             "type": "string",
             "minLength": 1
           },
+          "reference_read": {
+            "description": "a skill references/ or scripts/ file matching this regex was ACCESSED (main agent or sub-agents) via Read, Grep, or a Bash command naming it — regex is unanchored + case-insensitive; fails when the run recorded no observable tool stream",
+            "type": "string",
+            "minLength": 1
+          },
+          "no_observed_reference_access": {
+            "description": "NO observed access to a skill references/ or scripts/ file matching this regex. Named 'observed' because detection under-approximates (a cd then a bare relative cat, a heredoc, or a $VAR-built path is invisible) — it is not proof of absence; fails when no observable tool stream was recorded",
+            "type": "string",
+            "minLength": 1
+          },
           "subagent_tool_used": {
             "description": "a sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)",
             "type": "string",

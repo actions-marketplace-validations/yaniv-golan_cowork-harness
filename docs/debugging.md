@@ -132,7 +132,9 @@ A green run is not automatically a correct run.
 There is a second, larger family the checks below exist for, and it has nothing to do with the harness:
 **the agent's answer describes work the run never did.** A skill that never triggered still produces a
 confident answer. A "ran seven parallel passes" claim still reads well with `subagents: []`. A
-reference file the skill says it consulted is not in `subagents[].referencesRead`. None of that is
+reference file the skill says it consulted is not in `subagents[].referencesAccessed` (read that, not
+`referencesRead` — the latter counts the `Read` tool alone, so a `Bash cat` of the same file leaves it
+empty; and even the wide field under-approximates, so absence is weak evidence, never proof). None of that is
 visible in the transcript — the output is exactly what a correct run would have produced — and it is
 the reason to read the *record* rather than the answer. (`critique` is built on the same observation:
 [agent self-reports confabulate routinely](./critique.md).)

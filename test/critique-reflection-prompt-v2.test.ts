@@ -36,7 +36,11 @@ describe("pass 2 self-report bounding", () => {
       false,
       false,
     );
-    expect(prompt.length).toBeLessThan(huge.length);
+    // Assert the SELF-REPORT was cut, not that the whole prompt is shorter than one of its inputs. The
+    // length proxy passed only while the prompt's fixed overhead stayed under the 5,000-char margin this
+    // fixture leaves, so any added instruction broke it without anything about truncation changing.
+    expect(prompt).not.toContain(huge);
+    expect(prompt).toContain("x".repeat(SELF_REPORT_MAX_CHARS - 100)); // the kept head is still there
     expect(prompt).toMatch(/self-report truncated/i);
   });
 

@@ -455,6 +455,14 @@ once and never renamed — so the graded turn is `turns/1/`, and the reflection 
 **no root compat copy of anything** — `<run-dir>/result.json` does not exist. Rather than expect you to
 reach into `turns/1/` yourself:
 
+- **whether the skill's own `references/`/`scripts/` were ever reached is in the report** (`noSkillFilesRead`
+  in `--output-format json`, and a header line). It reads `referencesAccessed` — main agent **and**
+  sub-agents, through **any** observed tool channel (`Read`, `Grep`, or a `Bash` command naming the
+  path under the mounted plugin), not the `Read` tool alone. Detection **under-approximates**: a `cd` into
+  the skill dir followed by a bare `cat references/x.md`, a heredoc body and a `$VAR`-built path are all
+  invisible, so a "nothing was accessed" line is **weak evidence of non-use, never proof the content went
+  unread** — do not re-architect a reference document on it alone. Where the run recorded no observable
+  tool stream the report makes **no claim** rather than rendering a clean negative;
 - the graded turn's **model ids are in the report itself** (`gradedModels` in `--output-format json`, and
   as `graded model(s):` in the text header), read back from the graded turn's own `result.json`. **The
   turns are a subprocess and inherit no model from whatever invoked `critique`** — with no `--model`, the

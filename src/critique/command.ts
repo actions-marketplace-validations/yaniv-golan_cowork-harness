@@ -1112,6 +1112,12 @@ interface ReportState {
    *  quota or a dropped connection without opening a turn file — and would read the findings as being
    *  about the skill either way. Absent when the run did not error, or recorded no classification. */
   gradedErrorReason?: string;
+  /** The graded run carried no reference-access list at all — a run kept before the signal existed, or
+   *  one with no observable tool stream. DISTINCT from `noSkillFilesRead === undefined` alone, which is
+   *  also how "the skill ships nothing to read" and "the turn-1 result was degraded" are encoded: without
+   *  this, a historical `result.json` rendered NO line at all and the reader was left to infer from
+   *  silence — the same absence-vs-unknown conflation, one level up. */
+  referenceAccessUnobservable?: boolean;
   selfReportStatus: SelfReportStatus;
   items: CritiqueItem[];
   /** F35: the TRANSPORT-RESOLVED evaluator model, present only when the evaluator actually completed and
@@ -1318,11 +1324,24 @@ export function buildTextReport(state: ReportState): string {
   // absence-vs-unknown conflation this instrument exists to surface.
   if (state.noSkillFilesRead === undefined && state.turn1ResultDegraded)
     out.push(
-      `  whether any references/ or scripts/ file was Read is UNKNOWN — the graded turn's result was degraded, so treat this as unknown, never as "nothing was read"`,
+      `  whether any references/ or scripts/ file was ACCESSED is UNKNOWN — the graded turn's result was degraded, so treat this as unknown, never as "nothing was read"`,
+    );
+  else if (state.noSkillFilesRead === undefined && state.referenceAccessUnobservable)
+    out.push(
+      `  whether any references/ or scripts/ file was ACCESSED is UNKNOWN — this run recorded no reference-access list (a run kept before the signal existed, or one with no observable tool stream), so treat this as unknown, never as "nothing was read"`,
     );
   if (state.noSkillFilesRead) {
+    // Says what was OBSERVED, and names the channels it observed. The previous wording ("was Read …
+    // counts the Read tool only") invited the reader to conclude the agent opened no reference, when a
+    // `Bash cat` or a `Grep` of one was simply invisible to the field it was computed from — and that
+    // conclusion is the one a reader acts on. The residual caveat is now short and true rather than
+    // load-bearing: a `cd` then a bare relative `cat`, a heredoc, or a $VAR-built path stays invisible
+    // by design, so this is weak evidence, never proof the content went unread.
     out.push(
-      `  no references/ or scripts/ file was Read during the graded turn (main agent or sub-agents) — note this counts the Read tool only, so Grep or assets/ use would not appear here`,
+      `  no references/ or scripts/ file was ACCESSED through any observed tool channel during the graded turn — ` +
+        `main agent and sub-agents, via Read, Grep, or a Bash command naming the path under the mounted plugin. ` +
+        `Under-approximates (a 'cd' then a bare relative cat, a heredoc, or a $VAR-built path is invisible), so treat ` +
+        `this as weak evidence of non-use, never proof the content went unread`,
     );
   }
   if (eb) {
@@ -1503,6 +1522,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     skillMdStatus,
     evidenceBudget: state.evidenceBudget,
     noSkillFilesRead: state.noSkillFilesRead,
+    referenceAccessUnobservable: state.referenceAccessUnobservable,
     verdictProvenance: VERDICT_PROVENANCE,
   };
   // The phase/kind ride WITH the reason, never separately: a consumer that reads `infraFailure` and not
@@ -1848,6 +1868,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let skillMdStatus: SkillMdStatus | undefined;
     let evidenceBudget: ReportState["evidenceBudget"];
     let noSkillFilesRead: boolean | undefined;
+    let referenceAccessUnobservable: boolean | undefined;
     // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
     // BEFORE parsing, so a parse throw cannot lose them) and by the per-turn result reads.
     let evidenceText: string | undefined;
@@ -1898,6 +1919,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         trimRecord: tr,
         packageTruncated: pt,
         noSkillFilesRead: nofr,
+        referenceAccessUnobservable: rau,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agentsMdPath: resolvedSkill.agentsMdPath,
         agentsMdRoot: resolvedSkill.agentsMdRoot,
@@ -1908,6 +1930,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       skillMdStatus = sms;
       evidenceBudget = { corpusBytes: cb, corpusCeiling: cc, corpusCuts: ccuts, corpusExcluded: cex, trimRecord: tr, packageTruncated: pt };
       noSkillFilesRead = nofr;
+      referenceAccessUnobservable = rau;
       // The agent was never given these, so the evaluator must not be either — but silence would let an
       // author believe their grade covered a file it never saw.
       if (cex.length)
@@ -2033,6 +2056,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       skillMdStatus,
       evidenceBudget,
       noSkillFilesRead,
+      referenceAccessUnobservable,
     };
     if (opts.outputFormat === "json") {
       // writeAllSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)

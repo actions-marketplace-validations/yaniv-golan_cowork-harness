@@ -6,6 +6,62 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`referencesAccessed` — reference access through EVERY tool channel, not just the `Read` tool.**
+  `referencesRead` counts one channel, and `critique`'s headline invited a reader to conclude the agent
+  had opened no reference — a claim about *reading* that a one-channel count cannot support. An agent
+  that `cat`s, `grep`s or globs a reference has reached it just as much. The new `RunResult` field (and
+  its `subagents[]` twin) records each file with the channel(s) it was reached through: `read`
+  (`Read.file_path`), `grep` (its `path` input), and `bash` (a `Bash`/`mcp__workspace__bash`
+  command naming the path).
+
+  All four channels apply the **same** `skillReferenceReadPath()` predicate, so a token only counts when
+  it is rooted in the mounted plugin — the agent's own `node scripts/build.js` is not a skill-script
+  access, and a non-skill filename never reaches `result.json` under a field claiming it is skill
+  content. Redirection targets and every argument of a write verb (`rm`/`mv`/`mkdir`/`touch`/`chmod`/`tee`) is excluded, as is a verb that only inspects metadata (`ls`/`test`/`stat`/`echo`): those are files the command
+  wrote or destroyed.
+
+  It **deliberately under-approximates**. A `cd` into the skill dir followed by a bare
+  `cat references/x.md`, a heredoc body and a `$VAR`-built path are all invisible, and there are tests
+  pinning them as misses so a later widening is a visible change rather than a silent one.
+
+  **Presence is the cannot-verify channel**, which is the one way it differs from `referencesRead`:
+  `[]` means the drive ran and observed nothing (a real negative); **absent** means there was no
+  observable drive, and must never be read as "none". Present on live *and* replay — cassettes freeze
+  whole tool inputs, so the replay re-drive reconstructs every channel identically.
+
+  `referencesRead` is unchanged in meaning and is now documented as this field's `read`-channel
+  projection, produced by the same capture so the two cannot disagree.
+
+  Scope is **main agent ∪ sub-agents**, via a single `unionReferenceAccesses()` derivation shared by the
+  assertion keys, the critique report and `--probe dispatch` — a dispatcher-shaped skill does all its
+  reading a level down, so judging the top-level list alone would report "never reached" on a run where a
+  sub-agent read the file cover to cover. A **truncated cassette** (one that could never be driven)
+  reports cannot-verify rather than an empty list, for the same reason.
+
+- **`reference_read` / `no_observed_reference_access` assertion keys.** Gate on whether a skill's
+  progressive disclosure actually works: a well-partitioned skill and one whose second half is dead look
+  identical from outside. Regex (unanchored, case-insensitive — the same shared helper every regex key
+  uses), main agent ∪ sub-agents, evaluated on replay as well as live.
+
+  The negative key is named `no_observed_reference_access`, not `no_reference_read`, because the
+  detector under-approximates by design: it proves nothing was *seen*, not that the file went unread.
+  Both keys **fail evidence-unavailable** when the run recorded no observable access list — including
+  the negative one, which is the direction that would otherwise pass vacuously off a missing field. The
+  scenario linter rejects asserting both with the same pattern.
+
+### Changed
+
+- **`critique`'s "no references were Read" headline now says what it observed.** It reads the wide
+  signal, names the channels it looked through, and states its own under-approximation in one short
+  clause instead of the load-bearing caveat that did all the work. Where the run recorded no observable
+  tool stream it makes **no claim** rather than rendering a clean negative. The evaluator's evidence
+  section moves with it (previously main-agent `Read`s only — a different population from the headline's,
+  so widening one without the other would have handed the evaluator a prompt contradicting the report),
+  and the grading prompt now tells the evaluator not to issue a finding whose only support is a path
+  missing from that list. `--probe dispatch` prints the wide list too.
+
 ### Fixed
 
 - **`critique` diagnosed an unanswered gate as an infrastructure failure, and named the wrong turn while

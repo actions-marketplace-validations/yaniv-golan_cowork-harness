@@ -446,8 +446,13 @@ describe("no-reads signal — three states, never collapsed", () => {
   const line = (s: Partial<Parameters<typeof buildTextReport>[0]>) =>
     buildTextReport({ ...base, ...s } as Parameters<typeof buildTextReport>[0]);
 
-  it("says nothing was Read when that is what happened", () => {
-    expect(line({ noSkillFilesRead: true })).toMatch(/no references\/ or scripts\/ file was Read/);
+  it("says nothing was ACCESSED — naming the channels observed — when that is what happened", () => {
+    // Wording is load-bearing: the old line said "was Read … counts the Read tool only", which invited
+    // the reader to conclude the agent opened no reference when a Bash `cat` was simply invisible.
+    const out = line({ noSkillFilesRead: true });
+    expect(out).toMatch(/no references\/ or scripts\/ file was ACCESSED through any observed tool channel/);
+    expect(out).toMatch(/Read, Grep, or a Bash command/);
+    expect(out).toMatch(/weak evidence of non-use, never proof/);
   });
 
   it("says UNKNOWN — not 'nothing was read' — when the graded result was degraded", () => {

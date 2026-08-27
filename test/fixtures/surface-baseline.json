@@ -2334,6 +2334,25 @@
         "type": "string",
         "required": true
       },
+      ".referencesAccessed": {
+        "type": "array"
+      },
+      ".referencesAccessed[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".referencesAccessed[].path": {
+        "type": "string",
+        "required": true
+      },
+      ".referencesAccessed[].via": {
+        "type": "array",
+        "required": true
+      },
+      ".referencesAccessed[].via[]": {
+        "type": "string",
+        "enum": ["read", "grep", "bash"]
+      },
       ".referencesRead": {
         "type": "array"
       },
@@ -2554,6 +2573,25 @@
       ".subagents[].reasoning[].text": {
         "type": "string",
         "required": true
+      },
+      ".subagents[].referencesAccessed": {
+        "type": "array"
+      },
+      ".subagents[].referencesAccessed[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".subagents[].referencesAccessed[].path": {
+        "type": "string",
+        "required": true
+      },
+      ".subagents[].referencesAccessed[].via": {
+        "type": "array",
+        "required": true
+      },
+      ".subagents[].referencesAccessed[].via[]": {
+        "type": "string",
+        "enum": ["read", "grep", "bash"]
       },
       ".subagents[].referencesRead": {
         "type": "array"
@@ -3108,6 +3146,9 @@
         "type": "boolean",
         "const": true
       },
+      ".assert[].no_observed_reference_access": {
+        "type": "string"
+      },
       ".assert[].no_path_denied": {
         "type": "boolean",
         "const": true
@@ -3190,6 +3231,9 @@
       },
       ".assert[].questions_count_max": {
         "type": "integer"
+      },
+      ".assert[].reference_read": {
+        "type": "string"
       },
       ".assert[].replay_protocol_fidelity": {
         "type": "boolean"

@@ -83,6 +83,200 @@ export function skillReferenceReadPath(filePath: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
+/** Which tool channels a skill reference/script file was reached through. `read` is the historical
+ *  `Read`-tool signal (`RunRecord.filesRead` / `RunResult.referencesRead`); the other three exist because
+ *  an agent that `cat`s, `grep`s or globs a reference has reached it just as much, and a signal that
+ *  counts one channel while being READ as a statement about reading is a real number answering a
+ *  question nobody asked. */
+export type ReferenceChannel = "read" | "grep" | "bash";
+
+/** Split a shell command into path-ish tokens. Deliberately crude: shell quoting, `$VAR` expansion,
+ *  heredoc bodies and `find -exec` are all beyond this, and every one of them is an accepted MISS. */
+function shellTokens(command: string): string[] {
+  return command.split(/[\s'"=;|&()<>]+/).filter(Boolean);
+}
+
+/** Verbs that NAME a path without opening its contents. This is the largest false-positive class by far:
+ *  an `ls`/`test -f`/`stat` is how an agent checks whether a reference EXISTS, which is the opposite of
+ *  having read it — and recording it as access turns `reference_read` into "was the path mentioned". It
+ *  also actively misleads the critique evaluator, which is told to treat "the agent says it never found
+ *  X, but the record shows it reached X" as confabulation. */
+const NON_READING_VERBS = new Set([
+  "ls",
+  "test",
+  "[",
+  "stat",
+  "echo",
+  "file",
+  "basename",
+  "dirname",
+  "realpath",
+  "readlink",
+  "printf",
+  "which",
+  "type",
+]);
+
+/** Verbs where EVERY path argument is created, destroyed or re-stamped, never read. `mv` is here because
+ *  a rename reads no bytes — neither its source nor its destination. */
+const WRITE_VERBS = new Set(["rm", "mv", "mkdir", "rmdir", "touch", "chmod", "chown", "chgrp", "ln", "tee", "truncate"]);
+
+/** Verbs that READ their sources and WRITE their last argument. `cp <ref> /tmp/x` is a genuine read of
+ *  the source, so excluding every argument (as an earlier version did) dropped a real access. */
+const COPY_VERBS = new Set(["cp", "install", "rsync"]);
+
+/** Wrappers to skip when locating a segment's real verb. Keying the verb on `tokens[0]` alone was
+ *  defeated by every one of these — and agents chain with `&&` and prefix with `sudo` constantly. */
+const VERB_WRAPPERS = new Set(["sudo", "env", "nice", "time", "command", "exec", "then", "do", "xargs", "nohup"]);
+
+/** Split on the operators that separate INDEPENDENT commands, so each is judged by its own verb and its
+ *  own redirections. This is also what makes the redirect check positional: in
+ *  `cat <ref> && echo done >> <ref>` the read and the write live in different segments, where a
+ *  whole-command redirect search saw one `>>` and discarded the genuine `cat`. */
+function shellSegments(command: string): string[] {
+  return command.split(/&&|\|\||[;\n|]/).filter((seg) => seg.trim().length > 0);
+}
+
+/** The verb a segment actually runs. Resolved from the segment TEXT rather than from tokens, because
+ *  `shellTokens` splits on `=` and an inline `VAR=value` assignment therefore arrives as two tokens —
+ *  which made `env X=1 cp …` resolve its verb to `X`. Leading assignments, wrappers (`sudo`, `env`, …)
+ *  and flags are stripped until a real command name remains. */
+function segmentVerb(segment: string): string {
+  let rest = segment.trim();
+  for (;;) {
+    const m = /^(\S+)\s+/.exec(rest);
+    if (!m) break;
+    const tok = m[1]!;
+    if (/^[A-Za-z_]\w*=/.test(tok) || VERB_WRAPPERS.has(tok) || tok.startsWith("-")) {
+      rest = rest.slice(m[0].length);
+      continue;
+    }
+    break;
+  }
+  return (/^(\S+)/.exec(rest)?.[1] ?? "").replace(/^.*\//, "");
+}
+
+/** Every skill reference/script path a single `Bash`/`mcp__workspace__bash` command READ, in first-seen
+ *  order.
+ *
+ *  Uses `skillReferenceReadPath()` per token — the SAME predicate as the other channels, and the reason
+ *  this is sound. That predicate requires `.local-plugins/` or `.remote-plugins/` in the path, so a token
+ *  only counts when it is rooted in a mounted plugin. Matching a bare `references/foo.md` token instead
+ *  would launder the agent's OWN `node scripts/build.js` into a skill-script access — `scripts/` is the
+ *  commonest directory name there is — and would publish a non-skill (possibly customer-project)
+ *  filename into `result.json` under a field claiming it is skill content.
+ *
+ *  Naming a path is NOT reading it, and that distinction is the whole value of the signal. The role of
+ *  each token is therefore decided per SEGMENT, from that segment's own verb: a verb that only inspects
+ *  metadata (`ls`, `test`, `stat`), one that writes or destroys (`rm`, `touch`, `tee`), a copy's
+ *  destination, and a redirection target are all excluded. Deciding from the immediately-preceding token
+ *  instead let `rm -f <ref>`, `mv /tmp/x <ref>` and `sudo cp /tmp/x <ref>` all record as accesses.
+ *
+ *  The cost is a real miss: an agent that `cd`s into the plugin dir and runs `cat references/foo.md` is
+ *  invisible here, as is a heredoc body or a `$VAR`-built path. That is the correct side to err on for a
+ *  POSITIVE signal, and it is exactly why the negative assertion key is named
+ *  `no_observed_reference_access` rather than promising proof of absence. */
+export function bashReferenceAccessPaths(command: string): string[] {
+  const out: string[] = [];
+  for (const segment of shellSegments(command)) {
+    const tokens = shellTokens(segment);
+    const verb = segmentVerb(segment);
+    if (NON_READING_VERBS.has(verb) || WRITE_VERBS.has(verb)) continue;
+    // Redirection targets, resolved within THIS segment only.
+    const redirected = new Set([...segment.matchAll(/>>?\s*([^\s;|&()<>'"]+)/g)].map((m) => m[1]!));
+    // A copy's destination is its LAST path argument — unless `-t <dir>` moved it to the front, where
+    // telling source from destination needs real flag parsing; skip the whole segment rather than guess.
+    const isCopy = COPY_VERBS.has(verb);
+    if (isCopy && tokens.includes("-t")) continue;
+    // The LAST non-flag token of the segment — correct whatever prefixed the verb (`sudo cp a b`,
+    // `env X=1 cp a b`), which a position counted from the verb's index was not.
+    const nonFlags = tokens.filter((t) => !t.startsWith("-"));
+    const copyDest = isCopy ? nonFlags[nonFlags.length - 1] : undefined;
+    for (const token of tokens) {
+      if (token === copyDest || redirected.has(token)) continue;
+      // `..` in a raw shell token can walk OUT of the plugin and still satisfy the predicate (which only
+      // requires `.local-plugins/` to appear somewhere), publishing a non-skill filename under a field
+      // that claims skill content. The Read channel is safe — `file_path` arrives resolved — so this
+      // guard belongs to the raw-token channel alone.
+      if (token.split("/").includes("..")) continue;
+      const ref = skillReferenceReadPath(token);
+      if (ref && !out.includes(ref)) out.push(ref);
+    }
+  }
+  return out;
+}
+
+/** The reference/script paths one tool_use reached, with the channel it reached them through. Returns
+ *  `[]` for every tool that cannot reach one — the single place any channel is recognized, so a new
+ *  channel is added here and both the main-agent and sub-agent capture sites inherit it. */
+export function referenceAccessesOf(name: string, input: unknown): Array<{ path: string; via: ReferenceChannel }> {
+  const inp = input as Record<string, unknown> | undefined;
+  const one = (raw: unknown, via: ReferenceChannel) => {
+    const ref = skillReferenceReadPath(String(raw ?? ""));
+    return ref ? [{ path: ref, via }] : [];
+  };
+  if (name === "Read") return one(inp?.file_path, "read");
+  // `path` is the path-bearing input for BOTH (see src/hostloop/pretooluse-path-hook.ts's PATH_ARG_KEYS).
+  // Grep's `glob` is deliberately NOT read: it is a filename filter (`*.md`), never a path, so it can
+  // never satisfy the predicate — declaring it would imply coverage that does not exist.
+  if (name === "Grep") return one(inp?.path, "grep");
+  // NO `Glob` channel. Its `path` input is a DIRECTORY by tool contract, so it either fails the predicate
+  // outright (`…/references` has nothing after the slash) or records a directory into a field documented
+  // as reference/script FILES — where `reference_read: scripts/lib` would then pass. Declaring it was
+  // advertising coverage the tool contract makes unreachable, the same reason `Grep.glob` was dropped.
+  if (name === "Bash" || name === "mcp__workspace__bash")
+    return bashReferenceAccessPaths(String(inp?.command ?? "")).map((path) => ({ path, via: "bash" as const }));
+  return [];
+}
+
+/** Append one access to a deduped `{path, via[]}` list, merging channels for a path reached more than one
+ *  way. First-seen order for both the list and each entry's channels. */
+export function noteReferenceAccess(list: Array<{ path: string; via: ReferenceChannel[] }>, path: string, via: ReferenceChannel): void {
+  const existing = list.find((e) => e.path === path);
+  if (!existing) list.push({ path, via: [via] });
+  else if (!existing.via.includes(via)) existing.via.push(via);
+}
+
+/** Main-agent ∪ sub-agent reference accesses — the population every consumer of the WIDE question must
+ *  read, and the ONE place that union is computed.
+ *
+ *  The top-level list is main-agent ONLY by contract (the same split `referencesRead` has), and a
+ *  dispatcher-shaped skill does all of its reading a level down — so a main-agent-empty list says
+ *  nothing on its own. An assertion evaluated against the top-level list alone passes
+ *  `no_observed_reference_access` on a run where a sub-agent read the file cover to cover: a false green
+ *  in exactly the direction that key exists to prevent.
+ *
+ *  Defensive over raw JSON so a `result.json` read off disk and a live `RunRecord` share this derivation
+ *  rather than each growing their own. `undefined` in ⇒ `undefined` out: the top-level field's ABSENCE is
+ *  the cannot-verify signal (no observable drive), and a sub-agent list must never upgrade that to a
+ *  verified answer. */
+export function unionReferenceAccesses(src: {
+  referencesAccessed?: unknown;
+  subagents?: unknown;
+}): Array<{ path: string; via: string[] }> | undefined {
+  if (!Array.isArray(src.referencesAccessed)) return undefined;
+  const parse = (v: unknown): Array<{ path: string; via: string[] }> =>
+    Array.isArray(v)
+      ? v.flatMap((e) => {
+          const path = (e as { path?: unknown } | null)?.path;
+          const via = (e as { via?: unknown } | null)?.via;
+          return typeof path === "string" && path
+            ? [{ path, via: Array.isArray(via) ? via.filter((c): c is string => typeof c === "string") : [] }]
+            : [];
+        })
+      : [];
+  const out: Array<{ path: string; via: string[] }> = [];
+  const subs = Array.isArray(src.subagents)
+    ? src.subagents.flatMap((sa) => parse((sa as { referencesAccessed?: unknown })?.referencesAccessed))
+    : [];
+  for (const a of [...parse(src.referencesAccessed), ...subs]) {
+    const seen = out.find((e) => e.path === a.path);
+    if (!seen) out.push({ path: a.path, via: [...a.via] });
+    else for (const c of a.via) if (!seen.via.includes(c)) seen.via.push(c);
+  }
+  return out;
+}
+
 /** Extract the ordered `file_path` list from a `mcp__cowork__present_files` tool_use's `input`
  *  (`{ files: [{ file_path }, …] }`) — guards every shape (missing/non-array `files`, a non-object or
  *  non-string-`file_path` entry) so a malformed input can't throw mid-drive; a bad entry is just
@@ -173,7 +367,8 @@ interface SubagentDispatch {
   // `scripts/bar.py`), deduped in first-seen order — the sub-agent counterpart of the top-level
   // (main-agent-only) RunRecord.filesRead. Attributed via the same parentToolUseId join that builds
   // toolsUsed above, using the identical skillReferenceReadPath() predicate the main path uses.
-  referencesRead: string[];
+  referencesRead: string[]; // DERIVED: the `read` subset of referencesAccessed below
+  referencesAccessed: Array<{ path: string; via: ReferenceChannel[] }>;
   description?: string; // the dispatch's `description` — identifies it when the skill set no subagent_type
   prompt?: string; // dispatch input.prompt, assertText-capped
   dispatchModel?: string; // the DISPATCHING message's model (ex-`model` — renamed when resolvedModel landed beside it)
@@ -267,7 +462,11 @@ export interface RunRecord {
   usage?: UsageInfo;
   cost?: CostInfo;
   skillsInvoked: string[]; // top-level Skill tool_use ids, in call order, duplicates kept
-  filesRead: string[]; // skill-relative reference/script files the agent Read (progressive-disclosure signal), deduped, first-seen order
+  // Skill reference/script files the agent REACHED, with the tool channel(s) it reached them through —
+  // the progressive-disclosure signal. `filesRead` below is the `read`-channel PROJECTION of this list,
+  // derived at assembly so the two can never disagree.
+  referencesAccessed: Array<{ path: string; via: ReferenceChannel[] }>;
+  filesRead: string[]; // DERIVED: the `read` (Read-tool) subset of referencesAccessed, deduped, first-seen order
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
   thinking: { text: string; redacted?: boolean }[]; // reasoning blocks, capped: last 50 × 10KB each. redacted:true = reasoned but text omitted by request (see noteThinking / RunResult.thinking)
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
@@ -453,6 +652,7 @@ export class Run {
       transcript: "",
       toolsCalled: new Set(),
       toolCounts: {},
+      referencesAccessed: [],
       filesRead: [],
       subagentTools: new Set(),
       subagents: [],
@@ -636,9 +836,9 @@ export class Run {
               // Progressive-disclosure signal: which of the skill's reference/script files the agent
               // actually Read (SKILL.md is delivered whole, never Read as a file — so this covers
               // references/* and scripts/*). Deduped, first-seen order.
-              if (ev.name === "Read") {
-                const ref = skillReferenceReadPath(String((ev.input as Record<string, unknown> | undefined)?.file_path ?? ""));
-                if (ref && !this.rec.filesRead.includes(ref)) this.rec.filesRead.push(ref);
+              for (const a of referenceAccessesOf(ev.name, ev.input)) {
+                noteReferenceAccess(this.rec.referencesAccessed, a.path, a.via);
+                if (a.via === "read" && !this.rec.filesRead.includes(a.path)) this.rec.filesRead.push(a.path);
               }
               if (ev.toolUseId) this.toolNameByUseId.set(ev.toolUseId, ev.name);
               // A Skill call inherits the main agent's context when it runs (fork context) — seed its id so
@@ -681,9 +881,9 @@ export class Run {
                 // Sub-agent counterpart of the main-agent-only filesRead capture at :594-597 above —
                 // same skillReferenceReadPath() predicate, attributed to THIS dispatch instead of the
                 // top-level record. Deduped, first-seen order (mirrors the main filesRead dedupe).
-                if (ev.name === "Read") {
-                  const ref = skillReferenceReadPath(String((ev.input as Record<string, unknown> | undefined)?.file_path ?? ""));
-                  if (ref && !sa.referencesRead.includes(ref)) sa.referencesRead.push(ref);
+                for (const a of referenceAccessesOf(ev.name, ev.input)) {
+                  noteReferenceAccess(sa.referencesAccessed, a.path, a.via);
+                  if (a.via === "read" && !sa.referencesRead.includes(a.path)) sa.referencesRead.push(a.path);
                 }
               }
             }
@@ -771,6 +971,7 @@ export class Run {
               declaredTools: ev.declaredTools,
               toolsUsed: [],
               referencesRead: [],
+              referencesAccessed: [],
               description: ev.description,
               prompt: ev.prompt,
               dispatchModel: ev.dispatchModel,

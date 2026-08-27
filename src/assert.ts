@@ -399,6 +399,14 @@ export interface AssertContext {
   /** Set by verify-run only when `result.toolCounts` is undefined in result.json (partial/old run).
    *  Prevents tool_not_called from passing vacuously (absent ≠ empty). Undefined/false on live/replay. */
   toolsCalledMissing?: boolean;
+  /** Every skill reference/script file the run OBSERVED being reached, with the channel(s) — the wide
+   *  signal behind `reference_read` / `no_observed_reference_access`.
+   *
+   *  `undefined` means the run recorded no observable tool stream (a replay error result, a torn partial
+   *  result, or a result.json written before the field existed) — NOT "no accesses". Both keys fail on
+   *  `undefined`, including the negative one: that is the direction that would otherwise pass vacuously,
+   *  and a vacuous pass here reads as a clean result. An empty array is the real negative. */
+  referencesAccessed?: Array<{ path: string; via: string[] }>;
   /** Set by verify-run only when `result.subagents` is undefined in result.json (partial/old run).
    *  Prevents subagent_tool_absent / subagent_declared_but_unused / dispatch_count_max from passing
    *  vacuously (absent ≠ no sub-agents). Undefined/false on live/replay. */
@@ -1346,6 +1354,42 @@ function check(
           ? ok()
           : fail(`tool unexpectedly called: "${a.tool_not_called}" matched ${hits.join(", ")}`),
     );
+  }
+  if (a.reference_read !== undefined || a.no_observed_reference_access !== undefined) {
+    // One block for both keys: they read the same list through the same compiled regex, and splitting
+    // them invites the two halves to drift on what counts as evidence-unavailable.
+    const evaluate = (key: "reference_read" | "no_observed_reference_access", pattern: string, wantHit: boolean): void => {
+      const compiled = compileUserRegex(pattern);
+      if ("error" in compiled) {
+        results.push(fail(`${key}: bad regex "${pattern}": ${compiled.error}`));
+        return;
+      }
+      if (ctx.referencesAccessed === undefined) {
+        // Evidence-unavailable, both directions. A negative assertion that passes because we could not
+        // look is the false green this key exists to avoid producing.
+        results.push(fail(`evidence unavailable: this run recorded no observable reference-access list — cannot evaluate ${key}`));
+        return;
+      }
+      const hits = ctx.referencesAccessed.filter((e) => compiled.re.test(e.path));
+      const shown = hits.map((h) => `${h.path}${h.via.length ? ` (${h.via.join(", ")})` : ""}`).join(", ");
+      if (wantHit)
+        results.push(
+          hits.length
+            ? ok(shown)
+            : fail(
+                `reference_read: no observed access matched /${pattern}/ (searched ${ctx.referencesAccessed.length} accessed file(s)). ` +
+                  `Detection under-approximates — a 'cd' then a bare relative read, a heredoc, or a $VAR-built path is invisible`,
+              ),
+        );
+      else
+        results.push(
+          hits.length === 0
+            ? ok(`no observed access matched /${pattern}/`)
+            : fail(`no_observed_reference_access: /${pattern}/ was accessed — ${shown}`),
+        );
+    };
+    if (a.reference_read !== undefined) evaluate("reference_read", a.reference_read, true);
+    if (a.no_observed_reference_access !== undefined) evaluate("no_observed_reference_access", a.no_observed_reference_access, false);
   }
   if (a.subagent_tool_used !== undefined) {
     warnIfRegexish("subagent_tool_used", a.subagent_tool_used);

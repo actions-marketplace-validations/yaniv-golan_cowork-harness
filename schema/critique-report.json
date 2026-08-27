@@ -321,7 +321,7 @@
     },
     "noSkillFilesRead": {
       "type": "boolean",
-      "description": "the graded turn Read NO references/ or scripts/ file at all — neither the main agent nor any sub-agent. OBSERVATIONAL: the predicate matches references/+scripts/ only (never assets/, never SKILL.md) and keys on the Read TOOL, so Grep or assets/ use yields an empty set having demonstrably reached the material. Absent when the turn-1 result was degraded (unknown, not zero)"
+      "description": "the graded turn ACCESSED no references/ or scripts/ file at all — neither the main agent nor any sub-agent, through any observed tool channel (Read, Grep, or a Bash command naming the path). OBSERVATIONAL: the predicate matches references/+scripts/ only (never assets/, never SKILL.md), and detection UNDER-APPROXIMATES — a `cd` into the skill dir then a bare relative `cat`, a heredoc body, and a $VAR-built path are invisible — so `true` is weak evidence of non-use, never proof the content went unread. Absent when the turn-1 result was degraded, when the skill ships nothing to read, or when the run recorded no observable tool stream (unknown, not zero)."
     },
     "gradedModels": {
       "type": "array",

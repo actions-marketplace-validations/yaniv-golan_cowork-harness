@@ -22,7 +22,30 @@
       "items": {
         "type": "string"
       },
-      "description": "Skill reference/script files the agent Read (skill-relative: references/foo.md, scripts/bar.py), deduped in first-seen order. A progressive-disclosure signal for skill-quality measurement. Main-agent Reads only (sub-agent reads not attributed); references/ and scripts/ under a mounted plugin root, not assets/, never SKILL.md (delivered whole). Present on both live and replay."
+      "description": "Skill reference/script files the agent Read (skill-relative: references/foo.md, scripts/bar.py), deduped in first-seen order. A progressive-disclosure signal for skill-quality measurement. Main-agent Reads only (sub-agent reads not attributed); references/ and scripts/ under a mounted plugin root, not assets/, never SKILL.md (delivered whole). Present on both live and replay. READ referencesAccessed INSTEAD for 'did the agent open this reference?': this counts the Read TOOL, and its absence is not evidence the content went unread."
+    },
+    "referencesAccessed": {
+      "type": "array",
+      "description": "every skill reference/script file the agent REACHED, with the tool channel(s) \u2014 the WIDE progressive-disclosure signal; referencesRead is this field's `read`-channel projection. All channels apply the same mounted-plugin-root predicate. DELIBERATELY UNDER-APPROXIMATES (a cd then a bare relative cat, a heredoc, or a $VAR-built path is invisible), so absence is weak evidence, never proof the content went unread. PRESENCE is the cannot-verify channel: [] = the drive ran and observed nothing (a real negative); ABSENT = no observable drive (replay error result, torn partial result, or a result written before the field existed) \u2014 never read absent as 'none'. Present on both live and replay.",
+      "items": {
+        "type": "object",
+        "required": ["path", "via"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "skill-relative reference/script path, e.g. references/foo.md"
+          },
+          "via": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["read", "grep", "bash"]
+            },
+            "description": "the tool channel(s) this path was reached through, first-seen order"
+          }
+        }
+      }
     },
     "ablated": {
       "type": "boolean",
@@ -687,6 +710,29 @@
               "type": "string"
             },
             "description": "skill reference/script files THIS sub-agent Read (same shape/dedupe as the top-level referencesRead), attributed via the dispatch's toolUseId"
+          },
+          "referencesAccessed": {
+            "type": "array",
+            "description": "THIS sub-agent's wide reference-access list \u2014 same shape, channels and caveats as the top-level referencesAccessed",
+            "items": {
+              "type": "object",
+              "required": ["path", "via"],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "skill-relative reference/script path, e.g. references/foo.md"
+                },
+                "via": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["read", "grep", "bash"]
+                  },
+                  "description": "the tool channel(s) this path was reached through, first-seen order"
+                }
+              }
+            }
           },
           "description": {
             "type": "string"
