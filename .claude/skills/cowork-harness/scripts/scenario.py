@@ -589,6 +589,41 @@ def lint_doc(doc, path, raw_lines):
     # warns at run start, after authoring). Lint is deliberately STRICTER than the runtime: the docs
     # declare the combination incompatible, so authoring it is a bug even if a tool-free run could
     # accidentally pass. `cowork` gets a WARN naming the baseline-gate resolution dependency (the
+    # `tool_not_called` naming a tool the TIER does not serve can never be violated — it passes
+    # vacuously and verifies nothing. Expressible offline because the mapping is a harness constant
+    # (WORKSPACE_TOOL_ALIASES / VM_LOOP_TOOL_ALIASES), NOT a baseline read. Deliberately literals only,
+    # and deliberately a closed table: `--tools` gates the BUILT-IN set alone while every tier separately
+    # passes --mcp-config, so a session-MCP tool name is offered without appearing in any tool list and
+    # must never be flagged here. The harness refuses these at load; this catches them before any run.
+    _TIER_VACUOUS = {
+        "hostloop": {"Bash": "mcp__workspace__bash", "WebFetch": "mcp__workspace__web_fetch", "NotebookEdit": None},
+        "container": {"mcp__workspace__bash": "Bash"},
+        "microvm": {"mcp__workspace__bash": "Bash", "mcp__workspace__web_fetch": "WebFetch"},
+        # `protocol` absent on purpose: it passes no tool flags, so its surface is the operator's own
+        # host CLI registry — machine-dependent and about a different product.
+    }
+    for _v in _assert_values(items, "tool_not_called"):
+        if not isinstance(_v, str) or "*" in _v or "?" in _v:
+            continue  # a glob is not a literal claim about one tool
+        _repl = _TIER_VACUOUS.get(fidelity, {})
+        if _v not in _repl:
+            continue
+        _instead = _repl[_v]
+        findings.append(
+            Finding(
+                "WARN",
+                "tool-not-called-tier-vacuous",
+                f"`tool_not_called: {_v}` on `fidelity: {fidelity}` — that tier does not serve "
+                f"`{_v}` at all, so this can never be violated and verifies nothing.",
+                (
+                    f"Assert `tool_not_called: {_instead}` instead — that is what the tier serves in its place."
+                    if _instead
+                    else f"The {fidelity} tier removes `{_v}` outright; drop this assertion."
+                ),
+                path,
+            )
+        )
+
     # linter stays offline — the message carries the gate fact instead of reading a baseline).
     if "transcript_no_host_path" in assert_keys:
         if fidelity in ("hostloop", "protocol"):

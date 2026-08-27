@@ -303,7 +303,7 @@ export const Assertion = z.strictObject({
   tool_not_called: toolGlob
     .optional()
     .describe(
-      "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive; legacy spellings match as in tool_called). Passes VACUOUSLY if the tier never offers the tool (e.g. Bash at hostloop) — check the tier's tool surface",
+      "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive; legacy spellings match as in tool_called). A LITERAL naming a tool the tier does not serve (Bash/WebFetch/NotebookEdit at hostloop; mcp__workspace__bash at container/microvm) is refused at load — it could never be violated",
     ),
   reference_read: z
     .string()

@@ -47,6 +47,7 @@ import {
 } from "../runtime/image-capabilities.js";
 import { instanceName, VM_WORK_HOST } from "../runtime/lima.js";
 import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
+import { tierVacuousTool, tierVacuousMessage } from "./tier-vacuous-tools.js";
 import { decideLoopFromBaseline, readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -526,6 +527,25 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const effectiveFidelity =
     scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
   if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
+
+  // Refuse a `tool_not_called` naming a tool this tier provably does not serve. Placed HERE, not in the
+  // schema or validateScenarioRegexes, because both run before the baseline and the tier exist — and a
+  // `fidelity: cowork` scenario has no tier at all until the line above resolves it, which is the tier
+  // most authors actually write. Still ahead of every spawn, staging and image pull, so no model spend is
+  // wasted on an assertion that could never have been violated. (A same-origin `--session-id` re-run has
+  // already cleared the prior outDir by this point — pre-spend for tokens, not for that.)
+  //
+  // UsageError, not a plain throw: parseScenarioFile wraps only ZodError, so a bare Error here would be
+  // categorized `internal` — an authoring mistake reported as a harness bug.
+  for (const a of scenario.assert) {
+    if (typeof a.tool_not_called !== "string") continue;
+    const finding = tierVacuousTool(
+      a.tool_not_called,
+      effectiveFidelity,
+      readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false),
+    );
+    if (finding) throw new UsageError(tierVacuousMessage(finding, scenario.name));
+  }
 
   let agentSessionId: string | undefined;
   if (opts.sessionId || opts.resume) {

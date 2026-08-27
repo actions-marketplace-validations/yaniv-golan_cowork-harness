@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **BEHAVIOUR CHANGE: `tool_not_called` naming a tool the tier does not serve is now REFUSED at scenario
+  load.** `tool_not_called: "Bash"` at `hostloop` passed vacuously, always — that tier disallows the
+  built-in shell and aliases it to `mcp__workspace__bash`, so the run could never have called `Bash`
+  whatever the agent did. The assertion read as a guarantee and verified nothing. The inverse was equally
+  broken: `mcp__workspace__bash` at `container`, where the built-in is served instead.
+
+  The refusal is a `UsageError` at the point the tier resolves — after `fidelity: cowork` becomes a real
+  tier, and before any staging, image pull or spawn, so no model spend is wasted. The message names the
+  tool to assert instead, and names the sibling keys that behave differently (`tool_called` still fails
+  normally; `subagent_tool_absent` is judged against a per-dispatch inventory this check cannot
+  determine). `scenario.py lint` WARNs on the same set, before any run at all.
+
+  **The table is closed to tools the harness itself removes or registers**, and never derived from the
+  launch plan. `--tools` gates the built-in set alone — the agent binary's own help says so — while every
+  sandbox tier separately passes `--mcp-config`. A launch-set-derived check would therefore have rejected
+  `tool_not_called: "mcp__example-fs__write_file"` for a session using the `mcp.config` this repo ships an
+  example of, while that tool was registered and callable. Globs are never refused, and the table
+  under-approximates on purpose: `REPL` at hostloop is vacuous too and is not caught, which is the correct
+  side to err on when the verdict is a hard refusal.
+
+  There is **no opt-out**, deliberately. The repo's `allow_*` modifiers all cover cases where the harness
+  might be wrong about a real signal; a fired reject here cannot be a false positive, so there is no
+  legitimate scenario to rescue. If one is ever found, the table is wrong and the table should change.
+
+  `e2e/scenarios/canary-hostloop.yaml` carried exactly this defect and is fixed in the same change: its
+  `tool_not_called: Bash` never proved anything, and its `tool_called: mcp__workspace__*` already carries
+  the canary's stated purpose.
+
 ### Fixed
 
 - **`tool_called: "Task"` could never pass and `tool_not_called: "Task"` always did.** The agent binary
