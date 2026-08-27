@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A guard that a committed cassette's `tool_not_called` is actually violable by its own recording.**
+  The tool surface at a tier is **gate-conditional**: at `container`, `mcp__workspace__web_fetch` is
+  offered only when `coworkWebFetchViaApi` is on (17 of 138 measured container runs), and with the gate
+  off `WebFetch` is offered instead. `examples/replays/example-pdf-skill.cassette.json` asserts
+  `tool_not_called: "mcp__workspace__web_fetch"` and passes today only because it was recorded gate-ON —
+  a re-record with the gate off would leave it naming a tool the run could never have called, so it would
+  keep passing while verifying nothing, and nothing in the suite would notice. `verify-cassettes`'s
+  `replaced-builtin` note keys on the recorded *inventory*, never on the assertions, and only covers
+  built-ins being replaced, never the inverse.
+
+  The guard checks every committed cassette's `tool_called`/`tool_not_called` against that cassette's own
+  frozen init inventory, through the same glob engine the evaluator uses. It deliberately does **not**
+  cover `subagent_tool_absent` (judged against the per-dispatch `declaredTools`, a different inventory)
+  and cannot see alias-class vacuity (`tool_not_called: "Task"` names a tool that is in every inventory
+  yet never emitted — the agent binary canonicalizes `Task` to `Agent`); both are recorded as separate
+  work rather than left implied.
+
+### Added
+
 - **`referencesAccessed` — reference access through EVERY tool channel, not just the `Read` tool.**
   `referencesRead` counts one channel, and `critique`'s headline invited a reader to conclude the agent
   had opened no reference — a claim about *reading* that a one-channel count cannot support. An agent
