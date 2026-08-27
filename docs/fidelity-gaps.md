@@ -892,6 +892,36 @@ branch never promotes, so there is no scratch→outputs copy to leak there.
 path model to work against; `microvm` stages into a different tree than the artifact scan walks. Both
 report can't-verify rather than passing vacuously.
 
+### Path resolution: the shell and the file tools use DIFFERENT roots (measured 2026-08-27)
+
+**This is not modeled, and one half of it is a false-green.** On the desktop-local lane, production
+resolves a relative path differently depending on which tool writes it:
+
+| | production (host-loop) | `container`/`microvm` (VM-loop) | `hostloop` |
+|---|---|---|---|
+| file tools (`Write`/`Read`) base | `mnt/outputs` | session root | `mnt/outputs` ✓ |
+| `mcp__workspace__bash` cwd | session root | session root ✓ | `mnt/outputs` ✗ |
+
+Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; anything written outside
+`<vmCwd>/mnt/` (including `/tmp`) stays in that environment and never reaches the user or your file
+tools."* Bash also **resets its cwd between every call** (*"no cwd/env carryover"*), so a relative path
+from a script always resolves against the session root and cannot be `cd`-ed away from.
+
+Two consequences for anyone reading a green run:
+
+1. **A relative bash write is a FALSE-GREEN.** Production discards anything outside `mnt/`; the harness
+   bind-mounts the whole session dir, so the same write persists into the run dir and can satisfy an
+   artifact assertion. A skill whose bundled scripts take relative output paths passes here and delivers
+   nothing in production — and **no current tier reproduces the real failure**: `hostloop` puts the write
+   in `mnt/outputs` where it looks fine, `container` puts it in the right place but keeps it.
+2. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
+   invisible), and **`<folder>/x` builds a same-named decoy inside `outputs`** rather than reaching the
+   connected folder — silently, with a success result. No relative path from the file tools reaches a
+   connected folder. See [scenario.md](./scenario.md), "Where a relative path actually lands".
+
+The **cloud** lane shares none of this: cwd is `/home/claude`, there is no `mnt/` tree, and the shell and
+file tools share one root.
+
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 
 The remote lane also has an internal MCP server the harness does not model at all, wire-named

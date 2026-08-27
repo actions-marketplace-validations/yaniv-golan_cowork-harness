@@ -33,7 +33,7 @@ on_unanswered: fail                      # optional: policy for unscripted quest
                                          # ("agent" is retired — no longer a valid value)
 
 prompt: |                                # the user turn
-  Summarize report.pdf and write action items to outputs/actions.md
+  Summarize report.pdf and write action items to actions.md   # bare name: host-loop. See the lane table below.
 
 timeout_ms: 600000                       # OPTIONAL wall-clock budget; on expiry the harness kills the agent
                                          # and the run ends result:error / errorSource:timeout. Omit = no timeout.
@@ -378,12 +378,42 @@ without actually running the agent. For **content correctness**, match the asser
   check is too complex for a dotted path + single operator. Either way, prefer a structured-field assert over
   a transcript substring for anything the skill writes to an artifact.
 - a skill whose output is a **written file** (a report, a deliverable on disk) → `user_visible_artifact: <path>`,
-  **not** `file_exists`, for the user-facing deliverable. When the session connects a folder, the deliverable
-  lands in `mnt/<folder>` (that folder is `{{workspaceFolder}}`), **not** `mnt/outputs` — so a model told to
-  write "outputs/foo" writes `mnt/<folder>/outputs/foo`. `user_visible_artifact` spans both visible roots
+  **not** `file_exists`, for the user-facing deliverable. `user_visible_artifact` spans both visible roots
   (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and does not check
-  folder-relative deliverables. Reserve `file_exists` for a known fixed sandbox path (e.g. a folder-less session
-  where `{{workspaceFolder}} = mnt/outputs`).
+  folder-relative deliverables.
+
+  > **Where a relative path actually lands — measured on desktop-local Cowork, 2026-08-27.** An earlier
+  > version of this bullet said a model told to write `outputs/foo` writes `mnt/<folder>/outputs/foo`. That
+  > was wrong about production *and* about both harness tiers.
+  >
+  > On the **desktop-local** lane the file tools resolve a relative path against **`outputs/`**, and they do
+  > so **regardless of whether a folder is connected** — a connected folder sits *beside* `outputs`, it does
+  > not become the file-tool base. Three consequences a skill author has to know:
+  >
+  > | written as | lands at | visible? |
+  > |---|---|---|
+  > | `foo.md` (bare) | `outputs/foo.md` | **yes** |
+  > | `./foo.md` | `outputs/foo.md` | **yes** |
+  > | `outputs/foo.md` | `outputs/outputs/foo.md` | **no** — the prefix DOUBLES |
+  > | `<folder>/foo.md` | `outputs/<folder>/foo.md` | **no** — a same-named DECOY inside outputs |
+  >
+  > The last row is the nastiest: addressing a connected folder by name never reaches it, the write
+  > succeeds, and nothing signals the miss. **No relative path from the file tools can reach a connected
+  > folder** — that needs an absolute path.
+  >
+  > **The right guidance is LANE-DEPENDENT — there is no single answer.**
+  >
+  > | lane | file-tool base | write a deliverable as |
+  > |---|---|---|
+  > | desktop-local **host-loop** (production today, gate `1143815894` force-ON) | `outputs/` | a **bare filename** |
+  > | **VM-loop** (`fidelity: container`/`microvm` — the harness DEFAULT) | the session root, i.e. the scratchpad | a path under `{{workspaceFolder}}`, or deliver via `present_files` |
+  > | **cloud** | `/home/claude`; no `mnt/` tree at all | neither of the above applies |
+  >
+  > So a bare filename is right for production and WRONG at the harness's own default tier, where it lands
+  > in the scratchpad. Name the tier you mean. The safest skill instruction describes the OUTCOME ("save it
+  > where the user can see it") rather than a path, because the path differs by lane.
+
+  Reserve `file_exists` for a known fixed sandbox path.
 
 Each list item under `assert:` is one assertion. An item with **multiple keys is an AND** — it passes only
 if *every* key passes (don't rely on the first; keep one concern per item unless you mean conjunction).
@@ -425,7 +455,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_matches: <regex>` | the transcript matches the regex (case-insensitive) — fuzzy content for stochastic prose, e.g. `'SOM:?\s*\$[0-9.]+\s*M'`. **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`). **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
-| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — the agent's cwd already **is** the outputs dir (`src/run/execute.ts` sets `hostCwd` to `mnt/outputs`), so a file written there is already under a user-visible root and this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. Prefer writing directly to `outputs/`, or run present_files-delivering skills on `container`. Writing directly to `outputs/` also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
+| `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — the agent's cwd already **is** the outputs dir (`src/run/execute.ts` sets `hostCwd` to `mnt/outputs`), so a file written there is already under a user-visible root and this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. **The correct path is LANE-DEPENDENT** — see "Where a relative path actually lands" above. On the desktop-local **host-loop** lane (production today) the file tools are already rooted at `outputs/`, so the literal prefix DOUBLES: `outputs/actions.md` lands at `outputs/outputs/actions.md` and the user never sees it — write a **bare filename** there. At `fidelity: container`/`microvm` (VM-loop, the harness default) the base is the session root instead, so a bare filename lands in the scratchpad and you want `{{workspaceFolder}}` or `present_files`. Measured 2026-08-27. Describing the OUTCOME rather than a path also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
 | `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (Cowork's outputs mount fails `unlink`/`rmdir` with `EPERM`) — **only `true` is valid**; writing `false` is rejected by the schema. **Omitting the key does NOT allow deletes**: a detected delete still fails the run via the `outputs_delete` verdict signal, which fires precisely *because* the key was not authored — authoring it turns that signal into an explicit assertion. To accept an intended delete, use `allow_outputs_delete: true`. Detects operations that UNLINK a name; emptying a file in place (`truncate`, `>`, `shred` without `-u`) is not a delete and is permitted by Cowork, so it is not flagged |
 | `no_delete_in_mounts: true` | no delete op touched **any** delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount until per-mount approval, so `no_delete_in_outputs` asserts only part of the real rule; this is the mount-wide form. **Only `true` is valid.** Same post-run-scan caveat: a green means none was *detected*, not that the mount enforced anything |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay-checkable when the cassette carries `artifacts` **and** `preRunPaths`; an **incomplete** post-run filesystem walk (an unreadable subtree — permission/I-O error — not just a missing pre-run manifest) also ⇒ evidence-unavailable, so "no strays" is never trusted from a partial walk |

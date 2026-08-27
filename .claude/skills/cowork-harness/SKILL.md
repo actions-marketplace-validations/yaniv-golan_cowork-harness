@@ -550,8 +550,15 @@ Recognize these before "fixing" a non-bug:
   only when you thought to ask for it, and the runs that most need this are the ones where nobody did.
   **Silent when the evidence cannot answer the question** (no workspace walk, or a tier that runs no
   scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
-  **The fix is lane-dependent.** On `lane: local`, write deliverables under `outputs/` or a connected
-  folder, or deliver them explicitly. **On `lane: remote`, moving a file under `outputs/` does NOT help** —
+  **The fix is lane-dependent — and so is the PATH.** On `lane: local`, write deliverables where the user
+  can see them, but do **not** hardcode the literal prefix `outputs/`: on the desktop-local host-loop lane
+  (what production runs) the file tools are ALREADY rooted at `outputs/`, so `outputs/x.md` doubles to
+  `outputs/outputs/x.md` and the user never sees it — a **bare filename** is correct there. At
+  `fidelity: container`/`microvm` (VM-loop, the harness default) the base is the session root instead, so a
+  bare name lands in the scratchpad and you want `{{workspaceFolder}}` or an explicit delivery. Addressing
+  a connected folder by name (`<folder>/x.md`) never reaches it on either lane — it builds a same-named
+  decoy inside `outputs`, reports success, and gives no signal. Measured 2026-08-27; see
+  [docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md), "Where a relative path actually lands". **On `lane: remote`, moving a file under `outputs/` does NOT help** —
   nothing is delivered by location there, so only an explicit delivery counts. Assert
   **`allow_undelivered_deliverables: true`** when the leftovers are intentional (intermediates, caches,
   downloaded inputs) rather than a delivery gap.
