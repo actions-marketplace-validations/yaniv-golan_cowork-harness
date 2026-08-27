@@ -298,9 +298,13 @@ export const Assertion = z.strictObject({
   tool_called: toolGlob
     .optional()
     .describe(
-      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
+      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way",
     ),
-  tool_not_called: toolGlob.optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  tool_not_called: toolGlob
+    .optional()
+    .describe(
+      "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive; legacy spellings match as in tool_called). Passes VACUOUSLY if the tier never offers the tool (e.g. Bash at hostloop) — check the tier's tool surface",
+    ),
   reference_read: z
     .string()
     .min(1, "reference_read is empty — an empty regex matches every path and passes vacuously")

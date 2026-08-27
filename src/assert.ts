@@ -11,6 +11,7 @@ import { warn } from "./io.js";
 import { collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
+import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
 
 /** Bytes cap for re-hashing a matched input file on the live / verify-run lane (`input_unmodified`).
@@ -1021,7 +1022,16 @@ function check(
   // literal; anchored full-match, case-sensitive). A pattern with no metachar is an exact name — so all
   // existing exact asserts are unchanged — while `mcp__workspace__*` matches any workspace tool. Reuses the
   // path-glob engine; its `/`-segment / `**` handling is inert for tool names (they contain no `/`).
-  const toolMatches = (pattern: string, name: string): boolean => anyGlobMatches([pattern], name);
+  //
+  // ALIAS-AWARE. The agent binary canonicalizes a set of legacy tool names (`Task` → `Agent`, …) and the
+  // baseline's `spawn.tools` still declares the LEGACY spelling, which the init inventory echoes back
+  // while every actual call is emitted CANONICAL. Measured over 506 kept runs: `Task` offered 506 /
+  // called 0, `Agent` offered 0 / called 188 — so a literal match made `tool_called: "Task"` impossible
+  // and `tool_not_called: "Task"` a permanent vacuous pass. Expanding the RECORDED NAME (not the
+  // pattern) is what makes this work for globs too: rewriting the pattern would fix `"Task"` and leave
+  // `"Ta*"` and `"*"` broken. See src/run/tool-name-canonicalization.ts.
+  const toolMatches = (pattern: string, name: string): boolean =>
+    toolNameSpellings(name).some((spelling) => anyGlobMatches([pattern], spelling));
   // These four keys are GLOB-matched, not regex. A pattern carrying a regex-only metacharacter is almost
   // always a regex-habit slip (`mcp__*.*`, `Bash|Read`) that would match NOTHING under glob — a silent
   // false-green for the `_not_`/`_absent` direction the failure message can't reach. Warn loudly.

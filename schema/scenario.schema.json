@@ -187,12 +187,12 @@
             "type": "string"
           },
           "tool_called": {
-            "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
+            "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way",
             "type": "string",
             "minLength": 1
           },
           "tool_not_called": {
-            "description": "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)",
+            "description": "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive; legacy spellings match as in tool_called). Passes VACUOUSLY if the tier never offers the tool (e.g. Bash at hostloop) — check the tier's tool surface",
             "type": "string",
             "minLength": 1
           },

@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`tool_called: "Task"` could never pass and `tool_not_called: "Task"` always did.** The agent binary
+  canonicalizes a set of legacy tool names — `Task`→`Agent`, `KillShell`/`KillBash`→`TaskStop`, and nine
+  more — while the spawn tool list still declares the **legacy** spelling. So the init inventory echoes
+  back `Task`, every actual dispatch is emitted as `Agent`, and a literal matcher could never connect the
+  two. Measured across 506 kept runs: `Task` offered **506** times and called **0**; `Agent` called **188**
+  times and offered **0**. The negative form was a permanent vacuous pass in the most common dispatch
+  assertion there is, at every tier.
+
+  All four tool keys (`tool_called`, `tool_not_called`, `subagent_tool_used`, `subagent_tool_absent`) now
+  match either spelling, through the one shared matcher. Globs see both too — the **recorded name** is
+  expanded rather than the author's pattern, so `tool_not_called: "Ta*"` and `"*"` are violated by a
+  recorded `Agent`, which rewriting the pattern would not have fixed.
+
+  Recorded data is unchanged: `toolCounts`, `context.tools` and every cassette keep exactly what the agent
+  reported, the same verbatim posture `RunResult.models` documents. Only matching is alias-aware, so
+  `tool_available: "Task"` still matches the inventory's literal `Task` and no committed cassette changes
+  meaning.
+
+  **Still vacuous, and now documented as such:** `tool_not_called` on a tool the *tier* never offers —
+  `Bash` at `hostloop`, or `mcp__workspace__bash` at `container`. That is a separate class with a separate
+  fix; the key's docs and the skill reference now warn about it rather than leaving it implied.
+
 ### Added
 
 - **A guard that a committed cassette's `tool_not_called` is actually violable by its own recording.**
