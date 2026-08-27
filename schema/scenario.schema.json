@@ -19,7 +19,7 @@
     },
     "fidelity": {
       "default": "container",
-      "description": "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic)",
+      "description": "isolation tier: protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic). DEPRECATION: omitting this key is deprecated and the field becomes REQUIRED in the next major. The `container` default models the VM loop, while production runs the host loop (gate 1143815894 is force-ON in every shipped baseline), so an omitted key measures the scenario against a lane your users are not on — a bare relative path lands elsewhere, the shell starts elsewhere, and the offered tool set differs. Name a tier: hostloop to match production, cowork to auto-pick the way Cowork does, or container to keep the current behaviour deliberately.",
       "type": "string",
       "enum": [
         "protocol",
