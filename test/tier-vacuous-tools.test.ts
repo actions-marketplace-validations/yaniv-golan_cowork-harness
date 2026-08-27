@@ -83,18 +83,25 @@ describe("what the check must NOT reject — it is a hard refusal, so a false po
 });
 
 describe("the refusal message", () => {
-  it("names the replacement, and the sibling keys it does not cover", () => {
-    const m = tierVacuousMessage(tierVacuousTool("Bash", "hostloop", GATE_ON)!, "my-scenario");
+  it("names the replacement in the SAME key the author wrote, and the positive sibling", () => {
+    const m = tierVacuousMessage(tierVacuousTool("Bash", "hostloop", GATE_ON)!, "tool_not_called", "my-scenario");
     expect(m).toMatch(/my-scenario/);
     expect(m).toMatch(/can never be violated at fidelity `hostloop`/);
     expect(m).toMatch(/passes vacuously and verifies nothing/);
     expect(m).toMatch(/tool_not_called: "mcp__workspace__bash"/); // the remedy, spelled out
     expect(m).toMatch(/tool_called: "Bash"` fails normally/); // the sibling that behaves differently
-    expect(m).toMatch(/subagent_tool_absent/);
+  });
+
+  it("echoes the sub-agent key back when that is what was written", () => {
+    // An earlier version hardcoded `tool_not_called` in the remedy, which would have told an author who
+    // wrote `subagent_tool_absent` to fix a key they had not used.
+    const m = tierVacuousMessage(tierVacuousTool("Bash", "hostloop", GATE_ON)!, "subagent_tool_absent", "s");
+    expect(m).toMatch(/`subagent_tool_absent: "Bash"` can never be violated/);
+    expect(m).toMatch(/Assert `subagent_tool_absent: "mcp__workspace__bash"` instead/);
   });
 
   it("says there is nothing to assert instead when the tier simply removes the tool", () => {
-    const m = tierVacuousMessage(tierVacuousTool("NotebookEdit", "hostloop", GATE_ON)!, "s");
+    const m = tierVacuousMessage(tierVacuousTool("NotebookEdit", "hostloop", GATE_ON)!, "tool_not_called", "s");
     expect(m).toMatch(/removes `NotebookEdit` outright.*no replacement.*drop this assertion/s);
   });
 });
@@ -120,6 +127,16 @@ describe("executeScenario refuses a tier-vacuous tool_not_called at load", () =>
   it("rejects `Bash` at hostloop, naming the replacement", async () => {
     await expect(executeScenario(scenarioWith("hostloop", `  - tool_not_called: Bash\n`))).rejects.toThrow(
       /can never be violated at fidelity `hostloop`[\s\S]*mcp__workspace__bash/,
+    );
+  });
+
+  it("rejects the sub-agent form of the same claim — the asymmetry the first cut shipped", async () => {
+    // Refusing `tool_not_called: "Bash"` at hostloop while greening `subagent_tool_absent: "Bash"` taught
+    // an author that this class is caught, then did not catch it. `subagent_tool_absent` reads the tools
+    // sub-agents actually USED (assert.ts's ctx.subagentTools), not a per-dispatch declared list, so the
+    // same table applies — the belief that it read a different inventory was simply wrong.
+    await expect(executeScenario(scenarioWith("hostloop", `  - subagent_tool_absent: Bash\n`))).rejects.toThrow(
+      /`subagent_tool_absent: "Bash"` can never be violated at fidelity `hostloop`/,
     );
   });
 

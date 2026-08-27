@@ -8,8 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- **BEHAVIOUR CHANGE: `tool_not_called` naming a tool the tier does not serve is now REFUSED at scenario
-  load.** `tool_not_called: "Bash"` at `hostloop` passed vacuously, always — that tier disallows the
+- **`subagent_declared_but_unused` documents that it fires only on a dispatch that declares a tool list.**
+  It reads `subagents[].declaredTools`, populated from a `tools`/`allowedTools` key in the dispatch input.
+  The `Agent` tool carries neither, so that list is empty and the key passes on every such dispatch —
+  **0 of 1091 real dispatches** carry a non-empty list. The key is not wrong, but a green means "not
+  applicable here", never "no fabrication", and neither its description nor its docs said so.
+
+- **BEHAVIOUR CHANGE: `tool_not_called` and `subagent_tool_absent` naming a tool the tier does not serve
+  are now REFUSED at scenario load.** `tool_not_called: "Bash"` at `hostloop` passed vacuously, always — that tier disallows the
   built-in shell and aliases it to `mcp__workspace__bash`, so the run could never have called `Bash`
   whatever the agent did. The assertion read as a guarantee and verified nothing. The inverse was equally
   broken: `mcp__workspace__bash` at `container`, where the built-in is served instead.
@@ -31,6 +37,12 @@ All notable changes to this project are documented here. The format is based on
   There is **no opt-out**, deliberately. The repo's `allow_*` modifiers all cover cases where the harness
   might be wrong about a real signal; a fired reject here cannot be a false positive, so there is no
   legitimate scenario to rescue. If one is ever found, the table is wrong and the table should change.
+
+  **`subagent_tool_absent` is covered for the same reason `tool_not_called` is.** It reads the tools
+  sub-agents actually USED, not a per-dispatch declared list, so a tool the tier never serves makes it
+  vacuous in exactly the same way — corroborated by the run population, where sub-agent `Bash` calls
+  appear 20 times, all at `container` and never at `hostloop`. Covering one key and not the other would
+  refuse an assertion at hostloop while silently greening the sub-agent form of the identical claim.
 
   `e2e/scenarios/canary-hostloop.yaml` carried exactly this defect and is fixed in the same change: its
   `tool_not_called: Bash` never proved anything, and its `tool_called: mcp__workspace__*` already carries

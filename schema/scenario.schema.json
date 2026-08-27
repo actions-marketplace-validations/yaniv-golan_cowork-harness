@@ -320,7 +320,7 @@
             "type": "string"
           },
           "subagent_declared_but_unused": {
-            "description": "a sub-agent declared this tool but never used it (the fabrication proxy)",
+            "description": "a sub-agent declared this tool but never used it (the fabrication proxy). Fires only on a dispatch that declares a tools/allowedTools list; the Agent tool carries neither, so declaredTools is [] and the key passes — a green means not-applicable, not absence of fabrication",
             "type": "string"
           },
           "subagent_output_contains": {

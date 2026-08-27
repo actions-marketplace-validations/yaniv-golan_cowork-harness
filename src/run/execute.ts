@@ -537,14 +537,18 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   //
   // UsageError, not a plain throw: parseScenarioFile wraps only ZodError, so a bare Error here would be
   // categorized `internal` — an authoring mistake reported as a harness bug.
+  const viaApiForVacuity = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
   for (const a of scenario.assert) {
-    if (typeof a.tool_not_called !== "string") continue;
-    const finding = tierVacuousTool(
-      a.tool_not_called,
-      effectiveFidelity,
-      readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false),
-    );
-    if (finding) throw new UsageError(tierVacuousMessage(finding, scenario.name));
+    // BOTH negative tool keys. `subagent_tool_absent` reads the tools sub-agents actually USED
+    // (assert.ts's `ctx.subagentTools`), not a per-dispatch declared list, so the same tier table applies
+    // — covering one and not the other would refuse `tool_not_called: "Bash"` at hostloop while silently
+    // greening the sub-agent form of the identical claim.
+    for (const key of ["tool_not_called", "subagent_tool_absent"] as const) {
+      const pattern = a[key];
+      if (typeof pattern !== "string") continue;
+      const finding = tierVacuousTool(pattern, effectiveFidelity, viaApiForVacuity);
+      if (finding) throw new UsageError(tierVacuousMessage(finding, key, scenario.name));
+    }
   }
 
   let agentSessionId: string | undefined;

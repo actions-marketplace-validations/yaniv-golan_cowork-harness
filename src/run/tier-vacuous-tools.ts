@@ -65,18 +65,28 @@ export function tierVacuousTool(pattern: string, tier: string, webFetchViaApi: b
   return { tool: pattern, tier, instead: table[pattern] ?? null };
 }
 
+/** Keys this refusal covers. Both are NEGATIVE tool assertions judged against a set of names the tier
+ *  never produces, so both pass vacuously in exactly the same way.
+ *
+ *  `subagent_tool_absent` belongs here despite an earlier belief that it did not. It reads
+ *  `ctx.subagentTools` — the tools sub-agents actually USED (`assert.ts:1418`) — NOT
+ *  `subagents[].declaredTools`, so there is no second inventory and no category error. Corroborated by
+ *  the run population: sub-agent `Bash` calls appear 20 times, all at `container`, never at `hostloop`.
+ *  Excluding it left the harness refusing `tool_not_called: "Bash"` at hostloop while silently greening
+ *  `subagent_tool_absent: "Bash"` — teaching an author that this class is caught, then not catching it. */
+export type TierVacuousKey = "tool_not_called" | "subagent_tool_absent";
+
 /** The load-time refusal text. Names what is wrong, why it can never hold, what to write instead, and —
- *  because an author will meet all three — that the sibling keys behave differently. */
-export function tierVacuousMessage(f: TierVacuousFinding, context: string): string {
+ *  because an author will meet it — that `tool_called` behaves differently. */
+export function tierVacuousMessage(f: TierVacuousFinding, key: TierVacuousKey, context: string): string {
   const remedy =
     f.instead === null
       ? `The \`${f.tier}\` tier removes \`${f.tool}\` outright, so there is no replacement to assert — drop this assertion.`
-      : `Assert \`tool_not_called: "${f.instead}"\` instead: that is the tool \`${f.tier}\` actually serves in its place.`;
+      : `Assert \`${key}: "${f.instead}"\` instead: that is the tool \`${f.tier}\` actually serves in its place.`;
   return (
-    `${context}: \`tool_not_called: "${f.tool}"\` can never be violated at fidelity \`${f.tier}\` — that tier does not ` +
+    `${context}: \`${key}: "${f.tool}"\` can never be violated at fidelity \`${f.tier}\` — that tier does not ` +
     `serve \`${f.tool}\` at all, so the assertion passes vacuously and verifies nothing. ${remedy}\n` +
-    `Note the sibling keys differ and are NOT checked here: \`tool_called: "${f.tool}"\` fails normally (a legible red, ` +
-    `not a false green), and \`subagent_tool_absent\` is judged against each dispatch's own declared tools, which this ` +
-    `check cannot determine.`
+    `The positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally, which is a legible red ` +
+    `rather than a false green.`
   );
 }

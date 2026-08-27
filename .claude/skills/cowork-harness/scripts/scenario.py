@@ -602,27 +602,30 @@ def lint_doc(doc, path, raw_lines):
         # `protocol` absent on purpose: it passes no tool flags, so its surface is the operator's own
         # host CLI registry — machine-dependent and about a different product.
     }
-    for _v in _assert_values(items, "tool_not_called"):
-        if not isinstance(_v, str) or "*" in _v or "?" in _v:
-            continue  # a glob is not a literal claim about one tool
-        _repl = _TIER_VACUOUS.get(fidelity, {})
-        if _v not in _repl:
-            continue
-        _instead = _repl[_v]
-        findings.append(
-            Finding(
-                "WARN",
-                "tool-not-called-tier-vacuous",
-                f"`tool_not_called: {_v}` on `fidelity: {fidelity}` — that tier does not serve "
-                f"`{_v}` at all, so this can never be violated and verifies nothing.",
-                (
-                    f"Assert `tool_not_called: {_instead}` instead — that is what the tier serves in its place."
-                    if _instead
-                    else f"The {fidelity} tier removes `{_v}` outright; drop this assertion."
-                ),
-                path,
+    # BOTH negative tool keys: `subagent_tool_absent` is judged against the tools sub-agents actually
+    # USED, not a per-dispatch declared list, so a tool the tier never serves makes it equally vacuous.
+    for _key in ("tool_not_called", "subagent_tool_absent"):
+        for _v in _assert_values(items, _key):
+            if not isinstance(_v, str) or "*" in _v or "?" in _v:
+                continue  # a glob is not a literal claim about one tool
+            _repl = _TIER_VACUOUS.get(fidelity, {})
+            if _v not in _repl:
+                continue
+            _instead = _repl[_v]
+            findings.append(
+                Finding(
+                    "WARN",
+                    "tool-not-called-tier-vacuous",
+                    f"`{_key}: {_v}` on `fidelity: {fidelity}` — that tier does not serve "
+                    f"`{_v}` at all, so this can never be violated and verifies nothing.",
+                    (
+                        f"Assert `{_key}: {_instead}` instead — that is what the tier serves in its place."
+                        if _instead
+                        else f"The {fidelity} tier removes `{_v}` outright; drop this assertion."
+                    ),
+                    path,
+                )
             )
-        )
 
     # linter stays offline — the message carries the gate fact instead of reading a baseline).
     if "transcript_no_host_path" in assert_keys:

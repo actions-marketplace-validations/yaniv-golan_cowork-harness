@@ -401,7 +401,12 @@ export const Assertion = z.strictObject({
     .string()
     .optional()
     .describe("a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched"),
-  subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
+  subagent_declared_but_unused: z
+    .string()
+    .optional()
+    .describe(
+      "a sub-agent declared this tool but never used it (the fabrication proxy). Fires only on a dispatch that declares a tools/allowedTools list; the Agent tool carries neither, so declaredTools is [] and the key passes — a green means not-applicable, not absence of fabrication",
+    ),
   subagent_output_contains: z
     .strictObject({
       match: z
