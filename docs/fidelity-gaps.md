@@ -912,13 +912,17 @@ report can't-verify rather than passing vacuously.
 
 ### Path resolution: the shell and the file tools use DIFFERENT roots (measured 2026-08-27)
 
-**This is not modeled, and one half of it is a false-green.** On the desktop-local lane, production
-resolves a relative path differently depending on which tool writes it:
+**The two roots are modeled; what remains divergent is whether the write SURVIVES.** On the
+desktop-local lane, production resolves a relative path differently depending on which tool writes it:
 
 | | production (host-loop) | `container`/`microvm` (VM-loop) | `hostloop` |
 |---|---|---|---|
 | file tools (`Write`/`Read`) base | `mnt/outputs` | session root | `mnt/outputs` ✓ |
-| `mcp__workspace__bash` cwd | session root | session root ✓ | `mnt/outputs` ✗ |
+| `mcp__workspace__bash` cwd | session root | session root ✓ | session root ✓ |
+
+Both cwds come from a single function (`hostLoopCwds`, `src/runtime/hostloop.ts`) and are pinned together
+in one test, because a single-value assertion cannot express "the shell and the file tools disagree, on
+purpose" — and collapsing them into one value is the mistake this arrangement exists to prevent.
 
 Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; anything written outside
 `<vmCwd>/mnt/` (including `/tmp`) stays in that environment and never reaches the user or your file
@@ -927,17 +931,24 @@ from a script always resolves against the session root and cannot be `cd`-ed awa
 
 Two consequences for anyone reading a green run:
 
-1. **A relative bash write persists here and is discarded there — a narrow FALSE-GREEN.** Production
-   throws away anything outside `mnt/`; the harness bind-mounts the whole session dir, so the same write
-   survives into the run dir. Measured 2026-08-27: `printf > rel.txt` from a shell tool landed at
-   `/sessions/<id>/rel.txt` on `container` and **persisted** as `session/rel.txt`.
+1. **A relative bash write lands in the right place but PERSISTS, where production discards it.**
+   Production throws away anything outside `mnt/`; the harness bind-mounts the whole session dir, so the
+   same write survives into the run dir. Measured 2026-08-27: `printf > rel.txt` from a shell tool landed
+   at `/sessions/<id>/rel.txt` on `container` and **persisted** as `session/rel.txt`.
 
    **Scope, so this is not over-read:** `file_exists`, `user_visible_artifact` and
    `computer_links_resolve` are all bounded by `workRoot` (`…/session/mnt`) and **cannot** reach such a
-   file. The exposure is `semantic_matches` and `no_lost_write_back`, which grade the *authored* set —
-   so a rubric like "the report was written" grades TRUE on a file the user would never receive. A skill whose bundled scripts take relative output paths passes here and delivers
-   nothing in production — and **no current tier reproduces the real failure**: `hostloop` puts the write
-   in `mnt/outputs` where it looks fine, `container` puts it in the right place but keeps it.
+   file. The exposure is `semantic_matches` and `no_lost_write_back`, which grade the *authored* set. That
+   set still contains the file — capturing it is correct, since the run did write it — but every entry
+   from the scratchpad walk is labelled `— SCRATCH, NOT delivered to the user` in the judged document,
+   with a note saying such files are evidence of what the run DID and not that anything was delivered.
+   That label is what keeps a rubric like "the report was written" from grading TRUE on a file the user
+   would never receive.
+
+   **What is still divergent:** production would have discarded the file entirely, so a skill whose
+   bundled scripts take relative output paths still gets further here than it would there. The location
+   half is now faithful on both tiers; the survival half is not, and removing it would mean unpicking a
+   bind-mount every tier's artifact capture, `--resume` and the microvm snapshot depend on.
 2. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
    invisible), and **`<folder>/x` builds a same-named decoy inside `outputs`** rather than reaching the
    connected folder — silently, with a success result. No relative path from the file tools reaches a
