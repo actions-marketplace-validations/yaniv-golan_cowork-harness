@@ -481,11 +481,12 @@ tool. Registering the tool without pre-approving it would trip the off-registry 
 offer the built-in `WebFetch` and a bare emission there does not reach a workspace server. Use
 `container` or `hostloop` for alias-sensitive scenarios.
 
-**Consequence for existing scenarios:** at `container`, `WebFetch` is no longer in the offered tool set.
-An assertion naming it (`tool_called: WebFetch`, `tool_not_called: WebFetch`) no longer describes a tool
-that can be called — `tool_not_called` in particular passes **vacuously** rather than failing loudly.
-Name `mcp__workspace__web_fetch` instead. `verify-cassettes` emits a `replaced-builtin` note when a
-recorded init inventory still names a built-in the tier no longer offers.
+**Consequence for scenarios:** at `container` the offered set contains `mcp__workspace__web_fetch`, and
+not `WebFetch`. An assertion naming the built-in (`tool_called: WebFetch`, `tool_not_called: WebFetch`)
+therefore names a tool that does not exist at this tier — and `tool_not_called` passes **vacuously**
+rather than failing loudly, which is the harder direction to notice. Name `mcp__workspace__web_fetch`
+instead. `verify-cassettes` emits a `replaced-builtin` note when a recorded init inventory names a
+built-in absent from the tier's current set.
 
 ## Skill/plugin discovery SDK-MCP servers — modeled on container/hostloop; microvm/protocol pending
 
