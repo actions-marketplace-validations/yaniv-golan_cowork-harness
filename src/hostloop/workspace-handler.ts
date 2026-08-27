@@ -279,6 +279,13 @@ export interface WorkspaceHandlerOptions {
    *  ALL connected folders live), not as the exec cwd (see `execCwd`). */
   vmMnt: string;
   runner?: string;
+  /** The session's egress allowlist for PATH B (provenance not enforced). Defaults to `[]` — DENY-ALL.
+   *
+   *  It used to default to `["*"]`, which `compile()` turns into `() => true`. Because this fetch runs in
+   *  the harness's own Node process — outside the container network namespace, so the sidecar proxy never
+   *  sees it — a caller that forgot this option got a completely unrestricted fetcher while its tier
+   *  advertised default-deny egress. `spawnContainer` forgot it, and only an adversarial review caught it.
+   *  Every real caller passes `plan.egressAllow`; an omitted allowlist now denies rather than allows. */
   webFetchAllow?: string[];
   onEgress?: (entry: EgressEntry) => void;
   onInfraError?: (message: string) => void;
@@ -309,7 +316,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
     containerName,
     vmMnt,
     runner = "docker",
-    webFetchAllow = ["*"],
+    webFetchAllow = [], // DENY-ALL when unset — see the option doc; an open default was a real hole
     onEgress,
     onInfraError,
     provenanceRef,

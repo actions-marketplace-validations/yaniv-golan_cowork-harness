@@ -1812,7 +1812,10 @@ function computeDiscoverySurfaceNote(cassette: Cassette): string[] {
  *    VM-loop   — the site registers web_fetch ONLY (gated on coworkWebFetchViaApi) and never touches Bash,
  *                which is why container legitimately keeps the built-in shell. */
 const REPLACED_BUILTINS_BY_TIER: Record<string, string[]> = {
-  hostloop: ["Bash", "WebFetch"],
+  // NotebookEdit is in spawnHostLoop's `disallowed` alongside Bash/WebFetch, so a cassette asserting
+  // `tool_not_called: NotebookEdit` at this tier is just as vacuous. It has no workspace replacement —
+  // the tier simply removes it — which the note's wording accommodates.
+  hostloop: ["Bash", "WebFetch", "NotebookEdit"],
   container: ["WebFetch"],
   // microvm is deliberately ABSENT, not an oversight: spawnMicroVm never receives `webFetchViaApi`
   // (execute.ts), so that tier still offers the built-in WebFetch. Listing it here would tell users to
@@ -1842,9 +1845,10 @@ function computeReplacedBuiltinNote(cassette: Cassette): string[] {
   if (stale.length === 0) return [];
   return [
     `replaced-builtin: this cassette's init inventory names ${stale.join(", ")} at ${tier}, which this build ` +
-      `replaces with a workspace MCP tool (mcp__workspace__*). An assertion naming the built-in can no longer ` +
-      `be violated — it would pass VACUOUSLY. Re-record if this scenario asserts on those names; harmless if ` +
-      `it does not, and expected if the recording predates the swap or ran with coworkWebFetchViaApi off.`,
+      `no longer offers there — Bash/WebFetch are replaced by workspace MCP tools (mcp__workspace__*), and ` +
+      `NotebookEdit is removed outright. An assertion naming one of them can no longer be violated: it would ` +
+      `pass VACUOUSLY. Re-record if this scenario asserts on those names; harmless if it does not, and ` +
+      `expected if the recording predates the swap or ran with coworkWebFetchViaApi off.`,
   ];
 }
 

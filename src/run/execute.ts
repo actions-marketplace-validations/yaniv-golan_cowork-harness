@@ -700,6 +700,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let containerName: string | undefined;
   let deregisterContainerReap: (() => void) | undefined; // Ctrl-C cleanup for the agent container
   let hostEgress: { host: string; decision: "allow" | "deny" }[] | undefined; // host-routed web_fetch egress
+  // Container's web_fetch is host-routed too, so its decisions cannot come from the proxy log and must
+  // survive the `egress = eg.entries` teardown assignment. Kept separate for exactly that reason.
+  const containerWebFetchEgress: { host: string; decision: "allow" | "deny" }[] = [];
   let hostloopHooks: HookBundle | undefined; // hostloop's PreToolUse path-gate bundle
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
@@ -886,7 +889,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           webFetchViaApi: viaApiOn,
           provenanceRef,
           dedup,
-          onEgress: (e) => egress.push(e),
+          onEgress: (e) => containerWebFetchEgress.push(e),
         });
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
@@ -952,7 +955,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
       // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
       // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
-      if (effectiveFidelity === "hostloop" && viaApiOn) {
+      // BOTH loops, not just host-loop: production's VM-loop factory calls the provenance path
+      // unconditionally and has no allowlist fallback in it at all. Leaving `ref.current` undefined at
+      // container drops the handler onto PATH B — the gate-OFF path — even though the tool exists only
+      // BECAUSE the gate is on, which is the inverse of production.
+      if ((effectiveFidelity === "hostloop" || effectiveFidelity === "container") && viaApiOn) {
         run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),
@@ -1016,8 +1023,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         egressMalformedLines += eg.malformedLines; // applied to record.evidenceErrors after the finally, where `record` is assigned (#39)
         sidecar.teardown();
       }
-      // merge host-routed web_fetch decisions (host-loop) so they're visible to egress assertions.
+      // merge host-routed web_fetch decisions so they're visible to egress assertions. This MUST come
+      // after the `egress = eg.entries` above, which replaces the array wholesale with the proxy log —
+      // a log that can never contain a host-side fetch. Both loops route web_fetch off-container, so
+      // both need the merge; container's decisions were being discarded by that assignment.
       if (hostEgress?.length) egress = [...egress, ...hostEgress];
+      if (containerWebFetchEgress.length) egress = [...egress, ...containerWebFetchEgress];
       hostProxy?.close();
     }
 

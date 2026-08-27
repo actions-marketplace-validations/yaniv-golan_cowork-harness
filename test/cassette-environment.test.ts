@@ -237,6 +237,19 @@ describe("replaced-builtin note — a fixture naming a tool this build no longer
   // Pins the tier the IMPLEMENTATION does not cover. spawnMicroVm never receives `webFetchViaApi`, so
   // that tier still offers the built-in WebFetch — a note here would tell users to re-record a cassette
   // that faithfully describes what this build produces. Delete this only alongside wiring microvm up.
+  // spawnHostLoop disallows NotebookEdit alongside Bash/WebFetch. It has no workspace replacement — the
+  // tier removes it outright — but `tool_not_called: NotebookEdit` is vacuous there all the same.
+  it("FIRES on NotebookEdit at hostloop, which removes it outright rather than replacing it", () => {
+    const n = notesFor({ events: [init(["NotebookEdit", ...D]), result], effectiveFidelity: "hostloop" });
+    expect(n).toContain("replaced-builtin");
+    expect(n).toContain("NotebookEdit");
+  });
+
+  it("is SILENT on NotebookEdit at container, which still offers it", () => {
+    const n = notesFor({ events: [init(["NotebookEdit", ...D]), result], effectiveFidelity: "container" });
+    expect(n).not.toContain("replaced-builtin");
+  });
+
   it("is SILENT at microvm — that tier still offers the built-in WebFetch", () => {
     const n = notesFor({ events: [init(["Bash", "WebFetch", ...D]), result], effectiveFidelity: "microvm" });
     expect(n).not.toContain("replaced-builtin");

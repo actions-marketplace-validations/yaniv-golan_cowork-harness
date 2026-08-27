@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { baseAgentArgs } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
 import { WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../src/runtime/hostloop.js";
+import { vmLoopWebFetchSurface } from "../src/runtime/container.js";
 import { LiveAgentSession } from "../src/agent/session.js";
 import type { LaunchPlan } from "../src/session.js";
 
@@ -34,6 +35,38 @@ describe("toolAliases + bash-only pre-approval (production hostloop contract)", 
   // "Bash is the only tool that truly diverges between loops": the VM loop keeps the built-in shell.
   // Aliasing Bash here would invent a replacement production does not perform — and would resolve onto a
   // workspace server the VM-loop registration never exposes bash on.
+  // These four pin the COUPLING, which is what an adversarial review broke: it deleted the disallow and
+  // the alias from the call sites and all 6131 tests still passed. Each part is individually plausible
+  // and only correct alongside the others.
+  describe("the VM-loop web_fetch surface is three answers from one gate reading", () => {
+    it("gate ON: advertise the workspace tool AND disallow the built-in — never one without the other", () => {
+      const s = vmLoopWebFetchSurface(true);
+      expect(s.advertised).toEqual(["mcp__workspace__web_fetch"]);
+      expect(s.disallowed).toEqual(["WebFetch"]);
+    });
+
+    // Production's VM-loop registration passes the same approval hook the host loop does. Pre-approving
+    // would make a scripted `webfetch:<domain>` answer, and `decide: deny` on it, silently inert — the
+    // scenario would look like it tested a denial and would have tested nothing.
+    it("gate ON: web_fetch is advertised but NOT pre-approved — production gates it at can_use_tool", () => {
+      expect(vmLoopWebFetchSurface(true).preApproved).toEqual([]);
+    });
+
+    it("gate OFF: no swap at all — the tier keeps the built-in and advertises nothing", () => {
+      expect(vmLoopWebFetchSurface(false)).toEqual({ advertised: [], preApproved: [], disallowed: [] });
+    });
+
+    // The alias is the third half. Disallowing the built-in without it is strictly WORSE than doing
+    // neither: the name stops resolving instead of landing on the workspace tool.
+    it("every name the gate disallows is aliased to a tool it actually advertises", () => {
+      const s = vmLoopWebFetchSurface(true);
+      for (const name of s.disallowed) {
+        expect(Object.keys(VM_LOOP_TOOL_ALIASES)).toContain(name);
+        expect(s.advertised).toContain(VM_LOOP_TOOL_ALIASES[name]);
+      }
+    });
+  });
+
   it("the VM-loop map aliases web_fetch ONLY — Bash is untouched there", () => {
     expect(VM_LOOP_TOOL_ALIASES).toEqual({ WebFetch: "mcp__workspace__web_fetch" });
     expect(VM_LOOP_TOOL_ALIASES.Bash).toBeUndefined();

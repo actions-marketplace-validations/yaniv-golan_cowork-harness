@@ -1812,6 +1812,25 @@ describe("judged document — scratch files are labelled as undelivered", () => 
       authoredFiles: files,
     } as never);
 
+  // `scratchpad` is not in RESERVED_MOUNT_NAMES, so a user can connect a folder with that exact name and
+  // its files arrive as `scratchpad/…` — byte-identical to the synthetic walk prefix. Labelling those
+  // tells the judge something FALSE about a file the user really does receive, which false-REDs a
+  // "was it delivered?" rubric. A wrong claim is worse than a missing one.
+  it("does NOT label when `scratchpad` is a real connected folder — the prefix collides", () => {
+    const d = buildJudgedDocument({
+      transcript: [],
+      finalMessage: "done",
+      toolsCalled: [],
+      result: "success",
+      workRoot: "/w/session/mnt",
+      userVisiblePrefixes: ["outputs", "scratchpad"],
+      authoredFiles: [{ path: "scratchpad/report.md", content: "the report" }],
+    } as never);
+    expect(d).toContain("scratchpad/report.md");
+    expect(d).not.toContain("NOT delivered to the user");
+    expect(d).not.toContain("## Note on scratch files");
+  });
+
   it("marks a scratchpad file NOT delivered, and leaves a real deliverable unmarked", () => {
     const d = doc([
       { path: "outputs/report.md", content: "DELIVERED" },

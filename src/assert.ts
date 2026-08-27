@@ -747,9 +747,17 @@ export function buildJudgedDocument(ctx: AssertContext, includeSubagentText = fa
   //
   // The distinction is already carried in the path: the scratchpad walk emits a synthetic `scratchpad/`
   // prefix (run/artifacts.ts). This only makes it legible to the judge, rather than restructuring the set.
+  // `scratchpad` is NOT in RESERVED_MOUNT_NAMES, so a user may connect a folder with that exact name.
+  // Its files then arrive workRoot-relative as `scratchpad/…` — indistinguishable by prefix from the
+  // synthetic walk. Labelling those would hand the judge a FALSE statement ("NOT delivered" about a file
+  // the user does receive) and false-RED a "was the report delivered?" rubric. A wrong claim is worse
+  // than a missing one, so the collision disables the label rather than guessing.
+  // `?? []` because a partial AssertContext (tests, and any caller building one by hand) may omit this;
+  // an absent prefix list means "nothing is user-visible", which keeps the label ON — the safe direction.
+  const scratchIsUserVisible = (ctx.userVisiblePrefixes ?? []).some((p) => p === "scratchpad" || p === SCRATCHPAD_PREFIX);
   let sawScratch = false;
   for (const f of ctx.authoredFiles ?? []) {
-    const scratch = f.path.startsWith(SCRATCHPAD_PREFIX);
+    const scratch = !scratchIsUserVisible && f.path.startsWith(SCRATCHPAD_PREFIX);
     sawScratch ||= scratch;
     const tag = scratch ? " — SCRATCH, NOT delivered to the user" : "";
     parts.push(`## Authored file: ${s(f.path)}${tag}${f.truncated ? " (truncated)" : ""}\n${s(f.content)}`);

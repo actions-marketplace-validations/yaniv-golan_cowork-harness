@@ -17,6 +17,24 @@ import { listMountedSkills } from "../run/skill-metadata.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
 
+/** The VM loop's web_fetch surface, as three coupled answers derived from ONE gate reading.
+ *
+ *  Exported and pure because the bug this prevents lives at the CALL SITE, not in any one value: the
+ *  three parts (advertise, do-not-pre-approve, disallow the built-in) are only correct together, and
+ *  each can be dropped independently without any other test noticing. An adversarial review deleted the
+ *  disallow and the alias and the entire suite still passed.
+ *
+ *  - `advertised`   — the workspace tool the model can see.
+ *  - `preApproved`  — deliberately EMPTY. Production gates web_fetch at can_use_tool (its VM-loop
+ *                     registration passes the same approval hook the host loop does), so pre-approving
+ *                     would make a scripted `webfetch:<domain>` answer and `decide: deny` silently inert.
+ *  - `disallowed`   — the built-in name production removes. Ships with the alias in execute.ts; without
+ *                     that alias a bare `WebFetch` resolves onto nothing instead of the workspace tool. */
+export function vmLoopWebFetchSurface(webFetchViaApi: boolean): { advertised: string[]; preApproved: string[]; disallowed: string[] } {
+  if (!webFetchViaApi) return { advertised: [], preApproved: [], disallowed: [] };
+  return { advertised: ["mcp__workspace__web_fetch"], preApproved: [], disallowed: ["WebFetch"] };
+}
+
 /**
  * L1 — container parity runtime. Runs the staged in-VM agent in a sandboxed arm64
  * Linux container that reproduces the Desktop→agent spawn contract (asar 1.12603.1):
@@ -110,11 +128,11 @@ export function spawnContainer(
   // a registered tool with no backing server is a phantom capability the model can try and fail to use.
   const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
   // Mirror production's VM-loop web_fetch swap: the built-in name goes away and the workspace tool takes
-  // its place. Advertised AND pre-approved together — a registered tool that is not pre-approved gets
-  // auto-allowed as OFF-REGISTRY on first call and trips the permissive-auto-allow guard (the same
-  // reasoning as present_files above).
-  const webFetchTools = opts.webFetchViaApi ? ["mcp__workspace__web_fetch"] : [];
-  const webFetchDisallowed = opts.webFetchViaApi ? ["WebFetch"] : [];
+  // its place. ADVERTISED but deliberately NOT pre-approved — production's VM-loop registration passes
+  // the same `requestWebFetchApproval` hook the host loop does, so the call is gated at can_use_tool.
+  // `spawnHostLoop` splits extraTools/extraAllowedTools for exactly this reason; pre-approving here
+  // would make a scripted `webfetch:<domain>` answer, and a `decide: deny` on it, silently inert.
+  const { advertised: webFetchTools, disallowed: webFetchDisallowed } = vmLoopWebFetchSurface(!!opts.webFetchViaApi);
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,
     systemPromptAppend: opts.systemPromptAppend,
@@ -129,7 +147,9 @@ export function spawnContainer(
     // off-registry-auto-allow reason present_files is.
     disallowed: webFetchDisallowed,
     extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES],
-    extraAllowedTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES],
+    // web_fetch is absent here ON PURPOSE — see webFetchTools above. It is the one registered tool this
+    // tier does not pre-approve, because production gates it at can_use_tool.
+    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
   });
   const dockerArgs = dockerRunArgv({
     network,
@@ -194,6 +214,11 @@ export function spawnContainer(
           provenanceRef: opts.provenanceRef,
           dedup: opts.dedup,
           onEgress: opts.onEgress,
+          // MUST be passed. The handler defaults this to ["*"], and compile(["*"]) is `() => true` — so
+          // omitting it hands the tier an UNRESTRICTED fetcher that runs in the harness's own Node
+          // process, outside the container network namespace and therefore invisible to the sidecar
+          // proxy. That silently voids this tier's default-deny egress promise for this one tool.
+          webFetchAllow: plan.egressAllow,
           tools: ["web_fetch"],
         }),
       }
