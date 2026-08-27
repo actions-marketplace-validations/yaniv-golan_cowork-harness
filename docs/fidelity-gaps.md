@@ -531,7 +531,11 @@ offer the built-in `WebFetch` and a bare emission there does not reach a workspa
 not `WebFetch`. An assertion naming the built-in (`tool_called: WebFetch`, `tool_not_called: WebFetch`)
 therefore names a tool that does not exist at this tier — and `tool_not_called` passes **vacuously**
 rather than failing loudly, which is the harder direction to notice. Name `mcp__workspace__web_fetch`
-instead. `verify-cassettes` emits a `replaced-builtin` note when a recorded init inventory names a
+instead — **but that name is itself tier-dependent**: `microvm` and `protocol` never offer it, so the same
+assertion is permanently vacuous THERE. There is no single spelling that is meaningful at every tier,
+because the tiers genuinely differ; switching a scenario's `fidelity:` can silently turn a web-fetch
+assertion into a tautology in either direction. Pair it with a positive assertion that fails if the tool
+set is not what you assumed, or keep the scenario on the tier it was written for. `verify-cassettes` emits a `replaced-builtin` note when a recorded init inventory names a
 built-in absent from the tier's current set.
 
 ## Skill/plugin discovery SDK-MCP servers — modeled on container/hostloop; microvm/protocol pending
