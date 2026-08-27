@@ -502,10 +502,12 @@ def lint_doc(doc, path, raw_lines):
                 "WARN",
                 "fidelity-defaulted",
                 "no `fidelity:` — defaulting to `container`, which models the VM-LOOP lane. Production "
-                "runs HOST-LOOP (gate 1143815894 is force-ON), so this scenario is measured against a "
-                "lane your users are not on.",
+                "runs HOST-LOOP by default (gate 1143815894), so this scenario is likely measured "
+                "against a lane your users are not on.",
                 "Name a tier: `fidelity: hostloop` to match production, `fidelity: cowork` to auto-pick "
                 "the way Cowork does, or `fidelity: container` to keep today's behaviour deliberately. "
+                "Switching tiers can COST you assertions: `no_scratchpad_leak` is container-only (an "
+                "error elsewhere) and `transcript_no_host_path` fails by design at hostloop/protocol. "
                 "The default is being removed — `fidelity:` becomes REQUIRED in the next major.",
                 path,
             )

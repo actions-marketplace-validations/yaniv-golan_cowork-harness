@@ -1794,7 +1794,8 @@ describe("prompt drift guard (H1-H3)", () => {
 // backwards: the file-tool base is correct, the shell was the wrong one.
 // ==========================================================================================
 // The deprecation window before `fidelity` becomes REQUIRED. The default models VM-LOOP while production
-// runs HOST-LOOP (gate 1143815894 force-ON), so an omitted key silently measures the wrong lane. Warn now,
+// runs HOST-LOOP by default (gate 1143815894 — per-account, read from the fcache, so never state it as a
+// live fact), so an omitted key silently measures the wrong lane. Warn now,
 // fail at the next major — consumers get told before they get an error.
 // AUTHORED is not DELIVERED. The authored-file capture deliberately includes the scratchpad — the run did
 // write those files — but production DISCARDS anything outside `mnt/` ("never reaches the user or your file

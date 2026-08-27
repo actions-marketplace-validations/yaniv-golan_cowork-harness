@@ -882,7 +882,8 @@ def test_zero_gate_declaration_switches_the_message_to_drop_it(tmp_path):
 
 
 # --- fidelity-defaulted -------------------------------------------------------
-# The schema default (`container`) models VM-LOOP; production runs HOST-LOOP (gate 1143815894 force-ON).
+# The schema default (`container`) models VM-LOOP; production runs HOST-LOOP by default (gate 1143815894 —
+# per-account, read from the fcache, so the warning must not assert it as a live fact).
 # So an omitted `fidelity:` measures the scenario against a lane real users are not on — silently. This is
 # the deprecation warning before the key becomes REQUIRED at the next major.
 
