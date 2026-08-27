@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-08-28
+
 ### Added
 
 - **`cowork-harness assertions --list` gains a "Skill references (progressive disclosure)" family** for the
