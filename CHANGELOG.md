@@ -31,9 +31,17 @@ All notable changes to this project are documented here. The format is based on
   (`VM_LOOP_TOOL_ALIASES`). Bash is deliberately untouched — "Bash is the only tool that truly diverges
   between loops" — which is why `container` keeps the built-in shell while `hostloop` replaces both.
 
-  The three parts ship together by necessity. Disallowing the built-in without the alias would turn a
-  fidelity fix into a regression (the bare name stops resolving instead of landing on the workspace
-  tool); registering the tool without pre-approving it trips the off-registry auto-allow guard.
+  The three parts ship together by necessity: disallowing the built-in without the alias turns a fidelity
+  fix into a regression, because the bare name stops resolving instead of landing on the workspace tool.
+  The tool is advertised but deliberately **not** pre-approved — production's VM-loop registration passes
+  the same approval hook the host loop does, so the call is gated at `can_use_tool`. Pre-approving it
+  would make a scripted `webfetch:<domain>` answer, and `decide: deny` on it, silently inert.
+
+  Its fetch is bound to the session egress allowlist and to URL provenance, exactly as the host loop's is.
+  Both matter: this fetch runs in the harness's own process, outside the container network namespace,
+  so the sidecar proxy never sees it and only these two gates constrain it. The handler's allowlist now
+  defaults to **deny-all** rather than `["*"]`, so a caller that forgets to pass one gets nothing through
+  instead of everything.
 
   The workspace handler now gates **dispatch** on the same set it advertises, not just `tools/list`. An
   unadvertised tool that still executed when named was a real hole: the VM-loop registration exposes
@@ -41,11 +49,12 @@ All notable changes to this project are documented here. The format is based on
   container.
 
   **`microvm` is unchanged** and still offers the built-in `WebFetch` — `spawnMicroVm` does not receive
-  the gate.
+  the gate. **`chat` is unchanged too**: the swap applies to `run`/`record`, so `chat --fidelity container`
+  still offers the built-in and the two surfaces differ at the same declared tier.
 
 ### Upgrade impact
 
-- **At `fidelity: container`, `WebFetch` is no longer in the offered tool set.** An assertion naming it
+- **At `fidelity: container` under `run`/`record`, `WebFetch` is no longer in the offered tool set.** An assertion naming it
   no longer describes a callable tool. `tool_not_called: WebFetch` is the dangerous direction: it now
   passes **vacuously** rather than failing loudly, so a scenario that was genuinely testing "this skill
   does not fetch from the web" silently stops testing anything. Rename to

@@ -181,6 +181,46 @@ The `--help` text notes this at runtime. If you need to test egress policy, use 
 
 ---
 
+## Browser tools are not served — and egress assertions say nothing about that path
+
+**Real Cowork behaviour:** Desktop `1.37937.1` serves an in-app browser to Cowork agent sessions as
+`mcp__Claude_Browser__*` — 16 tools (`browser_batch`, `computer`, `find`, `form_input`, `get_page_text`,
+`javascript_tool`, `navigate`, `preview_start`, `read_console_messages`, `read_network_requests`,
+`read_page`, `resize_window`, `tabs_close`, `tabs_context`, `tabs_create`, `tabs_select`). Two gates
+carry it, `17519066` and `3990395613`; both read `on:true source:"force"` in the live fcache
+(2026-08-27). Chat mode does not receive them. The tool list comes from real sessions' `system/init`
+arrays; the browser's *behaviour* is unprobed, so treat the limits Anthropic's prompt text describes
+(no `file://`, no Claude-started `localhost`) as documentation rather than observation.
+
+**Harness behaviour:** none of the 16 are served, and neither gate is in `PINNED_GATES`. A skill that
+calls one gets an unknown-tool error — a false-RED, and the cheaper half of this gap.
+
+**The half that matters is what a GREEN does not cover.** Egress entries have exactly two sources: the
+sidecar proxy's `onDecision` (container traffic, which is what `bash` uses) and the workspace
+`web_fetch`'s `onEgress`. In production the browser pane runs Desktop-side — it traverses neither the
+container nor the harness's proxy. So this tier of the contract has a hole that no assertion reports:
+
+> **`egress_denied` and the other `egress_*` assertions do not cover browser-tool traffic.** They are
+> evidence about `bash` and `web_fetch` only. A run where they pass is silent about whether the skill
+> could reach the network through the browser in production — not proof that it could not.
+
+That silence is easy to over-read, because "default-deny egress held" is exactly the sentence a reader
+wants from a green egress assertion. It is true of the paths the harness models and says nothing about
+the one it does not.
+
+**Why the tools are not modelled:** driving a real browser pane is disproportionate to the value.
+Declaring the 16 names so calls resolve is a much smaller step than serving behaviour, and the
+declaration-vs-rendered distinction elsewhere in this document covers the difference — worth doing if a
+real skill needs it, not before. Anything added must be gate-conditional: this is per-account
+(force-ON here, not necessarily elsewhere), so it needs both gate ids pinned first.
+
+**One sync trap, latent today.** `preview_start` is served in Cowork with a **different input schema**
+than its base definition — `{url}` (open a tab; explicitly no dev server on that surface) versus
+`{name}` (start a dev server from `.claude/launch.json`). Same tool name, no shared field, chosen by
+session kind at tool-list construction. Nothing in the harness reasons about that tool, so nothing is
+wrong today; if a sentinel or `deriveSpawnEnv` ever does, the surface qualifier is load-bearing and a
+name-only match would silently pick the wrong schema.
+
 ## No session resume in `chat`
 
 **Real Cowork behaviour:** Sessions persist and can be resumed across launches.
@@ -476,6 +516,12 @@ keeps the built-in shell while host-loop replaces it.
 The three parts ship together on purpose. Disallowing the built-in **without** the alias would turn a
 fidelity fix into a regression: the bare name would stop resolving instead of landing on the workspace
 tool. Registering the tool without pre-approving it would trip the off-registry auto-allow guard.
+
+**`chat` does not do the swap.** `chat --fidelity container` spawns without the gate, so it still offers
+the built-in `WebFetch` and no `mcp__workspace__web_fetch`. The swap is a `run`/`record` property today.
+Debugging a skill in `chat` and then running it as a scenario therefore presents two different tool sets
+at the same declared tier — check the tier's inventory in the run's `system/init` rather than assuming
+`chat` matches.
 
 **`microvm` is still unaliased** — `spawnMicroVm` does not receive the gate, so that tier continues to
 offer the built-in `WebFetch` and a bare emission there does not reach a workspace server. Use
