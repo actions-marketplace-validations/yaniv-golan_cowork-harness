@@ -295,6 +295,13 @@ export interface WorkspaceHandlerOptions {
    *  `outputs` — never the bare mnt root. Defaults to `vmMnt` for callers that don't care about the
    *  distinction (e.g. tests exercising a single generic mount). */
   execCwd?: string;
+  /** Which workspace tools to expose. Defaults to BOTH (the host-loop shape).
+   *
+   *  Production registers different sets per loop, and the difference is not cosmetic: the host-loop
+   *  patch replaces `Bash` AND `WebFetch`, while the VM-loop site registers **web_fetch only** — gated on
+   *  `!hostLoopMode && coworkWebFetchViaApi` — and never touches Bash, which is why `container` correctly
+   *  keeps the built-in shell. Passing `["web_fetch"]` models the VM-loop registration. */
+  tools?: ("bash" | "web_fetch")[];
 }
 
 export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler {
@@ -314,6 +321,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
   // Per-handler (per-spawn) latch for the provenance-unenforced warning — was module-level, which
   // silenced the gap after the first run in a long-lived process. Each fresh handler warns once.
   const provWarned = { value: false };
+  const exposed = opts.tools ?? ["bash", "web_fetch"];
   const tools = [
     {
       name: "bash",
@@ -325,7 +333,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
       description: FETCH_DESC,
       inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
     },
-  ];
+  ].filter((td) => exposed.includes(td.name as "bash" | "web_fetch"));
   return async (_server, jr) => {
     const method = jr.method;
     if (method === "initialize")
@@ -340,6 +348,11 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
     if (method === "tools/call") {
       const name = jr.params?.name;
       const a = jr.params?.arguments ?? {};
+      // Gate the DISPATCH on the same set as the advertisement, not just the tools/list response. An
+      // unadvertised tool that still executes when named is a real hole: the VM-loop registration exposes
+      // web_fetch ONLY, and a `bash` call arriving there must be refused, not quietly exec'd into the
+      // container.
+      if (!exposed.includes(name as "bash" | "web_fetch")) return { result: textResult(`error: unknown tool "${String(name)}"`, true) };
       if (name === "bash")
         return {
           result: await execInContainer(runner, containerName, execCwd, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),

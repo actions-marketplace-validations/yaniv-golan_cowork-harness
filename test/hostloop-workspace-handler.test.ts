@@ -16,6 +16,47 @@ import {
 // `runner` binary so the `docker exec` infra-failure shape is exercised without Docker.
 
 // ---------------------------------------------------------------------------------------------
+// TOOL SELECTION. Production registers a DIFFERENT set per loop and the difference is load-bearing:
+// the host-loop patch replaces Bash AND WebFetch, while the VM-loop site registers **web_fetch only**
+// (gated on `!hostLoopMode && coworkWebFetchViaApi`) and never touches Bash — which is why `container`
+// correctly keeps the built-in shell. Read from asar 1.37937.3.
+// ---------------------------------------------------------------------------------------------
+describe("workspace handler tool selection (host-loop vs VM-loop registration)", () => {
+  const call = async (opts: Parameters<typeof makeWorkspaceHandler>[0], jr: Record<string, unknown>) =>
+    (await makeWorkspaceHandler(opts)(null as never, jr as never)) as {
+      result?: { tools?: { name: string }[]; content?: { text: string }[]; isError?: boolean };
+    };
+
+  const base = { containerName: "c", vmMnt: "/sessions/x/mnt" };
+
+  it("DEFAULT is both tools — the host-loop shape stays unchanged", async () => {
+    const r = await call({ ...base }, { method: "tools/list" });
+    expect(r.result?.tools?.map((t) => t.name).sort()).toEqual(["bash", "web_fetch"]);
+  });
+
+  it('tools:["web_fetch"] advertises web_fetch ONLY — the VM-loop shape', async () => {
+    const r = await call({ ...base, tools: ["web_fetch"] }, { method: "tools/list" });
+    expect(r.result?.tools?.map((t) => t.name)).toEqual(["web_fetch"]);
+  });
+
+  // The hole this closes: filtering only the ADVERTISEMENT leaves the dispatch reachable by name. An
+  // unadvertised `bash` that still execs into the container is a real capability leak, not a cosmetic one.
+  it("an UNADVERTISED tool is refused at dispatch, not silently executed", async () => {
+    const r = await call(
+      { ...base, tools: ["web_fetch"] },
+      { method: "tools/call", params: { name: "bash", arguments: { command: "echo pwned" } } },
+    );
+    expect(r.result?.isError).toBe(true);
+    expect(r.result?.content?.[0]?.text ?? "").toMatch(/unknown tool "bash"/);
+  });
+
+  it("the advertised tool still dispatches when the set is narrowed", async () => {
+    const r = await call({ ...base, tools: ["web_fetch"] }, { method: "tools/call", params: { name: "nope", arguments: {} } });
+    expect(r.result?.isError, "an unknown name is still an error, not a crash").toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // The SSRF backstop resolves ONCE and PINS the fetch to that vetted address, so a host that
 // answers public for the check can't be re-resolved to a private address by the fetch (DNS rebind).
 // ---------------------------------------------------------------------------------------------

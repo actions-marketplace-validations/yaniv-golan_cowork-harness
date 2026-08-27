@@ -881,6 +881,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           runToken,
           suggestSkillsEnabled,
           proactiveSkillSuggestEnabled,
+          // Same gate production reads for its VM-loop web_fetch registration. Read once above and shared
+          // with the hostloop branch so the two tiers cannot drift apart on it.
+          webFetchViaApi: viaApiOn,
+          provenanceRef,
+          dedup,
+          onEgress: (e) => egress.push(e),
         });
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
