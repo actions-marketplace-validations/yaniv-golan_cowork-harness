@@ -6,73 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Changed
-
-- **`subagent_declared_but_unused` documents that it fires only on a dispatch that declares a tool list.**
-  It reads `subagents[].declaredTools`, populated from a `tools`/`allowedTools` key in the dispatch input.
-  The `Agent` tool carries neither, so that list is empty and the key passes on every such dispatch —
-  **0 of 1091 real dispatches** carry a non-empty list. The key is not wrong, but a green means "not
-  applicable here", never "no fabrication", and neither its description nor its docs said so.
-
-- **BEHAVIOUR CHANGE: `tool_not_called` and `subagent_tool_absent` naming a tool the tier does not serve
-  are now REFUSED at scenario load.** `tool_not_called: "Bash"` at `hostloop` passed vacuously, always — that tier disallows the
-  built-in shell and aliases it to `mcp__workspace__bash`, so the run could never have called `Bash`
-  whatever the agent did. The assertion read as a guarantee and verified nothing. The inverse was equally
-  broken: `mcp__workspace__bash` at `container`, where the built-in is served instead.
-
-  The refusal is a `UsageError` at the point the tier resolves — after `fidelity: cowork` becomes a real
-  tier, and before any staging, image pull or spawn, so no model spend is wasted. The message names the
-  tool to assert instead, and names the sibling keys that behave differently (`tool_called` still fails
-  normally; `subagent_tool_absent` is judged against a per-dispatch inventory this check cannot
-  determine). `scenario.py lint` WARNs on the same set, before any run at all.
-
-  **The table is closed to tools the harness itself removes or registers**, and never derived from the
-  launch plan. `--tools` gates the built-in set alone — the agent binary's own help says so — while every
-  sandbox tier separately passes `--mcp-config`. A launch-set-derived check would therefore have rejected
-  `tool_not_called: "mcp__example-fs__write_file"` for a session using the `mcp.config` this repo ships an
-  example of, while that tool was registered and callable. Globs are never refused, and the table
-  under-approximates on purpose: `REPL` at hostloop is vacuous too and is not caught, which is the correct
-  side to err on when the verdict is a hard refusal.
-
-  There is **no opt-out**, deliberately. The repo's `allow_*` modifiers all cover cases where the harness
-  might be wrong about a real signal; a fired reject here cannot be a false positive, so there is no
-  legitimate scenario to rescue. If one is ever found, the table is wrong and the table should change.
-
-  **`subagent_tool_absent` is covered for the same reason `tool_not_called` is.** It reads the tools
-  sub-agents actually USED, not a per-dispatch declared list, so a tool the tier never serves makes it
-  vacuous in exactly the same way — corroborated by the run population, where sub-agent `Bash` calls
-  appear 20 times, all at `container` and never at `hostloop`. Covering one key and not the other would
-  refuse an assertion at hostloop while silently greening the sub-agent form of the identical claim.
-
-  `e2e/scenarios/canary-hostloop.yaml` carried exactly this defect and is fixed in the same change: its
-  `tool_not_called: Bash` never proved anything, and its `tool_called: mcp__workspace__*` already carries
-  the canary's stated purpose.
-
-### Fixed
-
-- **`tool_called: "Task"` could never pass and `tool_not_called: "Task"` always did.** The agent binary
-  canonicalizes a set of legacy tool names — `Task`→`Agent`, `KillShell`/`KillBash`→`TaskStop`, and nine
-  more — while the spawn tool list still declares the **legacy** spelling. So the init inventory echoes
-  back `Task`, every actual dispatch is emitted as `Agent`, and a literal matcher could never connect the
-  two. Measured across 506 kept runs: `Task` offered **506** times and called **0**; `Agent` called **188**
-  times and offered **0**. The negative form was a permanent vacuous pass in the most common dispatch
-  assertion there is, at every tier.
-
-  All four tool keys (`tool_called`, `tool_not_called`, `subagent_tool_used`, `subagent_tool_absent`) now
-  match either spelling, through the one shared matcher. Globs see both too — the **recorded name** is
-  expanded rather than the author's pattern, so `tool_not_called: "Ta*"` and `"*"` are violated by a
-  recorded `Agent`, which rewriting the pattern would not have fixed.
-
-  Recorded data is unchanged: `toolCounts`, `context.tools` and every cassette keep exactly what the agent
-  reported, the same verbatim posture `RunResult.models` documents. Only matching is alias-aware, so
-  `tool_available: "Task"` still matches the inventory's literal `Task` and no committed cassette changes
-  meaning.
-
-  **Still vacuous, and now documented as such:** `tool_not_called` on a tool the *tier* never offers —
-  `Bash` at `hostloop`, or `mcp__workspace__bash` at `container`. That is a separate class with a separate
-  fix; the key's docs and the skill reference now warn about it rather than leaving it implied.
-
 ### Added
+
+- **`cowork-harness assertions --list` gains a "Skill references (progressive disclosure)" family** for the
+  two new keys, so they are not appended to a flat dump nobody reads.
 
 - **A guard that a committed cassette's `tool_not_called` is actually violable by its own recording.**
   The tool surface at a tier is **gate-conditional**: at `container`, `mcp__workspace__web_fetch` is
@@ -90,8 +27,6 @@ All notable changes to this project are documented here. The format is based on
   and cannot see alias-class vacuity (`tool_not_called: "Task"` names a tool that is in every inventory
   yet never emitted — the agent binary canonicalizes `Task` to `Agent`); both are recorded as separate
   work rather than left implied.
-
-### Added
 
 - **`referencesAccessed` — reference access through EVERY tool channel, not just the `Read` tool.**
   `referencesRead` counts one channel, and `critique`'s headline invited a reader to conclude the agent
@@ -136,7 +71,74 @@ All notable changes to this project are documented here. The format is based on
   the negative one, which is the direction that would otherwise pass vacuously off a missing field. The
   scenario linter rejects asserting both with the same pattern.
 
+- **`critique` names why the GRADED turn errored** — `gradedErrorReason` in the JSON report and inline in
+  the text NOTE. `taskResult: "error"` is a legitimate **gradeable** outcome and the critique still runs,
+  but the report said only "the task run ended in error", so an exhausted quota or a dropped connection
+  read as a defect in the skill under review.
+
+- **`critique` reports which model produced the GRADED run** — `gradedModels` in the JSON report and
+  `graded model(s):` in the text header, read back from the graded turn's own `result.json` and filtered
+  of the agent's locally-fabricated `<synthetic>` entries. The report named the *evaluator's* resolved
+  model and no other, so the model that produced the behaviour being graded appeared nowhere. It cannot
+  be inferred from context either: the turns are a subprocess that inherits no model from whatever
+  invoked `critique`, so an omitted `--model` silently grades whatever the spawned agent defaults to. A
+  run with nothing recorded now says `graded model(s): unknown` rather than staying silent. The ids are
+  **observed, not requested** — read from the model stamped on the graded turn's assistant messages, not
+  from the flag.
+- `isLiveModelId` (`src/types.ts`) — the agent-marker filter every consumer of `RunResult.models` must
+  apply, now declared once beside the field it governs. It replaces **three** divergent copies, two of
+  which disagreed: `src/run/provenance.ts` (which renders `provenance.model` on every JSON envelope)
+  matched the angle-bracket **shape**, `scripts/eval-gate.ts` the `<` **prefix** — so a malformed or
+  truncated marker such as `"<synthetic"` was dropped by one and rendered as if it were a model id by the
+  other. The shared rule is the shape.
+
 ### Changed
+
+- **Skill and docs updated for the tier refusal.** `SKILL.md` previously told authors a tier-mismatched
+  `tool_not_called` "can silently void a web-fetch assertion" when moving a scenario between tiers — the
+  harness now refuses it at load instead, so that guidance described behaviour that no longer exists. The
+  skill's critique reference gains the `referencesAccessed` field, its channels, and the
+  `[]`-vs-absent cannot-verify rule.
+
+- **`subagent_declared_but_unused` documents that it fires only on a dispatch that declares a tool list.**
+  It reads `subagents[].declaredTools`, populated from a `tools`/`allowedTools` key in the dispatch input.
+  The `Agent` tool carries neither, so that list is empty and the key passes on every such dispatch —
+  **0 of 1091 real dispatches** carry a non-empty list. The key is not wrong, but a green means "not
+  applicable here", never "no fabrication", and neither its description nor its docs said so.
+
+- **BEHAVIOUR CHANGE: `tool_not_called` and `subagent_tool_absent` naming a tool the tier does not serve
+  are now REFUSED at scenario load.** `tool_not_called: "Bash"` at `hostloop` passed vacuously, always — that tier disallows the
+  built-in shell and aliases it to `mcp__workspace__bash`, so the run could never have called `Bash`
+  whatever the agent did. The assertion read as a guarantee and verified nothing. The inverse was equally
+  broken: `mcp__workspace__bash` at `container`, where the built-in is served instead.
+
+  The refusal is a `UsageError` at the point the tier resolves — after `fidelity: cowork` becomes a real
+  tier, and before any staging, image pull or spawn, so no model spend is wasted. The message names the
+  tool to assert instead, and names the sibling keys that behave differently (`tool_called` still fails
+  normally; `subagent_tool_absent` is judged against a per-dispatch inventory this check cannot
+  determine). `scenario.py lint` WARNs on the same set, before any run at all.
+
+  **The table is closed to tools the harness itself removes or registers**, and never derived from the
+  launch plan. `--tools` gates the built-in set alone — the agent binary's own help says so — while every
+  sandbox tier separately passes `--mcp-config`. A launch-set-derived check would therefore have rejected
+  `tool_not_called: "mcp__example-fs__write_file"` for a session using the `mcp.config` this repo ships an
+  example of, while that tool was registered and callable. Globs are never refused, and the table
+  under-approximates on purpose: `REPL` at hostloop is vacuous too and is not caught, which is the correct
+  side to err on when the verdict is a hard refusal.
+
+  There is **no opt-out**, deliberately. The repo's `allow_*` modifiers all cover cases where the harness
+  might be wrong about a real signal; a fired reject here cannot be a false positive, so there is no
+  legitimate scenario to rescue. If one is ever found, the table is wrong and the table should change.
+
+  **`subagent_tool_absent` is covered for the same reason `tool_not_called` is.** It reads the tools
+  sub-agents actually USED, not a per-dispatch declared list, so a tool the tier never serves makes it
+  vacuous in exactly the same way — corroborated by the run population, where sub-agent `Bash` calls
+  appear 20 times, all at `container` and never at `hostloop`. Covering one key and not the other would
+  refuse an assertion at hostloop while silently greening the sub-agent form of the identical claim.
+
+  `e2e/scenarios/canary-hostloop.yaml` carried exactly this defect and is fixed in the same change: its
+  `tool_not_called: Bash` never proved anything, and its `tool_called: mcp__workspace__*` already carries
+  the canary's stated purpose.
 
 - **`critique`'s "no references were Read" headline now says what it observed.** It reads the wide
   signal, names the channels it looked through, and states its own under-approximation in one short
@@ -148,6 +150,28 @@ All notable changes to this project are documented here. The format is based on
   missing from that list. `--probe dispatch` prints the wide list too.
 
 ### Fixed
+
+- **`tool_called: "Task"` could never pass and `tool_not_called: "Task"` always did.** The agent binary
+  canonicalizes a set of legacy tool names — `Task`→`Agent`, `KillShell`/`KillBash`→`TaskStop`, and nine
+  more — while the spawn tool list still declares the **legacy** spelling. So the init inventory echoes
+  back `Task`, every actual dispatch is emitted as `Agent`, and a literal matcher could never connect the
+  two. Measured across 506 kept runs: `Task` offered **506** times and called **0**; `Agent` called **188**
+  times and offered **0**. The negative form was a permanent vacuous pass in the most common dispatch
+  assertion there is, at every tier.
+
+  All four tool keys (`tool_called`, `tool_not_called`, `subagent_tool_used`, `subagent_tool_absent`) now
+  match either spelling, through the one shared matcher. Globs see both too — the **recorded name** is
+  expanded rather than the author's pattern, so `tool_not_called: "Ta*"` and `"*"` are violated by a
+  recorded `Agent`, which rewriting the pattern would not have fixed.
+
+  Recorded data is unchanged: `toolCounts`, `context.tools` and every cassette keep exactly what the agent
+  reported, the same verbatim posture `RunResult.models` documents. Only matching is alias-aware, so
+  `tool_available: "Task"` still matches the inventory's literal `Task` and no committed cassette changes
+  meaning.
+
+  **Still vacuous, and now documented as such:** `tool_not_called` on a tool the *tier* never offers —
+  `Bash` at `hostloop`, or `mcp__workspace__bash` at `container`. That is a separate class with a separate
+  fix; the key's docs and the skill reference now warn about it rather than leaving it implied.
 
 - **`critique` diagnosed an unanswered gate as an infrastructure failure, and named the wrong turn while
   doing it.** A graded run that stopped at an `AskUserQuestion` gate with no scripted answer exits 2 with
@@ -182,28 +206,6 @@ All notable changes to this project are documented here. The format is based on
   `transport` as a retryable tail-end drop — matching how the run renderer has always shown them.
   `usage_limit` and `transport` join the ordinary/actionable set; `agent` does not, because for
   critique's own protocol turn an agent-level failure *is* the instrument breaking.
-
-### Added
-
-- **`critique` names why the GRADED turn errored** — `gradedErrorReason` in the JSON report and inline in
-  the text NOTE. `taskResult: "error"` is a legitimate **gradeable** outcome and the critique still runs,
-  but the report said only "the task run ended in error", so an exhausted quota or a dropped connection
-  read as a defect in the skill under review.
-- **`critique` reports which model produced the GRADED run** — `gradedModels` in the JSON report and
-  `graded model(s):` in the text header, read back from the graded turn's own `result.json` and filtered
-  of the agent's locally-fabricated `<synthetic>` entries. The report named the *evaluator's* resolved
-  model and no other, so the model that produced the behaviour being graded appeared nowhere. It cannot
-  be inferred from context either: the turns are a subprocess that inherits no model from whatever
-  invoked `critique`, so an omitted `--model` silently grades whatever the spawned agent defaults to. A
-  run with nothing recorded now says `graded model(s): unknown` rather than staying silent. The ids are
-  **observed, not requested** — read from the model stamped on the graded turn's assistant messages, not
-  from the flag.
-- `isLiveModelId` (`src/types.ts`) — the agent-marker filter every consumer of `RunResult.models` must
-  apply, now declared once beside the field it governs. It replaces **three** divergent copies, two of
-  which disagreed: `src/run/provenance.ts` (which renders `provenance.model` on every JSON envelope)
-  matched the angle-bracket **shape**, `scripts/eval-gate.ts` the `<` **prefix** — so a malformed or
-  truncated marker such as `"<synthetic"` was dropped by one and rendered as if it were a model id by the
-  other. The shared rule is the shape.
 
 ## [2.4.0] — 2026-08-27
 

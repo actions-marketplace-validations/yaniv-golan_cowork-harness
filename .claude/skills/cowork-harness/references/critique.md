@@ -137,6 +137,20 @@ false `already-covered` verdict. It is named in `corpusExcluded` instead, and an
 specifically reports `skillMdStatus: "untracked"`, forcing the mechanical `already-covered` →
 `not-adjudicable` downgrade. `git add` it (or commit before critiquing) if it should count as evidence.
 
+## Read `referencesAccessed`, not `referencesRead`
+
+`referencesRead` counts the **`Read` tool only**. An agent that reaches a reference with a `Bash cat`, a
+`Grep` or a `Glob` leaves nothing in it, so its emptiness is **not** evidence the content went unread.
+`referencesAccessed` is the wide signal — every file reached, with the channel each was reached through
+(`read` / `grep` / `bash`) — and it is what the critique headline is computed from.
+
+Two properties to carry: only the `read` channel is strong evidence the agent opened the file (a `bash`
+entry means a command named the path); and detection **under-approximates** — a `cd` into the skill dir
+then a bare relative `cat`, a heredoc body and a `$VAR`-built path are all invisible. So an absent path is
+weak evidence, never proof. **Presence is the cannot-verify channel:** `[]` means the drive ran and saw
+nothing (a real negative); an ABSENT field means there was no observable drive, and must never be read as
+"none".
+
 ## `referencesRead` is main-agent-only — `noSkillFilesRead` is not
 
 `result.json`'s top-level `referencesRead` lists **main-agent Reads only**. A dispatcher-style skill does
