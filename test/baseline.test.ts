@@ -50,6 +50,8 @@ import {
 } from "../src/sync/cowork-sync.js";
 import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
 import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
+import { hostLoopCwds } from "../src/runtime/hostloop.js";
+import { renderPrompts } from "../src/prompt.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
@@ -1772,6 +1774,58 @@ describe("prompt drift guard (H1-H3)", () => {
     const result = checkPromptDrift(fp, fakeFingerprintsFile, MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS);
     expect(result.unknownDeltas.some((d) => d.includes("workspaceContext"))).toBe(false);
     expect(result.unknownDeltas.some((d) => d.includes("modelIdentity"))).toBe(false);
+  });
+});
+
+// ==========================================================================================
+// The host-loop cwd SPLIT. Production keeps the agent process and the shell at DIFFERENT roots, and a
+// single-value assertion cannot express that — which is how the harness ran bash at the outputs dir for
+// two releases while believing it faithful. All three values are pinned in one place so a future edit
+// cannot move one and leave the others.
+//
+// MEASURED on desktop-local Cowork 2026-08-27:
+//   agent process / bare `Write` base : mnt/outputs      (Probes A, A2, B)
+//   mcp__workspace__bash cwd          : /sessions/<id>   (Probes A and B — with AND without a folder)
+//   {{cwd}} prompt token at hostloop  : mnt/outputs      (src/prompt.ts)
+//
+// Do NOT "fix" the agent cwd to match the shell. That was this investigation's first instinct and it is
+// backwards: the file-tool base is correct, the shell was the wrong one.
+// ==========================================================================================
+describe("host-loop cwd split (agent at outputs, shell at the session root)", () => {
+  const ROOT = "/sessions/abc";
+  const OUT = "/run/work/session/mnt/outputs";
+
+  it("the agent process resolves relative file-tool paths at OUTPUTS", () => {
+    expect(hostLoopCwds(ROOT, OUT).agentProcessCwd).toBe(OUT);
+  });
+
+  it("mcp__workspace__bash starts at the bare SESSION ROOT — not outputs, not a connected folder", () => {
+    expect(hostLoopCwds(ROOT, OUT).workspaceBashCwd).toBe(ROOT);
+  });
+
+  it("the two are DIFFERENT — collapsing them is the defect, so assert the split itself", () => {
+    const { agentProcessCwd, workspaceBashCwd } = hostLoopCwds(ROOT, OUT);
+    expect(agentProcessCwd).not.toBe(workspaceBashCwd);
+  });
+
+  // The pre-2026-08-27 value. Pinned as a NEGATIVE so a revert cannot pass quietly: it was derived from
+  // the asar's `cwd: c.vmCwd` spawn argument, which is not load-bearing on the cowork path (only the
+  // `chat` branch prepends an explicit `cd`, which would be redundant if it worked).
+  it("REGRESSION: the shell cwd is never a connected folder or outputs, with or without folders", () => {
+    expect(hostLoopCwds(ROOT, OUT).workspaceBashCwd).not.toMatch(/\/mnt\//);
+    expect(hostLoopCwds(ROOT, `${ROOT}/mnt/outputs`).workspaceBashCwd).toBe(ROOT);
+    expect(hostLoopCwds(ROOT, `${ROOT}/mnt/project`).workspaceBashCwd).toBe(ROOT);
+  });
+
+  // The third value. `{{cwd}}` must track the AGENT cwd, not the shell — a swap is the sentinel-failing
+  // drift the sub-agent asset calls out explicitly.
+  it("the {{cwd}} prompt token tracks the AGENT cwd at hostloop, not the shell", () => {
+    const rendered = renderPrompts(loadBaseline("latest") as never, { model: "claude-opus-4-8" } as never, "abc", undefined, {
+      effectiveFidelity: "hostloop",
+      hostCwd: OUT,
+    } as never);
+    const sys = JSON.stringify(rendered);
+    expect(sys).toContain(OUT);
   });
 });
 

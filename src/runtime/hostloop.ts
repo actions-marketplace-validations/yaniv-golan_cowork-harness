@@ -4,7 +4,7 @@ import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } f
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
-import type { LaunchPlan, Mount } from "../session.js";
+import type { LaunchPlan } from "../session.js";
 import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
 import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills-handler.js";
 import { makePluginsHandler } from "../hostloop/plugins-handler.js";
@@ -79,6 +79,24 @@ export function buildHostLoopNativeEnv(
  *  (/tmp→/private/tmp, /var→/private/var on macOS) makes the agent's realpath'd wire cwd differ from the
  *  un-canonicalized spawner cwd even for the SAME directory — a false alarm this collapses. The gate
  *  decision is unaffected (it realpaths candidate and roots itself); this only governs the diagnostic. */
+/** The host-loop cwd SPLIT, in one place because the two halves are only correct TOGETHER.
+ *
+ *  Production keeps them deliberately different, measured on desktop-local Cowork 2026-08-27:
+ *   - the agent process sits at the OUTPUTS dir, so its file tools resolve a bare `Write` there;
+ *   - every `mcp__workspace__bash` call starts at the bare SESSION ROOT, and bash resets its cwd
+ *     between calls ("no cwd/env carryover"), so a relative shell path can never be `cd`-ed elsewhere.
+ *
+ *  Cowork's own sub-agent prompt states the second half: "Each command starts in `<vmCwd>`; anything
+ *  written outside `<vmCwd>/mnt/` (including /tmp) stays in that environment and never reaches the user
+ *  or your file tools."
+ *
+ *  Collapsing them — which this harness did until 2026-08-27, running bash at the outputs dir — makes a
+ *  skill that writes relative paths from a script look correct here and deliver nothing in production.
+ *  Keep them as one function so a future edit cannot move one and leave the other. */
+export function hostLoopCwds(sessionRoot: string, hostOutputsDir: string): { agentProcessCwd: string; workspaceBashCwd: string } {
+  return { agentProcessCwd: hostOutputsDir, workspaceBashCwd: sessionRoot };
+}
+
 export function pathGateCwdMismatch(wireCwd: string, spawnerCwd: string): boolean {
   const canon = (p: string): string => {
     try {
@@ -317,7 +335,11 @@ export function spawnHostLoop(
     },
   };
 
-  const child = spawn(agentNativeHost, nativeArgs, { cwd: hostOutputsDir, env: nativeEnv, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(agentNativeHost, nativeArgs, {
+    cwd: hostLoopCwds(sessionRoot, hostOutputsDir).agentProcessCwd,
+    env: nativeEnv,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
 
   // The VM sidecar container: bash/web_fetch's `docker exec` target. No agent inside it (the agent is
   // the native `child` above) — it runs a keep-alive command (dockerRunArgv's default when `agentArgv` is
@@ -355,11 +377,24 @@ export function spawnHostLoop(
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(outDir, infraErrors);
   const { markTearingDown } = watchHostLoopSidecar(sidecarChild, logSidecarInfra);
 
-  // Production's vmCwd is the first non-network-drive connected folder's mount name, falling back to
-  // outputs — never the bare session root or bare mnt/. The harness has no network-drive detection; an
-  // unmountable folder fails loud at container start instead (a documented, deliberate divergence).
-  const firstFolder = plan.mounts.find((mt): mt is Mount => mt.kind === "folder");
-  const execCwd = `${sessionRoot}/mnt/${firstFolder ? firstFolder.mountPath : "outputs"}`;
+  // Every `mcp__workspace__bash` call starts at the bare SESSION ROOT — not a connected folder, not
+  // outputs. MEASURED on desktop-local Cowork 2026-08-27, twice: `pwd` returned `/sessions/<id>` with no
+  // folder connected AND with one connected. Cowork's own sub-agent prompt says the same thing: "Each
+  // command starts in `<vmCwd>`; anything written outside `<vmCwd>/mnt/` (including /tmp) stays in that
+  // environment and never reaches the user or your file tools."
+  //
+  // This REPLACES a `${sessionRoot}/mnt/${firstFolder ?? "outputs"}` derivation whose comment claimed
+  // production's vmCwd was the first connected folder "never the bare session root". That claim came from
+  // the asar's `cwd: c.vmCwd` spawn argument, which is NOT load-bearing on the cowork path — only the
+  // `chat` branch prepends an explicit `cd ${vmCwd}`, which would be redundant if the argument worked.
+  // The old value was never faithful: it reproduced a prompt claim rather than an observed behaviour.
+  //
+  // It is deliberately NOT the agent-process cwd. The agent spawns at `hostOutputsDir` (see the
+  // `spawn(agentNativeHost, …, { cwd: hostOutputsDir })` above) so its FILE TOOLS resolve relative paths
+  // against outputs, while the SHELL sits at the session root. Production keeps those two values
+  // different on purpose; collapsing them is the bug this replaces. Both are pinned together in
+  // test/baseline.test.ts — a single-value assertion cannot express the split.
+  const execCwd = hostLoopCwds(sessionRoot, hostOutputsDir).workspaceBashCwd;
 
   // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.

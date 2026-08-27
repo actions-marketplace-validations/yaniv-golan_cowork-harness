@@ -911,7 +911,8 @@ Two consequences for anyone reading a green run:
 
 1. **A relative bash write is a FALSE-GREEN.** Production discards anything outside `mnt/`; the harness
    bind-mounts the whole session dir, so the same write persists into the run dir and can satisfy an
-   artifact assertion. A skill whose bundled scripts take relative output paths passes here and delivers
+   artifact assertion. Measured 2026-08-27 — `printf > rel.txt` from a shell tool landed at
+   `/sessions/<id>/rel.txt` on `container` and **persisted** to the run dir as `session/rel.txt`. A skill whose bundled scripts take relative output paths passes here and delivers
    nothing in production — and **no current tier reproduces the real failure**: `hostloop` puts the write
    in `mnt/outputs` where it looks fine, `container` puts it in the right place but keeps it.
 2. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
