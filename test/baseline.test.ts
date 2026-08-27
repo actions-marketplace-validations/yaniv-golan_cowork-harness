@@ -52,6 +52,7 @@ import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPr
 import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityWasDefaulted, defaultedFidelityNotice } from "../src/run/execute.js";
+import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
 import { checkPathHookFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
@@ -1795,6 +1796,42 @@ describe("prompt drift guard (H1-H3)", () => {
 // The deprecation window before `fidelity` becomes REQUIRED. The default models VM-LOOP while production
 // runs HOST-LOOP (gate 1143815894 force-ON), so an omitted key silently measures the wrong lane. Warn now,
 // fail at the next major — consumers get told before they get an error.
+// AUTHORED is not DELIVERED. The authored-file capture deliberately includes the scratchpad — the run did
+// write those files — but production DISCARDS anything outside `mnt/` ("never reaches the user or your file
+// tools"). Unlabelled, a rubric like "the report was written" grades TRUE on a file the user never receives.
+// The distinction already rides in the synthetic `scratchpad/` path prefix; this makes it legible to the
+// one evaluator that reads free-form prose and cannot infer the convention.
+describe("judged document — scratch files are labelled as undelivered", () => {
+  const doc = (files: { path: string; content: string }[]) =>
+    buildJudgedDocument({
+      transcript: [],
+      finalMessage: "done",
+      toolsCalled: [],
+      result: "success",
+      workRoot: "/w/session/mnt",
+      authoredFiles: files,
+    } as never);
+
+  it("marks a scratchpad file NOT delivered, and leaves a real deliverable unmarked", () => {
+    const d = doc([
+      { path: "outputs/report.md", content: "DELIVERED" },
+      { path: "scratchpad/notes.txt", content: "SCRATCH" },
+    ]);
+    expect(d).toMatch(/## Authored file: scratchpad\/notes\.txt — SCRATCH, NOT delivered/);
+    expect(d, "a real deliverable must not be tagged").toMatch(/## Authored file: outputs\/report\.md\n/);
+  });
+
+  it("explains the tag, so the judge cannot read SCRATCH as delivery evidence", () => {
+    const d = doc([{ path: "scratchpad/notes.txt", content: "x" }]);
+    expect(d).toMatch(/Note on scratch files/);
+    expect(d, "must say what it is NOT evidence of").toMatch(/NOT evidence that anything was delivered/);
+  });
+
+  it("adds no note when nothing was written to scratch — no noise on the common case", () => {
+    expect(doc([{ path: "outputs/report.md", content: "x" }])).not.toMatch(/Note on scratch files/);
+  });
+});
+
 describe("defaulted fidelity — the deprecation notice", () => {
   it("detects the OMITTED key, and does not fire when the tier was chosen deliberately", () => {
     expect(fidelityWasDefaulted({ prompt: "x" })).toBe(true);
