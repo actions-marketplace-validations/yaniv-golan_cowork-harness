@@ -1260,9 +1260,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // on-disk content), so a claim about a written artifact is presentation-stable (not a paste-vs-write
     // coin-flip). Captured here — BEFORE the semantic pre-pass below — using the pre-run manifest to diff
     // added/modified files. (`[]` when there's no manifest, e.g. a --resume run.)
-    // F12: at container/hostloop the agent's cwd is the SESSION ROOT (parent of `mnt`), not `mnt` — so a
-    // relative `Write outputs/x` lands in the scratchpad, outside `workRoot`. Pass the session root so those
-    // cwd-relative deliverables are captured too (`workRoot` ends `/session/mnt`; its parent is the root).
+    // F12, CORRECTED 2026-08-27: the old text said "at container/hostloop the agent's cwd is the SESSION
+    // ROOT". True at CONTAINER only. At hostloop the agent process sits at `mnt/outputs` (see
+    // `hostLoopCwds` in src/runtime/hostloop.ts), so a bare `Write` there lands INSIDE `workRoot` and needs
+    // no scratchpad walk to be seen. The branch is still right, but for two different reasons per tier:
+    //   container — agent cwd IS the session root, so a relative `Write` lands outside `workRoot`;
+    //   hostloop  — the agent writes inside `mnt`, but `mcp__workspace__bash` starts at the session root,
+    //               so a relative SHELL write lands outside `workRoot`.
+    // Either way `workRoot` ends `/session/mnt` and its parent is the root, so passing it captures what the
+    // run actually authored.
+    //
+    // KNOWN FALSE-GREEN, deliberately not fixed here (see docs/fidelity-gaps.md, "Path resolution"):
+    // production DISCARDS anything written outside `mnt/` — "never reaches the user or your file tools" —
+    // while the harness bind-mounts the whole session dir, so these files persist and can be graded as
+    // authored. That is correct for the semantic judge (the run did write them) and wrong as a model of
+    // delivery. `user_visible_artifact` is unaffected: it checks user-visible ROOTS, not this set.
     const scratchpadRoot = workRoot.endsWith(`${sep}mnt`) ? dirname(workRoot) : undefined;
     // On a resume the session root is REUSED, so the scratchpad no longer starts empty — a prior turn's files
     // would be mis-attributed as this turn's authorship. Skip the scratchpad walk in that case (evidence-
