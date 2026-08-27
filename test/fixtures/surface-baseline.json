@@ -1105,6 +1105,12 @@
       ".gradedEffectiveFidelity": {
         "type": "string"
       },
+      ".gradedModels": {
+        "type": "array"
+      },
+      ".gradedModels[]": {
+        "type": "string"
+      },
       ".gradedOutcome": {
         "type": "string"
       },
@@ -1116,6 +1122,13 @@
       },
       ".infraFailure": {
         "type": "string"
+      },
+      ".infraFailureKind": {
+        "type": "string"
+      },
+      ".infraFailurePhase": {
+        "type": "string",
+        "enum": ["task turn", "reflection turn"]
       },
       ".items": {
         "type": "array",

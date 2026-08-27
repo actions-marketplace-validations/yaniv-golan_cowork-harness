@@ -1836,3 +1836,22 @@ export interface RunResult {
     probeFailures?: number;
   };
 }
+
+/** The filter EVERY consumer of `RunResult.models` (and of any other verbatim-from-the-agent model id)
+ *  must apply before reading a value as run provenance. The agent stamps the literal `<synthetic>` on
+ *  assistant messages it fabricates LOCALLY — no API call, zero-filled `usage` — so `["claude-sonnet-5",
+ *  "<synthetic>"]` is an ordinary array and two runs of the SAME pinned model can differ purely by
+ *  whether a synthesized turn occurred.
+ *
+ *  Matches the angle-bracket SHAPE (`<…>`), not the one known spelling, so a future marker is still
+ *  excluded rather than rendered as if it were a model. The SHAPE and not merely the `<` PREFIX: the two
+ *  disagree on a truncated or malformed value like `"<synthetic"`, and a consumer that treats such a
+ *  value as live prints a marker where a model id belongs — the exact class of bug the filter exists for.
+ *
+ *  Lives here, beside the field it governs, because it had been reimplemented per consumer with
+ *  DIFFERENT rules — `scripts/eval-gate.ts` had an unfiltered `<synthetic>` flip its observed answerer
+ *  and refuse a valid gate, and `src/run/provenance.ts` (which renders `provenance.model` on every JSON
+ *  envelope) carried a third copy. All three now share this one. */
+export function isLiveModelId(m: unknown): m is string {
+  return typeof m === "string" && !(m.startsWith("<") && m.endsWith(">"));
+}

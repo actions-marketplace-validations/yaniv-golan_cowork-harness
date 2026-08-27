@@ -6,6 +6,49 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`critique` diagnosed an unanswered gate as an infrastructure failure, and named the wrong turn while
+  doing it.** A graded run that stopped at an `AskUserQuestion` gate with no scripted answer exits 2 with
+  a fully-formed `{ok:false, error:{category:"unanswered", …}}` envelope, but the report read only
+  `results[0].outDir` and answered *"task turn exited nonzero without a parseable result envelope — it
+  crashed before completing a gradeable task"* — under a header hardcoded to
+  `INFRASTRUCTURE/PROTOCOL FAILURE (reflection turn)`, though it was the **task** turn that stopped and
+  no reflection turn had been attempted. Both halves pointed at the wrong subsystem: a reader following
+  the report would audit Docker and the staged agent over what is one scenario flag.
+
+  The report now prefers the failed turn's own diagnosis, on both turns, carrying its message **and hint
+  verbatim** (and only once — `UnansweredError`'s message already contains its hint, so appending it
+  unconditionally printed the whole question, its options and its remedy tip twice). No remedy text is
+  synthesized on top: there are 36 `UnansweredError` sites and only one is "the skill asked an unscripted
+  question", so advice keyed on the category is wrong for nearly all of them.
+
+  Two new fields carry the classification — `infraFailurePhase` (`task turn` | `reflection turn`) and
+  `infraFailureKind` (the harness `ErrCategory`). The header keys on **which** category, not on merely
+  having one: `unanswered` / `usage` / `boundary` render as `RUN FAILED (<turn>, <kind>)`; everything
+  else renders as `INFRASTRUCTURE/PROTOCOL FAILURE (<turn>)` and it **fails closed** — `internal` is the
+  CLI's catch-all for any unexpected throw (Docker down, container start failure, missing staged agent, a
+  harness bug), so an unrecognized category is treated as an instrument failure rather than assumed
+  ordinary.
+
+### Added
+
+- **`critique` reports which model produced the GRADED run** — `gradedModels` in the JSON report and
+  `graded model(s):` in the text header, read back from the graded turn's own `result.json` and filtered
+  of the agent's locally-fabricated `<synthetic>` entries. The report named the *evaluator's* resolved
+  model and no other, so the model that produced the behaviour being graded appeared nowhere. It cannot
+  be inferred from context either: the turns are a subprocess that inherits no model from whatever
+  invoked `critique`, so an omitted `--model` silently grades whatever the spawned agent defaults to. A
+  run with nothing recorded now says `graded model(s): unknown` rather than staying silent. The ids are
+  **observed, not requested** — read from the model stamped on the graded turn's assistant messages, not
+  from the flag.
+- `isLiveModelId` (`src/types.ts`) — the agent-marker filter every consumer of `RunResult.models` must
+  apply, now declared once beside the field it governs. It replaces **three** divergent copies, two of
+  which disagreed: `src/run/provenance.ts` (which renders `provenance.model` on every JSON envelope)
+  matched the angle-bracket **shape**, `scripts/eval-gate.ts` the `<` **prefix** — so a malformed or
+  truncated marker such as `"<synthetic"` was dropped by one and rendered as if it were a model id by the
+  other. The shared rule is the shape.
+
 ## [2.4.0] — 2026-08-27
 
 ### Fidelity

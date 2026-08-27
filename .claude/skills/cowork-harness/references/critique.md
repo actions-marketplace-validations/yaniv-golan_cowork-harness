@@ -34,6 +34,56 @@ computed over raw rows** — that exclusion also governs `stats --group-by skill
 **total spend** still needs the raw rows (only the roll-up carries the evaluator passes); and a roll-up with `result:"error"` had an unpriced workload, so its totals
 UNDERCOUNT. The index is the only cost record that survives run-dir pruning.
 
+## An exit-2 report — which turn failed, and whether it was really infrastructure
+
+Exit 2 means no findings were produced, so the report's only job is to say what went wrong. Three fields
+carry that; read all three before touching anything.
+
+| Field | Meaning |
+|---|---|
+| `infraFailure` | the reason |
+| `infraFailurePhase` | `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
+| `infraFailureKind` | the harness error category the failed turn reported for itself. **Absent** = killed, or exited with no envelope |
+
+**Do NOT read "has a kind" as "the instrument is fine".** The CLI's top-level catch turns every
+unexpected throw into category **`internal`** — Docker down, container start failure, missing staged
+agent, harness bug — and `runtime` carries a refused run dir. Only **`unanswered`, `usage`, `boundary`**
+are the caller's problem. The header encodes exactly that split and fails closed (an unrecognized
+category renders as infrastructure):
+
+- `RUN FAILED (<turn>, <kind>): …` → ordinary, actionable, instrument healthy.
+- `INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …` → `internal`/`runtime`/unknown/killed/no-envelope.
+
+**Read the reason, not the category.** The reason carries the failed turn's own message *and* hint
+verbatim. That matters most for `unanswered`, which is 36 distinct throw sites and only ONE of them is
+"the skill asked an unscripted question" — the others are a mis-typed `--answer` label, malformed
+`--answer-policy` YAML, a crashed or bad-JSON `--decider-cmd` helper, an out-of-set `--decider-llm`
+reply, an unanswered dialog/elicit, even a self-declared harness bug. A remedy picked from the category
+is wrong for nearly all of them; each site's own hint is written for its case. (Also note `--on-unanswered`
+*conflicts* with `--decider-dir`/`--decider-cmd`, so it is not a blanket fallback.)
+
+For the genuine unscripted-gate case: script it (`--answer`, `--answer-policy`), or, when the skill's
+gates are LLM-authored and reworded every run so a literal regex will not match twice, use `--decider-llm`
+(or the scenario's `on_unanswered: llm`).
+
+## Which model was graded — `gradedModels`
+
+**The two turns are a SUBPROCESS.** They inherit no model from whatever invoked `critique` — not your
+session, not a project setting. With no `--model`, the graded run uses the spawned agent's own default,
+which may not be the model you are otherwise working under, and nothing about the run announces it.
+
+`gradedModels` (text header: `graded model(s):`) is read back from the graded turn's own `result.json` and
+is the only record of which model produced the behaviour being graded — distinct from the evaluator's
+resolved model, which is a **different workload with its own default** (`claude-opus-4-8`), reported
+separately. An evaluator line naming a model you did not pass is therefore expected, not evidence your
+`--model` was ignored. Pin with `--model <id>` whenever a critique will be compared against another, and
+read `gradedModels` back to confirm it took.
+
+It is **observed, not requested** — the ids come from the model stamped on the graded turn's assistant
+messages, never from the flag. So `graded model(s): unknown` means no assistant message reached the run
+(crash, kill, or a gate before the first reply); passing `--model` does not change that line. Past runs
+can be checked without re-running: the same ids are in each kept run dir's `turns/1/result.json`.
+
 ## The report's item shape — no `title`, no `summary`
 
 Each `items[]` entry's prose fields are **`idea`** and **`recommendedAction`** — there is no `title` field

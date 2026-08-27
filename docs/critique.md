@@ -241,6 +241,30 @@ It does **not** record their contents — see Known limitations.
 
 Never gate CI on findings; that is the whole design.
 
+### Reading an exit-2 report: which turn, and why
+
+An exit-2 report has no findings, so the only thing it tells you is what went wrong — and it must not send
+you at the wrong subsystem. Two fields carry that, in `--output-format json` and in the text header:
+
+| Field | Says |
+|---|---|
+| `infraFailurePhase` | which turn failed — `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
+| `infraFailureKind` | the harness error category the failed turn reported for itself. **Absent** = the turn was killed or exited with no envelope at all |
+
+**A category alone does not mean the instrument is healthy.** `cli.ts`'s top-level catch funnels every
+unexpected throw into category `internal` — a Docker daemon that is down, a container that fails to
+start, a missing staged agent, a harness bug — and `runtime` carries a refused run dir. Only three
+categories are the caller's problem, and the header is keyed on exactly that split:
+
+- **`RUN FAILED (<turn>, <kind>): …`** — `unanswered`, `usage` or `boundary`. An ordinary, actionable
+  failure the harness already diagnosed, with a healthy instrument underneath. The reason carries the
+  harness's own message and hint verbatim; **follow those** rather than a category-level guess — an
+  `unanswered` can be an unscripted gate, a mis-typed `--answer` label, malformed `--answer-policy` YAML,
+  a crashed `--decider-cmd` helper or an out-of-set `--decider-llm` reply, and the remedy differs.
+- **`INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …`** — everything else: `internal`, `runtime`, a category
+  this build has not been taught, a killed turn (timeout, byte cap), or no envelope at all. This wording
+  means the instrument itself may be broken. It fails **closed**: an unrecognized category lands here.
+
 ## Reading the report
 
 | Section | Meaning |
@@ -420,6 +444,15 @@ once and never renamed — so the graded turn is `turns/1/`, and the reflection 
 **no root compat copy of anything** — `<run-dir>/result.json` does not exist. Rather than expect you to
 reach into `turns/1/` yourself:
 
+- the graded turn's **model ids are in the report itself** (`gradedModels` in `--output-format json`, and
+  as `graded model(s):` in the text header), read back from the graded turn's own `result.json`. **The
+  turns are a subprocess and inherit no model from whatever invoked `critique`** — with no `--model`, the
+  graded run uses the spawned agent's own default, which may not be the model you are otherwise working
+  under. Pin it with `--model <id>` when the comparison matters, and read `gradedModels` back to confirm
+  it took. Note this is **observed, not requested**: the ids come from the model stamped on the graded
+  turn's assistant messages, never from the flag — so `graded model(s): unknown` means no assistant
+  message reached the run (a crash, a kill, a gate before the first reply), which passing `--model`
+  does not change;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
   `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
   file; and

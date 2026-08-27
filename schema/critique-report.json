@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "critique-report.json",
   "title": "cowork-harness critique --output-format json report (and critique-report.json run-dir artifact)",
-  "description": "EXPERIMENTAL, descriptive schema \u2014 NOT a SPEC \u00a712-frozen surface: additive field changes are expected between minor versions (unlike doctor.json). It exists so automation consumers (budget pacers, harvesters) have authoritative field names/shapes instead of prose. Exactly one of infraFailure / evaluatorError / evaluatorModel-with-findings describes the outcome; items is [] on both failure branches.",
+  "description": "EXPERIMENTAL, descriptive schema — NOT a SPEC §12-frozen surface: additive field changes are expected between minor versions (unlike doctor.json). It exists so automation consumers (budget pacers, harvesters) have authoritative field names/shapes instead of prose. Exactly one of infraFailure / evaluatorError / evaluatorModel-with-findings describes the outcome; items is [] on both failure branches.",
   "type": "object",
   "required": ["skillFolder", "prompt", "sessionId", "outDir", "fidelity", "selfReportStatus", "verdictProvenance", "items"],
   "additionalProperties": false,
@@ -65,7 +65,7 @@
         },
         "evaluatorPass1Tokens": {
           "type": "object",
-          "description": "token split for one evaluator pass. Answers 'is this pass's money evidence or thinking?' \u2014 the question that decides whether sending more evidence is cheap. cacheRead is separate because it prices at a tenth of fresh input",
+          "description": "token split for one evaluator pass. Answers 'is this pass's money evidence or thinking?' — the question that decides whether sending more evidence is cheap. cacheRead is separate because it prices at a tenth of fresh input",
           "properties": {
             "input": {
               "type": "number"
@@ -82,7 +82,7 @@
         },
         "evaluatorPass2Tokens": {
           "type": "object",
-          "description": "token split for one evaluator pass. Answers 'is this pass's money evidence or thinking?' \u2014 the question that decides whether sending more evidence is cheap. cacheRead is separate because it prices at a tenth of fresh input",
+          "description": "token split for one evaluator pass. Answers 'is this pass's money evidence or thinking?' — the question that decides whether sending more evidence is cheap. cacheRead is separate because it prices at a tenth of fresh input",
           "properties": {
             "input": {
               "type": "number"
@@ -129,7 +129,7 @@
     },
     "taskResult": {
       "type": "string",
-      "description": "the graded turn's own result \u2014 error is a GRADEABLE outcome, not an instrument failure",
+      "description": "the graded turn's own result — error is a GRADEABLE outcome, not an instrument failure",
       "enum": ["success", "error"]
     },
     "gradedOutcome": {
@@ -138,7 +138,7 @@
     },
     "gradedSkillHash": {
       "type": "string",
-      "description": "content-exact hash of the MOUNTED folder \u2014 the cross-FIX pairing key (per-plugin under --skill)"
+      "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill)"
     },
     "selfReportStatus": {
       "type": "string",
@@ -147,7 +147,7 @@
     },
     "evaluatorIntegrity": {
       "type": "object",
-      "description": "mechanical canary check per pass; false = that pass ignored a trusted instruction \u2014 an empty critique may be adversarial silencing, not a clean skill",
+      "description": "mechanical canary check per pass; false = that pass ignored a trusted instruction — an empty critique may be adversarial silencing, not a clean skill",
       "required": ["pass1Canary"],
       "additionalProperties": false,
       "properties": {
@@ -175,11 +175,11 @@
     },
     "turn1ResultDegraded": {
       "type": "boolean",
-      "description": "the graded turn's canonical result was corrupted/never archived \u2014 result-derived sections are empty DEFAULTS, treat as unknown"
+      "description": "the graded turn's canonical result was corrupted/never archived — result-derived sections are empty DEFAULTS, treat as unknown"
     },
     "turn1SliceDegraded": {
       "type": "boolean",
-      "description": "the turn-1 transcript slice's boundary could not be trusted \u2014 treat gaps as unknown"
+      "description": "the turn-1 transcript slice's boundary could not be trusted — treat gaps as unknown"
     },
     "skillMdStatus": {
       "type": "string",
@@ -188,7 +188,7 @@
     },
     "evidenceBudget": {
       "type": "object",
-      "description": "what the evaluator was actually shown. Skill-authored content (SKILL.md + references + agents md) ships WHOLE; these fields exist so a consumer never has to read compiled source to learn the budgets \u2014 the previous per-file caps were discoverable only by inspecting dist/, and let 11 of 13 reference files go permanently ungraded with no signal",
+      "description": "what the evaluator was actually shown. Skill-authored content (SKILL.md + references + agents md) ships WHOLE; these fields exist so a consumer never has to read compiled source to learn the budgets — the previous per-file caps were discoverable only by inspecting dist/, and let 11 of 13 reference files go permanently ungraded with no signal",
       "properties": {
         "corpusBytes": {
           "type": "number",
@@ -200,7 +200,7 @@
         },
         "corpusCuts": {
           "type": "array",
-          "description": "per-file record of what the ceiling cut. EMPTY on every real skill. omitted:true means the file's share fell below the minimum useful slice \u2014 a different instruction to the author (split this file) than a partial cut (the corpus as a whole is too big)",
+          "description": "per-file record of what the ceiling cut. EMPTY on every real skill. omitted:true means the file's share fell below the minimum useful slice — a different instruction to the author (split this file) than a partial cut (the corpus as a whole is too big)",
           "items": {
             "type": "object",
             "properties": {
@@ -223,7 +223,7 @@
         },
         "corpusExcluded": {
           "type": "array",
-          "description": "skill files present on the HOST but excluded because staging would not deliver them (untracked, git-mode on). They were never in the agent's mount, so grading against them would manufacture false already-covered verdicts \u2014 but the author must be told, or the grade silently covers less than they believe",
+          "description": "skill files present on the HOST but excluded because staging would not deliver them (untracked, git-mode on). They were never in the agent's mount, so grading against them would manufacture false already-covered verdicts — but the author must be told, or the grade silently covers less than they believe",
           "items": {
             "type": "string"
           }
@@ -247,7 +247,7 @@
         },
         "packageTruncated": {
           "type": "boolean",
-          "description": "ANY section was cut \u2014 most often the transcript's 128 KiB head+tail elision, the cut that actually happens on long runs. This is what adds the evaluator's truncation caveat, so a consumer reading DROPPED findings or a rise in not-adjudicable needs it; corpusCuts is empty in that case and would otherwise imply nothing was cut"
+          "description": "ANY section was cut — most often the transcript's 128 KiB head+tail elision, the cut that actually happens on long runs. This is what adds the evaluator's truncation caveat, so a consumer reading DROPPED findings or a rise in not-adjudicable needs it; corpusCuts is empty in that case and would otherwise imply nothing was cut"
         }
       },
       "required": ["corpusBytes", "corpusCeiling", "corpusCuts", "corpusExcluded", "trimRecord", "packageTruncated"],
@@ -273,11 +273,11 @@
     },
     "infraFailure": {
       "type": "string",
-      "description": "instrument failure (task turn killed / reflection protocol broke) \u2014 no critique was produced; items is []; process exits 2"
+      "description": "instrument failure (task turn killed / reflection protocol broke) — no critique was produced; items is []; process exits 2"
     },
     "evaluatorError": {
       "type": "string",
-      "description": "the evaluator threw (embeds the raw reply) \u2014 no critique was produced; items is []; process exits 2; see critique-salvage.json"
+      "description": "the evaluator threw (embeds the raw reply) — no critique was produced; items is []; process exits 2; see critique-salvage.json"
     },
     "evaluatorModel": {
       "type": "string",
@@ -285,7 +285,7 @@
     },
     "items": {
       "type": "array",
-      "description": "the citation-validated findings from both passes. citationResolved:false = the cited excerpt did not resolve verbatim against the evidence package (DROPPED section \u2014 transparency only, do not act on as-is)",
+      "description": "the citation-validated findings from both passes. citationResolved:false = the cited excerpt did not resolve verbatim against the evidence package (DROPPED section — transparency only, do not act on as-is)",
       "items": {
         "type": "object",
         "required": ["source", "idea", "classification", "evidence", "recommendedAction"],
@@ -304,7 +304,7 @@
           },
           "evidence": {
             "type": "string",
-            "description": "the model's cited excerpt \u2014 verbatim-checked against the evidence package"
+            "description": "the model's cited excerpt — verbatim-checked against the evidence package"
           },
           "recommendedAction": {
             "type": "string"
@@ -314,14 +314,33 @@
           },
           "findingFingerprint": {
             "type": "string",
-            "description": "sha256/16 over normalized idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key \u2014 HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
+            "description": "sha256/16 over normalized idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key — HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
           }
         }
       }
     },
     "noSkillFilesRead": {
       "type": "boolean",
-      "description": "the graded turn Read NO references/ or scripts/ file at all \u2014 neither the main agent nor any sub-agent. OBSERVATIONAL: the predicate matches references/+scripts/ only (never assets/, never SKILL.md) and keys on the Read TOOL, so Grep or assets/ use yields an empty set having demonstrably reached the material. Absent when the turn-1 result was degraded (unknown, not zero)"
+      "description": "the graded turn Read NO references/ or scripts/ file at all — neither the main agent nor any sub-agent. OBSERVATIONAL: the predicate matches references/+scripts/ only (never assets/, never SKILL.md) and keys on the Read TOOL, so Grep or assets/ use yields an empty set having demonstrably reached the material. Absent when the turn-1 result was degraded (unknown, not zero)"
+    },
+    "gradedModels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "the model ids the GRADED (task) turn actually ran on, read back from its own result.json `models` and filtered of the agent's `<…>`-wrapped locally-fabricated entries. The turns are a SUBPROCESS and inherit no model from the caller, so an omitted --model grades whatever the spawned agent defaults to — this is the only field that records which model produced the graded behaviour. Absent when no result.json was readable or it recorded no live id."
+    },
+    "infraFailurePhase": {
+      "type": "string",
+      "enum": ["task turn", "reflection turn"],
+      "description": "WHICH turn produced `infraFailure` — `task turn` (the graded run) or `reflection turn` (critique's own protocol turn). Required alongside infraFailure (see the `dependencies` keyword): without it the text report falls back to a default phase and can name the wrong turn."
+    },
+    "infraFailureKind": {
+      "type": "string",
+      "description": "the harness error category (ErrCategory: unanswered | usage | boundary | runtime | internal) when the failed turn printed a structured error envelope. Absent = killed or exited with no envelope at all. DO NOT read a present kind as \"the instrument is fine\": cli.ts's top-level catch funnels every unexpected throw (Docker down, container start failure, missing staged agent, a harness bug) into category `internal`, and LegacyRunDirError into `runtime`. Only `unanswered`, `usage` and `boundary` are ordinary/actionable; every other value — including one added after this text — is an instrument failure, which is how the text report's header renders it."
     }
+  },
+  "dependencies": {
+    "infraFailure": ["infraFailurePhase"]
   }
 }
