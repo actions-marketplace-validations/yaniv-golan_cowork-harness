@@ -412,6 +412,22 @@ without actually running the agent. For **content correctness**, match the asser
   > So a bare filename is right for production and WRONG at the harness's own default tier, where it lands
   > in the scratchpad. Name the tier you mean. The safest skill instruction describes the OUTCOME ("save it
   > where the user can see it") rather than a path, because the path differs by lane.
+  >
+  > **The same place has four names, and the product uses none of ours.** Worth stating once, because a
+  > skill author reading Cowork's UI and this page is reading two vocabularies for one directory:
+  >
+  > | Cowork's UI says | this page says | in a scenario |
+  > |---|---|---|
+  > | **Working folder** | `outputs/` + each connected folder — the user-visible roots | `user_visible_artifact:` |
+  > | **Scratchpad** | the scratchpad / session root — everything outside `mnt/` | not addressable; not delivered |
+  >
+  > `{{workspaceFolder}}` is a prompt token, not a UI concept: it renders to the *first* user-visible
+  > root. And Cowork's **Scratchpad panel is an activity log, not a location listing** — measured: it lists
+  > files as "wrote to"/"viewed" regardless of where they landed, so a file appearing there is NOT evidence
+  > it is undelivered.
+  >
+  > **A bare `Write` is user-visible the moment it lands** on the desktop-local lane, so `present_files`
+  > on it is a no-op promotion rather than the step that delivers it.
 
   Reserve `file_exists` for a known fixed sandbox path.
 

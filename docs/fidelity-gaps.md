@@ -979,7 +979,8 @@ Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; 
 tools."* Bash also **resets its cwd between every call** (*"no cwd/env carryover"*), so a relative path
 from a script always resolves against the session root and cannot be `cd`-ed away from.
 
-Two consequences for anyone reading a green run:
+Three consequences — the first for anyone reading a green run, the other two for anyone writing a skill
+or an assertion against these tools:
 
 1. **A relative bash write lands in the right place but PERSISTS, where production discards it.**
    Production throws away anything outside `mnt/`; the harness bind-mounts the whole session dir, so the
@@ -999,7 +1000,14 @@ Two consequences for anyone reading a green run:
    bundled scripts take relative output paths still gets further here than it would there. The location
    half is now faithful on both tiers; the survival half is not, and removing it would mean unpicking a
    bind-mount every tier's artifact capture, `--resume` and the microvm snapshot depend on.
-2. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
+2. **`Write`'s tool result echoes the RAW path it was given — it never absolutizes.** Structural, read
+   from the agent binary. A bare `Write foo.md` comes back as `foo.md`, not
+   `/sessions/<id>/mnt/outputs/foo.md`. Nothing in the harness parses a path out of a `Write` result
+   today, and this note exists so nothing starts: an assertion or doc that reads an absolute path out of
+   one is reading something production does not emit. Cowork's own chat-surface prompt asserts the
+   opposite ("Write's result shows the file's full path"), so the product's documentation of its own tool
+   is wrong here — do not take it as a spec.
+3. **The literal prefix `outputs/` DOUBLES on the desktop-local lane** (`outputs/x` → `outputs/outputs/x`,
    invisible), and **`<folder>/x` builds a same-named decoy inside `outputs`** rather than reaching the
    connected folder — silently, with a success result. No relative path from the file tools reaches a
    connected folder. See [scenario.md](./scenario.md), "Where a relative path actually lands".

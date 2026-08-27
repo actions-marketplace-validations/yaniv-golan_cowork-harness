@@ -121,6 +121,18 @@ All notable changes to this project are documented here. The format is based on
 - The skill's undelivered-deliverables guidance no longer hardcodes the literal prefix `outputs/`, which
   was wrong on the lane production actually runs.
 
+- **The product's vocabulary is mapped to this project's**, because one directory had four names and none
+  of them was the one Cowork's UI shows. "Working folder" is the user-visible roots (`outputs/` plus each
+  connected folder); "Scratchpad" is everything outside `mnt/`; `{{workspaceFolder}}` is a prompt token
+  that renders to the *first* user-visible root. Also recorded: Cowork's **Scratchpad panel is an activity
+  log, not a location listing** — it lists files as "wrote to" wherever they landed, so a file appearing
+  there is not evidence it was undelivered.
+
+- **`Write`'s tool result echoes the raw path it was given and never absolutizes** (read from the agent
+  binary). Nothing in the harness parses a path out of a `Write` result; this is recorded so nothing
+  starts, since such an assertion would be reading something production does not emit. Cowork's own
+  chat-surface prompt claims the opposite, so the product's description of its own tool is wrong here.
+
 
 ## [2.3.0] — 2026-08-26
 
