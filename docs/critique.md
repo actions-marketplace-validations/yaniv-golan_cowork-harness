@@ -241,6 +241,41 @@ It does **not** record their contents — see Known limitations.
 
 Never gate CI on findings; that is the whole design.
 
+### Reading an exit-2 report: which turn, and why
+
+An exit-2 report has no findings, so the only thing it tells you is what went wrong — and it must not send
+you at the wrong subsystem. Two fields carry that, in `--output-format json` and in the text header:
+
+| Field | Says |
+|---|---|
+| `infraFailurePhase` | which turn failed — `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
+| `infraFailureKind` | why the turn failed — a harness `ErrCategory` when it printed an error envelope, **or** a `resultErrorKind` (`usage_limit` / `transport` / `agent`) when it RAN and reported an errored result. **Absent** = killed, or exited with no envelope at all |
+
+**A category alone does not mean the instrument is healthy.** `cli.ts`'s top-level catch funnels every
+unexpected throw into category `internal` — a Docker daemon that is down, a container that fails to
+start, a missing staged agent, a harness bug — and `runtime` carries a refused run dir. Only three
+categories are the caller's problem, and the header is keyed on exactly that split:
+
+A turn that **ran and errored** exits `1` with a full result envelope whose top-level `error` is `null` —
+so its cause lives in `results[0]`, not in an error object. That is where an exhausted quota shows up:
+`usage_limit` renders as *"the account's quota is exhausted; retry after the reset"*, not as a broken
+instrument and not as a skill defect.
+
+- **`RUN FAILED (<turn>, <kind>): …`** — `unanswered`, `usage`, `boundary`, `usage_limit` or `transport`.
+  An ordinary, actionable
+  failure the harness already diagnosed, with a healthy instrument underneath. The reason carries the
+  harness's own message and hint verbatim; **follow those** rather than a category-level guess — an
+  `unanswered` can be an unscripted gate, a mis-typed `--answer` label, malformed `--answer-policy` YAML,
+  a crashed `--decider-cmd` helper or an out-of-set `--decider-llm` reply, and the remedy differs.
+- **`INFRASTRUCTURE/PROTOCOL FAILURE (<turn>): …`** — everything else: `internal`, `runtime`, `agent` (for
+  critique's own protocol turn, an agent-level failure *is* the instrument breaking), a kind this build has
+  not been taught, a killed turn (timeout, byte cap), or no envelope at all. This wording means the
+  instrument itself may be broken. It fails **closed**: an unrecognized kind lands here.
+
+The graded turn gets the same treatment from the other side. `taskResult: "error"` is a **gradeable**
+outcome — the critique proceeds and the findings stand — but `gradedErrorReason` now names *why*, so an
+exhausted quota or a dropped connection is not read as a defect in the skill under review.
+
 ## Reading the report
 
 | Section | Meaning |
@@ -420,6 +455,23 @@ once and never renamed — so the graded turn is `turns/1/`, and the reflection 
 **no root compat copy of anything** — `<run-dir>/result.json` does not exist. Rather than expect you to
 reach into `turns/1/` yourself:
 
+- **whether the skill's own `references/`/`scripts/` were ever reached is in the report** (`noSkillFilesRead`
+  in `--output-format json`, and a header line). It reads `referencesAccessed` — main agent **and**
+  sub-agents, through **any** observed tool channel (`Read`, `Grep`, or a `Bash` command naming the
+  path under the mounted plugin), not the `Read` tool alone. Detection **under-approximates**: a `cd` into
+  the skill dir followed by a bare `cat references/x.md`, a heredoc body and a `$VAR`-built path are all
+  invisible, so a "nothing was accessed" line is **weak evidence of non-use, never proof the content went
+  unread** — do not re-architect a reference document on it alone. Where the run recorded no observable
+  tool stream the report makes **no claim** rather than rendering a clean negative;
+- the graded turn's **model ids are in the report itself** (`gradedModels` in `--output-format json`, and
+  as `graded model(s):` in the text header), read back from the graded turn's own `result.json`. **The
+  turns are a subprocess and inherit no model from whatever invoked `critique`** — with no `--model`, the
+  graded run uses the spawned agent's own default, which may not be the model you are otherwise working
+  under. Pin it with `--model <id>` when the comparison matters, and read `gradedModels` back to confirm
+  it took. Note this is **observed, not requested**: the ids come from the model stamped on the graded
+  turn's assistant messages, never from the flag — so `graded model(s): unknown` means no assistant
+  message reached the run (a crash, a kill, a gate before the first reply), which passing `--model`
+  does not change;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
   `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
   file; and

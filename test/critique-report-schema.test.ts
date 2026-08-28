@@ -44,6 +44,8 @@ const FULL_STATE = {
   taskResult: "success" as const,
   gradedOutcome: "delivered_clean",
   gradedSkillHash: "abc123def4567890",
+  gradedModels: ["claude-opus-5"],
+  gradedErrorReason: "usage-limit — the account's quota is exhausted; retry after the reset",
   selfReportStatus: "captured" as const,
   evaluatorIntegrity: { pass1Canary: true, pass2Canary: true },
   droppedEvaluatorItems: { pass1: 1, pass2: 0 },
@@ -74,8 +76,16 @@ const FULL_STATE = {
   ],
 };
 
+/** What a CONSUMER actually parses. `buildJsonReport` leaves optional keys present with an `undefined`
+ *  value; `JSON.stringify` drops them. Validating the in-memory object therefore tests a shape nobody
+ *  ever receives — and ajv skips both type checks and `dependentRequired` for a present-but-undefined
+ *  key, so a missing required companion field read as satisfied. Round-trip first. */
+function asEmitted(report: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(report)) as Record<string, unknown>;
+}
+
 function assertValid(report: Record<string, unknown>, label: string): void {
-  const ok = validate(report);
+  const ok = validate(asEmitted(report));
   expect(ok, `${label}: ${JSON.stringify(validate.errors, null, 2)}\nreport: ${JSON.stringify(report, null, 2)}`).toBe(true);
 }
 
@@ -85,7 +95,35 @@ describe("critique-report.json schema ↔ buildJsonReport", () => {
   });
 
   it("the infraFailure branch validates", () => {
-    assertValid(buildJsonReport({ ...FULL_STATE, evaluatorModel: undefined, infraFailure: "reflection turn exited 1" }), "infra branch");
+    assertValid(
+      buildJsonReport({
+        ...FULL_STATE,
+        evaluatorModel: undefined,
+        infraFailure: "reflection turn exited 1",
+        infraFailurePhase: "reflection turn",
+      }),
+      "infra branch",
+    );
+  });
+
+  it("REFUSES an infraFailure with no phase — the shape that falls back to the old hardcoded wrong label", () => {
+    // buildJsonReport is exported, so an external caller can construct this; the text renderer then
+    // defaults the phase to "reflection turn" and can name the wrong turn. The schema is where that
+    // pairing is stated, so it must actually be enforced rather than only described in prose.
+    expect(validate(asEmitted(buildJsonReport({ ...FULL_STATE, evaluatorModel: undefined, infraFailure: "exited 1" })))).toBe(false);
+  });
+
+  it("the infraFailure branch validates WITH its phase/kind — the fields that say which turn failed and why", () => {
+    assertValid(
+      buildJsonReport({
+        ...FULL_STATE,
+        evaluatorModel: undefined,
+        infraFailure: "task turn exited 2 reporting unanswered: unanswered question",
+        infraFailurePhase: "task turn",
+        infraFailureKind: "unanswered",
+      }),
+      "infra branch (phase + kind)",
+    );
   });
 
   it("the evaluatorError branch validates", () => {

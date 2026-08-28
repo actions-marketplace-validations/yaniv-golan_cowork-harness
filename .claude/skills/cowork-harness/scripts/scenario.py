@@ -80,6 +80,10 @@ CONTENT_KEYS = {
     "tool_result_not_matches",
     "tool_called",
     "tool_not_called",
+    # Replay re-derives these from the SAME frozen tool inputs the live run used (a cassette stores whole
+    # tool inputs), so they are content keys, not live-only.
+    "reference_read",
+    "no_observed_reference_access",
     "subagent_tool_used",
     "subagent_tool_absent",
     "subagent_dispatched",
@@ -294,6 +298,8 @@ REGEX_KEYS = {
     "hook_blocked",
     "tool_result_matches",
     "tool_result_not_matches",
+    "reference_read",
+    "no_observed_reference_access",
 }
 VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
 VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")
@@ -583,6 +589,44 @@ def lint_doc(doc, path, raw_lines):
     # warns at run start, after authoring). Lint is deliberately STRICTER than the runtime: the docs
     # declare the combination incompatible, so authoring it is a bug even if a tool-free run could
     # accidentally pass. `cowork` gets a WARN naming the baseline-gate resolution dependency (the
+    # `tool_not_called` naming a tool the TIER does not serve can never be violated — it passes
+    # vacuously and verifies nothing. Expressible offline because the mapping is a harness constant
+    # (WORKSPACE_TOOL_ALIASES / VM_LOOP_TOOL_ALIASES), NOT a baseline read. Deliberately literals only,
+    # and deliberately a closed table: `--tools` gates the BUILT-IN set alone while every tier separately
+    # passes --mcp-config, so a session-MCP tool name is offered without appearing in any tool list and
+    # must never be flagged here. The harness refuses these at load; this catches them before any run.
+    _TIER_VACUOUS = {
+        "hostloop": {"Bash": "mcp__workspace__bash", "WebFetch": "mcp__workspace__web_fetch", "NotebookEdit": None},
+        "container": {"mcp__workspace__bash": "Bash"},
+        "microvm": {"mcp__workspace__bash": "Bash", "mcp__workspace__web_fetch": "WebFetch"},
+        # `protocol` absent on purpose: it passes no tool flags, so its surface is the operator's own
+        # host CLI registry — machine-dependent and about a different product.
+    }
+    # BOTH negative tool keys: `subagent_tool_absent` is judged against the tools sub-agents actually
+    # USED, not a per-dispatch declared list, so a tool the tier never serves makes it equally vacuous.
+    for _key in ("tool_not_called", "subagent_tool_absent"):
+        for _v in _assert_values(items, _key):
+            if not isinstance(_v, str) or "*" in _v or "?" in _v:
+                continue  # a glob is not a literal claim about one tool
+            _repl = _TIER_VACUOUS.get(fidelity, {})
+            if _v not in _repl:
+                continue
+            _instead = _repl[_v]
+            findings.append(
+                Finding(
+                    "WARN",
+                    "tool-not-called-tier-vacuous",
+                    f"`{_key}: {_v}` on `fidelity: {fidelity}` — that tier does not serve "
+                    f"`{_v}` at all, so this can never be violated and verifies nothing.",
+                    (
+                        f"Assert `{_key}: {_instead}` instead — that is what the tier serves in its place."
+                        if _instead
+                        else f"The {fidelity} tier removes `{_v}` outright; drop this assertion."
+                    ),
+                    path,
+                )
+            )
+
     # linter stays offline — the message carries the gate fact instead of reading a baseline).
     if "transcript_no_host_path" in assert_keys:
         if fidelity in ("hostloop", "protocol"):
@@ -1012,6 +1056,26 @@ def lint_doc(doc, path, raw_lines):
                 "no run can satisfy that, so this would spend a run to fail.",
                 "Drop whichever half the scenario does not mean. If you meant 'this file must be replaced', "
                 "assert the new content with `artifact_text`/`artifact_json` instead.",
+                path,
+            )
+        )
+
+    # Same shape for the reference-access pair: `reference_read: R` and `no_observed_reference_access: R`
+    # with the IDENTICAL regex cannot both hold. Compared as raw pattern strings — two different regexes
+    # that happen to match the same path are NOT a contradiction (the linter cannot know the paths), so
+    # this only fires on the case that is unambiguously self-defeating.
+    read_pats = {v for v in _assert_values(items, "reference_read") if isinstance(v, str)}
+    unread_pats = {v for v in _assert_values(items, "no_observed_reference_access") if isinstance(v, str)}
+    both_refs = sorted(read_pats & unread_pats)
+    if both_refs:
+        findings.append(
+            Finding(
+                "ERROR",
+                "reference-access-contradiction",
+                f"assert requires {both_refs} to be both accessed (`reference_read`) and never observed "
+                "(`no_observed_reference_access`) — no run can satisfy that, so this would spend a run to fail.",
+                "Drop whichever half the scenario does not mean. To check that ONE reference is reached while "
+                "another is not, give the two keys different patterns.",
                 path,
             )
         )

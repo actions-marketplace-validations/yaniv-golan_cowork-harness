@@ -1,4 +1,5 @@
 import type { RunResult } from "../types.js";
+import { isLiveModelId } from "../types.js";
 
 /**
  * "Which experiment actually ran?" — derived from fields the record already carries, in one place, so
@@ -26,17 +27,12 @@ export interface RunProvenance {
   ablated: boolean;
 }
 
-/** An agent MARKER, not a model id — the agent stamps `<synthetic>` on assistant messages it fabricates
- *  locally (no API call, zero-filled usage). Matched by the angle-bracket SHAPE rather than the one
- *  known spelling: a future marker would otherwise be rendered as if it were a model, which is exactly
- *  the class of bug this banner exists to catch. `scripts/eval-gate.ts` hit the single-spelling version
- *  of this and had an unfiltered `<synthetic>` flip its observed answerer. */
-function isAgentMarker(m: string): boolean {
-  return m.startsWith("<") && m.endsWith(">");
-}
-
 export function runProvenance(r: RunResult): RunProvenance {
-  const realModels = (r.models ?? []).filter((m) => !isAgentMarker(m));
+  // An agent MARKER, not a model id — the agent stamps `<synthetic>` on assistant messages it fabricates
+  // locally (no API call, zero-filled usage). The rule is `isLiveModelId` (src/types.ts), shared with
+  // every other consumer of `RunResult.models`: this banner and critique's `gradedModels` disagreeing
+  // about what counts as a model is exactly the class of bug the filter exists to prevent.
+  const realModels = (r.models ?? []).filter(isLiveModelId);
 
   // Two independent pieces of evidence, so four states rather than a boolean. `availableSkills` is read
   // off each staged skill's SKILL.md frontmatter at assembly time (src/run/skill-metadata.ts); undefined

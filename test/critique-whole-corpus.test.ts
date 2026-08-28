@@ -33,7 +33,16 @@ function makeRunDir(transcript = "turn-1 transcript"): string {
   mkdirSync(turnDir, { recursive: true });
   writeFileSync(
     join(turnDir, "result.json"),
-    JSON.stringify({ finalMessage: "ok", referencesRead: [], skillActivity: [], toolCounts: {}, result: "success" }),
+    // `referencesAccessed: []` is the OBSERVED-nothing state. Its ABSENCE means "no observable tool
+    // stream" and must suppress the no-access signal entirely — pinned by its own test below.
+    JSON.stringify({
+      finalMessage: "ok",
+      referencesRead: [],
+      referencesAccessed: [],
+      skillActivity: [],
+      toolCounts: {},
+      result: "success",
+    }),
   );
   writeFileSync(join(turnDir, "run.jsonl"), JSON.stringify({ t: "transcript", text: transcript }) + "\n");
   return runDir;
@@ -436,6 +445,59 @@ describe("whole-corpus evidence packaging", () => {
     writeFileSync(join(skillDir, "SKILL.md"), "# skill\nbody");
     writeFileSync(join(skillDir, "scripts", "run.py"), "print(1)");
     expect(pkgOf(runDir, skillDir).noSkillFilesRead).toBe(true);
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("withholds the no-access signal entirely when the run recorded NO observable tool stream", () => {
+    // `referencesAccessed: []` (looked, saw nothing) and an ABSENT field (could not look) must not
+    // collapse. Collapsing them turns "we could not verify" into a clean negative — the exact
+    // false-green this signal exists to stop producing.
+    const runDir = mkdtempSync(join(tmpdir(), "cwh-wc-run-"));
+    const turnDir = join(runDir, "turns", "1");
+    mkdirSync(turnDir, { recursive: true });
+    writeFileSync(
+      join(turnDir, "result.json"),
+      JSON.stringify({ finalMessage: "ok", referencesRead: [], skillActivity: [], toolCounts: {}, result: "success" }),
+    );
+    writeFileSync(join(turnDir, "run.jsonl"), JSON.stringify({ t: "transcript", text: "t" }) + "\n");
+    const skillDir = makeSkillDir();
+    mkdirSync(join(skillDir, "references"), { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "# skill\nbody");
+    writeFileSync(join(skillDir, "references", "a.md"), "guidance");
+    const pkg = pkgOf(runDir, skillDir);
+    expect(pkg.noSkillFilesRead).toBeUndefined();
+    expect(findSection(pkg.sections, "referencesAccessed")!.body).toMatch(/unavailable — this run recorded no observable tool stream/);
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(skillDir, { recursive: true, force: true });
+  });
+
+  it("names the CHANNEL each reference was reached through, including a Bash access the Read tool never saw", () => {
+    const runDir = mkdtempSync(join(tmpdir(), "cwh-wc-run-"));
+    const turnDir = join(runDir, "turns", "1");
+    mkdirSync(turnDir, { recursive: true });
+    writeFileSync(
+      join(turnDir, "result.json"),
+      JSON.stringify({
+        finalMessage: "ok",
+        referencesRead: [],
+        referencesAccessed: [{ path: "references/env.md", via: ["bash"] }],
+        subagents: [{ referencesAccessed: [{ path: "references/env.md", via: ["read"] }] }],
+        skillActivity: [],
+        toolCounts: {},
+        result: "success",
+      }),
+    );
+    writeFileSync(join(turnDir, "run.jsonl"), JSON.stringify({ t: "transcript", text: "t" }) + "\n");
+    const skillDir = makeSkillDir();
+    mkdirSync(join(skillDir, "references"), { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "# skill\nbody");
+    writeFileSync(join(skillDir, "references", "env.md"), "guidance");
+    const pkg = pkgOf(runDir, skillDir);
+    // A Bash-only access is a real access: the signal must NOT fire, even though `referencesRead` is [].
+    expect(pkg.noSkillFilesRead).toBe(false);
+    // Main-agent and sub-agent channels merge onto one line rather than listing the path twice.
+    expect(findSection(pkg.sections, "referencesAccessed")!.body).toMatch(/references\/env\.md \(bash, read\)/);
     rmSync(runDir, { recursive: true, force: true });
     rmSync(skillDir, { recursive: true, force: true });
   });

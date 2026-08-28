@@ -24,6 +24,7 @@ function minimalChatRecord(): RunRecord {
     transcript: "hi",
     toolsCalled: new Set(["Bash"]),
     toolCounts: { Bash: 1 },
+    referencesAccessed: [],
     filesRead: [],
     subagentTools: new Set(),
     subagents: [],

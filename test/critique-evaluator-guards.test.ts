@@ -5,6 +5,7 @@ import type { Complete } from "../src/decide/decider";
 import {
   boundedSpawn,
   validateReflectionTurn,
+  isOrdinaryFailureKind,
   taskTurnInfraFailure,
   buildTextReport,
   buildJsonReport,
@@ -425,17 +426,230 @@ describe("F37: the reflection turn is validated (exit code / envelope / continui
     expect(textReport).toMatch(/INFRASTRUCTURE\/PROTOCOL FAILURE/);
     expect(textReport).toMatch(/NOT invoked/);
   });
+
+  it("names the FAILING TURN in the header — a task-turn failure must not be reported as a reflection-turn one", () => {
+    // The header hardcoded "(reflection turn)" while the same `infraFailure` field also carries TASK-turn
+    // failures, so a task that never produced a gradeable run was announced as a broken reflection —
+    // pointing a reader at the wrong turn's artifacts before they had read the reason.
+    const base = {
+      skillFolder: "skills/foo",
+      prompt: "do the thing",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: undefined,
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+    };
+    const taskText = buildTextReport({ ...base, infraFailure: "task turn exited 1", infraFailurePhase: "task turn" });
+    expect(taskText).toMatch(/FAILURE \(task turn\)/);
+    expect(taskText).not.toMatch(/reflection turn\)/);
+
+    const reflText = buildTextReport({ ...base, infraFailure: "reflection turn exited 1", infraFailurePhase: "reflection turn" });
+    expect(reflText).toMatch(/FAILURE \(reflection turn\)/);
+  });
+
+  it("KEEPS the INFRASTRUCTURE wording for `internal`/`runtime` — the harness's own catch-all for a broken instrument", () => {
+    // The dangerous inversion. `src/cli.ts`'s top-level catch turns EVERY unexpected throw into
+    // `jsonError(command, "internal", …)` — a Docker daemon that is down, a container that fails to
+    // start, a missing staged agent, a harness bug. All of those arrive as a well-formed error envelope
+    // WITH a category, so "has a category ⇒ ordinary" tells the reader the instrument is healthy when it
+    // is not: the same wrong-subsystem failure, pointed the other way.
+    const base = {
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: undefined,
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      infraFailurePhase: "task turn" as const,
+    };
+    for (const kind of ["internal", "runtime"]) {
+      const text = buildTextReport({
+        ...base,
+        infraFailure: `task turn exited 2 reporting ${kind}: Cannot connect to the Docker daemon`,
+        infraFailureKind: kind,
+      });
+      expect(text, kind).toMatch(/INFRASTRUCTURE\/PROTOCOL FAILURE \(task turn\)/);
+      expect(text, kind).not.toMatch(/RUN FAILED/);
+    }
+    // An UNKNOWN category (one added later that this list has not been taught) must fail CLOSED to
+    // infrastructure rather than be assumed ordinary.
+    const future = buildTextReport({ ...base, infraFailure: "task turn exited 2 reporting quota: x", infraFailureKind: "quota" });
+    expect(future).toMatch(/INFRASTRUCTURE\/PROTOCOL FAILURE/);
+  });
+
+  it("drops the INFRASTRUCTURE wording when the failed turn reported an ordinary category of its own", () => {
+    const state = {
+      skillFolder: "skills/foo",
+      prompt: "do the thing",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: undefined,
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      infraFailure: "task turn exited 2 reporting unanswered: unanswered question (on_unanswered=fail)",
+      infraFailurePhase: "task turn" as const,
+      infraFailureKind: "unanswered",
+    };
+    const text = buildTextReport(state);
+    expect(text).toMatch(/RUN FAILED \(task turn, unanswered\)/);
+    // The whole point: an unanswered gate is not an infrastructure fault and must stop claiming to be one.
+    expect(text).not.toMatch(/INFRASTRUCTURE/);
+    // The phase and kind must reach a machine consumer too, not just the human header.
+    const json = buildJsonReport(state);
+    expect(json.infraFailurePhase).toBe("task turn");
+    expect(json.infraFailureKind).toBe("unanswered");
+  });
+
+  it("always states which model produced the GRADED run — including when it is unknown", () => {
+    // The report named the evaluator's model and no other, so the model that produced the behaviour being
+    // graded was absent from every critique. The turns are a subprocess and inherit no model from their
+    // caller, so this cannot be inferred from context: an unstated one has to say so out loud.
+    const base = {
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: "success" as const,
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+    };
+    expect(buildTextReport({ ...base, gradedModels: ["claude-sonnet-5"] })).toMatch(/graded model\(s\): claude-sonnet-5/);
+    expect(buildTextReport(base)).toMatch(/graded model\(s\): unknown/);
+    expect(buildJsonReport({ ...base, gradedModels: ["claude-sonnet-5"] }).gradedModels).toEqual(["claude-sonnet-5"]);
+  });
+});
+
+describe("validateReflectionTurn carries the failed turn's own diagnosis, not just its exit code", () => {
+  it("names the harness's reported category and message when the reflection turn exited nonzero with an error envelope", () => {
+    const turn = {
+      stdout: JSON.stringify({ ok: false, results: [], error: { category: "usage", message: "unknown flag: --nope", hint: "see --help" } }),
+      stderr: "",
+      code: 2,
+      timedOut: false,
+      truncated: false,
+    };
+    const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.kind).toBe("usage");
+    expect(v.reason).toMatch(/exited with code 2/);
+    expect(v.reason).toMatch(/unknown flag: --nope/);
+    expect(v.reason).toMatch(/see --help/);
+  });
+
+  it("names an EXHAUSTED QUOTA on a turn that RAN and errored — the exit-1 path with `error: null`", () => {
+    // The case a consumer actually hit. A turn that completed a run and errored exits 1 with a FULL
+    // result envelope whose top-level `error` is null, so reading only that object left the report saying
+    // "reflection turn exited with code 1 (expected 0)" and nothing more. The real cause — an exhausted
+    // seven-day quota — was in `results[0]` the whole time, and is already rendered this way by the run
+    // renderer; they found it only by opening events.jsonl by hand.
+    const turn = {
+      stdout: JSON.stringify({
+        ok: false,
+        error: null,
+        results: [{ result: "error", resultErrorKind: "usage_limit", errorSource: "result", resultSubtype: "error_during_execution" }],
+      }),
+      stderr: "",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    };
+    const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/usage-limit/);
+    expect(v.reason).toMatch(/quota is exhausted/);
+    expect(v.reason).toMatch(/NOT a harness or skill defect/);
+    expect(v.reason).toMatch(/error_during_execution/);
+    expect(v.kind).toBe("usage_limit");
+  });
+
+  it("renders an exhausted quota as RUN FAILED, not as a broken instrument", () => {
+    const text = buildTextReport({
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container",
+      taskResult: undefined,
+      selfReportStatus: "unavailable",
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      infraFailure: "reflection turn exited with code 1 (expected 0) — usage-limit …",
+      infraFailurePhase: "reflection turn",
+      infraFailureKind: "usage_limit",
+    });
+    // Nothing is broken — the account is out of quota. Naming it INFRASTRUCTURE sends the reader to the
+    // same wrong subsystem, just via the other taxonomy.
+    expect(text).toMatch(/RUN FAILED \(reflection turn, usage_limit\)/);
+    expect(text).not.toMatch(/INFRASTRUCTURE/);
+  });
+
+  it("keeps `agent` on the INFRASTRUCTURE side — for critique's own protocol turn that IS the instrument breaking", () => {
+    const turn = {
+      stdout: JSON.stringify({ ok: false, error: null, results: [{ result: "error", resultErrorKind: "agent", errorSource: "agent" }] }),
+      stderr: "",
+      code: 1,
+      timedOut: false,
+      truncated: false,
+    };
+    const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
+    if (v.ok) throw new Error("expected failure");
+    expect(v.kind).toBe("agent");
+    expect(isOrdinaryFailureKind(v.kind)).toBe(false);
+  });
+
+  it("names WHY the GRADED turn errored — an errored task is gradeable, but a quota exhaustion is not a skill defect", () => {
+    // The same information gap on the other turn: `taskResult:"error"` is a legitimate gradeable outcome
+    // and the critique proceeds, but the NOTE said only "ended in error" — so a reader would attribute an
+    // exhausted quota or a dropped connection to the skill under review.
+    const state = {
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: "error" as const,
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      gradedErrorReason: "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect",
+    };
+    expect(buildTextReport(state)).toMatch(/ended in error \(usage-limit/);
+    expect(buildJsonReport(state).gradedErrorReason).toMatch(/quota is exhausted/);
+    // Absent reason ⇒ the original wording, unchanged.
+    expect(buildTextReport({ ...state, gradedErrorReason: undefined })).toMatch(/ended in error — recommendations/);
+  });
+
+  it("leaves `kind` absent for a nonzero exit with no envelope — the case that really is an instrument failure", () => {
+    const turn = { stdout: "junk", stderr: "", code: 1, timedOut: false, truncated: false };
+    const v = validateReflectionTurn(turn, "crit-1", "/runs/x/sess-crit-1");
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.kind).toBeUndefined();
+    expect(v.reason).toMatch(/exited with code 1/);
+  });
 });
 
 describe("F37 residual (part 2): taskTurnInfraFailure gates a killed TASK turn before the reflection turn is ever attempted", () => {
   it("reports a timed-out task turn as an infra failure", () => {
     const task = { stdout: "", stderr: "", code: null, timedOut: true, truncated: false };
-    expect(taskTurnInfraFailure(task)).toMatch(/timed out/i);
+    expect(taskTurnInfraFailure(task)?.reason).toMatch(/timed out/i);
   });
 
   it("reports a byte-capped task turn as an infra failure", () => {
     const task = { stdout: "", stderr: "", code: null, timedOut: false, truncated: true };
-    expect(taskTurnInfraFailure(task)).toMatch(/byte cap/i);
+    expect(taskTurnInfraFailure(task)?.reason).toMatch(/byte cap/i);
   });
 
   it('returns undefined for a task turn that completed on its own — even a gradeable result:"error" — timedOut/truncated are the only infra signals here', () => {
@@ -470,7 +684,87 @@ describe("F37 residual (part 2): taskTurnInfraFailure gates a killed TASK turn b
       timedOut: false,
       truncated: false,
     };
-    expect(taskTurnInfraFailure(task)).toMatch(/crashed|no parseable result envelope/i);
+    const failure = taskTurnInfraFailure(task);
+    expect(failure?.reason).toMatch(/crashed|no parseable result envelope/i);
+    // No envelope to classify from — `kind` must stay absent, because it is what the report keys the
+    // "this is really infrastructure" wording off. A kind invented here would downgrade a genuine crash
+    // to an ordinary, actionable failure.
+    expect(failure?.kind).toBeUndefined();
+  });
+
+  it("names an UNANSWERED GATE as the cause instead of calling it a crash — the envelope's own diagnosis wins", () => {
+    // The regression this exists for: an unanswered question gate exits 2 with a FULLY-FORMED error
+    // envelope (`fail()` in run/envelope.ts prints one on the way out), but the old check looked only for
+    // `results[0].outDir` and so answered "it crashed before completing a gradeable task" — a diagnosis
+    // that sends a reader to audit Docker and the staged agent when the actual fix is one scenario flag.
+    //
+    // The envelope here mirrors the REAL shape `UnansweredError` produces (decider.ts: the message is
+    // built as `<prefix>:\n${body}` and the hint IS that same `body`), not a convenient stub — a stub
+    // where message ⊉ hint cannot see the duplication the assertion below pins.
+    const body = 'unscripted AskUserQuestion:\n  • script it:  --answer "<q>=<choice>"\n  • --decider-llm';
+    const task = {
+      stdout: JSON.stringify({
+        tool: "cowork-harness",
+        command: "skill",
+        ok: false,
+        results: [],
+        error: { category: "unanswered", message: `unscripted AskUserQuestion (on_unanswered=fail):\n${body}`, hint: body },
+      }),
+      stderr: "[status] /tmp/eval-x/sess-1\n",
+      code: 2,
+      timedOut: false,
+      truncated: false,
+    };
+    const failure = taskTurnInfraFailure(task);
+    expect(failure?.kind).toBe("unanswered");
+    expect(failure?.reason).toMatch(/unscripted AskUserQuestion/);
+    // It must NOT keep claiming a crash.
+    expect(failure?.reason).not.toMatch(/crashed|no parseable result envelope/i);
+    // The harness's own hint must appear EXACTLY ONCE. It is already inside the message, and appending it
+    // unconditionally printed the whole question + options + remedy tip twice on the most common failure
+    // this reporting serves.
+    expect(failure!.reason.split("--decider-llm").length - 1).toBe(1);
+    // And no remedy text of our own on top: 35 of the 36 UnansweredError sites are NOT "the skill asked
+    // an unscripted question" (a mis-typed --answer label, malformed policy YAML, a crashed --decider-cmd
+    // helper, even a self-declared harness bug), so category-keyed coaching is wrong for nearly all of them.
+    expect(failure?.reason).not.toMatch(/SCENARIO, not the infrastructure/);
+  });
+
+  it("does NOT append a hint that the message already contains, but DOES append a genuinely separate one", () => {
+    const dup = {
+      stdout: JSON.stringify({ ok: false, results: [], error: { category: "usage", message: "bad flag: see --help", hint: "see --help" } }),
+      stderr: "",
+      code: 2,
+      timedOut: false,
+      truncated: false,
+    };
+    expect(taskTurnInfraFailure(dup)!.reason.split("see --help").length - 1).toBe(1);
+
+    const distinct = {
+      stdout: JSON.stringify({
+        ok: false,
+        results: [],
+        error: { category: "usage", message: "bad flag", hint: "put it before the subcommand" },
+      }),
+      stderr: "",
+      code: 2,
+      timedOut: false,
+      truncated: false,
+    };
+    expect(taskTurnInfraFailure(distinct)?.reason).toMatch(/bad flag\nput it before the subcommand/);
+  });
+
+  it("still reports a structured NON-gate error (e.g. usage) by its own category rather than as a crash", () => {
+    const task = {
+      stdout: JSON.stringify({ ok: false, results: [], error: { category: "usage", message: "unknown flag: --nope" } }),
+      stderr: "",
+      code: 2,
+      timedOut: false,
+      truncated: false,
+    };
+    const failure = taskTurnInfraFailure(task);
+    expect(failure?.kind).toBe("usage");
+    expect(failure?.reason).toMatch(/unknown flag: --nope/);
   });
 
   it("returns undefined for a NONZERO-exit task that DID complete a valid envelope (a failing verdict is gradeable, not a crash)", () => {

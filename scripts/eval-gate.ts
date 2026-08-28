@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { buildJudgePrompt } from "../src/decide/semantic-judge.js";
+import { isLiveModelId } from "../src/types.js";
 
 const SKILL = "cowork-harness";
 const ALPHA = 0.05;
@@ -534,9 +535,10 @@ async function capture(reps: number, dotenv: string | undefined, ablate: boolean
   // Only REAL live model ids count. `RunResult.models` is verbatim from the agent, and the agent stamps the
   // literal `<synthetic>` on assistant messages it fabricates LOCALLY (no API call, zero-filled usage) — so
   // a perfectly ordinary LIVE rep can carry it alongside the real id. It is not an answerer: including it
-  // would pollute the set and, via singleModel()'s size check, refuse an otherwise-valid gate. Match the
-  // angle-bracket PREFIX, not the one spelling — `<synthetic>` is the marker seen so far, not the contract.
-  const isLiveModel = (m: unknown): m is string => typeof m === "string" && !m.startsWith("<");
+  // would pollute the set and, via singleModel()'s size check, refuse an otherwise-valid gate. The
+  // predicate is `isLiveModelId` (src/types.ts), beside the field it governs — shared rather than
+  // reimplemented here, so a future marker spelling cannot be fixed in one consumer and missed in another.
+  const isLiveModel = isLiveModelId;
   const judge = new Set<string>();
   const answerer = new Set<string>();
   for (const envs of byScenario.values())

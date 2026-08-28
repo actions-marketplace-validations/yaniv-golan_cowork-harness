@@ -14,6 +14,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     turn: undefined,
     ablated: undefined,
     referencesRead: undefined,
+    referencesAccessed: undefined,
     mode: undefined,
     command: undefined,
     lane: undefined,

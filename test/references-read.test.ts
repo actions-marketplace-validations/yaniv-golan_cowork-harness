@@ -117,3 +117,56 @@ describe("sub-agent referencesRead attribution", () => {
     expect(sa?.referencesRead).toEqual(["references/foo.md", "scripts/bar.py"]);
   });
 });
+
+// The WIDE field at the DRIVE layer. The `referencesRead` tests above cannot cover it: they assert the
+// `read`-channel projection, which survives even if `noteReferenceAccess` is deleted outright — an
+// adversarial pass proved exactly that by removing both capture calls and watching the whole suite stay
+// green. These assert `referencesAccessed` itself, on the same drives.
+const BASH_CMD = `cat ${SCRIPT_PATH}`;
+
+describe("referencesAccessed at the drive layer", () => {
+  it("captures a MAIN-AGENT Bash read that the Read tool never saw, alongside the read channel", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Read", input: { file_path: REF_PATH } },
+      { type: "tool_use", name: "Bash", input: { command: BASH_CMD } },
+    ]);
+    expect(rec.referencesAccessed).toEqual([
+      { path: "references/foo.md", via: ["read"] },
+      { path: "scripts/bar.py", via: ["bash"] },
+    ]);
+    // The narrow projection stays narrow — the Bash access is NOT in it.
+    expect(rec.filesRead).toEqual(["references/foo.md"]);
+  });
+
+  it("merges channels for one path reached two ways", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Bash", input: { command: `cat ${REF_PATH}` } },
+      { type: "tool_use", name: "Read", input: { file_path: REF_PATH } },
+      { type: "tool_use", name: "Grep", input: { path: REF_PATH, pattern: "x" } },
+    ]);
+    expect(rec.referencesAccessed).toEqual([{ path: "references/foo.md", via: ["bash", "read", "grep"] }]);
+  });
+
+  it("attributes a SUB-AGENT Bash read to its dispatch, not the top level", async () => {
+    const rec = await drive([
+      { type: "tool_use", name: "Agent", input: { subagent_type: "general-purpose" }, toolUseId: "A" },
+      { type: "subagent_dispatch", toolUseId: "A", dispatchAgentType: "general-purpose", declaredTools: [], typeOmitted: false },
+      { type: "tool_use", name: "Bash", input: { command: BASH_CMD }, parentToolUseId: "A", toolUseId: "B1" },
+    ]);
+    expect(rec.subagents.find((s) => s.toolUseId === "A")?.referencesAccessed).toEqual([{ path: "scripts/bar.py", via: ["bash"] }]);
+    expect(rec.referencesAccessed).toEqual([]); // top level is main-agent-only, same split as filesRead
+    expect(rec.filesRead).toEqual([]);
+  });
+
+  it("records NOTHING for a command that only NAMES the path — `ls` is not a read", async () => {
+    // The distinction the whole signal rests on. An existence check is how an agent asks whether a
+    // reference is there, which is the opposite of having read it.
+    const rec = await drive([{ type: "tool_use", name: "Bash", input: { command: `ls -la ${REF_PATH}` } }]);
+    expect(rec.referencesAccessed).toEqual([]);
+  });
+
+  it("is [] — never undefined — on a drive that made no qualifying call, so `[]` means 'looked, saw nothing'", async () => {
+    const rec = await drive([{ type: "tool_use", name: "Bash", input: { command: "echo hi" } }]);
+    expect(rec.referencesAccessed).toEqual([]);
+  });
+});

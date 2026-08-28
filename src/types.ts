@@ -298,9 +298,27 @@ export const Assertion = z.strictObject({
   tool_called: toolGlob
     .optional()
     .describe(
-      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
+      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way",
     ),
-  tool_not_called: toolGlob.optional().describe("NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)"),
+  tool_not_called: toolGlob
+    .optional()
+    .describe(
+      "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive; legacy spellings match as in tool_called). A LITERAL naming a tool the tier does not serve (Bash/WebFetch/NotebookEdit at hostloop; mcp__workspace__bash at container/microvm) is refused at load — it could never be violated",
+    ),
+  reference_read: z
+    .string()
+    .min(1, "reference_read is empty — an empty regex matches every path and passes vacuously")
+    .optional()
+    .describe(
+      "a skill references/ or scripts/ file matching this regex was ACCESSED (main agent or sub-agents) via Read, Grep, or a Bash command naming it — regex is unanchored + case-insensitive; fails when the run recorded no observable tool stream",
+    ),
+  no_observed_reference_access: z
+    .string()
+    .min(1, "no_observed_reference_access is empty — an empty regex matches every path and never passes")
+    .optional()
+    .describe(
+      "NO observed access to a skill references/ or scripts/ file matching this regex. Named 'observed' because detection under-approximates (a cd then a bare relative cat, a heredoc, or a $VAR-built path is invisible) — it is not proof of absence; fails when no observable tool stream was recorded",
+    ),
   subagent_tool_used: toolGlob
     .optional()
     .describe("a sub-agent used a tool matching this glob (* / ?; exact when literal; anchored, case-sensitive)"),
@@ -383,7 +401,12 @@ export const Assertion = z.strictObject({
     .string()
     .optional()
     .describe("a sub-agent matching this regex (by dispatch or resolved agent type, or description) was dispatched"),
-  subagent_declared_but_unused: z.string().optional().describe("a sub-agent declared this tool but never used it (the fabrication proxy)"),
+  subagent_declared_but_unused: z
+    .string()
+    .optional()
+    .describe(
+      "a sub-agent declared this tool but never used it (the fabrication proxy). Fires only on a dispatch that declares a tools/allowedTools list; the Agent tool carries neither, so declaredTools is [] and the key passes — a green means not-applicable, not absence of fabrication",
+    ),
   subagent_output_contains: z
     .strictObject({
       match: z
@@ -1481,8 +1504,40 @@ export interface RunResult {
    *  `subagents[].referencesRead` below — this top-level field's data is unaffected by that addition,
    *  matching `references/`/`scripts/` under a mounted plugin root — NOT `assets/`, and never `SKILL.md`
    *  (delivered whole, never Read as a file). Derived from the run's Read events, so it's present on
-   *  **both live and replay**; absent when no such file was Read. */
+   *  **both live and replay**; absent when no such file was Read.
+   *
+   *  READ `referencesAccessed` INSTEAD for the question "did the agent open this reference?". This field
+   *  counts the Read TOOL, and its absence is not evidence the content went unread — a `Bash cat`, a
+   *  `Grep` or a `Glob` of the same file leaves nothing here. It is retained with exactly this meaning
+   *  for consumers that want the strict channel; it is the `"read"` projection of `referencesAccessed`,
+   *  produced by the same capture. */
   referencesRead?: string[];
+  /** Every skill reference/script file the agent REACHED, and the tool channel(s) it reached them
+   *  through — the WIDE progressive-disclosure signal, and the one a consumer asking "did the agent open
+   *  this reference?" should read. `referencesRead` above is this field's `"read"`-channel projection,
+   *  derived from the same capture so the two cannot disagree; it is kept, unchanged in meaning, because
+   *  a `Read` and a `grep -c` are genuinely different evidence.
+   *
+   *  Channels: `read` (`Read.file_path`), `grep` (`Grep.path`), `bash` (a `Bash`/`mcp__workspace__bash`
+   *  command naming the path). There is deliberately NO `Glob` channel: its `path` input is a DIRECTORY
+   *  by tool contract, so it either fails the predicate outright or records a directory into a field
+   *  documented as FILES. All three apply the SAME
+   *  `skillReferenceReadPath()` predicate, which requires a mounted-plugin root — so a token only counts
+   *  when it is rooted in the staged plugin, never the agent's own `scripts/` directory.
+   *
+   *  DELIBERATELY UNDER-APPROXIMATES. A `cd` into the plugin dir followed by a bare `cat references/x.md`,
+   *  a heredoc body, a `$VAR`-built path and `find -exec` are all invisible. A miss is the correct side to
+   *  err on for a positive signal; it is also why the negative assertion key is named
+   *  `no_observed_reference_access` rather than promising proof of absence.
+   *
+   *  PRESENCE IS THE CANNOT-VERIFY CHANNEL, and this is the one way it differs from `referencesRead`
+   *  (which collapses empty to `undefined` and therefore cannot express the difference):
+   *    - `[]`        — the drive ran and observed no access. A real, usable negative.
+   *    - `undefined` — no observable drive (a replay error result, a torn partial result, or a result
+   *                    written before this field existed). Cannot verify; never read it as "none".
+   *  Present on BOTH live and replay: cassettes freeze whole tool inputs, so the replay re-drive
+   *  re-derives all four channels identically. */
+  referencesAccessed?: Array<{ path: string; via: Array<"read" | "grep" | "bash"> }>;
   /** 1-based turn number within a resumed (`--session-id` + `--resume`) session — 1 for a normal
    *  single-shot run, incrementing per resume. Each turn owns its artifacts under `turns/<N>/`
    *  (`result.json`, `run.jsonl`, `trace.json`, `resources.jsonl`), so a multi-turn consumer attributes a
@@ -1502,6 +1557,9 @@ export interface RunResult {
      *  counterpart of the main-agent-only top-level field. Absent/empty when the dispatch Read no
      *  reference/script file. */
     referencesRead?: string[];
+    /** THIS sub-agent's wide reference-access list — same shape, channels and caveats as the top-level
+     *  `referencesAccessed`, attributed via the dispatch's `toolUseId`. */
+    referencesAccessed?: Array<{ path: string; via: Array<"read" | "grep" | "bash"> }>;
     description?: string;
     prompt?: string; // dispatch input.prompt, assertText-capped
     dispatchModel?: string; // the DISPATCHING message's model (ex-"model" — renamed when resolvedModel landed beside it)
@@ -1835,4 +1893,23 @@ export interface RunResult {
      *  by resource assertions (that consumption tier is deliberately deferred). */
     probeFailures?: number;
   };
+}
+
+/** The filter EVERY consumer of `RunResult.models` (and of any other verbatim-from-the-agent model id)
+ *  must apply before reading a value as run provenance. The agent stamps the literal `<synthetic>` on
+ *  assistant messages it fabricates LOCALLY — no API call, zero-filled `usage` — so `["claude-sonnet-5",
+ *  "<synthetic>"]` is an ordinary array and two runs of the SAME pinned model can differ purely by
+ *  whether a synthesized turn occurred.
+ *
+ *  Matches the angle-bracket SHAPE (`<…>`), not the one known spelling, so a future marker is still
+ *  excluded rather than rendered as if it were a model. The SHAPE and not merely the `<` PREFIX: the two
+ *  disagree on a truncated or malformed value like `"<synthetic"`, and a consumer that treats such a
+ *  value as live prints a marker where a model id belongs — the exact class of bug the filter exists for.
+ *
+ *  Lives here, beside the field it governs, because it had been reimplemented per consumer with
+ *  DIFFERENT rules — `scripts/eval-gate.ts` had an unfiltered `<synthetic>` flip its observed answerer
+ *  and refuse a valid gate, and `src/run/provenance.ts` (which renders `provenance.model` on every JSON
+ *  envelope) carried a third copy. All three now share this one. */
+export function isLiveModelId(m: unknown): m is string {
+  return typeof m === "string" && !(m.startsWith("<") && m.endsWith(">"));
 }

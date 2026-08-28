@@ -316,8 +316,11 @@ ${evidenceRules(nonce, true)}
 ${pkg}
 
 Look for concrete, skill-improvement-relevant findings, e.g.:
-- the agent read a reference/script (see referencesRead) but its final answer/transcript shows it ignored
-  or contradicted that guidance (a salience problem — the content exists but didn't land);
+- the agent reached a reference/script (see referencesAccessed, which lists the tool channel each was
+  reached through) but its final answer/transcript shows it ignored or contradicted that guidance (a
+  salience problem — the content exists but didn't land). That section UNDER-APPROXIMATES access, so an
+  absent path is weak evidence and never proof the agent did not read the file: do NOT issue a finding
+  whose only support is a path missing from it;
 - the transcript shows the agent guessing, backtracking, or asking a question that SKILL.md or a
   references/ file already appears to answer (check the "SKILL.md" and "references/ available" sections);
 - redundant or wasted tool calls (see toolCounts/skillActivity) that a clearer instruction would avoid;
@@ -436,7 +439,10 @@ classification by checking it against the evidence package:
 - "grounded-and-actionable": the evidence supports the claim and it is worth fixing.
 - "grounded-but-not-worth-it": the evidence supports the claim but it is low-value or an edge case.
 - "confabulated": the evidence CONTRADICTS the claim (e.g. the agent says it "never found" a reference
-  that referencesRead or the transcript shows it read, or describes something that did not happen).
+  that referencesAccessed or the transcript shows it reached, or describes something that did not happen).
+  Be careful with referencesAccessed here: only its "read" channel is strong evidence the agent opened
+  the file. Do NOT call a claim confabulated on a "bash" or "grep" entry alone — those mean a command
+  named the path, which is weaker.
 - "already-covered": SKILL.md or a references/ file (see those sections) already covers this; the agent
   overlooked or didn't act on existing guidance.
 - "not-adjudicable": the evidence CANNOT decide this claim — for example, a complaint about SKILL.md-

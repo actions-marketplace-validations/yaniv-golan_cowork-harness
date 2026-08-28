@@ -47,6 +47,7 @@ import {
 } from "../runtime/image-capabilities.js";
 import { instanceName, VM_WORK_HOST } from "../runtime/lima.js";
 import { ResourceSampler, makeSampleOnce, foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js";
+import { tierVacuousTool, tierVacuousMessage } from "./tier-vacuous-tools.js";
 import { decideLoopFromBaseline, readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
@@ -73,7 +74,7 @@ import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliComplete } from "../decide/llm-transport.js";
-import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks } from "./run.js";
+import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -526,6 +527,29 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const effectiveFidelity =
     scenario.fidelity === "cowork" ? (decideLoopFromBaseline(baseline) === "host" ? "hostloop" : "container") : scenario.fidelity;
   if (scenario.fidelity === "cowork") process.stderr.write(`[loop] cowork → ${effectiveFidelity} (per gate 1143815894)\n`);
+
+  // Refuse a `tool_not_called` naming a tool this tier provably does not serve. Placed HERE, not in the
+  // schema or validateScenarioRegexes, because both run before the baseline and the tier exist — and a
+  // `fidelity: cowork` scenario has no tier at all until the line above resolves it, which is the tier
+  // most authors actually write. Still ahead of every spawn, staging and image pull, so no model spend is
+  // wasted on an assertion that could never have been violated. (A same-origin `--session-id` re-run has
+  // already cleared the prior outDir by this point — pre-spend for tokens, not for that.)
+  //
+  // UsageError, not a plain throw: parseScenarioFile wraps only ZodError, so a bare Error here would be
+  // categorized `internal` — an authoring mistake reported as a harness bug.
+  const viaApiForVacuity = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
+  for (const a of scenario.assert) {
+    // BOTH negative tool keys. `subagent_tool_absent` reads the tools sub-agents actually USED
+    // (assert.ts's `ctx.subagentTools`), not a per-dispatch declared list, so the same tier table applies
+    // — covering one and not the other would refuse `tool_not_called: "Bash"` at hostloop while silently
+    // greening the sub-agent form of the identical claim.
+    for (const key of ["tool_not_called", "subagent_tool_absent"] as const) {
+      const pattern = a[key];
+      if (typeof pattern !== "string") continue;
+      const finding = tierVacuousTool(pattern, effectiveFidelity, viaApiForVacuity);
+      if (finding) throw new UsageError(tierVacuousMessage(finding, key, scenario.name));
+    }
+  }
 
   let agentSessionId: string | undefined;
   if (opts.sessionId || opts.resume) {
@@ -1321,6 +1345,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredFilesHealth: authoredFilesHealthNonEmpty(authored.health) ? authored.health : undefined,
       secrets,
       toolsCalled: record.toolsCalled,
+      referencesAccessed: unionReferenceAccesses(record),
       subagentTools: record.subagentTools,
       egress,
       result: record.result,
@@ -1592,6 +1617,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       turn,
       ablated: opts.ablateSkill || undefined,
       referencesRead: record.filesRead.length ? record.filesRead : undefined,
+      referencesAccessed: record.referencesAccessed,
       finalMessage: record.resultText,
       execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
       scenario: scenario.name,
@@ -1909,6 +1935,8 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
       "subagent_dispatched",
       "tool_result_matches",
       "tool_result_not_matches",
+      "reference_read",
+      "no_observed_reference_access",
     ] as const) {
       const pattern = a[key];
       if (pattern !== undefined) {
@@ -2133,6 +2161,7 @@ export function buildPartialResult(args: {
     turn: args.turn,
     ablated: args.ablated || undefined,
     referencesRead: args.record.filesRead.length ? args.record.filesRead : undefined,
+    referencesAccessed: args.record.referencesAccessed,
     finalMessage: args.record.resultText,
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,

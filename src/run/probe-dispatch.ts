@@ -29,6 +29,7 @@ export interface DispatchProbeEntry {
    *  `toolResults` is undefined — the pairing can't be proven either way, never reported as a false "no". */
   delivered: boolean | "unavailable";
   referencesRead?: string[];
+  referencesAccessed?: Array<{ path: string; via: string[] }>;
 }
 
 export interface DispatchProbeProjection {
@@ -84,6 +85,7 @@ export function projectDispatchProbe(result: RunResult, opts: { expectWriteSuffi
     ...computePathDenials(result, s.toolUseId),
     delivered: computeDelivered(result, s.toolUseId, opts.expectWriteSuffix),
     referencesRead: s.referencesRead,
+    referencesAccessed: s.referencesAccessed,
   }));
   const v = computeVerdict(result, "live");
   return { dispatches, subagentsUnavailable: subagents === undefined, verdict: { pass: v.pass, exitCode: v.exitCode, signals: v.signals } };
@@ -116,7 +118,12 @@ export function formatDispatchProbe(p: DispatchProbeProjection): string {
         lines.push(`  pathDenials: ${d.pathDenials.length}${scopeNote}`);
         for (const pd of d.pathDenials) lines.push(`    - [${pd.source}] ${pd.tool} ${pd.path ?? "(no path)"}`);
       }
-      if (d.referencesRead?.length) lines.push(`  referencesRead: ${d.referencesRead.join(", ")}`);
+      // The WIDE list, with channels — `referencesRead` alone is the Read tool only, and printing it
+      // under a probe that reads as "what did this dispatch open" is the same one-channel misreading the
+      // critique headline carried. Falls back to the narrow field for an older result.json.
+      if (d.referencesAccessed?.length)
+        lines.push(`  referencesAccessed: ${d.referencesAccessed.map((a) => `${a.path} (${a.via.join(", ")})`).join(", ")}`);
+      else if (d.referencesRead?.length) lines.push(`  referencesRead (Read tool only): ${d.referencesRead.join(", ")}`);
     }
   }
   const sig = p.verdict.signals.length ? ` (${p.verdict.signals.map((s) => s.code).join(", ")})` : "";

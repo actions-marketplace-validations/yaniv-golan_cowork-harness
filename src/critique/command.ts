@@ -31,6 +31,7 @@ import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
+import { isLiveModelId } from "../types.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import { parseDotenv } from "../dotenv.js";
 import type { CritiqueItem } from "./evidence.js";
@@ -682,12 +683,17 @@ function runSkillTurn(args: string[], timeoutMs = TURN_TIMEOUT_MS, maxBytes = TU
 
 interface SkillEnvelope {
   ok?: boolean;
-  error?: { category?: string; message?: string } | null;
+  error?: { category?: string; message?: string; hint?: string } | null;
   results?: Array<{
     outDir?: string;
     finalMessage?: string;
     result?: "success" | "error";
     resultSubtype?: string;
+    /** Why an errored run errored. `resultErrorKind` is the harness's own classification (a tail-end
+     *  transport drop / a genuine agent failure / an exhausted quota); `errorSource` is the finer
+     *  termination source. Both ride in the envelope because it spreads the whole `RunResult`. */
+    resultErrorKind?: "transport" | "agent" | "usage_limit";
+    errorSource?: string;
     /** 1-based turn number within a `--session-id`+`--resume` session (see src/types.ts's `RunResult.turn`).
      *  1 for a fresh/single-shot run; >1 only for a genuine resume. F37 uses this as the mechanical proof
      *  that the reflection turn actually continued the SAME session rather than silently starting fresh. */
@@ -736,6 +742,21 @@ function extractResult(turn: TurnOutcome): "success" | "error" | undefined {
   return parseEnvelope(turn.stdout)?.results?.[0]?.result;
 }
 
+/** The graded turn's own recorded model ids — the provenance question a reader of a critique must be able
+ *  to answer without opening a turn file, and the one the report used to leave blank.
+ *
+ *  `taskRaw` is passed in on the normal path (already read there); the task-turn FAILURE path has no such
+ *  read yet, so it is re-read here rather than skipped — a failure report is exactly where "which model
+ *  was this?" is asked, and it is the branch that used to name no model at all. Every step is defensive:
+ *  an absent, unreadable or shapeless result.json yields `undefined`, never a throw. */
+export function readGradedModels(outDir: string, taskRaw?: Record<string, unknown> | null): string[] | undefined {
+  const raw = taskRaw === undefined ? (readTurn1Result(outDir) as Record<string, unknown> | null) : taskRaw;
+  const models = raw?.models;
+  if (!Array.isArray(models)) return undefined;
+  const live = models.filter(isLiveModelId);
+  return live.length ? [...new Set(live)] : undefined;
+}
+
 /** F37: the reflection turn (turn 2) validated at the PROTOCOL level, before its `finalMessage` is trusted
  *  as a self-report and before any evidence is packaged / handed to the evaluator. Distinct from the TASK
  *  turn's own success/error, which is a GRADEABLE outcome (a legitimate input to the critique, not an infra
@@ -757,10 +778,23 @@ export function validateReflectionTurn(
   turn: TurnOutcome,
   expectedSessionId: string,
   expectedOutDir: string,
-): { ok: true; envelope: SkillEnvelope } | { ok: false; reason: string } {
+): { ok: true; envelope: SkillEnvelope } | ({ ok: false } & TurnFailure) {
   if (turn.timedOut) return { ok: false, reason: "reflection turn timed out and was killed before it could complete" };
   if (turn.truncated) return { ok: false, reason: "reflection turn's output exceeded the byte cap and was killed" };
-  if (turn.code !== 0) return { ok: false, reason: `reflection turn exited with code ${turn.code ?? "null"} (expected 0)` };
+  if (turn.code !== 0) {
+    // Same rule as the task turn's (see `taskTurnInfraFailure`): a nonzero exit usually arrives WITH the
+    // harness's own structured diagnosis, and reporting only the exit code throws it away — leaving a
+    // reader to guess between a crashed instrument and an ordinary usage/boundary error the harness
+    // already named.
+    // `fail()`'s error envelope first (exit 2/3), then the result row of a turn that RAN and errored
+    // (exit 1, `error: null`) — the path that used to report a bare exit code and nothing else.
+    const diag = envelopeDiagnosis(turn) ?? resultRowDiagnosis(turn);
+    return {
+      ok: false,
+      reason: `reflection turn exited with code ${turn.code ?? "null"} (expected 0)${diag ? ` — ${diag.text}` : ""}`,
+      kind: diag?.kind,
+    };
+  }
   const env = parseEnvelope(turn.stdout);
   if (!env) return { ok: false, reason: "reflection turn produced no parseable --output-format json envelope on stdout" };
   if (env.ok !== true) {
@@ -804,14 +838,104 @@ export function validateReflectionTurn(
  *  `undefined` for a task turn that completed (cleanly OR with a genuine `result:"error"` — that remains a
  *  gradeable outcome, not an infra failure). `main()` itself spawns real processes and isn't directly
  *  testable, so this decision is factored out and exported for the unit test. */
-export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
+/** A turn that produced no gradeable outcome: the human-readable `reason`, plus the harness error
+ *  `kind` (an `ErrCategory`) when the failed turn printed a structured error envelope. */
+export interface TurnFailure {
+  reason: string;
+  kind?: string;
+}
+
+/** The error categories that are the CALLER's problem — a scenario or an invocation to fix, with a
+ *  healthy instrument underneath.
+ *
+ *  The complement matters more than the list. `src/cli.ts`'s top-level catch funnels EVERY unexpected
+ *  throw into `jsonError(command, "internal", …)`, and `LegacyRunDirError` into `"runtime"` — so a
+ *  Docker daemon that is down, a container that fails to start, a missing staged agent, a vanished mount
+ *  and an outright harness bug all arrive as a well-formed error envelope with a category. "It has a
+ *  category, therefore it is ordinary" is exactly wrong for those, and wrong in the dangerous direction:
+ *  it tells a reader the instrument is healthy while it is not. Only these three are ordinary; anything
+ *  else — including a category added later that this list has not been taught — stays INFRASTRUCTURE. */
+const ORDINARY_ERROR_KINDS = new Set([
+  // Harness `ErrCategory` values (from a `fail()` error envelope).
+  "unanswered",
+  "usage",
+  "boundary",
+  // `RunResult.resultErrorKind` values, from a turn that RAN and reported an errored result. Both
+  // taxonomies answer the same question — why did this turn fail — and both land in `infraFailureKind`.
+  // `usage_limit` (quota exhausted, retry after reset) and `transport` (a tail-end connection drop) leave
+  // a healthy instrument behind. `agent` deliberately does NOT: for critique's own protocol turn, an
+  // agent-level failure IS the instrument breaking.
+  "usage_limit",
+  "transport",
+]);
+
+export function isOrdinaryFailureKind(kind: string | undefined): boolean {
+  return kind !== undefined && ORDINARY_ERROR_KINDS.has(kind);
+}
+
+/** Render a failed turn's own structured diagnosis, or `undefined` when it printed none.
+ *
+ *  The hint is appended ONLY when the message does not already contain it. `UnansweredError` is thrown
+ *  as `new UnansweredError(\`unscripted AskUserQuestion…:\n${body}\`, body)` — the message CONTAINS the
+ *  hint — so an unconditional append printed the whole question, its options and its four-line remedy tip
+ *  twice, on the single most common failure this reporting exists to serve.
+ *
+ *  Deliberately NO remedy text of our own on top. There are 36 `UnansweredError` sites and only ONE is
+ *  "the skill asked a question the graded run had no answer for"; the rest are a mis-typed `--answer`
+ *  label, malformed `--answer-policy` YAML, a crashed `--decider-cmd` helper, an out-of-set
+ *  `--decider-llm` reply, an unanswered dialog/elicit, even a self-declared harness bug. Advice keyed on
+ *  the CATEGORY is wrong for nearly all of them, and each site already carries a hint written for its own
+ *  case. Carry that hint; do not re-derive it from the category. */
+/** Why a turn that RAN reported an errored result — read off its envelope's result row.
+ *
+ *  Distinct from `envelopeDiagnosis`: that reads the top-level `error` object, which only `fail()` writes
+ *  (exit 2/3). A turn that completed a run and errored exits 1 with `error: null` and a full result row,
+ *  so the exit-code-only report said "exited with code 1 (expected 0)" and stopped — the reader learned
+ *  nothing about a quota exhaustion, a transport drop or a turn-limit. Every field here already existed
+ *  and was already rendered this way by the run renderer; critique simply never read them.
+ *
+ *  Subtype precedence matches `src/run/renderer.ts`: prefer the SDK subtype ONLY when the terminal error
+ *  actually came from a result event, so a stale subtype from an earlier turn cannot mislabel a later
+ *  exit/timeout/no_result error. */
+function resultRowDiagnosis(turn: TurnOutcome): { text: string; kind?: string } | undefined {
+  const r0 = parseEnvelope(turn.stdout)?.results?.[0];
+  if (!r0 || r0.result !== "error") return undefined;
+  const subtype = r0.errorSource === "result" && r0.resultSubtype && r0.resultSubtype !== "success" ? r0.resultSubtype : undefined;
+  const detail = [subtype ?? r0.errorSource].filter(Boolean).join("");
+  const label =
+    r0.resultErrorKind === "usage_limit"
+      ? "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect"
+      : r0.resultErrorKind === "transport"
+        ? "transport error — a tail-end connection drop, not a skill defect; retry"
+        : r0.resultErrorKind === "agent"
+          ? "agent error"
+          : "error";
+  // The bare reason, with no framing of its own — the two callers wrap it differently (a failed turn's
+  // sentence vs. a parenthetical on the graded run's NOTE), and a shared prefix that one of them stripped
+  // back off with a regex would couple them through a string shape.
+  return { kind: r0.resultErrorKind, text: `${label}${detail ? ` (${detail})` : ""}` };
+}
+
+function envelopeDiagnosis(turn: TurnOutcome): { text: string; kind?: string } | undefined {
+  const err = parseEnvelope(turn.stdout)?.error;
+  if (!err || typeof err.message !== "string" || !err.message) return undefined;
+  const hint = typeof err.hint === "string" && err.hint ? err.hint : undefined;
+  const kind = typeof err.category === "string" && err.category ? err.category : undefined;
+  return {
+    kind,
+    text: `${kind ?? "error"}: ${err.message}` + (hint && !err.message.includes(hint) ? `\n${hint}` : ""),
+  };
+}
+
+export function taskTurnInfraFailure(task: TurnOutcome): TurnFailure | undefined {
   if (task.timedOut)
-    return (
-      "task turn timed out and was killed before it could complete — raise the wall-clock budget with " +
-      "--timeout <ms> (default 30 min). The turn is killed AFTER its model spend, so this run cost you the " +
-      "graded turn and produced no critique"
-    );
-  if (task.truncated) return "task turn's output exceeded the byte cap and was killed";
+    return {
+      reason:
+        "task turn timed out and was killed before it could complete — raise the wall-clock budget with " +
+        "--timeout <ms> (default 30 min). The turn is killed AFTER its model spend, so this run cost you the " +
+        "graded turn and produced no critique",
+    };
+  if (task.truncated) return { reason: "task turn's output exceeded the byte cap and was killed" };
   // A task that exited NONZERO without ever printing a parseable result envelope (a `results[0]` with an
   // outDir) crashed before it completed. The task turn is spawned `--output-format json`, so a run that
   // actually finished always prints one; when it didn't, `extractOutDir` recovers the dir only from the
@@ -823,7 +947,19 @@ export function taskTurnInfraFailure(task: TurnOutcome): string | undefined {
   // whole point of the critique. So this fires ONLY on the crash-with-no-envelope case, never on a
   // completed run's success/verdict.
   if (task.code !== 0 && !parseEnvelope(task.stdout)?.results?.[0]?.outDir) {
-    return "task turn exited nonzero without a parseable result envelope — it crashed before completing a gradeable task, so its evidence cannot be trusted";
+    // A nonzero exit is not automatically a CRASH. `fail()` (run/envelope.ts) prints a fully-formed
+    // `{ok:false, results:[], error:{category,message,hint}}` envelope on the way out, so the harness has
+    // usually already said WHY in machine-readable form — an unanswered gate, a usage error, a boundary
+    // refusal. Reading only `results[0].outDir` threw all of that away and answered "it crashed" for every
+    // one of them, which points a reader at Docker and the staged agent when the real cause was a gate
+    // with no scripted answer. Prefer the envelope's own diagnosis; keep the crash wording strictly for
+    // the case where there is genuinely no envelope to read.
+    const diag = envelopeDiagnosis(task);
+    if (diag) return { kind: diag.kind, reason: `task turn exited ${task.code} — ${diag.text}` };
+    return {
+      reason:
+        "task turn exited nonzero without a parseable result envelope — it crashed before completing a gradeable task, so its evidence cannot be trusted",
+    };
   }
   return undefined;
 }
@@ -962,6 +1098,26 @@ interface ReportState {
    *  whole purpose is killing silent wrong answers. Surfacing it here removes the need to know. */
   gradedOutcome?: string;
   gradedSkillHash?: string;
+  /** The model ids the GRADED turn actually ran on, read back from its own `result.json` (`models`) and
+   *  filtered through `isLiveModelId`. The report already named the EVALUATOR's resolved model and named
+   *  no other, so the one number a reader must not get wrong — which model produced the behaviour being
+   *  graded — was absent from every critique. It cannot be inferred from the caller's context either: the
+   *  turns are a SUBPROCESS and inherit nothing from the session that invoked `critique`, so an omitted
+   *  `--model` grades whatever the spawned agent defaults to, silently and without a trace in the report.
+   *  Absent when no result.json was readable or it recorded no live id. */
+  gradedModels?: string[];
+  /** WHY a graded turn that ended in `result:"error"` errored — the run's own `resultErrorKind` plus its
+   *  finer termination source. An errored task turn is a GRADEABLE outcome (the critique proceeds), but
+   *  the report said only "ended in error", so a reader could not tell a skill defect from an exhausted
+   *  quota or a dropped connection without opening a turn file — and would read the findings as being
+   *  about the skill either way. Absent when the run did not error, or recorded no classification. */
+  gradedErrorReason?: string;
+  /** The graded run carried no reference-access list at all — a run kept before the signal existed, or
+   *  one with no observable tool stream. DISTINCT from `noSkillFilesRead === undefined` alone, which is
+   *  also how "the skill ships nothing to read" and "the turn-1 result was degraded" are encoded: without
+   *  this, a historical `result.json` rendered NO line at all and the reader was left to infer from
+   *  silence — the same absence-vs-unknown conflation, one level up. */
+  referenceAccessUnobservable?: boolean;
   selfReportStatus: SelfReportStatus;
   items: CritiqueItem[];
   /** F35: the TRANSPORT-RESOLVED evaluator model, present only when the evaluator actually completed and
@@ -976,6 +1132,15 @@ interface ReportState {
    *  or broken session/turn continuity) — the evaluator was never invoked at all, distinct from a gradeable
    *  task failure or an evaluator-side parse error. */
   infraFailure?: string;
+  /** WHICH turn failed. The header used to hardcode "(reflection turn)" while the same field also carried
+   *  TASK-turn failures — so a task that never ran was reported as a broken reflection, sending a reader
+   *  to the wrong turn's artifacts before they had read a word of the reason. Required in practice
+   *  wherever `infraFailure` is set. */
+  infraFailurePhase?: "task turn" | "reflection turn";
+  /** The harness error category (`ErrCategory`) when the failed turn printed a structured error envelope —
+   *  "unanswered", "usage", "boundary", … Absent for a genuine crash/kill with no envelope to classify
+   *  from, which is the only case that still reads as an infrastructure fault. */
+  infraFailureKind?: string;
   /** Mechanical integrity signal from the evaluator's trusted canary — false means that pass stopped
    *  following trusted instructions, so an empty critique may be adversarial silencing, not a clean skill. */
   evaluatorIntegrity?: { pass1Canary: boolean; pass2Canary?: boolean };
@@ -1092,11 +1257,23 @@ export function buildTextReport(state: ReportState): string {
   if (state.gradedSkill)
     out.push(`  graded skill: ${state.gradedSkill} (pair by skillHash + this name — skillHash keys the whole mounted plugin)`);
   if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
+  // The GRADED turn's model, beside the evaluator's — never one without the other. Naming only the
+  // evaluator invited exactly the wrong reading: that the critique was produced under the model the
+  // caller had in mind, when the turns are a subprocess that inherits no model from their caller.
+  if (state.gradedModels?.length) out.push(`  graded model(s): ${state.gradedModels.join(", ")} (from the graded turn's own result.json)`);
+  // No `--model` remediation here: `models` is populated from the model ids on ASSISTANT MESSAGES
+  // (run.ts's noteModel), never from the flag. Every case that lands on "unknown" — no result.json at
+  // all, no assistant message, marker-only — is unchanged by passing --model, so naming it would send a
+  // reader to a lever that cannot move this line.
+  else out.push(`  graded model(s): unknown (the graded turn recorded no live model id — no assistant message reached it)`);
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
   else if (infraFailure || evaluatorError)
     out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
   if (taskResult === "error")
-    out.push(`  NOTE: the task run ended in error — recommendations below reflect whatever happened before the failure.`);
+    out.push(
+      `  NOTE: the task run ended in error${state.gradedErrorReason ? ` (${state.gradedErrorReason})` : ""} — ` +
+        `recommendations below reflect whatever happened before the failure.`,
+    );
   if (state.skillInvocationObserved === false)
     out.push(
       `  NOTE: the graded run's recorded skillActivity never mentions the selected skill — this critique may be grading a run that did not actually invoke it.`,
@@ -1147,11 +1324,24 @@ export function buildTextReport(state: ReportState): string {
   // absence-vs-unknown conflation this instrument exists to surface.
   if (state.noSkillFilesRead === undefined && state.turn1ResultDegraded)
     out.push(
-      `  whether any references/ or scripts/ file was Read is UNKNOWN — the graded turn's result was degraded, so treat this as unknown, never as "nothing was read"`,
+      `  whether any references/ or scripts/ file was ACCESSED is UNKNOWN — the graded turn's result was degraded, so treat this as unknown, never as "nothing was read"`,
+    );
+  else if (state.noSkillFilesRead === undefined && state.referenceAccessUnobservable)
+    out.push(
+      `  whether any references/ or scripts/ file was ACCESSED is UNKNOWN — this run recorded no reference-access list (a run kept before the signal existed, or one with no observable tool stream), so treat this as unknown, never as "nothing was read"`,
     );
   if (state.noSkillFilesRead) {
+    // Says what was OBSERVED, and names the channels it observed. The previous wording ("was Read …
+    // counts the Read tool only") invited the reader to conclude the agent opened no reference, when a
+    // `Bash cat` or a `Grep` of one was simply invisible to the field it was computed from — and that
+    // conclusion is the one a reader acts on. The residual caveat is now short and true rather than
+    // load-bearing: a `cd` then a bare relative `cat`, a heredoc, or a $VAR-built path stays invisible
+    // by design, so this is weak evidence, never proof the content went unread.
     out.push(
-      `  no references/ or scripts/ file was Read during the graded turn (main agent or sub-agents) — note this counts the Read tool only, so Grep or assets/ use would not appear here`,
+      `  no references/ or scripts/ file was ACCESSED through any observed tool channel during the graded turn — ` +
+        `main agent and sub-agents, via Read, Grep, or a Bash command naming the path under the mounted plugin. ` +
+        `Under-approximates (a 'cd' then a bare relative cat, a heredoc, or a $VAR-built path is invisible), so treat ` +
+        `this as weak evidence of non-use, never proof the content went unread`,
     );
   }
   if (eb) {
@@ -1192,9 +1382,22 @@ export function buildTextReport(state: ReportState): string {
     );
   }
   if (infraFailure) {
-    out.push(`INFRASTRUCTURE/PROTOCOL FAILURE (reflection turn): ${infraFailure}`);
+    // Two things this header used to get wrong at once, and both sent a reader to the wrong subsystem:
+    // the PHASE was hardcoded to "reflection turn" even for task-turn failures, and the CAUSE was
+    // "INFRASTRUCTURE/PROTOCOL" even when the harness had already reported an ordinary scenario problem
+    // (an unanswered gate, a usage error). Say which turn, and reserve the infrastructure wording for a
+    // failure that actually had no structured diagnosis of its own.
+    const phase = state.infraFailurePhase ?? "reflection turn";
+    const kind = state.infraFailureKind;
+    // Gated on WHICH category, never on merely having one: `internal`/`runtime` are the harness's own
+    // catch-all for an unexpected throw (Docker down, container start failure, missing staged agent, a
+    // harness bug), so treating any category as "ordinary" claims a healthy instrument over a broken one.
+    const ordinary = isOrdinaryFailureKind(kind);
+    out.push(ordinary ? `RUN FAILED (${phase}, ${kind}): ${infraFailure}` : `INFRASTRUCTURE/PROTOCOL FAILURE (${phase}): ${infraFailure}`);
     out.push(
-      `The evaluator was NOT invoked — this is a broken discovery run, not a critique. Re-run, or inspect ${tildeify(outDir)} directly.`,
+      `The evaluator was NOT invoked — this is a broken discovery run, not a critique. ` +
+        (ordinary ? `Fix the cause named above and re-run` : `Re-run, or inspect ${tildeify(outDir)} directly`) +
+        `${ordinary ? `, or inspect ${tildeify(outDir)} directly` : ""}.`,
     );
     return out.join("\n");
   }
@@ -1307,6 +1510,8 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     // paths where knowing which skill generation was graded matters most.
     gradedOutcome,
     gradedSkillHash,
+    gradedModels: state.gradedModels,
+    gradedErrorReason: state.gradedErrorReason,
     selfReportStatus,
     evaluatorIntegrity,
     // On `base` for the same reason as evaluatorIntegrity: a reply with dropped items is exactly where
@@ -1317,9 +1522,13 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     skillMdStatus,
     evidenceBudget: state.evidenceBudget,
     noSkillFilesRead: state.noSkillFilesRead,
+    referenceAccessUnobservable: state.referenceAccessUnobservable,
     verdictProvenance: VERDICT_PROVENANCE,
   };
-  if (infraFailure) return { ...base, infraFailure, items: [] };
+  // The phase/kind ride WITH the reason, never separately: a consumer that reads `infraFailure` and not
+  // these two gets the same wrong-subsystem diagnosis the text header used to hand a human.
+  if (infraFailure)
+    return { ...base, infraFailure, infraFailurePhase: state.infraFailurePhase, infraFailureKind: state.infraFailureKind, items: [] };
   if (evaluatorError) return { ...base, evaluatorError, items: [] };
   return { ...base, evaluatorModel, items };
 }
@@ -1391,6 +1600,11 @@ export function persistCritiqueArtifacts(
       JSON.stringify(
         {
           infraFailure: state.infraFailure,
+          // The phase and kind ride WITH the reason here too. A salvage consumer reading the top-level
+          // `infraFailure` and nothing else would otherwise get the bare reason — the same wrong-subsystem
+          // reading the report header was fixed for.
+          infraFailurePhase: state.infraFailurePhase,
+          infraFailureKind: state.infraFailureKind,
           evaluatorError: state.evaluatorError,
           selfReport: salvage.selfReport,
           rawEvaluatorReplies: salvage.rawEvaluatorReplies,
@@ -1551,7 +1765,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         selfReportStatus: "unavailable",
         items: [],
         requestedModel: opts.evaluatorModel ?? DEFAULT_EVALUATOR_MODEL,
-        infraFailure: taskInfra,
+        infraFailure: taskInfra.reason,
+        infraFailurePhase: "task turn",
+        infraFailureKind: taskInfra.kind,
+        gradedModels: readGradedModels(outDir),
       };
       if (opts.outputFormat === "json") writeAllSync(1, JSON.stringify(buildJsonReport(state)) + "\n");
       else printTextReport(state);
@@ -1581,6 +1798,12 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const taskFp = taskRaw?.fingerprint as { baseline?: unknown } | undefined;
     const gradedBaseline = typeof taskFp?.baseline === "string" ? taskFp.baseline : undefined;
     const taskTurnUsd = sumCostUsd(taskRaw?.modelUsage);
+    // WHICH model produced the graded behaviour — read back from the run's own record, never assumed from
+    // the caller's context. `<…>`-wrapped entries are the agent's locally-fabricated turns, not answerers.
+    const gradedModels = readGradedModels(outDir, taskRaw);
+    // Why an errored graded turn errored — same helper as the reflection turn's, read off the same
+    // envelope. A quota exhaustion and a skill defect both render as `result:"error"` otherwise.
+    const gradedErrorReason = taskResult === "error" ? resultRowDiagnosis(task)?.text : undefined;
     // Graded-run validity (advisory): when a specific plugin skill was selected, check the run's own
     // skillActivity actually mentions it — packaging can be perfectly plugin-aware and still be grading a
     // run that never invoked the selected skill. Best-effort string scan of the recorded activity;
@@ -1636,6 +1859,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let droppedEvaluatorItems: { pass1: number; pass2?: number } | undefined;
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
+    let infraFailurePhase: "task turn" | "reflection turn" | undefined;
+    let infraFailureKind: string | undefined;
     let evaluatorModel: string | undefined;
     let selfReportStatus: SelfReportStatus = "unavailable";
     let turn1ResultDegraded: boolean | undefined;
@@ -1643,6 +1868,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let skillMdStatus: SkillMdStatus | undefined;
     let evidenceBudget: ReportState["evidenceBudget"];
     let noSkillFilesRead: boolean | undefined;
+    let referenceAccessUnobservable: boolean | undefined;
     // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
     // BEFORE parsing, so a parse throw cannot lose them) and by the per-turn result reads.
     let evidenceText: string | undefined;
@@ -1656,6 +1882,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
     if (!reflectionValidation.ok) {
       infraFailure = reflectionValidation.reason;
+      infraFailurePhase = "reflection turn";
+      infraFailureKind = reflectionValidation.kind;
       // Per this tool's contract (a discovery instrument, never a gate) the defect is REPORTED, not thrown —
       // main() then exits 2 (no critique was produced). The evaluator is deliberately never invoked.
     } else {
@@ -1691,6 +1919,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         trimRecord: tr,
         packageTruncated: pt,
         noSkillFilesRead: nofr,
+        referenceAccessUnobservable: rau,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agentsMdPath: resolvedSkill.agentsMdPath,
         agentsMdRoot: resolvedSkill.agentsMdRoot,
@@ -1701,6 +1930,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       skillMdStatus = sms;
       evidenceBudget = { corpusBytes: cb, corpusCeiling: cc, corpusCuts: ccuts, corpusExcluded: cex, trimRecord: tr, packageTruncated: pt };
       noSkillFilesRead = nofr;
+      referenceAccessUnobservable = rau;
       // The agent was never given these, so the evaluator must not be either — but silence would let an
       // author believe their grade covered a file it never saw.
       if (cex.length)
@@ -1809,12 +2039,16 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       taskResult,
       gradedOutcome,
       gradedSkillHash,
+      gradedModels,
+      gradedErrorReason,
       selfReportStatus,
       items,
       evaluatorModel,
       requestedModel,
       evaluatorError,
       infraFailure,
+      infraFailurePhase,
+      infraFailureKind,
       evaluatorIntegrity,
       droppedEvaluatorItems,
       turn1ResultDegraded,
@@ -1822,6 +2056,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       skillMdStatus,
       evidenceBudget,
       noSkillFilesRead,
+      referenceAccessUnobservable,
     };
     if (opts.outputFormat === "json") {
       // writeAllSync: a long JSON report piped to `jq` truncates past the ~64KB buffer with async write + exit(0)

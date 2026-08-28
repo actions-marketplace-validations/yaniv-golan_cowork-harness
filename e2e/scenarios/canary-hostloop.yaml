@@ -9,4 +9,8 @@ prompt: |
 assert:
   - result: success
   - tool_called: mcp__workspace__*
-  - tool_not_called: Bash
+  # NO `tool_not_called: Bash` here. It read as the other half of the canary's claim, but hostloop does
+  # not serve `Bash` at all — it is disallowed and aliased to mcp__workspace__bash — so the assertion
+  # could never have been violated and proved nothing. `tool_called: mcp__workspace__*` above is the
+  # whole signal: the shell DID route through the workspace tool. The harness now refuses the vacuous
+  # form at load.

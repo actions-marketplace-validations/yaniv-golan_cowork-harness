@@ -56,6 +56,7 @@ import {
   deniedPathFrom,
   type RunHooks,
   type RunRecord,
+  unionReferenceAccesses,
 } from "./run.js";
 import {
   parseMessage,
@@ -2088,6 +2089,7 @@ function minimalRec(): RunRecord {
     transcript: "",
     toolsCalled: new Set(),
     toolCounts: {},
+    referencesAccessed: [],
     filesRead: [],
     subagentTools: new Set(),
     subagents: [],
@@ -4633,6 +4635,7 @@ function replayErrorResult(file: string): RunResult {
     lane: undefined, // unreadable cassette — no scenario to read a lane from
     scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
+    referencesAccessed: undefined, // ditto — and `undefined` here means CANNOT VERIFY, never "no accesses" (see the field doc)
     ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
     runLabel: undefined, // run-identity metadata is a LIVE-run property; a replay has no record-time label
     skillCommit: undefined,
@@ -6510,6 +6513,12 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "tool_result_not_matches",
   "tool_called",
   "tool_not_called",
+  // Replay re-derives these from the SAME frozen tool inputs the live run used — a cassette stores whole
+  // tool inputs (a Bash `command`, a Read `file_path`), so the re-drive reconstructs all four access
+  // channels identically. NOT live-only: classifying them there would red every committed scenario
+  // carrying one on every replay, in the lane CI actually runs.
+  "reference_read",
+  "no_observed_reference_access",
   "subagent_tool_used",
   "subagent_tool_absent",
   "subagent_dispatched",
@@ -7069,6 +7078,11 @@ export async function replayCassette(
     const assertCtx: AssertContext = {
       transcript: rec.transcript,
       toolsCalled: rec.toolsCalled,
+      // A TRUNCATED cassette was never driven — `minimalRec()`'s empty list is a placeholder, not an
+      // observation. Passing it through would let `no_observed_reference_access` pass vacuously on a
+      // cassette nothing could be read from, which is the false green in the shape that looks like
+      // success. Same posture as the `gateOptionsMissing` flag on the line's neighbours.
+      referencesAccessed: truncatedMsg ? undefined : unionReferenceAccesses(rec),
       subagentTools: rec.subagentTools,
       egress: [],
       result: rec.result,
@@ -7416,6 +7430,15 @@ export async function replayCassette(
       // the undelivered question — cannot-tell, never a clean read.
       scratchpadEvidenceComplete: false,
       referencesRead: rec.filesRead.length ? rec.filesRead : undefined, // re-derived from the frozen Read events on the replay re-drive, same as toolCounts
+      // Cassettes freeze WHOLE tool inputs (a Bash `command`, a Read `file_path`), so the re-drive
+      // re-derives all four channels identically — replay is a first-class lane for this signal, not a
+      // cannot-verify. `[]` (drive ran, saw nothing) is deliberately NOT collapsed to undefined here.
+      // Same gate as the assert context above, and it must not be dropped here: a TRUNCATED cassette was
+      // never driven, so `minimalRec()`'s empty list is a placeholder, not an observation. Persisting `[]`
+      // made `replay` itself say "evidence unavailable" while `verify-run` and `critique`, reading the
+      // very result.json replay had just written, reported a clean negative for a run whose frozen events
+      // contained the read. The contract has to hold where it is written to disk, not only in memory.
+      referencesAccessed: truncatedMsg ? undefined : rec.referencesAccessed,
       ablated: undefined, // replay reconstructs a recorded run; ablation is a live-run control
       runLabel: undefined, // run-identity metadata is a LIVE-run property; a replay has no record-time label
       skillCommit: undefined,

@@ -471,6 +471,18 @@ nothing to verify — and keeps replaying green.
   record to exist and its sibling requires none to, so no run satisfies both. Where the evidence is
   absent both halves fail evidence-unavailable rather than passing, and the denial keys are
   hostloop-only so a wrong tier fails both too — no combination produces a both-pass.
+- **A `tool_not_called` / `subagent_tool_absent` naming a tool the tier does not serve is REFUSED**, by
+  `run` / `skill` / `record`, before spawning (exit 2 on `run`/`skill`). `hostloop` replaces `Bash` and
+  `WebFetch` with `mcp__workspace__*` and removes `NotebookEdit`; `container` and `microvm` serve no
+  workspace shell. A negative assertion naming one of those can never be violated, so it passes vacuously
+  and verifies nothing. Like the contradiction refusals above this is a **command-level** refusal, not a
+  schema tightening — `schema/scenario.schema.json` still accepts the document, so §12's covered input
+  contract is unchanged. Literals only (a glob may match something the tier does serve), and the table is
+  closed to tools the harness itself removes or registers: `--tools` gates the built-in set alone while
+  every tier separately passes `--mcp-config`, so a session-MCP tool name is never refused. `protocol` is
+  never judged — it passes no tool flags, so its surface is the operator's own host CLI registry. `lint`
+  reports the same pairing as `tool-not-called-tier-vacuous` (WARN).
+
 - **`questions_count_max` counts sub-questions, not `AskUserQuestion` tool calls/gates.** A bundled
   gate with K sub-questions counts as K (`src/run/run.ts`'s recorder pushes one `rec.questions` entry
   per sub-question; `src/assert.ts` compares against that count). `trace --view questions` shows the

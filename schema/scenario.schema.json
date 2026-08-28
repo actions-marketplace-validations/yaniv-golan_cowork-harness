@@ -187,12 +187,22 @@
             "type": "string"
           },
           "tool_called": {
-            "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*",
+            "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way",
             "type": "string",
             "minLength": 1
           },
           "tool_not_called": {
-            "description": "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive)",
+            "description": "NO called tool matched this glob (* / ?; exact when literal; anchored, case-sensitive; legacy spellings match as in tool_called). A LITERAL naming a tool the tier does not serve (Bash/WebFetch/NotebookEdit at hostloop; mcp__workspace__bash at container/microvm) is refused at load — it could never be violated",
+            "type": "string",
+            "minLength": 1
+          },
+          "reference_read": {
+            "description": "a skill references/ or scripts/ file matching this regex was ACCESSED (main agent or sub-agents) via Read, Grep, or a Bash command naming it — regex is unanchored + case-insensitive; fails when the run recorded no observable tool stream",
+            "type": "string",
+            "minLength": 1
+          },
+          "no_observed_reference_access": {
+            "description": "NO observed access to a skill references/ or scripts/ file matching this regex. Named 'observed' because detection under-approximates (a cd then a bare relative cat, a heredoc, or a $VAR-built path is invisible) — it is not proof of absence; fails when no observable tool stream was recorded",
             "type": "string",
             "minLength": 1
           },
@@ -310,7 +320,7 @@
             "type": "string"
           },
           "subagent_declared_but_unused": {
-            "description": "a sub-agent declared this tool but never used it (the fabrication proxy)",
+            "description": "a sub-agent declared this tool but never used it (the fabrication proxy). Fires only on a dispatch that declares a tools/allowedTools list; the Agent tool carries neither, so declaredTools is [] and the key passes — a green means not-applicable, not absence of fabrication",
             "type": "string"
           },
           "subagent_output_contains": {

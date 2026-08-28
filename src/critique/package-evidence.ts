@@ -5,6 +5,7 @@ import { warn } from "../io.js";
 import { gitAccept, gitModeEnabled, gitTrackedSet } from "../run/skill-files.js";
 import { turnArtifactPath } from "../run/turn-layout.js";
 import { readTurn1ResultWithStatus, readTurn1Slice, verifyBoundaryIntegrity, type TurnBoundary } from "./evidence.js";
+import { unionReferenceAccesses } from "../run/run.js";
 import { loadVmPathContext } from "../run/vm-path-ctx-file.js";
 
 // Assembles the TURN-1-ONLY evidence document a tool-less, one-shot evaluator model is graded against.
@@ -346,7 +347,7 @@ function safeJson(value: unknown): string {
 const FINAL_MESSAGE_CAP = 4 * 1024;
 const STRUCTURED_CAP = 2 * 1024; // each of: result/toolCounts/skillActivity/subagents
 // Read PATHS only. Same reasoning as REFERENCE_LIST_CAP below: a read-heavy skill (25-40 Reads of
-// references//scripts/ is ordinary on a large reference tree) blew a 1 KiB cap, which set `truncated` and
+// references/ or scripts/ is ordinary on a large reference tree) blew a 1 KiB cap, which set `truncated` and
 // handed the evaluator a caveat steering claims to `not-adjudicable` on EVERY run — with `evidenceBudget`
 // entirely clean and nothing anywhere to explain it. Pure text; free at this package size.
 const REFERENCES_READ_CAP = 32 * 1024;
@@ -462,6 +463,8 @@ export interface PackageEvidenceResult {
    *  disclosure never fired" would be an inference, and a false accusation about the consumer's skill.
    *  `undefined` when the turn-1 result was degraded — unknown, not zero. */
   noSkillFilesRead?: boolean;
+  /** The run carried no reference-access list at all — see ReportState.referenceAccessUnobservable. */
+  referenceAccessUnobservable?: boolean;
   /** True when ANY section was cut — most often the transcript's 128 KiB head+tail elision, which is the
    *  cut that actually happens on long runs. This is what adds the evaluator's truncation caveat, so a
    *  consumer reading DROPPED findings or a rise in `not-adjudicable` needs it: without it an elided
@@ -537,6 +540,19 @@ export function packageEvidence(
   const raw = turn1Result.value as Record<string, unknown> | null;
 
   const finalMessage = typeof raw?.finalMessage === "string" ? raw.finalMessage : "";
+  // WIDE reference access: every channel (Read / Grep / Glob / a Bash command naming the path), not the
+  // Read tool alone. The narrow `referencesRead` used to drive both the headline and the evaluator's
+  // evidence section, and its absence was being read as "the agent opened no reference" — a claim about
+  // reading that a one-channel count cannot support.
+  // ONE derivation, shared with the assertion keys (`unionReferenceAccesses`, src/run/run.ts): main agent
+  // ∪ sub-agents, defensive over raw JSON. A second copy here is how the report and an assertion end up
+  // disagreeing about the same run.
+  //
+  // PRESENCE is the cannot-verify channel: `[]` means the drive ran and observed nothing, `undefined`
+  // means there was no observable drive. Collapsing them would turn "we could not look" into a clean
+  // negative — the exact failure this whole change exists to remove.
+  const allAccesses = unionReferenceAccesses(raw ?? {});
+  const accessObservable = allAccesses !== undefined;
   const referencesRead = Array.isArray(raw?.referencesRead)
     ? (raw!.referencesRead as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
@@ -550,6 +566,8 @@ export function packageEvidence(
       )
     : [];
   const allReads = [...new Set([...referencesRead, ...subagentReads])];
+  // `references/x.md (read, bash)` — channels merged per path by the shared helper above.
+  const accessLines = (allAccesses ?? []).map((a) => `${a.path}${a.via.length ? ` (${a.via.join(", ")})` : ""}`);
   const skillActivity = raw?.skillActivity ?? [];
   const toolCounts = raw?.toolCounts ?? {};
   const outcome = typeof raw?.result === "string" ? raw.result : "unknown";
@@ -809,10 +827,29 @@ export function packageEvidence(
       bound(subagentResearch, SUBAGENT_RESEARCH_CAP),
     ),
     sec(
-      "referencesRead (turn 1, main-agent Reads only, references/+scripts/ under the mounted skill — " +
-        "NEVER includes SKILL.md itself, which is delivered whole and never Read as a file)" +
+      "referencesAccessed (turn 1, MAIN AGENT + SUB-AGENTS, references/+scripts/ under the mounted skill, " +
+        "with the tool channel each was reached through — NEVER includes SKILL.md itself, which is delivered " +
+        "whole and never Read as a file. Under-approximates: a `cd` then a bare relative `cat`, a heredoc, or " +
+        "a $VAR-built path is invisible, so absence is WEAK evidence and never proof the content went unread)" +
         turn1ResultDegradedNote,
-      bound(referencesRead.length ? referencesRead.join("\n") : "(none)", REFERENCES_READ_CAP),
+      bound(
+        !accessObservable
+          ? "(unavailable — this run recorded no observable tool stream; absence here is NOT evidence of no access)"
+          : accessLines.length
+            ? accessLines.join("\n")
+            : "(none observed)",
+        REFERENCES_READ_CAP,
+      ),
+    ),
+    // The NARROW Read-tool signal, kept as its own line rather than folded away. `read` is the strongest
+    // channel — the agent opened the file through the file-reading tool — while a `bash` entry can be any
+    // command that named the path. Collapsing them would cost the evaluator the one distinction that
+    // separates "reached the content" from "referred to the file".
+    sec(
+      "referencesRead (turn 1, main agent + sub-agents, the Read-TOOL subset of the section above — the " +
+        "strongest evidence of access; a path present above but absent here was reached some other way)" +
+        turn1ResultDegradedNote,
+      bound(allReads.length ? allReads.join("\n") : "(none)", REFERENCES_READ_CAP),
     ),
     // Corpus sections: the ceiling was already applied per-file above, so these are passed through the
     // forgery-neutralizing `bound` at their own (already-satisfied) size rather than re-rationed here.
@@ -869,8 +906,13 @@ export function packageEvidence(
     // `undefined` when the turn-1 result was degraded (unknown) OR when the skill ships no references at
     // all — "nothing was Read" is not a signal about a skill that has nothing to read, and emitting it
     // there is noise a consumer reads as a warning about material that does not exist.
+    // Now keyed on the WIDE list. Also `undefined` when the run recorded no observable tool stream —
+    // "we could not look" must never render as "nothing was opened".
+    referenceAccessUnobservable: !accessObservable,
     noSkillFilesRead:
-      turn1ResultDegraded || (referenceFiles.length === 0 && deliveredScripts.length === 0) ? undefined : allReads.length === 0,
+      turn1ResultDegraded || !accessObservable || (referenceFiles.length === 0 && deliveredScripts.length === 0)
+        ? undefined
+        : (allAccesses ?? []).length === 0,
   };
 }
 
