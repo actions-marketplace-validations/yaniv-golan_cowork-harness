@@ -233,7 +233,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 > invisible at `container`. The **content** staged is the
 > working tree, so uncommitted edits to a tracked file are tested without committing; but commit before
 > recording the locking cassette, since real Cowork ships the committed tree. See
-> [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
+> [README → Test a local skill in one command](./cli.md#test-a-local-skill-in-one-command).
 
 ### Egress
 `extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).

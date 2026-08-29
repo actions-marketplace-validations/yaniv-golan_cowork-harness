@@ -26,22 +26,23 @@ describe("docs/cassette.md ↔ src/run/cassette.ts replay-key sync", () => {
   });
 });
 
-// Anti-drift guard: README.md's "What replay checks" blockquote table summarizes the same four key
+// Anti-drift guard: docs/cli.md's "What replay checks" blockquote table summarizes the same four key
 // buckets as its own compact reference. Unlike docs/cassette.md's per-key table (guarded above), this
 // table groups keys under wildcard tokens (`transcript_*`, `tool_*`, ...) instead of listing every
 // member — so this guard is wildcard-aware: a key is "covered" if its literal backtick token appears
 // in the right bucket's cell, OR a `prefix_*` token appears whose prefix is a prefix of the key.
-describe("README.md ↔ src/run/cassette.ts replay-bucket sync", () => {
-  const readme = readFileSync(resolve("README.md"), "utf8");
+describe("docs/cli.md ↔ src/run/cassette.ts replay-bucket sync", () => {
+  const readme = readFileSync(resolve("docs/cli.md"), "utf8");
 
   const markerIdx = readme.indexOf("> **What replay checks.**");
   const endIdx = markerIdx === -1 ? -1 : readme.indexOf("Authoritative list:", markerIdx);
   // Fail loudly (not a silent vacuous pass) if the marker/table moved or was renamed — same
   // anti-false-pass discipline test/scenario-docs-sync.test.ts uses for its own anchor.
   it('found the "What replay checks" table', () => {
-    expect(markerIdx, 'README.md\'s "> **What replay checks.**" marker was not found — did the table move or get renamed?').toBeGreaterThan(
-      -1,
-    );
+    expect(
+      markerIdx,
+      'docs/cli.md\'s "> **What replay checks.**" marker was not found — did the table move or get renamed?',
+    ).toBeGreaterThan(-1);
     expect(endIdx, 'README.md\'s "Authoritative list:" trailer (end of the replay-bucket table) was not found').toBeGreaterThan(markerIdx);
   });
 

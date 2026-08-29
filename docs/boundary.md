@@ -174,3 +174,10 @@ For the full catalog of what the harness deliberately does NOT reproduce vs real
   - We do not reconstruct/bundle Cowork's base prose (Anthropic-owned; not cleanly extractable) and cannot *programmatically* drive real Cowork to diff it (Desktop IPC is locked).
   - **Update (2026-06-18):** *manual* behavioral capture — asking the running Cowork agent to describe its own system prompt — IS available, and was used to add a reconstructed `<identity>` section to the append (Cowork self-identifies as "Claude … the Cowork assistant, not Claude Code"; the base `claude_code` preset alone would say "Claude Code").
   - The "IPC locked" caveat applies to automated diffing, not manual capture.
+
+## Sandboxing: container vs. the real VM (moved from README)
+
+Local Cowork runs the agent in an **Apple Virtualization.framework microVM** (separate kernel). The harness's default `container` tier uses an OS container (shared kernel, namespaces/cgroups). For **testing skills you wrote**, that's faithful where it counts — same agent binary, same cowork mode, same mount layout, same egress allowlist, same permission protocol — because skill behavior is agent-loop + tool behavior, all kernel-invisible. The container is the right default precisely because it's CI-native; a VM needs nested virtualization most shared CI runners don't have.
+
+It only *matters* to use a real VM when you're testing **isolation of untrusted skills** (container escape is easier than VM escape), or a skill that probes kernel internals. For that, the `microvm` tier runs the same agent in a real Linux microVM via **Lima with `vmType: vz` — the same Apple Virtualization.framework Cowork uses** (highest off-app fidelity). This tier is **macOS arm64 only** (it needs Apple's hypervisor); there is no Linux/Firecracker path. The launch contract is identical to the container tier; only the isolation boundary differs — egress is the same allowlist proxy as the container tier (no gVisor netstack at any harness tier). See [DESIGN.md — Architecture at a glance](../DESIGN.md#architecture-at-a-glance).
+

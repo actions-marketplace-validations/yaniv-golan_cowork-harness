@@ -219,7 +219,7 @@ describe("schema/run-result.json", () => {
   });
 });
 
-// Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, README.md's
+// Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, docs/cli.md's
 // --output-format json row) against the schema's `verdict.required` — a doc that drops or adds a
 // field fails loud instead of silently rotting.
 describe("docs ↔ schema/run-result.json verdict-shape sync", () => {
@@ -233,10 +233,10 @@ describe("docs ↔ schema/run-result.json verdict-shape sync", () => {
     expect(keys).toEqual(verdictRequired);
   });
 
-  it("README.md's --output-format json row names exactly the schema's required verdict keys", () => {
-    const readme = readFileSync(resolve("README.md"), "utf8");
+  it("docs/cli.md's --output-format json row names exactly the schema's required verdict keys", () => {
+    const readme = readFileSync(resolve("docs/cli.md"), "utf8");
     const m = readme.match(/verdict:\s*\{([^}]*)\}/);
-    expect(m, "README.md's `verdict: {...}` literal not found — did the wording change?").toBeTruthy();
+    expect(m, "docs/cli.md's `verdict: {...}` literal not found — did the wording change?").toBeTruthy();
     const keys = new Set(
       m![1]
         .split(",")

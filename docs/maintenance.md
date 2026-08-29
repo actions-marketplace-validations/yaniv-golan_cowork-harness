@@ -474,3 +474,31 @@ gh api -X PUT user/blocks/<username>   # block the account
 Push protection blocks known secret formats on push. If something slipped through: rotate the
 credential first (the local `.env` OAuth token / `ANTHROPIC_API_KEY`), then purge history. The
 GitHub **Secret scanning** alerts tab lists detections.
+
+## Parity between releases (moved from README)
+
+This is the part built for longevity. The fragile, release-specific facts live in **one JSON baseline**; the orchestration code rides the stable stream-json protocol.
+
+When a new Claude Desktop ships:
+
+```bash
+cowork-harness sync --diff
+```
+
+`cowork-harness sync` reads your **live install** and the **app.asar** and re-derives the baseline:
+
+| Baseline field | Source (auto-detected) |
+|---|---|
+| `agentVersion` | `~/Library/Application Support/Claude/claude-code-vm/.sdk-version` |
+| env-strip list | `app.asar` main bundle (BG env-strip — env vars the background-agent spawn scrubs before launch) |
+| `mountLayout` | `app.asar` (`{uuid,name,mountPath,hostPath}` model) |
+| `egress.allowDomains` | `app.asar` `vmAllowedDomains()` + `firewallAlso` + `config.json:coworkEgressAllowedHosts` |
+| `networkMode` | `config.json:coworkNetworkMode`, asar `vm_network_mode` |
+| `requireFullVmSandbox` | `config.json:lastSeenRequireCoworkFullVmSandbox` |
+
+The diff shows exactly what moved (agent bump, allowlist change, new mount). You review, commit the new `baselines/desktop-<ver>.json`, and the container pin updates automatically from the baseline. Parity drift then surfaces as **test diffs**, not silent rot.
+
+> The sync script is the maintenance contract. If an Anthropic release changes something the sync script doesn't yet read, `sync --diff` flags an `unknown delta` from the asar fingerprint so you know to extend it — rather than parity quietly degrading.
+
+---
+

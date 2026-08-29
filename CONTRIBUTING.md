@@ -108,3 +108,38 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
 ## Reporting issues
 
 Use the issue templates. For anything security/sandbox related, see [SECURITY.md](./SECURITY.md).
+
+## This repo's own CI pipeline
+
+Contributor-facing. For *consuming* the harness in your own CI — the token-free gate and the packaged
+Action — see [docs/ci.md](./docs/ci.md).
+
+The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-harness/blob/main/.github/workflows/ci.yml) runs a **nine-stage pipeline**. The **build** + **test** stages are the token-free gate you can copy into your skill repo; the `floor`, `action-self-test`, `python`, `image-recipe`, `boundary`, `scenarios`, and `parity-drift` stages are this repo's own fidelity self-tests and are not directly portable (they build the harness's Docker image and run harness-specific e2e scenarios — see [`ci-recipe.md`](./.claude/skills/cowork-harness/references/ci-recipe.md) for the skill-repo template):
+
+| Stage | Runs | Needs | Gates |
+|---|---|---|---|
+| **build** | format check · version-lockstep guard · typecheck · source guards · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
+| **test** | the unit suite (vitest), sharded 4-way | nothing | every push/PR |
+| **floor** | the unit suite once, unsharded, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line) | nothing | every push/PR; gates the merge context |
+| **action-self-test** | packs this commit and runs the packaged `uses: ./` Action across its full case set — pass (committed example cassette), usage-error fail (nonexistent path), assertion fail (checks the reporter renders a ❌ row), `lint`, and `analyze-skill`; `ci.yml` currently carries 11 `command:` invocations, so re-count here rather than trusting this sentence | nothing | every push/PR |
+| **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR |
+| **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check`, then `npm run test:live` (live contract tests that guard the binary-resolution assumptions, no token needed) | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
+| **image-recipe** | compiles `docker/Dockerfile.agent` in **both** variants (lean/core and `COWORK_FULL_PARITY=1`) on an arm64 runner, so a recipe change cannot reach the merge gate uncompiled | Docker, arm64 runner | every push/PR; gates the merge context |
+| **scenarios** | the live scenario suite (mixed `protocol` + `container` fidelity across `examples/scenarios/`), plus the `e2e/scenarios/*.yaml` smoke set (this repo's own L0/L1/hostloop self-tests, `microvm` excluded — needs a real VM); uploads transcripts/egress logs as artifacts; relies on a runner-local staged agent binary (no in-workflow download step). | `ANTHROPIC_API_KEY` | fork PRs: the whole job is skipped (`if:` guard); same-repo without a key: warns and exits 0 |
+| **parity-drift** | reminder to re-`sync` when Desktop updates | nothing | **goes red** if the newest committed baseline is &gt; 90 days old, but sits outside `ci-green`'s `needs:` list, so a red run does not block a merge |
+
+This ordering means cheap checks fail fast, the **boundary parity gate runs without secrets** (so forks get it too), and expensive live runs only happen when a key is present.
+
+
+## The harness's own suite
+
+```bash
+npm run ci            # typecheck + build + test (run format:check separately; NOT the same set as CI's `build` job — see CONTRIBUTING.md)
+npm test              # vitest: decider, egress allowlist, launch plan, example validation
+cowork-harness boundary-check   # self-verify the sandbox (needs Docker; not part of `npm run ci`)
+```
+
+Unit tests cover the scripted-answer logic, the egress allowlist matcher, the session→launch-plan materialization (mounts + discovery settings + env-strip), and a **schema guard** that fails if any shipped baseline/session/scenario stops validating. Add a test alongside any new schema field or `Decider` rule — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+> Copy your starting scenarios/sessions from **`examples/`**. The **`e2e/`** directory is the harness's *own* fidelity self-tests (smoke scenarios per tier) — not a template to copy.
+

@@ -2,7 +2,7 @@
 
 When a run does the wrong thing — or greens when you don't trust it — this is the map. It routes you to
 the right tool; the authoritative reference for each command's flags is its `--help` and the
-[README → Commands at a glance](../README.md#commands-at-a-glance).
+[README → Commands at a glance](./cli.md#commands-at-a-glance).
 
 > **Scope.** "Evidence" on this page means the RUN's own record — events, trace, transcript; what
 > `trace` / `inspect` / `diff` / `verify-run` / `replay --explain` read. `critique`'s evaluator grades
@@ -30,7 +30,7 @@ Every run writes to `~/.cowork-harness/runs/<scenario>/<sessionId>/` (relocatabl
 writes to `runs/chat/<sessionId>/` — the first path segment is the literal `chat`, not a scenario name.
 The files there — `events.jsonl`, `egress.log`, `agent.stderr.log` at the root, and each turn's
 `run.jsonl` / `trace.json` / `result.json` / `resources.jsonl` under **`turns/<N>/`** — are the raw
-evidence; see [README → What you get out](../README.md#what-you-get-out-inspectable-output) for the layout
+evidence; see [README → What you get out](./cli.md#what-you-get-out-inspectable-output) for the layout
 and how to relocate it. The tools below digest them so you rarely hand-parse.
 
 > **Multi-turn run dirs.** `--session-id` + `--resume`, and every `critique` (task turn + reflection
@@ -190,7 +190,7 @@ the reason to read the *record* rather than the answer. (`critique` is built on 
   check ("edited the skill, forgot to re-record"). See [cassette.md](./cassette.md).
 - **`COWORK_HARNESS_DEBUG_SKILLHASH`** — when a cassette is flagged stale and you can't see why, this env
   var dumps the exact file set feeding the skill hash (and flags OS-junk like `.DS_Store`) so the drift
-  source is one line. See [README → Reproducibility knobs](../README.md#reproducibility-knobs).
+  source is one line. See [README → Reproducibility knobs](./cli.md#reproducibility-knobs).
 - **`run --repeat N`** — "did it pass, or did it pass once?" A green run proves nothing about reliability
   on its own. Repeat the same scenario N times and read the variance rollup (pass rate, per-assertion
   attribution, the signal histogram) instead of trusting a single green — `--min-pass-rate` sets the batch

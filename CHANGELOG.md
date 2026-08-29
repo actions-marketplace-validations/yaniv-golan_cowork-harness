@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The README is now a router, not the whole manual.** It was 975 lines carrying three unrelated
+  audiences at once; it is now **282** and branches to per-audience pages: **`docs/cli.md`** (install,
+  prerequisites, commands, the two files, run output, env knobs), **`docs/companion-skill.md`** (install
+  + orientation; usage stays in `SKILL.md`), and **`docs/ci.md`** (the token-free gate, the packaged
+  Action, the live lane — written to stand alone). The harness's own pipeline and contributor suite moved
+  to `CONTRIBUTING.md`, which keeps `docs/ci.md` about *consuming* the Action rather than about this repo.
+  README keeps what all three audiences share: the fidelity-tier vocabulary, architecture, limitations,
+  the docs index, and versioning. Content moved verbatim — this is a relocation, not a rewrite.
+
+  Nothing is dropped: `Sandboxing` folded into `docs/boundary.md` and `Maintenance` into
+  `docs/maintenance.md`; `Discovery` was already covered in `docs/discovery.md`, so it was deleted rather
+  than duplicated. Every moved relative link was rewritten for its new depth, and every deep link into a
+  moved section was repointed across `docs/`, `examples/README.md`, `llms.txt` and the docs index.
+
 ### Fixed
 
 - **The `protocol` host-hook consent gate was defeatable by a spelling choice.** `allow_host_hooks`

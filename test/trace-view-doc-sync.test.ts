@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // Anti-drift tripwire: the `trace --view` enum lives in two places that must agree —
-// src/cli.ts's TRACE_VIEWS array (what the CLI actually accepts) and README.md's trace row (what a
+// src/cli.ts's TRACE_VIEWS array (what the CLI actually accepts) and docs/cli.md's trace row (what a
 // user reading the docs believes is accepted). Neither is generated from the other, so a view
 // added/renamed/removed in one and not the other silently rots. Source of truth is src/cli.ts;
 // the module is NOT imported here (it has side effects on load) — its TRACE_VIEWS array literal
@@ -20,7 +20,7 @@ describe("trace --view enum ↔ README docs", () => {
   const viewsBlock = src.slice(viewsIdx, src.indexOf("]", viewsIdx));
   const cliViews = [...viewsBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 
-  const readme = readFileSync(resolve("README.md"), "utf8");
+  const readme = readFileSync(resolve("docs/cli.md"), "utf8");
   // The trace row documents the view list as `--view tools\|questions\|...\|usage` inside a
   // markdown table cell — pipes are backslash-escaped there to avoid breaking the table, so the
   // separator to split on is the literal two-character sequence `\|`, not a bare `|`.
@@ -35,8 +35,8 @@ describe("trace --view enum ↔ README docs", () => {
     expect(cliViews).toContain("usage");
   });
 
-  it("found the --view list documented in README.md's trace row", () => {
-    expect(viewListMatch, "README.md's trace row no longer has a `--view a|b|c` list in the expected shape").not.toBeNull();
+  it("found the --view list documented in docs/cli.md's trace row", () => {
+    expect(viewListMatch, "docs/cli.md's trace row no longer has a `--view a|b|c` list in the expected shape").not.toBeNull();
   });
 
   it("src/cli.ts VIEWS and README.md's documented --view list are the same set", () => {

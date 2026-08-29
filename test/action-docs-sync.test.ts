@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 // snippet must stay truthful against action.yml — the actual contract. Source of truth = action.yml's
 // `inputs:` block (parsed below, not hardcoded), so a new/renamed/removed input can't silently drift
 // the docs out of sync. Token-free: pure text parsing, no CLI invocation.
-const DOC_FILES = ["README.md", ".claude/skills/cowork-harness/SKILL.md", ".claude/skills/cowork-harness/references/ci-recipe.md"];
+const DOC_FILES = ["docs/ci.md", ".claude/skills/cowork-harness/SKILL.md", ".claude/skills/cowork-harness/references/ci-recipe.md"];
 
 const actionYml = readFileSync(resolve("action.yml"), "utf8");
 const inputsIdx = actionYml.indexOf("\ninputs:");

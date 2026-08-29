@@ -11,6 +11,9 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 ## Start here
 - [README](README.md): overview, fidelity tiers, quick start, command reference
 - [docs/README.md](docs/README.md): the documentation index — a one-line map of every guide below
+- [docs/cli.md](docs/cli.md): the CLI page — install, prerequisites, commands, the two files you author, run output, env knobs
+- [docs/companion-skill.md](docs/companion-skill.md): companion-skill install + orientation (usage lives in SKILL.md)
+- [docs/ci.md](docs/ci.md): CI / the packaged GitHub Action — token-free gate and the live lane
 - [AGENTS.md](AGENTS.md): instructions for AI agents working in this repo — architecture seams, build gate, invariants, ethos
 - [SPEC.md](SPEC.md): the authoritative contract (CLI surface, JSON envelope, assertions, exit codes)
 

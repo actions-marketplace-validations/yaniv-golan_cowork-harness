@@ -88,8 +88,13 @@ describe("repo docs' ../README.md anchors resolve to real README headings (C1b)"
   const slugs = readmeSlugSet();
 
   it("parsed a sane README heading set (guards against extraction silently breaking)", () => {
-    expect(slugs.size).toBeGreaterThan(10);
-    expect(slugs.has("commands-at-a-glance")).toBe(true);
+    expect(slugs.size).toBeGreaterThan(5);
+    // Canary against the extractor silently returning nothing. Must name a heading the README still
+    // OWNS: `commands-at-a-glance` was the old canary and moved to docs/cli.md in the router split, so
+    // it would now assert the extractor is broken when it is working correctly. `fidelity-tiers…` is a
+    // deliberate choice — the plan pins its heading text as verbatim-unchanged precisely because other
+    // pages deep-link it, which is what makes it a stable canary.
+    expect(slugs.has("fidelity-tiers-pick-per-scenario--per-ci-job")).toBe(true);
   });
 
   const files = repoDocFiles();

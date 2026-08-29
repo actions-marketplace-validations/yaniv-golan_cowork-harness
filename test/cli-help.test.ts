@@ -195,7 +195,7 @@ describe("cli dispatch ↔ COMMANDS ↔ HELP membership", () => {
   });
 });
 
-// Docs guard: a command added to the COMMANDS allowlist but forgotten in README.md's "Commands at
+// Docs guard: a command added to the COMMANDS allowlist but forgotten in docs/cli.md's "Commands at
 // a glance" table is undiscoverable from the docs a user actually reads first. Source of truth =
 // the same COMMANDS array parsed above (re-parsed here so this block stands alone).
 describe("cli COMMANDS ↔ README 'Commands at a glance' table", () => {
@@ -204,7 +204,7 @@ describe("cli COMMANDS ↔ README 'Commands at a glance' table", () => {
   const arrBlock = src.slice(arr, src.indexOf("];", arr));
   const commands = [...arrBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 
-  const readme = readFileSync(resolve("README.md"), "utf8");
+  const readme = readFileSync(resolve("docs/cli.md"), "utf8");
   const tableStart = readme.indexOf("## Commands at a glance");
   const tableEnd = readme.indexOf("\n## ", tableStart + 1);
   const tableBlock = readme.slice(tableStart, tableEnd === -1 ? undefined : tableEnd);

@@ -20,20 +20,23 @@ reading order and tables that follow.
 
 | I want to… | Start here |
 |---|---|
-| Test a local skill before shipping it | [scenario.md](./scenario.md) (author a scenario) and the `skill` command in [README → Commands at a glance](../README.md#commands-at-a-glance) |
+| Test a local skill before shipping it | [scenario.md](./scenario.md) (author a scenario) and the `skill` command in [CLI page → Commands at a glance](./cli.md#commands-at-a-glance) |
 | Gate CI without spending tokens | [cassette.md](./cassette.md) (record/replay) + the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) |
 | **Check my skill actually *ran*** — not that the answer merely looked right | [debugging.md → hunt the false-green](./debugging.md#the-run-was-green-but-you-dont-trust-it--hunt-the-false-green) (`skillsInvoked` / `skillActivity`) |
 | **Prove a `description` edit didn't break triggering** | `skill_triggered` / `no_skill_triggered` in [scenario.md](./scenario.md#full-schema); the router model in [discovery.md](./discovery.md) |
-| **Find out whether it passed — or just passed once** | `--repeat N` ([README → Commands at a glance](../README.md#commands-at-a-glance)) and [stats.md](./stats.md) across separate runs |
+| **Find out whether it passed — or just passed once** | `--repeat N` ([CLI page → Commands at a glance](./cli.md#commands-at-a-glance)) and [stats.md](./stats.md) across separate runs |
 | **Check whether the skill beats no skill at all** | `--ablate-skill` (the control arm — one invocation per arm; see [scenario.md → Running](./scenario.md#running)) |
 | **Test a skill that asks the user questions** | scripted `answers:` in [scenario.md](./scenario.md), or a live decider while you're still discovering what it asks ([decider-dir.md](./decider-dir.md)) |
 | **Prove my skill doesn't reach the network, or leak host paths** | `egress_denied` / `transcript_no_host_path` in [scenario.md](./scenario.md#full-schema); the enforcement model in [boundary.md](./boundary.md) |
 | Compare a skill across a fix (before/after, without averaging over both) | [debugging.md → iterate across fixes](./debugging.md#iterating-a-skill-across-fixes--the-verification-loop) + `stats --group-by skill-hash` ([stats.md](./stats.md)) |
 | **My sub-agent wrote a file and nothing was delivered** | [subagents.md → Canonical outputs addressing](./subagents.md#canonical-outputs-addressing--tier-qualified-there-is-no-single-cross-tier-literal-form) — the outputs path is **tier-qualified**, so a hand-off path that works on one loop silently lands in sandbox scratch on the other; `analyze-skill` catches it statically, before you pay for a run |
-| **Assert on how the run *behaved*, not what it produced** | [README → Assert on the run, not the output](../README.md#assert-on-the-run-not-the-output) — `subagent_tool_absent`, `dispatch_count_max`, `no_delete_in_outputs`: claims no output diff can reach |
+| **Assert on how the run *behaved*, not what it produced** | [CLI page → Assert on the run, not the output](./cli.md#assert-on-the-run-not-the-output) — `subagent_tool_absent`, `dispatch_count_max`, `no_delete_in_outputs`: claims no output diff can reach |
 | **See exactly what a gate put in front of the user** (option labels *and* descriptions) | `trace <run> --view questions`; assert it with `question_context` ([scenario.md](./scenario.md#full-schema)). When no view renders the field you need, read `events.jsonl` directly — [debugging.md → investigate the run](./debugging.md#the-skill-misbehaved--investigate-the-run) has the `jq` recipes |
 | Debug a run that no-ops an assertion | [debugging.md](./debugging.md) |
-| Check whether the sandbox really enforces the boundary | [boundary.md](./boundary.md) |
+| Check whether the sandbox really enforces the boundary | [cli.md](./cli.md) | **Start here for the CLI** — install, prerequisites per fidelity tier, the command table, the two files you author, what a run leaves on disk, and the `COWORK_*` env knobs. |
+| [companion-skill.md](./companion-skill.md) | **Install/orientation** for the companion skill that lets Claude Code drive the harness. Usage itself lives in the skill's own `SKILL.md`. |
+| [ci.md](./ci.md) | **CI** — the token-free gate to copy into a skill repo, the packaged GitHub Action, and the live lane's requirements. |
+| [boundary.md](./boundary.md) |
 | Sync after a Claude Desktop update | [maintenance.md](./maintenance.md) |
 
 ## Guides
@@ -69,9 +72,9 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 
 | Topic | Where |
 |---|---|
-| Commands at a glance (what / when) | [README → Commands at a glance](../README.md#commands-at-a-glance) — the **complete** command catalog; full flags via `<command> --help` (includes `doctor`, the prerequisite check before a first live run) |
+| Commands at a glance (what / when) | [CLI page → Commands at a glance](./cli.md#commands-at-a-glance) — the **complete** command catalog; full flags via `<command> --help` (includes `doctor`, the prerequisite check before a first live run) |
 | `lint` / `scaffold` (scenario authoring) | [scenario.md](./scenario.md); `cowork-harness lint --help`, `cowork-harness scaffold --help` |
-| `lint-skill` (skill authoring — static checks on a `SKILL.md` / skill dir; `--strict` gates in CI) | [README → Commands at a glance](../README.md#commands-at-a-glance), [gotchas.md](./gotchas.md), [plugin-root.md](./plugin-root.md); `cowork-harness lint-skill --help` |
+| `lint-skill` (skill authoring — static checks on a `SKILL.md` / skill dir; `--strict` gates in CI) | [CLI page → Commands at a glance](./cli.md#commands-at-a-glance), [gotchas.md](./gotchas.md), [plugin-root.md](./plugin-root.md); `cowork-harness lint-skill --help` |
 | `analyze-skill` (static path-fidelity check — flags host-loop-only `/sessions/...` path literals, plus interactive-artifact write-back detection) | [subagents.md → Static path-fidelity check (analyze-skill)](./subagents.md#static-path-fidelity-check-analyze-skill); `cowork-harness analyze-skill --help` |
 | `verify-run` (re-assert a kept run, no tokens) · `decide` (smoke-test a decider against a sample question, no run) | `cowork-harness verify-run --help`, `cowork-harness decide --help`, [scenario.md → Dry-running a decider](./scenario.md#dry-running-a-decider-decide) |
 | Debugging a run (a misbehaving skill, or a green you don't trust) | [debugging.md](./debugging.md) |
