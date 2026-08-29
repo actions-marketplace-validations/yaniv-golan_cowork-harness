@@ -106,6 +106,9 @@ allow_host_hooks: true              # OPTIONAL — required to run `protocol` fi
                                     # that declares no hooks needs no opt-in, and a misplaced root-level
                                     # `hooks.json` cannot execute so it does not trigger the gate.
                                     # Use `--fidelity container` to run them sandboxed instead.
+                                    # NEEDS cowork-harness >= 3.0.0. The loader is a strict object, so an
+                                    # OLDER CLI does not default it — it hard-errors
+                                    # `Unrecognized key: "allow_host_hooks"` and exits 2.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files

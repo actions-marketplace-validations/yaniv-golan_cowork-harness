@@ -23,6 +23,8 @@ Self-contained reference. Tracks `cowork-harness 3.0.0` (baseline `desktop-1.406
 - A `protocol` scenario staging a plugin that declares runnable hooks needs `allow_host_hooks: true`
   (`--allow-host-hooks` on `chat`/`skill`). L0 passes `--plugin-dir`, so the CLI runs those
   hooks as native host processes under your account with no sandbox. Plugins without hooks need no opt-in.
+  Needs cowork-harness >= 3.0.0 — an older CLI rejects the key outright (`Unrecognized key`, exit 2), it
+  does not fall back to the default.
 - **Set the tier in the scenario's `fidelity:` field — not a flag.** `--fidelity` is accepted only by
   `skill` (any tier) and `chat` (`protocol`/`container`/`hostloop`; only `microvm`/`cowork` unsupported); `run` rejects an extra `--fidelity`
   positional ("Fidelity is set by the scenario's `fidelity:` field, not a flag").

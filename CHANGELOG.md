@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
+## [Unreleased]
+
 ## [3.0.0] — 2026-08-29
 
 ### Breaking
@@ -28,6 +30,8 @@ All notable changes to this project are documented here. The format is based on
 - **`allow_host_hooks` (scenario key) and `--allow-host-hooks` (`chat` / `skill`).** Consent to
   running a staged plugin's hooks as native host processes at `protocol`. Top-level like
   `allow_host_writes` rather than a verdict modifier — it gates the SPAWN, it does not suppress a signal.
+
+  **Version floor: `allow_host_hooks` needs cowork-harness ≥ 3.0.0.** The scenario loader is a `z.strictObject`, so an older CLI does NOT fall back to the default — it hard-errors `Unrecognized key: "allow_host_hooks"` and exits 2 (verified). Adopting the key is a floor bump for every consumer of that scenario.
 
 - **A committed live probe for L0 plugin delivery** — `examples/probes/l0-plugin-delivery.scenario.yaml`
   plus its fixture and session. It asserts the plugin under test reaches the agent's init inventory at
