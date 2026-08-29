@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **A skill that runs its bundled scripts trips `permissive_auto_allow`, and it depends on the Bash
+  COMMAND rather than the tool.** `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow),
+  but the agent decides whether to ASK: measured at `protocol`, `echo hello` produces no `can_use_tool`
+  request and goes green, while `python3 -c "print(42)"` produces one and fails the guard. So a
+  hello-world probe teaches the wrong expectation while a real script-bearing skill goes red on an
+  otherwise-correct run. `references/fidelity-and-answers.md` now names the three ways through, in
+  preference order. Scope is stated in the doc: the rows are measured at `protocol`, and while the
+  decider is built once from the session's `permission_parity` rather than per tier, whether the agent
+  asks was not re-measured on the sandboxed tiers.
+
+
 ## [3.0.0] — 2026-08-29
 
 ### Breaking

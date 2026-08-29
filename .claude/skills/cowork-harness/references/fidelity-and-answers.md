@@ -155,6 +155,36 @@ hands `fn` exactly this dict.
 - `agent` is **retired** — `on_unanswered: agent` is rejected by the schema. The enum is
   `["fail", "prompt", "llm", "first"]`.
 
+### A script-running skill trips `permissive_auto_allow` unless you script the gate
+
+The default `permission_parity: cowork` auto-allows an unscripted, off-registry tool ask — and records
+it, because real Cowork would have BLOCKED for the user. `computeVerdict` then FAILS the run: a green
+carrying one would not be a faithful pass. Only `Read`, `Glob` and `Grep` are default-allow; **`Bash` is
+off-registry**.
+
+The part that surprises people is that it depends on the COMMAND, not just the tool. Measured at
+`protocol`, same scenario shape, same session, only the command differing:
+
+| Bash command | `can_use_tool` ask | verdict |
+|---|---|---|
+| `echo hello` | none | ✓ green |
+| `python3 -c "print(42)"` | one | ✗ `permissive_auto_allow` |
+
+The agent's own permission logic decides whether to ask; the harness only decides how to answer. So a
+hello-world probe stays green and teaches the wrong expectation, while **a skill that runs its bundled
+scripts** (`python3 ${CLAUDE_SKILL_DIR}/scripts/…`) asks every time and goes red on a run that was
+otherwise correct. That is close to the common case, not an edge case.
+
+Three ways through, in preference order: script the gate (`--answer` / `answers:`), which is what the
+warning tells you and keeps the run deterministic; set `permission_parity: strict` to deny instead of
+allow, if refusal is what you want to test; or assert `allow_permissive_auto_allow: true` when the
+permissive behaviour is deliberately what the scenario is about.
+
+> **Scope, stated honestly.** The two rows above are measured at `protocol`. The decider is built once
+> from the session's `permission_parity` (`execute.ts`), not per tier, so the ANSWER is tier-independent
+> by construction — but whether the agent ASKS is the agent binary's own logic, and that was not
+> re-measured at `container`/`microvm`/`hostloop`. Do not assume the table transfers unchanged.
+
 ### Determinism contract
 
 - `fail` — the default for `run`. On an unscripted gate it hard-errors; the error names the exact
