@@ -173,7 +173,7 @@ LANE_REMOTE_INCOMPATIBLE_KEYS = {"present_files_called", "no_scratchpad_leak", "
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
 VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
-    "allow_l0_plugin_divergence",
+    "allow_l0_host_config_contamination",
     "allow_missing_capability",
     "allow_stall",
     "allow_undelivered_deliverables",

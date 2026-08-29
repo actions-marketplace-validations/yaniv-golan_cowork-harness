@@ -4,7 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
-## [Unreleased]
+## [3.0.0]
+
+### Breaking
+
+- **`l0_plugin_divergence` is renamed `l0_host_config_contamination`**, and its modifier
+  `allow_l0_plugin_divergence` is renamed `allow_l0_host_config_contamination`. The `RunResult` field
+  `l0PluginDivergence` becomes `l0HostConfigContamination`. Verdict-signal codes and the scenario schema
+  are covered surfaces ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)), so this is
+  a MAJOR bump. The old name described plugin *delivery* diverging at L0; delivery now works, and what the
+  signal actually reports is that the run read the operator's real config dir. A scenario asserting the old
+  key must rename it; a consumer keying on the old code must too.
+
+- **The signal's firing conditions changed with it.** It fired when a session declared plugin dirs; it now
+  fires when `protocol` reads the operator's real config dir — tested on the dir the agent will actually
+  read, so a pinned `plugins.config_dir` is caught even with the managed branch nominally active. A
+  `skills.local`-only protocol run that previously passed can now fail, and a sealed protocol run with
+  plugins that previously failed now passes.
+
 
 ### Changed
 

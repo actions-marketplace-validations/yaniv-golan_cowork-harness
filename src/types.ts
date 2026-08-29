@@ -751,7 +751,7 @@ export const Assertion = z.strictObject({
     .describe(
       '(verdict modifier) accept detected deletes in these mounts by NAME (e.g. ["reports"]) instead of failing/warning — the per-mount analogue of allow_outputs_delete, mirroring production\'s per-mount fileDeleteApprovedMounts. WAIVES the harness\'s post-hoc detection (which still runs and is still recorded); it does NOT model the live approval handshake. Listing "outputs" conflicts with no_delete_in_outputs',
     ),
-  allow_l0_plugin_divergence: z
+  allow_l0_host_config_contamination: z
     .literal(true)
     .optional()
     .describe(
@@ -841,7 +841,7 @@ export type Assertion = z.infer<typeof Assertion>;
 export const VERDICT_MODIFIER_KEYS = [
   "allow_permissive_auto_allow",
   "allow_missing_capability",
-  "allow_l0_plugin_divergence",
+  "allow_l0_host_config_contamination",
   "allow_stall",
   "allow_undelivered_deliverables",
   "allow_outputs_delete",
@@ -1477,7 +1477,7 @@ export interface RunResult {
         | "mount_delete"
         | "host_path_leak"
         | "non_deterministic"
-        | "l0_plugin_divergence"
+        | "l0_host_config_contamination"
         | "missing_capability"
         | "infra_error"
         | "exec_infra_error"
@@ -1764,10 +1764,10 @@ export interface RunResult {
   /** true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
    *  the operator's REAL config dir, so their installed plugins/skills/auto-memory/MCP servers were visible
    *  to the agent and may have answered instead of the thing under test. computeVerdict fails on this unless
-   *  allow_l0_plugin_divergence is asserted — a warn-only was insufficient since the run could still appear
+   *  allow_l0_host_config_contamination is asserted — a warn-only was insufficient since the run could still appear
    *  green. (Pre-`--plugin-dir` this field meant "plugins were not delivered at L0"; delivery is fixed, the
    *  contamination is what remains.) */
-  l0PluginDivergence?: boolean;
+  l0HostConfigContamination?: boolean;
   /** Capability families the agent image OMITS but the skill was observed USING (live lane only; the
    *  intersection of the image's probed `omitted` set and capability-usage detected in events.jsonl).
    *  computeVerdict default-fails on a non-empty list unless `allow_missing_capability` is asserted — a

@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 2.5.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.0.0`
 (baseline `desktop-1.40609.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -362,7 +362,7 @@ same set live from the schema.
 | `no_path_denied: true` | **`fidelity: hostloop` only** — NO path denial was recorded at all (the channel is already path-scoped, unlike `no_hook_blocked`'s indiscriminate reject). Replay: needs a `controlOut` cassette. Any other tier FAILS "cannot verify". **Only `true` is valid** |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; for tests that deliberately assert Cowork's permissive behavior |
 | `allow_missing_capability: true` | verdict modifier — suppresses the default-fail when the (partial "core") agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables). Assert only when the skill's fallback is genuinely equivalent; otherwise rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check. Live tiers only |
-| `allow_l0_plugin_divergence: true` | verdict modifier — opt into L0/protocol plugin divergence: suppresses the default-fail when a plugin behaves differently at `protocol` (L0) fidelity than under a sandboxed tier. Live tiers only |
+| `allow_l0_host_config_contamination: true` | verdict modifier — accept a contaminated L0 environment: suppresses the default-fail when `protocol` runs against your REAL config dir, where your installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test. Live tiers only |
 | `allow_stall: true` | verdict modifier — suppresses the `stalled` default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an `AskUserQuestion`); assert only when ending on a question is intended, else script the answer (`answer:` / `--answer` / a decider). **Scenario-only:** an open-ended `skill` run has no `assert:` block, so it cannot opt out — a helpful closing offer ("want me to run this through a structured pass?") fails `stalled` there with no suppressor. Read the final message before believing it, or move the check to a `run` scenario |
 | `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap |
 | `allow_outputs_delete: true` | verdict modifier — accepts a detected outputs delete instead of failing the run, for a skill whose deletion is intended. Omitting `no_delete_in_outputs` does **not** permit deletes (a detected delete fails via the `outputs_delete` signal precisely because the key was not authored), so this is the way to accept one. **Mutually exclusive** with `no_delete_in_outputs`. Waives the harness's post-hoc detection; it does not model Cowork's `allow_cowork_file_delete` approval handshake |
@@ -404,7 +404,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `outputs_delete` | fail | An unauthorized delete touched `mnt/outputs` (opt out: author `no_delete_in_outputs`) |
 | `mount_delete` | warn | A delete touched a delete-denied mount other than `outputs` (a `rw` connected folder). Production denies `unlink`/`rmdir` there until per-mount approval, so the run diverged. Warn, not fail: the harness detects post-hoc what production enforces. Author `no_delete_in_mounts` to hard-fail, or `allow_delete_in` to waive |
 | `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`) |
-| `l0_plugin_divergence` | fail | L0/protocol plugin loading diverged from Cowork (opt out: `allow_l0_plugin_divergence`) |
+| `l0_host_config_contamination` | fail | `protocol` ran against the operator's REAL config dir, so host-installed plugins/skills/memory/MCP may have answered instead of the thing under test — the run did not necessarily measure it (opt out: `allow_l0_host_config_contamination`). Name predates the meaning: delivery at L0 works, contamination is what this reports |
 | `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`, or `skill --allow-missing-capability` on an open-ended run) |
 | `infra_error` | fail | A supervising process died mid-run (VM/egress sidecar) — the run's evidence is contaminated, not author-suppressible |
 | `stalled` | fail | The run ended on an unanswered question, or on a trailing-`?` final turn with no tool work after the last gate (opt out: `allow_stall`) |
@@ -443,7 +443,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
 `max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `present_files_called`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
-modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
+modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `questions_count_max`,

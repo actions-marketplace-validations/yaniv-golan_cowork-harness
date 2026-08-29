@@ -208,8 +208,8 @@ export function spawnProtocol(
   const agentConfigDir = realpathIfPossible(
     useManagedConfig ? plan.configDir : (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")),
   );
-  const l0PluginDivergence = agentConfigDir === operatorConfigDir;
-  if (l0PluginDivergence) {
+  const l0HostConfigContamination = agentConfigDir === operatorConfigDir;
+  if (l0HostConfigContamination) {
     warn(
       `::warning:: ${scenario.name}: L0 (protocol) is reading your REAL config dir (${agentConfigDir}), so your ` +
         `installed plugins, skills, auto-memory and MCP servers are visible to the agent and may answer INSTEAD of ` +
@@ -219,5 +219,5 @@ export function spawnProtocol(
     );
   }
 
-  return { child: spawn("claude", args, { cwd: work, env, stdio: ["pipe", "pipe", "pipe"] }), l0PluginDivergence };
+  return { child: spawn("claude", args, { cwd: work, env, stdio: ["pipe", "pipe", "pipe"] }), l0HostConfigContamination };
 }

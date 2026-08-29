@@ -708,7 +708,7 @@
               "minLength": 1
             }
           },
-          "allow_l0_plugin_divergence": {
+          "allow_l0_host_config_contamination": {
             "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
             "type": "boolean",
             "const": true

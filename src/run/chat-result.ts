@@ -154,7 +154,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     scan: undefined,
     effectiveFidelity: opts.fidelity,
     fidelityWarnings: undefined,
-    l0PluginDivergence: undefined,
+    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,

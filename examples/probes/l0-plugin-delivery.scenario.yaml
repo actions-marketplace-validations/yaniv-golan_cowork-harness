@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe: at `protocol` (L0), a declared plugin is ACTUALLY DELIVERED to the agent.
+#
+# This is the ONLY thing that catches the regression it exists for. L0 used to pass no `--plugin-dir`,
+# and `local_plugins` never reaches the generated `settings.json`, so the plugin under test was never
+# loaded at all — the positional argument was silently inert and a run measured whatever the operator
+# happened to have installed. Nothing failed; the run went green against the wrong plugin.
+#
+# A unit test cannot see this: the argv builder is correct in isolation, and the defect was a missing
+# CALL SITE. Only a real agent reporting its init inventory can tell you the plugin arrived.
+#
+# Deliberately a no-tool prompt: the assertion is about the DECLARED surface (system/init), not about
+# the model choosing to invoke anything.
+#
+# MUST run on the sealed branch (COWORK_MANAGED_CONFIG=1 + a token, or ANTHROPIC_API_KEY). Off it, the
+# operator's own installed plugins are in the inventory too, so a name collision could satisfy these
+# assertions with or without the flag — the test would be measuring the machine, not the argv. The
+# fixture name is deliberately obscure to make an accidental collision unlikely even so.
+name: l0-plugin-delivery-probe
+baseline: latest
+session: ../sessions/l0-plugin-delivery.yaml
+fidelity: protocol
+prompt: |
+  Reply with exactly the word READY and nothing else. Do not call any tools.
+assert:
+  # The skill arrives, namespaced <plugin>:<skill> exactly as at container/microvm/hostloop — so an
+  # assertion written at one tier means the same thing at another.
+  - skill_available: "l0-plugin-delivery:delivery-marker"
+  # The fixture also declares an AGENT (`agents/delivery-agent.md`), and plugin-declared agents do reach
+  # the agent at protocol — verified by hand against the init event. It is NOT asserted here because the
+  # catalog has no `agent_available` key: `tool_available` / `skill_available` / `connector_available`
+  # exist, agents have no equivalent, and the harness's own init event type does not model `agents[]`.
+  # Inventing a key to close a doc gap would be worse than naming the gap. The fixture keeps the agent so
+  # that whoever adds that assertion has the case ready.

@@ -2125,7 +2125,7 @@
         "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar"],
         "required": true
       },
-      ".l0PluginDivergence": {
+      ".l0HostConfigContamination": {
         "type": "boolean"
       },
       ".lane": {
@@ -2838,7 +2838,7 @@
           "mount_delete",
           "host_path_leak",
           "non_deterministic",
-          "l0_plugin_divergence",
+          "l0_host_config_contamination",
           "missing_capability",
           "infra_error",
           "exec_infra_error",
@@ -2987,7 +2987,7 @@
       ".assert[].allow_delete_in[]": {
         "type": "string"
       },
-      ".assert[].allow_l0_plugin_divergence": {
+      ".assert[].allow_l0_host_config_contamination": {
         "type": "boolean",
         "const": true
       },

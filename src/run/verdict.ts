@@ -13,7 +13,7 @@ export interface VerdictSignal {
     | "mount_delete"
     | "host_path_leak"
     | "non_deterministic"
-    | "l0_plugin_divergence"
+    | "l0_host_config_contamination"
     | "missing_capability"
     | "infra_error"
     | "exec_infra_error"
@@ -324,7 +324,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // Capability fidelity: the (partial 'core') agent image omits a capability real Cowork ships, and the
     // skill was observed USING it on an otherwise-green run → a likely FALSE NEGATIVE. Fail unless the
     // scenario opts in via `allow_missing_capability: true` (the skill's fallback is genuinely equivalent).
-    // Mirrors permissive_auto_allow / l0_plugin_divergence — a warn-only would let the silent-green slip.
+    // Mirrors permissive_auto_allow / l0_host_config_contamination — a warn-only would let the silent-green slip.
     if (result.missingCapabilityUse?.length && !authored.some((a) => a.allow_missing_capability === true))
       signals.push({
         code: "missing_capability",
@@ -507,7 +507,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
 
     // L0 (protocol) reading the operator's REAL config dir — their installed plugins, skills, auto-memory
     // and MCP servers are live alongside the thing under test and can answer INSTEAD of it. Fail unless the
-    // scenario opts in via `allow_l0_plugin_divergence: true`.
+    // scenario opts in via `allow_l0_host_config_contamination: true`.
     //
     // This used to mean "plugins load via --settings, not --plugin-dir". That is obsolete: protocol now
     // passes --plugin-dir, so delivery works. What survives is CONTAMINATION, and it stays a FAIL rather
@@ -515,15 +515,15 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // the cassette RECORD path and never reaches a verdict; host_path_leak's default-fail is deliberately
     // skipped at this tier; and a host plugin's own `plugins[]` entry exempts its namespaced skills from
     // the record-time inventory scan).
-    if (result.l0PluginDivergence && !authored.some((a) => a.allow_l0_plugin_divergence === true))
+    if (result.l0HostConfigContamination && !authored.some((a) => a.allow_l0_host_config_contamination === true))
       signals.push({
-        code: "l0_plugin_divergence",
+        code: "l0_host_config_contamination",
         severity: "fail",
         message:
           "L0 (protocol) ran against your REAL config dir — your installed plugins, skills, auto-memory and MCP servers " +
           "were visible to the agent and may have answered INSTEAD of the plugin/skill under test, so this run did not " +
           "necessarily measure it. Set COWORK_MANAGED_CONFIG=1 with a token in the environment, use container/microvm, " +
-          "or assert allow_l0_plugin_divergence: true to opt in.",
+          "or assert allow_l0_host_config_contamination: true to opt in.",
       });
   }
 

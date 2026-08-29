@@ -1,0 +1,6 @@
+# Session for the L0 plugin-delivery probe. `local_plugins` is the route `chat <dir>` / `skill <dir>`
+# take for the thing under test, which is exactly the path that used to deliver nothing at `protocol`.
+model: claude-sonnet-5
+plugins:
+  local_plugins:
+    - ../probes/l0-plugin-delivery
