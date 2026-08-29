@@ -351,9 +351,25 @@ export function decodeFcacheProvenance(path = join(SUPPORT, "fcache")): FcachePr
  *  because a constant is invisible in the DELTA, which is what this field is read for. */
 export function extractAsarGateIds(files: Map<string, string>): string[] {
   const re = /["'`](\d{5,13})["'`]/g;
+  // SECOND SHAPE (added 2026-08-29): the gate-DEFAULTS map keys its entries on BARE numerics —
+  // `{…,748063099:bw,3586389629:tvt(6e4),3927880029:Sw({value:3}),…}` — so a quoted-literal-only scan
+  // misses every gate that is only ever defaulted and never read through a quoted id. That is not
+  // hypothetical: it under-reported 1.30096.1's new gates 3 -> 1, and — because it was recorded as a
+  // maintainer note rather than as a test — recurred unchanged at 1.40609.0 (+27 extracted vs +30 real).
+  //
+  // This is NOT the bare-number scan the header rejects. That one matches ANY bare numeric and adds 1687
+  // ids over this bundle. This one requires the defaults-map ENTRY shape — `<id>:<identifier>` immediately
+  // after a `{` or `,` — and adds 39, of which 38 match `<id>:<ctor>` with only three distinct constructor
+  // tokens (`xw` 30, `Sw` 7, `tvt` 1); the 39th (`748063099:bw`) is the same shape and is missed by a
+  // verification regex only because an adjacent entry consumed its leading comma. A tight, structurally
+  // coherent population, 43x less noisy than the rejected form.
+  //
+  // The lookbehind (rather than consuming `[{,]`) is load-bearing: entries are adjacent, so a
+  // delimiter-consuming match eats the comma the NEXT entry needs and silently drops every other one.
+  const bareKeyRe = /(?<=[{,])(\d{5,13}):(?=[A-Za-z_$])/g;
   const out = new Set<string>();
   for (const text of files.values())
-    for (const m of text.matchAll(re)) {
+    for (const m of [...text.matchAll(re), ...text.matchAll(bareKeyRe)]) {
       const id = m[1];
       // `length > 10` is REDUNDANT and deliberately kept: any 11+ digit run is >= 1e10 > 2^32, so the
       // range check already rejects it. Mutation-verified — relaxing it to `> 11` changes nothing, on
