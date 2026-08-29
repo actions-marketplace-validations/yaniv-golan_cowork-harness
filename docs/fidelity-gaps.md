@@ -764,12 +764,33 @@ argv builder's only sources for the flag are that session value and the baseline
 type — and the test fails the day either guard is relaxed, which is when this gap needs re-triage rather
 than after.
 
-So the residual is: in a real VM-loop, non-chat Cowork session the rubric is now a second, host-side
-judgement layer over every tool call in auto-mode, and its observable effect is that the PreToolUse hook
-can answer `deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool
-this harness models as always-gated may therefore raise no prompt in production. A scenario can already
-*express* a denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot
-reproduce a gate that silently stops prompting.
+So the residual is: in a real non-chat Cowork session the rubric is now a second, host-side judgement layer
+over every tool call in auto-mode, and its observable effect is that the PreToolUse hook can answer
+`deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool this harness
+models as always-gated may therefore raise no prompt in production. A scenario can already *express* a
+denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot reproduce a gate
+that silently stops prompting.
+
+The rubric reaches **both loops**. Its rule-inclusion predicate is
+`{includeRules: !isChatSession && gate("3424551112"), hostLoop}` — no host-loop exclusion — and `hostLoop`
+selects between two Filesystem sections. The VM one describes the sandbox; the host-loop one is Anthropic's
+own statement of the same path-resolution split this repo implements: file tools use real host paths with
+the working directory the session's `outputs/` folder, while shell commands run only via the bash tool in an
+isolated Linux VM under `/sessions/<name>/`, where `outputs/`, `uploads/` and the connected folders appear
+under `mnt/` and every other path is VM-only scratch.
+
+Two consequences worth stating separately. (a) The gap is **tier-independent**, so the two structural guards
+above carry the whole weight of keeping the harness out of it. (b) The rubric's environment text is
+**tier-dependent model-visible content**, which is a different kind of divergence from a permission verdict:
+a harness run and a production run at the same tier put different Filesystem prose in front of the model
+even when every permission decision matches.
+
+`sync` cannot see any of this: the `settings:` call site is a byte-identical call to a helper, and the
+baseline carries no `spawn.settings` key at all.
+
+**Still not modeled, and still deliberately so** — nothing here changes the recommendation. It is recorded
+because the section's stated scope became false, and a gap that under-states itself is worse than one that
+is merely open.
 
 ---
 

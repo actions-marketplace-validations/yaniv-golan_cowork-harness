@@ -172,9 +172,15 @@ export const PINNED_GATES: Record<string, string> = {
   // is not: the harness never constructs `settings.autoMode` on ANY tier (grep autoMode in src/ — only
   // gate-name constants; argv passes --permission-mode and --setting-sources, never an autoMode payload),
   // so the rubric is STRUCTURALLY unreachable here rather than excluded. Live effect in production, for
-  // VM-loop non-chat sessions: the PreToolUse hook can answer `deferred_to_classifier` (an empty result)
+  // non-chat sessions: the PreToolUse hook can answer `deferred_to_classifier` (an empty result)
   // INSTEAD of permissionDecision:"ask", so a tool this harness models as always-gated may raise no
   // prompt there. Documented in docs/fidelity-gaps.md, not modeled.
+  // WIDENED at Desktop 1.40609.0: the rule-inclusion predicate dropped its `!hostLoopMode` conjunct
+  // (`!isChatSession && !hostLoopMode && gate` -> `{includeRules: !isChatSession && gate, hostLoop}`), so
+  // this is no longer VM-loop-only, and `hostLoop` now selects between two Filesystem sections — the VM
+  // one, and a new host-loop one describing real host paths for file tools with shell confined to the VM.
+  // Sync cannot see any of it: the `settings:` call site is byte-identical and the baseline has no
+  // `spawn.settings` key at all. This comment said "VM-loop non-chat" until that release; do not restore it.
   // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
   "3424551112": "automode-permission-rubric",
   // Selects which of Cowork's two mutually exclusive artifact mechanisms a session gets. force/on for a

@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Platform baseline `desktop-1.40609.0` (agent `2.1.247`).** The Cowork system prompt, both sub-agent
+  appends, the egress allowlist, `spawn.env`, `tools[]`/`allowedTools` and `mountLayout` are all re-derived
+  unchanged. The one `sync` delta was a pure refactor: W2's `CLAUDE_CODE_ENTRYPOINT` deployment ternary is
+  now a hoisted helper, and W1 hard-sets `local-agent` after the spread either way, so the derived value
+  does not move. The VM rootfs is re-captured — node `v22.22.3` → `v22.23.2`, pip 144 → 136 packages
+  (`xlrd` added; the nine removals are Ubuntu system packages, no analysis library dropped).
+
+### Fixed
+
+- **`sync` resolves a spawn-env value expression that is a hoisted one-line helper** (`uH(n.type)`), where
+  it previously refused the baseline. The branch is narrow by construction: the argument must be a `.type`
+  member and the callee body must be exactly the literal deployment ternary over its own parameter, resolved
+  in the window's own chunk — a two-character minified name hopped against the joined bundle lands on an
+  unrelated helper. Anything else stays unresolvable rather than guessed.
+
+- **`provenance.asarGateIds` now includes the gate-defaults map's bare-numeric keys.** The scan matched
+  quoted literals only, so any gate that is keyed in that map and never read through a quoted id was
+  missing — `provenance.asarGateIds` 252 → 291, and the 1.40609.0 delta corrects from +27/−4 to +30/−4.
+  This is not the bare-*number* scan the extractor deliberately rejects: that matches any numeric and adds
+  1687 ids over the same bundle, while the defaults-map entry shape adds 39.
+
+### Documentation
+
+- **The auto-mode permission rubric gap is tier-independent.** `docs/fidelity-gaps.md` scopes it to both
+  loops rather than VM-loop only, and records that the rubric's Filesystem section is tier-dependent
+  model-visible text — a different kind of divergence from a permission verdict.
+
 ## [2.5.0] — 2026-08-28
 
 ### Added
