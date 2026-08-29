@@ -31,6 +31,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **A plugin's declared MCP servers are a documented fidelity gap.** Production replaces them with
+  zero-tool SDK stubs named `plugin:<plugin>:<server>` — remote (`url` + http/sse) unconditionally, local
+  and `.mcpb` under an MCP policy — while the harness stages plugins with `--plugin-dir` and lets the CLI
+  open the real ones. A plugin under test therefore sees a tool surface production would not give it, in
+  both directions and silently. Not modeled: the remote rule is mechanically reproducible, but the
+  local/`.mcpb` rule is conditioned on Desktop policy state the harness has no source for.
+
 - **The auto-mode permission rubric gap is tier-independent.** `docs/fidelity-gaps.md` scopes it to both
   loops rather than VM-loop only, and records that the rubric's Filesystem section is tier-dependent
   model-visible text — a different kind of divergence from a permission verdict.

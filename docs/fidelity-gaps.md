@@ -154,6 +154,45 @@ in a real unattended Cowork session, where these actions now refuse rather than 
 
 ---
 
+## A plugin's declared MCP servers run here; production replaces them with zero-tool stubs
+
+**Real Cowork behaviour:** Desktop rewrites a plugin's MCP servers before the spawn rather than passing them
+through. Two rules, with different conditions:
+
+- **Remote servers** — a `config.url` with `type` in `{http, streamable-http, sse}` — are replaced
+  unconditionally by an empty SDK server, logged *"Plugin `<name>` declares remote MCP servers (…).
+  Overriding with no-ops so the CLI does not open its own client."*
+- **Local / `.mcpb` servers** — `isMcpb`, or a `config.command` — are replaced when an MCP policy is active:
+  local MCP disabled, or for `.mcpb` specifically, extensions disabled, signature required, or a directory
+  policy in force.
+
+Both are renamed `plugin:<pluginName>:<serverName>` and constructed as `createSdkMcpServer({name, tools: []})`
+— **the server name is present in the session's inventory and offers zero tools.** The rewritten set is
+delivered to the agent as an `--mcp-config` payload, and when an MCP policy is active and that delivery
+fails, Desktop refuses to start the session rather than launching with unenforced plugin servers.
+
+**What the harness does:** nothing. Plugins are staged with `--plugin-dir` and the CLI reads each plugin's
+own declaration, so a plugin under test gets **working** MCP servers with their real tools.
+
+**Why this is not inherited by running the real binary.** The rewriting is Desktop's, upstream of the spawn
+— unlike, say, bundled-skill registration, which the agent decides for itself from `CLAUDE_CODE_ENTRYPOINT`
+and therefore behaves identically here. Anything Desktop computes and hands over is absent unless the
+harness computes it too.
+
+**What this means for a scenario.** A plugin that declares MCP servers is tested against a tool surface
+production would not give it: assertions naming those tools can pass here and be unreachable in Cowork, and
+a skill that leans on such a server will work in a harness run and find a zero-tool server in production.
+The failure is silent in both directions — nothing errors, the tools are simply there or not.
+
+**Not modeled, and modelling it needs a design decision rather than a patch.** The remote-server rule is
+unconditional and therefore mechanically reproducible; the local/`.mcpb` rule is conditioned on Desktop
+policy state (local-MCP enablement, extension signature and directory policy) that the harness has no
+source for. Modelling only the unconditional half would be faithful for remote servers and silently wrong
+for the rest, so which half to model — and whether a session should be able to opt out — is the decision to
+make first.
+
+---
+
 ## HIPAA restriction is a process-global latch
 
 **Real Cowork behaviour:** when an account or org is HIPAA-restricted, Cowork latches that state at
