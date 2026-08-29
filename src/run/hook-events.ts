@@ -147,7 +147,7 @@ export function checkHostHookConsent(pluginRoots: string[], allowHostHooks: bool
     `protocol fidelity stages a plugin whose hooks would run as NATIVE HOST PROCESSES — your account, ` +
       `your environment, no container sandbox: ${detail}. This tier passes --plugin-dir, so the CLI ` +
       `executes these hooks directly on this machine. This requires explicit consent: for a \`run\` ` +
-      `scenario add \`allow_host_hooks: true\` to the YAML; for \`chat\`/\`skill\`/\`critique\` pass ` +
+      `scenario add \`allow_host_hooks: true\` to the YAML; for \`chat\`/\`skill\` pass ` +
       `--allow-host-hooks. Use --fidelity container to run them sandboxed instead.`,
   );
 }

@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
-## [3.0.0]
+## [3.0.0] — 2026-08-29
 
 ### Breaking
 
@@ -23,6 +23,21 @@ All notable changes to this project are documented here. The format is based on
   plugins that previously failed now passes.
 
 
+### Added
+
+- **`allow_host_hooks` (scenario key) and `--allow-host-hooks` (`chat` / `skill`).** Consent to
+  running a staged plugin's hooks as native host processes at `protocol`. Top-level like
+  `allow_host_writes` rather than a verdict modifier — it gates the SPAWN, it does not suppress a signal.
+
+- **A committed live probe for L0 plugin delivery** — `examples/probes/l0-plugin-delivery.scenario.yaml`
+  plus its fixture and session. It asserts the plugin under test reaches the agent's init inventory at
+  `protocol`, which no unit test can see: the argv builder was correct in isolation and the defect was a
+  missing call site. It pins the sealed config-dir branch deliberately — off it, the operator's own
+  installed plugins are in the inventory and a name collision would satisfy the assertion with or without
+  `--plugin-dir`, measuring the machine instead of the argv. The fixture also ships an agent, deliberately
+  unasserted: there is no `agent_available` assertion key (tool / skill / connector have one, agents do
+  not), and naming that gap is better than inventing a key to hide it.
+
 ### Changed
 
 - **`protocol` (L0) now passes `--plugin-dir`, so a declared plugin or skill dir is actually delivered.**
@@ -37,7 +52,7 @@ All notable changes to this project are documented here. The format is based on
   means the CLI executes its `<plugin>/hooks/hooks.json` as **native host processes** — the operator's
   account and environment, no container sandbox — and opens its declared MCP servers. `protocol` therefore
   refuses to spawn when a staged plugin declares runnable hooks unless the scenario sets
-  `allow_host_hooks: true` (or `--allow-host-hooks` for `chat`/`skill`/`critique`); a plugin without hooks
+  `allow_host_hooks: true` (or `--allow-host-hooks` for `chat`/`skill`); a plugin without hooks
   needs no opt-in, and a misplaced root-level `hooks.json` (which cannot execute) does not trigger it. A
   per-run disclosure is printed even when consent was given. Mirrors the existing `allow_host_writes` gate.
 

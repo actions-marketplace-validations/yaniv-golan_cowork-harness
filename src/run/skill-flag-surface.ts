@@ -91,6 +91,18 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
   { flag: "--decider-dir", arity: 1, critique: forwardTask() },
 
   // ---- refused ----
+  // Consent for a hazard `critique` cannot reach: it runs at container/hostloop/cowork and REFUSES
+  // protocol outright, so a protocol-only plugin-hook consent can never apply. Rejecting with the reason
+  // beats silently accepting a flag that would do nothing.
+  {
+    flag: "--allow-host-hooks",
+    arity: 0,
+    critique: {
+      kind: "reject",
+      reason:
+        "protocol-only consent, and critique refuses protocol (resume continuity unproven there) — a staged plugin's hooks never run natively on this lane",
+    },
+  },
   {
     flag: "--session-id",
     arity: 1,

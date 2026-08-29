@@ -98,6 +98,14 @@ allow_host_writes: true             # OPTIONAL — required to run `hostloop` fi
                                     # around hostloop's native file tools, that combination gives the
                                     # agent genuine, software-checked-only host filesystem access.
                                     # Read-only folders and folder-less runs need no opt-in.
+
+allow_host_hooks: true              # OPTIONAL — required to run `protocol` fidelity when a staged plugin
+                                    # declares runnable hooks (`<plugin>/hooks/hooks.json`): L0 passes
+                                    # --plugin-dir, so the CLI executes those hooks as NATIVE HOST
+                                    # processes under your account, with no container sandbox. A plugin
+                                    # that declares no hooks needs no opt-in, and a misplaced root-level
+                                    # `hooks.json` cannot execute so it does not trigger the gate.
+                                    # Use `--fidelity container` to run them sandboxed instead.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
