@@ -110,11 +110,40 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
   }
 }
 
-/** Plugin roots that declare RUNNABLE hooks, i.e. a `<plugin>/hooks/hooks.json` naming at least one
- *  event. Placement is the whole point: the binary reads `<plugin>/hooks/hooks.json`, and the identical
- *  file at the plugin ROOT fires nothing — so a root-level copy must NOT count here, or the consent gate
- *  below would refuse a run over a file that cannot execute. Same placement test
- *  `warnUnservedHookEvents` uses before its own misplacement warning. */
+/** Hook events a plugin MANIFEST declares. Both spellings the repo accepts elsewhere
+ *  (`isPluginManifestDir`): `<plugin>/.claude-plugin/plugin.json`, else a bare `<plugin>/plugin.json`.
+ *
+ *  This is a SECOND, independent channel from `hooks/hooks.json`, and it is the more common spelling in
+ *  the wild. Missing it made the `protocol` consent gate defeatable by a spelling choice: a plugin
+ *  declaring `SessionStart` here ran its hook as a native host process while the gate stayed silent and
+ *  no disclosure printed (reproduced end-to-end, sentinel written under the operator's own account).
+ *
+ *  Deliberately NOT subject to the `hooks/hooks.json` placement carve-out below: a misplaced root-level
+ *  `hooks.json` is inert, so gating on it would refuse a run over a file that cannot execute — but a
+ *  manifest-declared hook is LIVE. Inertness is the reason for that carve-out, and it does not apply here. */
+function manifestHookEvents(root: string): string[] {
+  for (const rel of [[".claude-plugin", "plugin.json"], ["plugin.json"]]) {
+    const f = join(root, ...rel);
+    if (!existsSync(f)) continue;
+    try {
+      const doc = JSON.parse(readFileSync(f, "utf8")) as { hooks?: unknown };
+      const h = doc?.hooks;
+      if (!h || typeof h !== "object" || Array.isArray(h)) return [];
+      return Object.keys(h as Record<string, unknown>).filter((k) => typeof k === "string");
+    } catch {
+      return []; // malformed manifest is the mount/lint path's problem, not this gate's
+    }
+  }
+  return [];
+}
+
+/** Plugin roots that declare RUNNABLE hooks, from EITHER channel:
+ *   - `<plugin>/hooks/hooks.json` — placement is load-bearing. The binary reads exactly that path, and
+ *     the identical file at the plugin ROOT fires nothing, so a root-level copy must NOT count or the
+ *     consent gate would refuse a run over a file that cannot execute.
+ *   - the plugin MANIFEST's `hooks` key — live wherever the manifest is, no placement carve-out.
+ *  Returns the UNION of their event names. Both consumers (the consent gate and the disclosure) call
+ *  through here, so covering both channels in one place fixes both. */
 export function pluginRootsWithRunnableHooks(pluginRoots: string[]): Array<{ root: string; events: string[] }> {
   const out: Array<{ root: string; events: string[] }> = [];
   for (const root of pluginRoots) {
@@ -123,6 +152,7 @@ export function pluginRootsWithRunnableHooks(pluginRoots: string[]): Array<{ roo
       if (!f.endsWith(`${sep}hooks${sep}hooks.json`)) continue; // misplaced ⇒ inert ⇒ not a hazard
       for (const name of declaredHookEvents(f)) events.add(name);
     }
+    for (const name of manifestHookEvents(root)) events.add(name); // live regardless of placement
     if (events.size > 0) out.push({ root, events: [...events].sort() });
   }
   return out;

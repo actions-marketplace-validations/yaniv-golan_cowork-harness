@@ -147,3 +147,68 @@ describe("checkHostHookConsent", () => {
     ]);
   });
 });
+
+/** A plugin declaring hooks in its MANIFEST rather than `hooks/hooks.json`. This is the spelling that
+ *  defeated the consent gate in 3.0.0: detection keyed only on a file named `hooks.json`, so a
+ *  manifest-declaring plugin ran its hook as a native host process while the gate stayed silent.
+ *  Reported from a real consumer whose 10 committed cassettes all carried the resulting
+ *  `SessionStart:startup` hook_started/hook_response pair — including one recorded at `container`. */
+function pluginWithManifestHooks(events: string[], opts: { bare?: boolean } = {}): string {
+  const root = tmp();
+  const dir = opts.bare ? root : join(root, ".claude-plugin");
+  if (!opts.bare) mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "plugin.json"),
+    JSON.stringify({ name: "m", version: "0.1.0", hooks: Object.fromEntries(events.map((e) => [e, []])) }),
+  );
+  return root;
+}
+
+describe("manifest-declared hooks reach the consent gate", () => {
+  // The regression itself. A fixture carrying BOTH spellings would pass with the bug present, so this
+  // one declares hooks ONLY in the manifest — there is no hooks.json to find.
+  it("detects hooks declared in .claude-plugin/plugin.json, with no hooks.json present", () => {
+    const root = pluginWithManifestHooks(["SessionStart"]);
+    expect(pluginRootsWithRunnableHooks([root])).toEqual([{ root, events: ["SessionStart"] }]);
+  });
+
+  it("refuses the spawn for a manifest-only hook plugin", () => {
+    expect(() => checkHostHookConsent([pluginWithManifestHooks(["SessionStart"])], false)).toThrow(/NATIVE HOST PROCESSES/);
+  });
+
+  it("accepts the bare plugin.json spelling too — isPluginManifestDir takes either", () => {
+    const root = pluginWithManifestHooks(["PreToolUse"], { bare: true });
+    expect(pluginRootsWithRunnableHooks([root])).toEqual([{ root, events: ["PreToolUse"] }]);
+  });
+
+  it("unions both channels rather than letting one shadow the other", () => {
+    const root = pluginWithManifestHooks(["SessionStart"]);
+    mkdirSync(join(root, "hooks"), { recursive: true });
+    writeFileSync(join(root, "hooks", "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [] } }));
+    expect(pluginRootsWithRunnableHooks([root])[0].events).toEqual(["PreToolUse", "SessionStart"]);
+  });
+
+  // The placement carve-out is about INERTNESS: a root-level hooks.json cannot execute, so gating on it
+  // would refuse a run over a dead file. That reasoning does not extend to a manifest, which is live
+  // wherever it sits — so the carve-out must not be widened to cover it.
+  it("still ignores a misplaced root-level hooks.json when the manifest declares nothing", () => {
+    const root = tmp();
+    writeFileSync(join(root, "plugin.json"), JSON.stringify({ name: "m", version: "0.1.0" }));
+    writeFileSync(join(root, "hooks.json"), JSON.stringify({ hooks: { SessionStart: [] } }));
+    expect(pluginRootsWithRunnableHooks([root])).toEqual([]);
+  });
+
+  it("a manifest with no hooks key needs no opt-in", () => {
+    const root = tmp();
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "m", version: "0.1.0" }));
+    expect(() => checkHostHookConsent([root], false)).not.toThrow();
+  });
+
+  it("tolerates a malformed manifest rather than throwing from the gate", () => {
+    const root = tmp();
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), "{ not json");
+    expect(() => checkHostHookConsent([root], false)).not.toThrow();
+  });
+});

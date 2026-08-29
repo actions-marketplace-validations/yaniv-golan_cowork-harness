@@ -728,11 +728,17 @@ failures were the served-set parity guards, which is precisely their job — reg
 `assertion-keys.json` and update the linter's fallback and they pass. So the gate on serving a hook is
 **fidelity of its reply**, not migration cost.
 
-### A separate channel — plugin `hooks/hooks.json` — **fires here** (live-verified)
+### A separate channel — a plugin's own hooks — **fires here** (live-verified)
 
 The table above is what **Desktop** installs. A plugin's *own* hooks reach the agent by a different
 route — the `--plugin-dir` argv — and the agent binary loads and executes them itself. The harness
 neither serves nor blocks that path.
+
+**A plugin declares them in either of two places, and both are live:** `<plugin>/hooks/hooks.json`, or
+the `hooks` key of the plugin **manifest** (`<plugin>/.claude-plugin/plugin.json`, or a bare
+`<plugin>/plugin.json`). The manifest spelling is the more common one in the wild. Anything reasoning
+about this channel — including the `protocol` consent gate and its per-run disclosure — must cover both:
+keying on the filename alone leaves a plugin's hooks executing with nothing detecting them.
 
 > **`protocol` is in this list too, and it is the sharpest case.** L0 passes `--plugin-dir` and runs the
 > agent natively, so a staged plugin's hooks execute as **native host processes** — the operator's account,
@@ -761,6 +767,9 @@ arrive.
 > first run placed `hooks.json` at the root, observed zero sentinels, and looked exactly like "plugin
 > hooks don't fire in the harness." Moving the file one directory down flipped every result.
 > `lint-skill` now flags a misplaced file (`hooks-json-misplaced`), and so does a `run` at mount time.
+>
+> Note the footgun is specific to the `hooks.json` FILE. A manifest-declared hook is live wherever the
+> manifest sits, so "misplaced ⇒ inert" reasoning does not transfer to it.
 
 (Unchanged either way: the host-side seeding footgun — a hook that `export`s an env var or writes `/tmp`
 host-side is not visible to the in-VM agent. See [plugin-root.md](./plugin-root.md).)

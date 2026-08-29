@@ -100,7 +100,8 @@ allow_host_writes: true             # OPTIONAL — required to run `hostloop` fi
                                     # Read-only folders and folder-less runs need no opt-in.
 
 allow_host_hooks: true              # OPTIONAL — required to run `protocol` fidelity when a staged plugin
-                                    # declares runnable hooks (`<plugin>/hooks/hooks.json`): L0 passes
+                                    # declares runnable hooks — either `<plugin>/hooks/hooks.json` OR
+                                    # the manifest's `hooks` key: L0 passes
                                     # --plugin-dir, so the CLI executes those hooks as NATIVE HOST
                                     # processes under your account, with no container sandbox. A plugin
                                     # that declares no hooks needs no opt-in, and a misplaced root-level

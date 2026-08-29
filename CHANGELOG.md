@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `protocol` host-hook consent gate was defeatable by a spelling choice.** `allow_host_hooks`
+  (3.0.0) refuses a spawn until the operator consents to a staged plugin's hooks running as native host
+  processes — but detection keyed only on a file named `hooks.json`, and a plugin may equally declare its
+  hooks in the manifest's `hooks` key (`.claude-plugin/plugin.json`, or a bare `plugin.json`), which is
+  the more common spelling. Such a plugin sailed past the gate: reproduced end-to-end, the hook executed
+  under the operator's own account while the run went green, no consent was asked and no disclosure
+  printed. The same blind predicate feeds the tier-independent disclosure, so those hooks also ran
+  unannounced at `hostloop`. Detection now returns the UNION of both channels, which fixes the gate and
+  the disclosure together since both call through it. The `hooks/hooks.json` placement carve-out is
+  deliberately NOT extended to the manifest — that carve-out exists because a misplaced `hooks.json` is
+  inert, and a manifest-declared hook is live wherever the manifest sits.
+
+  Reported by a consumer during a 3.0.0 adoption pass, with the defect proven from committed cassettes:
+  10 of theirs carried a `SessionStart:startup` hook_started/hook_response pair from a manifest-only
+  declaration, including one recorded at `container`.
+
 ### Documentation
 
 - **`permissive_auto_allow` and script-running skills is a `protocol`-specific hazard, not a general one.**

@@ -20,7 +20,8 @@ Self-contained reference. Tracks `cowork-harness 3.0.0` (baseline `desktop-1.406
 - A `hostloop` scenario with a **writable** connected folder (`mode: rw`/`rwd`) needs `allow_host_writes:
   true` — with no container around the native file tools, that combination gives the agent genuine,
   software-checked-only host filesystem access. Read-only folders and folder-less runs need no opt-in.
-- A `protocol` scenario staging a plugin that declares runnable hooks needs `allow_host_hooks: true`
+- A `protocol` scenario staging a plugin that declares runnable hooks — in `<plugin>/hooks/hooks.json`
+  or the plugin manifest's `hooks` key, both live — needs `allow_host_hooks: true`
   (`--allow-host-hooks` on `chat`/`skill`). L0 passes `--plugin-dir`, so the CLI runs those
   hooks as native host processes under your account with no sandbox. Plugins without hooks need no opt-in.
   Needs cowork-harness >= 3.0.0 — an older CLI rejects the key outright (`Unrecognized key`, exit 2), it
