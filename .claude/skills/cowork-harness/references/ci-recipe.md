@@ -1,23 +1,23 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 2.5.0` (baseline `desktop-1.37937.1`).
+Self-contained reference. Tracks `cowork-harness 3.0.0` (baseline `desktop-1.40609.0`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v2
+- uses: yaniv-golan/cowork-harness@v3
   with:
     command: replay
     path: cassettes/
-    version: "^2"              # hold the major; see below
+    version: "^3"              # hold the major; see below
 ```
 
-**These recipes pin `version: "^2"`.** The Action's `version` input *defaults* to `latest`, which means a
+**These recipes pin `version: "^3"`.** The Action's `version` input *defaults* to `latest`, which means a
 CLI major reaches your workflow the moment it is promoted even though your `uses:` ref never changed — so a
 copy-pasted recipe that omits the input takes a major bump with no say in it. `^2` holds the major, needs no
 patch number to remember, and only wants a human decision at the next major. Pin an exact version
-(e.g. `version: "2.5.0"`) instead when you want byte-reproducible CI.
+(e.g. `version: "3.0.0"`) instead when you want byte-reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
-          V=2.1.246   # match your scenario's pinned baseline's agentVersion
+          V=2.1.247   # match your scenario's pinned baseline's agentVersion
           # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here, or
           # read it with jq if you vendor the baseline. An unverified download is an unverified agent:
           # this step FAILS rather than staging one, which is the whole point of naming it "verified".
@@ -47,11 +47,11 @@ jobs:
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
           # Background on the provenance chain: the "Agent-binary provenance" section of
           # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md
-      - uses: yaniv-golan/cowork-harness@v2
+      - uses: yaniv-golan/cowork-harness@v3
         with:
           command: run
           path: scenarios/
-          version: "^2"
+          version: "^3"
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
@@ -67,7 +67,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@^2.5.0"
+- run: npm i -g "cowork-harness@^3.0.0"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
@@ -119,18 +119,18 @@ Action has no input for, and it creates a coupling nothing checks:
 you have a reason:
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v2
+- uses: yaniv-golan/cowork-harness@v3
   with:
     command: lint
     path: scenarios/
-    version: "^2"                       # holds the major
-    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; any 2.x satisfies that
+    version: "^3"                       # holds the major
+    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; any 3.x satisfies that
 ```
 
 **If a flag you pass in `extra-args` landed in a specific release, bound the range — don't write a bare
 floor.** `>=1.11.0` reads as "at least 1.11.0" and silently means "and every future major too", so a
 recipe written that way hands a copy-paster the next major with no say in it. Anchor it at the current
-major instead — `version: "^2"`, which is what the steps above use — keeping the floor's intent while
+major instead — `version: "^3"`, which is what the steps above use — keeping the floor's intent while
 stopping at the major boundary. An exact
 pin (`version: "2.0.1"`) is the right choice when you want byte-reproducible CI, at the cost of rotting the
 moment a recipe adopts a newer flag.
@@ -147,7 +147,7 @@ The split is not just about tokens — it decides **where each lane can run**:
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions —
   `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
-  `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_plugin_divergence` /
+  `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
   `question_context` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
   (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
@@ -322,7 +322,7 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
 ## GitHub Actions sketch
 
-The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v2` does
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v3` does
 in one step (see the top of this doc) — reach for this form when you need independent per-command
 gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
 equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary
@@ -342,7 +342,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@^2.5.0"
+      - run: npm i -g "cowork-harness@^3.0.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -371,7 +371,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@^2.5.0"
+        run: npm i -g "cowork-harness@^3.0.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

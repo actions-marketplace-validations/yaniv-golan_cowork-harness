@@ -62,6 +62,9 @@ requires_capabilities: [pdf_tables]       # OPTIONAL — capability families the
 
 allow_host_writes: true                  # OPTIONAL — required consent to run `hostloop` with a WRITABLE
                                          # connected folder (session `folders:` mode rw/rwd) — and so ALSO
+allow_host_hooks: true                   # OPTIONAL — required consent to run `protocol` when a staged plugin
+                                         # declares runnable hooks (`<plugin>/hooks/hooks.json`); the CLI runs
+                                         # them as NATIVE HOST processes, no container sandbox
                                          # for `fidelity: cowork` whenever the baseline's gate resolves it
                                          # to hostloop, which is what the shipped baselines do: the native
                                          # agent process gets genuine host filesystem access there, gated
@@ -544,7 +547,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `gate_answer_count_min: <N>` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass (mirrors `transcript_contains` pairing with `computer_links_resolve`). **`: 0` asserts nothing** — `delivered >= 0` always holds — so it does not satisfy that pairing; `>= 1` is then **mutually exclusive** with `questions_count_max: 0` (refused by `run`/`skill`/`record`) |
 | `allow_permissive_auto_allow: true` | verdict modifier — suppresses the default-fail when the run recorded a cowork-parity permissive auto-allow; use this for tests that **deliberately** assert Cowork's permissive behavior rather than strict scripted coverage |
 | `allow_missing_capability: true` | verdict modifier (**live tiers only**) — suppresses the default-fail when the lean/`core` agent image omits a capability the skill used but real Cowork ships (OCR/LibreOffice/markitdown/opencv/PDF-tables); assert only when the skill's fallback is genuinely equivalent, else rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`). Also opts out of the `requires_capabilities` declared-need check below. On `replay` the modifier is a no-op pass — there's no live tier to probe, so it neither suppresses nor triggers anything there. |
-| `allow_l0_plugin_divergence: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
+| `allow_l0_host_config_contamination: true` | verdict modifier — opts into L0/protocol plugin divergence, suppressing the plugin-fidelity default-fail |
 | `allow_stall: true` | verdict modifier — suppresses the default-fail when a run ends on a question having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text *after* answering an `AskUserQuestion`); assert only when ending on a question is the intended terminal state, otherwise script the answer (`answer:` / `--answer` / a decider) |
 | `allow_undelivered_deliverables: true` | verdict modifier — suppresses the `undelivered_deliverables` WARN. Working in the scratchpad is Cowork's designed pattern, so a skill that legitimately leaves intermediates, caches or downloaded inputs behind can say so instead of carrying permanent noise. The signal is warn-only and never fails a run on its own; reach for this when the scratch activity is intentional, not to silence a real delivery gap. Also suppresses the sibling `delivery_unobservable` WARN on `lane: remote` (where delivery can't be measured at all — no remote delivery tool is modeled); on that lane the key means "I know delivery is unverifiable here and accept it", **not** "the files were delivered" |
 | `allow_outputs_delete: true` | verdict modifier — accepts a detected outputs delete instead of failing the run, for a skill whose deletion is intended. Needed because omitting `no_delete_in_outputs` does **not** permit deletes: a detected delete fails via the `outputs_delete` signal precisely *because* the key was not authored. **Mutually exclusive** with `no_delete_in_outputs` (asserting both is rejected at load). This WAIVES the harness's post-hoc detection — it does not model Cowork's `allow_cowork_file_delete` approval handshake, so a skill that would catch a real `EPERM` and escalate still behaves differently here |
@@ -750,7 +753,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
 `present_files_called`, `no_vm_path_file_op`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
-`allow_l0_plugin_divergence` / `allow_stall` / `allow_undelivered_deliverables` / `allow_outputs_delete` / `allow_delete_in` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
+`allow_l0_host_config_contamination` / `allow_stall` / `allow_undelivered_deliverables` / `allow_outputs_delete` / `allow_delete_in` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`
 assert the *frozen recording's* spend on replay, not fresh spend — see their table entries above.
 
 **`question_asked`, `question_options`, `question_context`, `questions_count_max`, `gate_answers_delivered`, and
@@ -818,7 +821,7 @@ Two consequences for CI:
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes` and `allow_host_hooks` — every field the schema defines — are
 all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
 

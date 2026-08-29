@@ -173,7 +173,7 @@ LANE_REMOTE_INCOMPATIBLE_KEYS = {"present_files_called", "no_scratchpad_leak", "
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
 VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
-    "allow_l0_plugin_divergence",
+    "allow_l0_host_config_contamination",
     "allow_missing_capability",
     "allow_stall",
     "allow_undelivered_deliverables",
@@ -262,7 +262,8 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "assert",
     "skills",  # opt-in skill-staleness hash scope
     "requires_capabilities",  # Fix 4b: scenario-level required-capability declaration (pre-flight gate)
-    "allow_host_writes",  # hostloop native-split: consent for a writable connected folder (pre-run gate)
+    "allow_host_writes",
+    "allow_host_hooks",  # protocol consent: a staged plugin's hooks run as NATIVE HOST processes  # hostloop native-split: consent for a writable connected folder (pre-run gate)
 }
 
 

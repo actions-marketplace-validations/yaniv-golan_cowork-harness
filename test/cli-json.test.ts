@@ -407,7 +407,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
 
   // Every verdict modifier must (a) pass as a STANDALONE assertion (not "empty assertion") and (b) replay
   // green without being misclassified as a filesystem/egress skip. Covering all three guards the exact gap
-  // `allow_l0_plugin_divergence` fell through (it had no assert.ts noop branch).
+  // `allow_l0_host_config_contamination` fell through (it had no assert.ts noop branch).
   it.each([...VERDICT_MODIFIER_KEYS])("a standalone %s assertion replays green with no filesystem-skip warning", (modifier) => {
     const r0 = run(["--version"]); // borrow a temp cwd
     // Not every modifier is `literal(true)` — `allow_delete_in` takes a non-empty array of mount names.

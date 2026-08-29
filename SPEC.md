@@ -409,7 +409,7 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `skill_tool_used`, `skill_available`, `connector_available`, `tool_available`, `all_tasks_completed`,
   `task_status`, `compaction_occurred`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
-  `allow_l0_plugin_divergence`, `allow_stall`, `allow_undelivered_deliverables`, `allow_outputs_delete`,
+  `allow_l0_host_config_contamination`, `allow_stall`, `allow_undelivered_deliverables`, `allow_outputs_delete`,
   `allow_delete_in`),
   and (when `controlOut` is present) `question_asked`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
@@ -573,7 +573,7 @@ shape before parsing it generically.
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass) && computeVerdict(r).pass)`.
 `result:"success"` and passing assertions are necessary but **not sufficient** — `computeVerdict` adds a
 verdict-signal layer that can still fail a run (e.g. `stalled` — ended on a question with no productive work after its last gate, `transport_error`,
-`missing_capability`, `permissive_auto_allow`, `outputs_delete`, `host_path_leak`, `l0_plugin_divergence`),
+`missing_capability`, `permissive_auto_allow`, `outputs_delete`, `host_path_leak`, `l0_host_config_contamination`),
 each suppressible only by the matching `allow_*` modifier. `result` means "the agent turn didn't error," NOT
 "the task completed."
 

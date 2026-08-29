@@ -4,6 +4,7 @@ import { tmpdir, homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../types.js";
+import { resolveAgentBinary } from "../baseline.js";
 
 /** Host dir mounted writable into the VM at /sessions (the staging area; per-session subdirs). */
 export const VM_WORK_HOST = join(homedir(), ".cowork-harness", "vm-work");
@@ -31,8 +32,34 @@ export function limaPath(): string {
   return process.env.COWORK_LIMACTL ?? "/opt/homebrew/bin/limactl";
 }
 
-function stagedHostOf(baseline: PlatformBaseline): string {
-  return (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
+/**
+ * The host path of the agent ELF this VM runs — resolved through the SAME `resolveAgentBinary` every
+ * other executed-agent tier uses, so microvm gets its existence check, its sha verification against the
+ * baseline pin, its pruned-binary fallback and its actionable error message.
+ *
+ * It previously read `agentBinary.stagedPath` raw. That handed a path Desktop had pruned straight into
+ * the guest mount, where the exec failed with `env: 'claude': No such file or directory` and exit 127 —
+ * the least informative message possible for a condition the other three tiers name precisely. Worse and
+ * quieter: it also skipped `verifiedElf`, so the one tier that actually EXECUTES the ELF in a VM was the
+ * only one not verifying it, while `container` hard-fails on the same mismatch. `baseline.ts` already
+ * documented microvm as one of the strict executed-agent callers; only the wiring was missing.
+ *
+ * NOT `parityMount`: that tolerance exists for hostloop's non-executed bind mount. microvm runs this
+ * binary, so it keeps the strict sha-hard-fail policy — same as container and chat-raw.
+ *
+ * `strict: false` is for the READ-ONLY callers (`vm status`, `vm prune`, `doctor`). Those must keep
+ * working when the binary is missing — that is precisely when an operator runs them — so they degrade to
+ * the raw pinned path rather than throwing. The instance name stays consistent with the config `vmInit`
+ * builds in every case where a VM can actually be created, because both go through this one function.
+ */
+function stagedHostOf(baseline: PlatformBaseline, opts: { strict?: boolean } = {}): string {
+  const raw = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
+  if (opts.strict) return resolveAgentBinary(baseline);
+  try {
+    return resolveAgentBinary(baseline);
+  } catch {
+    return raw; // read-only callers: a name is still derivable, and `vmInit` is where this fails loudly
+  }
 }
 
 /**
@@ -86,11 +113,16 @@ export function vmStatus(instance: string): string {
  *  `Running`/`Stopped` instance of THIS name is guaranteed to match the current config — there is no
  *  stale-config reuse to guard against. Returns when it is Running. */
 export function vmInit(baseline: PlatformBaseline): { instance: string; status: string } {
+  // Resolve BEFORE the reuse short-circuit below. A VM created while the pinned binary was present keeps
+  // a mount pointing at that host path, so a later Desktop prune leaves a Running instance whose mount
+  // resolves to nothing — the guest exec then dies with `env: 'claude': No such file or directory` and
+  // exit 127. Validating only on the create path would miss precisely the reported case, since the
+  // instance was already Running. Every spawn re-checks, so the failure is loud and named either way.
+  const stagedHost = stagedHostOf(baseline, { strict: true }); // fails LOUD here, with the resolver's message
   const instance = instanceName(baseline);
   const status = vmStatus(instance);
   if (status === "Running") return { instance, status };
 
-  const stagedHost = stagedHostOf(baseline);
   mkdirSync(VM_WORK_HOST, { recursive: true });
   const cfg = limaConfig(stagedHost);
   const tmp = mkdtempSync(join(tmpdir(), "cowork-lima-"));

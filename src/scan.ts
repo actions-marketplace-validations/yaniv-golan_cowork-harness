@@ -156,6 +156,7 @@ export const KNOWN_BUILTIN_AGENTS: ReadonlySet<string> = new Set([
  *  The alternative — leaving the roster stale — reds every fresh protocol/hostloop recording on false
  *  positives and pushes people to a blanket `--allow-host-inventory`, which is strictly worse. */
 export const KNOWN_BUILTIN_SKILLS: ReadonlySet<string> = new Set([
+  "workflow-authoring", // measured 2026-08-29 against a SEALED protocol run (managed config dir, zero host skills)
   "batch",
   "claude-api",
   "code-review",

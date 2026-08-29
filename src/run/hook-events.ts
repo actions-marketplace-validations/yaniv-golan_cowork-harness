@@ -109,3 +109,54 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
     }
   }
 }
+
+/** Plugin roots that declare RUNNABLE hooks, i.e. a `<plugin>/hooks/hooks.json` naming at least one
+ *  event. Placement is the whole point: the binary reads `<plugin>/hooks/hooks.json`, and the identical
+ *  file at the plugin ROOT fires nothing — so a root-level copy must NOT count here, or the consent gate
+ *  below would refuse a run over a file that cannot execute. Same placement test
+ *  `warnUnservedHookEvents` uses before its own misplacement warning. */
+export function pluginRootsWithRunnableHooks(pluginRoots: string[]): Array<{ root: string; events: string[] }> {
+  const out: Array<{ root: string; events: string[] }> = [];
+  for (const root of pluginRoots) {
+    const events = new Set<string>();
+    for (const f of findHooksFiles(root)) {
+      if (!f.endsWith(`${sep}hooks${sep}hooks.json`)) continue; // misplaced ⇒ inert ⇒ not a hazard
+      for (const name of declaredHookEvents(f)) events.add(name);
+    }
+    if (events.size > 0) out.push({ root, events: [...events].sort() });
+  }
+  return out;
+}
+
+/**
+ * L0 host-execution consent. `protocol` passes `--plugin-dir`, and the CLI runs a plugin's hooks as
+ * NATIVE HOST PROCESSES — the operator's account, the operator's env, no container. At `container` and
+ * `microvm` those hooks run inside the sandbox; at `hostloop` they already run on the host and that tier
+ * has its own consent gate (`checkHostLoopWriteConsent`). `protocol` had neither, because before the
+ * plugin-delivery fix it never loaded the plugin at all.
+ *
+ * Gate ONLY when there is something to execute: a plugin the scenario actually staged declares runnable
+ * hooks. An ordinary skill-under-test declares none and is unaffected.
+ */
+export function checkHostHookConsent(pluginRoots: string[], allowHostHooks: boolean): void {
+  if (allowHostHooks) return;
+  const declaring = pluginRootsWithRunnableHooks(pluginRoots);
+  if (declaring.length === 0) return;
+  const detail = declaring.map((d) => `${d.root} (${d.events.join(", ")})`).join("; ");
+  throw new Error(
+    `protocol fidelity stages a plugin whose hooks would run as NATIVE HOST PROCESSES — your account, ` +
+      `your environment, no container sandbox: ${detail}. This tier passes --plugin-dir, so the CLI ` +
+      `executes these hooks directly on this machine. This requires explicit consent: for a \`run\` ` +
+      `scenario add \`allow_host_hooks: true\` to the YAML; for \`chat\`/\`skill\` pass ` +
+      `--allow-host-hooks. Use --fidelity container to run them sandboxed instead.`,
+  );
+}
+
+/** The per-run disclosure, emitted even when consent was given in committed YAML — consent once should
+ *  still be visible every run. Never gated by `--compact` (a safety disclosure, not decorative output),
+ *  mirroring `logHostWriteNotice`. */
+export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => void): void {
+  for (const d of pluginRootsWithRunnableHooks(pluginRoots)) {
+    warn(`::warning:: [protocol] ${d.root} hooks run as native host processes (${d.events.join(", ")}) — no container sandbox\n`);
+  }
+}

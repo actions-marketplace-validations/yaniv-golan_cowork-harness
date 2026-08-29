@@ -595,7 +595,7 @@
                   "mount_delete",
                   "host_path_leak",
                   "non_deterministic",
-                  "l0_plugin_divergence",
+                  "l0_host_config_contamination",
                   "missing_capability",
                   "infra_error",
                   "exec_infra_error",
@@ -1077,7 +1077,7 @@
       },
       "description": "#49: structured prompt warnings visible to JSON callers"
     },
-    "l0PluginDivergence": {
+    "l0HostConfigContamination": {
       "type": "boolean",
       "description": "#20: failing fidelity signal for protocol+plugins"
     },

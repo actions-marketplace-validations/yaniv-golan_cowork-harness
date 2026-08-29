@@ -35,7 +35,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
-import { warnUnservedHookEvents } from "./hook-events.js";
+import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import {
@@ -597,6 +597,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane);
+
+  // Same layer, protocol's own hazard: this tier passes --plugin-dir, so a staged plugin's hooks execute
+  // as native host processes. Gate only when a plugin actually declares runnable hooks.
+  if (effectiveFidelity === "protocol") {
+    const roots = plan.mounts
+      .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
+      .map((m) => m.hostPath);
+    checkHostHookConsent(roots, scenario.allow_host_hooks ?? false);
+    logHostHookNotice(roots, warn);
+  }
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;
@@ -731,7 +741,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
-  let l0PluginDivergence = false; // set when protocol mode runs with plugins (failing fidelity signal)
+  let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
   // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
   // created HERE (before spawnHostLoop builds the handler) and filled with a Run-backed bundle after
@@ -926,10 +936,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         });
       } else {
         // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
-        // capture l0PluginDivergence so computeVerdict can fail the run when plugins are configured.
+        // capture l0HostConfigContamination so computeVerdict can fail the run when plugins are configured.
         const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend });
         child = proto.child;
-        l0PluginDivergence = proto.l0PluginDivergence;
+        l0HostConfigContamination = proto.l0HostConfigContamination;
         if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
           warn(
             `::warning:: [protocol] scenario asserts transcript_no_host_path — protocol (L0) runs the agent's file tools ` +
@@ -1714,7 +1724,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           },
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
-      l0PluginDivergence: l0PluginDivergence || undefined, // failing fidelity signal for protocol+plugins
+      l0HostConfigContamination: l0HostConfigContamination || undefined, // failing fidelity signal for protocol+plugins
       missingCapabilityUse, // capability fidelity: omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
       capabilityProbe, // probe outcome (definitive | unverified | skipped) for the guard roster
       requiresCapabilityUnmet, // declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
@@ -2250,7 +2260,7 @@ export function buildPartialResult(args: {
     permissiveAutoAllow: undefined,
     scan: undefined,
     fidelityWarnings: undefined,
-    l0PluginDivergence: undefined,
+    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     staleness: undefined,
     mutation: undefined, // replay --mutate only

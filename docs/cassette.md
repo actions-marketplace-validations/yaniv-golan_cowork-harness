@@ -66,7 +66,7 @@ skill that moved. Run both; the drift note in the "Filesystem assertions" sectio
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes` and `allow_host_hooks` — every field the schema defines — are
 all captured at record time, and a plain `replay` evaluates every one of them from that
 frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
 change a replay; the sibling is read only to print `::notice::` lines when it has drifted, or when it
@@ -519,7 +519,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentFilesCalls` > 0 — the invocation count, which a host-path redaction policy cannot alter) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container + hostloop tiers** |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
-| `allow_l0_plugin_divergence` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
+| `allow_l0_host_config_contamination` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 | `allow_outputs_delete` | verdict modifier — kept on replay → no-op pass (the live outputs-delete scan it waives is zeroed on replay) |
 | `allow_delete_in` | verdict modifier — kept on replay → no-op pass (the live per-mount delete scan it waives is zeroed on replay, same as its outputs-scoped sibling) |

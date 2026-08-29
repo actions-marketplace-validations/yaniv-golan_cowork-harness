@@ -6,6 +6,125 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-08-29
+
+### Breaking
+
+- **`l0_plugin_divergence` is renamed `l0_host_config_contamination`**, and its modifier
+  `allow_l0_plugin_divergence` is renamed `allow_l0_host_config_contamination`. The `RunResult` field
+  `l0PluginDivergence` becomes `l0HostConfigContamination`. Verdict-signal codes and the scenario schema
+  are covered surfaces ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)), so this is
+  a MAJOR bump. The old name described plugin *delivery* diverging at L0; delivery now works, and what the
+  signal actually reports is that the run read the operator's real config dir. A scenario asserting the old
+  key must rename it; a consumer keying on the old code must too.
+
+- **The signal's firing conditions changed with it.** It fired when a session declared plugin dirs; it now
+  fires when `protocol` reads the operator's real config dir — tested on the dir the agent will actually
+  read, so a pinned `plugins.config_dir` is caught even with the managed branch nominally active. A
+  `skills.local`-only protocol run that previously passed can now fail, and a sealed protocol run with
+  plugins that previously failed now passes.
+
+
+### Added
+
+- **`allow_host_hooks` (scenario key) and `--allow-host-hooks` (`chat` / `skill`).** Consent to
+  running a staged plugin's hooks as native host processes at `protocol`. Top-level like
+  `allow_host_writes` rather than a verdict modifier — it gates the SPAWN, it does not suppress a signal.
+
+  **Version floor: `allow_host_hooks` needs cowork-harness ≥ 3.0.0.** The scenario loader is a `z.strictObject`, so an older CLI does NOT fall back to the default — it hard-errors `Unrecognized key: "allow_host_hooks"` and exits 2 (verified). Adopting the key is a floor bump for every consumer of that scenario.
+
+- **A committed live probe for L0 plugin delivery** — `examples/probes/l0-plugin-delivery.scenario.yaml`
+  plus its fixture and session. It asserts the plugin under test reaches the agent's init inventory at
+  `protocol`, which no unit test can see: the argv builder was correct in isolation and the defect was a
+  missing call site. It pins the sealed config-dir branch deliberately — off it, the operator's own
+  installed plugins are in the inventory and a name collision would satisfy the assertion with or without
+  `--plugin-dir`, measuring the machine instead of the argv. The fixture also ships an agent, deliberately
+  unasserted: there is no `agent_available` assertion key (tool / skill / connector have one, agents do
+  not), and naming that gap is better than inventing a key to hide it.
+
+### Changed
+
+- **`protocol` (L0) now passes `--plugin-dir`, so a declared plugin or skill dir is actually delivered.**
+  It previously passed no `--plugin-dir` and `local_plugins` never reached the generated `settings.json`,
+  so **the positional argument was silently inert**: `cowork-harness chat <dir> --fidelity protocol` (and
+  the `skill` / `probe-dispatch` equivalents) measured whatever the operator had installed rather than the
+  tree they passed. Live-verified: a bare skill dir and a plugin root both register at L0 now, with their
+  skills and their declared agents. Expect scenarios that previously passed *vacuously* — asserting against
+  an agent that never had the plugin — to start failing honestly.
+
+- **A plugin's hooks and MCP servers now run at `protocol`, and hooks require consent.** Loading a plugin
+  means the CLI executes its `<plugin>/hooks/hooks.json` as **native host processes** — the operator's
+  account and environment, no container sandbox — and opens its declared MCP servers. `protocol` therefore
+  refuses to spawn when a staged plugin declares runnable hooks unless the scenario sets
+  `allow_host_hooks: true` (or `--allow-host-hooks` for `chat`/`skill`); a plugin without hooks
+  needs no opt-in, and a misplaced root-level `hooks.json` (which cannot execute) does not trigger it. A
+  per-run disclosure is printed even when consent was given. Mirrors the existing `allow_host_writes` gate.
+
+- **`protocol` takes the managed config dir when any credential is in the environment.**
+  `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN` now select it alongside `ANTHROPIC_API_KEY`, and the
+  token is injected into the agent's env (a managed config dir with no credential yields "Not logged in").
+  This severs host plugin/skill/MCP discovery — verified: a token-only L0 run delivered the plugin under
+  test and **zero** host plugins. `COWORK_MANAGED_CONFIG=0` suppresses only the token-derived branch,
+  never the `ANTHROPIC_API_KEY` CI path; an unrecognized value is now rejected rather than silently
+  selecting the managed branch (`COWORK_MANAGED_CONFIG=false` previously did).
+
+- **`l0_plugin_divergence` now reports contamination rather than the `--plugin-dir` layout.** Delivery is
+  fixed, so the signal fires when L0 runs against the operator's **real** config dir, and it tests the dir
+  the agent will actually read — a pinned `plugins.config_dir` reaches host discovery with the managed
+  branch nominally active. It stays a hard fail: nothing else catches this (the host-inventory scan runs
+  only at cassette-record time, and `host_path_leak`'s default-fail is skipped at this tier).
+
+- **`workflow-authoring` added to the built-in skill roster** (`KNOWN_BUILTIN_SKILLS`), measured against a
+  sealed `protocol` run rather than a contaminated one.
+
+- **Platform baseline `desktop-1.40609.0` (agent `2.1.247`).** The Cowork system prompt, both sub-agent
+  appends, the egress allowlist, `spawn.env`, `tools[]`/`allowedTools` and `mountLayout` are all re-derived
+  unchanged. The one `sync` delta was a pure refactor: W2's `CLAUDE_CODE_ENTRYPOINT` deployment ternary is
+  now a hoisted helper, and W1 hard-sets `local-agent` after the spread either way, so the derived value
+  does not move. The VM rootfs is re-captured — node `v22.22.3` → `v22.23.2`, pip 144 → 136 packages
+  (`xlrd` added; the nine removals are Ubuntu system packages, no analysis library dropped).
+
+### Fixed
+
+- **`microvm` resolves its agent binary through the shared resolver instead of deriving the path itself.**
+  It read `agentBinary.stagedPath` raw and handed it to the guest mount, so a pin that Claude Desktop had
+  pruned surfaced as `env: 'claude': No such file or directory` and exit 127 — the least informative
+  message possible for a condition the other three tiers name precisely. The quieter half mattered more:
+  the raw path also skipped `verifiedElf`, leaving the one tier that actually **executes** the ELF in a VM
+  as the only one not verifying it against the baseline pin, while `container` hard-fails on the same
+  mismatch. Routing it through `resolveAgentBinary` restores all three safeguards at once — existence
+  check, sha verification and the pruned-binary fallback — and removes a fourth derivation of a rule
+  `baseline.ts` already documented `microvm` as following. Resolution happens **before** the
+  already-Running reuse short-circuit, since a VM created while the binary was present keeps a mount at
+  the pruned path — the originally reported state. `vm status` / `vm prune` / `doctor` keep working when
+  the binary is missing (that is when an operator reaches for them) and degrade to the pinned path rather
+  than throwing.
+
+- **`sync` resolves a spawn-env value expression that is a hoisted one-line helper** (`uH(n.type)`), where
+  it previously refused the baseline. The branch is narrow by construction: the argument must be a `.type`
+  member and the callee body must be exactly the literal deployment ternary over its own parameter, resolved
+  in the window's own chunk — a two-character minified name hopped against the joined bundle lands on an
+  unrelated helper. Anything else stays unresolvable rather than guessed.
+
+- **`provenance.asarGateIds` now includes the gate-defaults map's bare-numeric keys.** The scan matched
+  quoted literals only, so any gate that is keyed in that map and never read through a quoted id was
+  missing — `provenance.asarGateIds` 252 → 291, and the 1.40609.0 delta corrects from +27/−4 to +30/−4.
+  This is not the bare-*number* scan the extractor deliberately rejects: that matches any numeric and adds
+  1687 ids over the same bundle, while the defaults-map entry shape adds 39.
+
+### Documentation
+
+- **A plugin's declared MCP servers are a documented fidelity gap.** Production replaces them with
+  zero-tool SDK stubs named `plugin:<plugin>:<server>` — remote (`url` + http/sse) unconditionally, local
+  and `.mcpb` under an MCP policy — while the harness stages plugins with `--plugin-dir` and lets the CLI
+  open the real ones. A plugin under test therefore sees a tool surface production would not give it, in
+  both directions and silently. Not modeled: the remote rule is mechanically reproducible, but the
+  local/`.mcpb` rule is conditioned on Desktop policy state the harness has no source for.
+
+- **The auto-mode permission rubric gap is tier-independent.** `docs/fidelity-gaps.md` scopes it to both
+  loops rather than VM-loop only, and records that the rubric's Filesystem section is tier-dependent
+  model-visible text — a different kind of divergence from a permission verdict.
+
 ## [2.5.0] — 2026-08-28
 
 ### Added

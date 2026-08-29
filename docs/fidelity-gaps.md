@@ -154,6 +154,49 @@ in a real unattended Cowork session, where these actions now refuse rather than 
 
 ---
 
+## A plugin's declared MCP servers run here; production replaces them with zero-tool stubs
+
+**Real Cowork behaviour:** Desktop rewrites a plugin's MCP servers before the spawn rather than passing them
+through. Two rules, with different conditions:
+
+- **Remote servers** — a `config.url` with `type` in `{http, streamable-http, sse}` — are replaced
+  unconditionally by an empty SDK server, logged *"Plugin `<name>` declares remote MCP servers (…).
+  Overriding with no-ops so the CLI does not open its own client."*
+- **Local / `.mcpb` servers** — `isMcpb`, or a `config.command` — are replaced when an MCP policy is active:
+  local MCP disabled, or for `.mcpb` specifically, extensions disabled, signature required, or a directory
+  policy in force.
+
+Both are renamed `plugin:<pluginName>:<serverName>` and constructed as `createSdkMcpServer({name, tools: []})`
+— **the server name is present in the session's inventory and offers zero tools.** The rewritten set is
+delivered to the agent as an `--mcp-config` payload, and when an MCP policy is active and that delivery
+fails, Desktop refuses to start the session rather than launching with unenforced plugin servers.
+
+**What the harness does:** nothing. Plugins are staged with `--plugin-dir` and the CLI reads each plugin's
+own declaration, so a plugin under test gets **working** MCP servers with their real tools.
+
+**Tier note:** this applies at `protocol` as well — L0 passes `--plugin-dir`, so a plugin's declared MCP
+servers are opened there too. Whether the harness should model production's stubbing is an open question,
+deliberately kept separate from plugin delivery.
+
+**Why this is not inherited by running the real binary.** The rewriting is Desktop's, upstream of the spawn
+— unlike, say, bundled-skill registration, which the agent decides for itself from `CLAUDE_CODE_ENTRYPOINT`
+and therefore behaves identically here. Anything Desktop computes and hands over is absent unless the
+harness computes it too.
+
+**What this means for a scenario.** A plugin that declares MCP servers is tested against a tool surface
+production would not give it: assertions naming those tools can pass here and be unreachable in Cowork, and
+a skill that leans on such a server will work in a harness run and find a zero-tool server in production.
+The failure is silent in both directions — nothing errors, the tools are simply there or not.
+
+**Not modeled, and modelling it needs a design decision rather than a patch.** The remote-server rule is
+unconditional and therefore mechanically reproducible; the local/`.mcpb` rule is conditioned on Desktop
+policy state (local-MCP enablement, extension signature and directory policy) that the harness has no
+source for. Modelling only the unconditional half would be faithful for remote servers and silently wrong
+for the rest, so which half to model — and whether a session should be able to opt out — is the decision to
+make first.
+
+---
+
 ## HIPAA restriction is a process-global latch
 
 **Real Cowork behaviour:** when an account or org is HIPAA-restricted, Cowork latches that state at
@@ -691,6 +734,14 @@ The table above is what **Desktop** installs. A plugin's *own* hooks reach the a
 route — the `--plugin-dir` argv — and the agent binary loads and executes them itself. The harness
 neither serves nor blocks that path.
 
+> **`protocol` is in this list too, and it is the sharpest case.** L0 passes `--plugin-dir` and runs the
+> agent natively, so a staged plugin's hooks execute as **native host processes** — the operator's account,
+> the operator's environment, no container sandbox. `protocol` therefore refuses to spawn when a staged
+> plugin declares runnable hooks unless the scenario sets `allow_host_hooks: true` (or `--allow-host-hooks`
+> for `chat`/`skill`/`critique`); a plugin without hooks needs no opt-in, and a misplaced root-level
+> `hooks.json` cannot execute so it does not trigger the gate. At `container`/`microvm` the same hooks run
+> inside the sandbox; at `hostloop` they run on the host under that tier's own consent gate.
+
 **Live-verified 2026-08-01, both tiers.** A fixture plugin declaring `SessionStart`, `UserPromptSubmit`
 and `PostToolUse` had **all three fire** at `container` *and* at `hostloop` (each hook appended a sentinel;
 every one appeared). So a plugin's own hooks are not a gap — they work. This also matches production: a
@@ -764,12 +815,33 @@ argv builder's only sources for the flag are that session value and the baseline
 type — and the test fails the day either guard is relaxed, which is when this gap needs re-triage rather
 than after.
 
-So the residual is: in a real VM-loop, non-chat Cowork session the rubric is now a second, host-side
-judgement layer over every tool call in auto-mode, and its observable effect is that the PreToolUse hook
-can answer `deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool
-this harness models as always-gated may therefore raise no prompt in production. A scenario can already
-*express* a denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot
-reproduce a gate that silently stops prompting.
+So the residual is: in a real non-chat Cowork session the rubric is now a second, host-side judgement layer
+over every tool call in auto-mode, and its observable effect is that the PreToolUse hook can answer
+`deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool this harness
+models as always-gated may therefore raise no prompt in production. A scenario can already *express* a
+denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot reproduce a gate
+that silently stops prompting.
+
+The rubric reaches **both loops**. Its rule-inclusion predicate is
+`{includeRules: !isChatSession && gate("3424551112"), hostLoop}` — no host-loop exclusion — and `hostLoop`
+selects between two Filesystem sections. The VM one describes the sandbox; the host-loop one is Anthropic's
+own statement of the same path-resolution split this repo implements: file tools use real host paths with
+the working directory the session's `outputs/` folder, while shell commands run only via the bash tool in an
+isolated Linux VM under `/sessions/<name>/`, where `outputs/`, `uploads/` and the connected folders appear
+under `mnt/` and every other path is VM-only scratch.
+
+Two consequences worth stating separately. (a) The gap is **tier-independent**, so the two structural guards
+above carry the whole weight of keeping the harness out of it. (b) The rubric's environment text is
+**tier-dependent model-visible content**, which is a different kind of divergence from a permission verdict:
+a harness run and a production run at the same tier put different Filesystem prose in front of the model
+even when every permission decision matches.
+
+`sync` cannot see any of this: the `settings:` call site is a byte-identical call to a helper, and the
+baseline carries no `spawn.settings` key at all.
+
+**Still not modeled, and still deliberately so** — nothing here changes the recommendation. It is recorded
+because the section's stated scope became false, and a gap that under-states itself is worse than one that
+is merely open.
 
 ---
 

@@ -24,6 +24,40 @@ import { diffBaselines, formatDiffLines, renderChangelog } from "../src/sync/bas
 
 const filesOf = (...texts: string[]) => new Map(texts.map((t, i) => [`chunk-${i}.js`, t]));
 
+describe("extractAsarGateIds — the gate-DEFAULTS map's bare-numeric keys", () => {
+  // Regression for a defect that shipped TWICE. The defaults map keys entries on bare numerics
+  // (`{748063099:bw,3586389629:tvt(6e4)}`), so a quoted-literal-only scan misses any gate that is only
+  // ever defaulted. It under-reported 1.30096.1's new gates 3 -> 1; that was recorded as a maintainer
+  // note rather than as a test, so it recurred unchanged at 1.40609.0 (+27 extracted vs +30 real). These
+  // cases exist so the third recurrence is impossible.
+  it("captures a bare-numeric defaults-map key that no quoted literal mentions", () => {
+    const ids = extractAsarGateIds(filesOf("var m={748063099:bw,3586389629:tvt(6e4),3927880029:Sw({value:3})};"));
+    expect(ids).toEqual(["748063099", "3586389629", "3927880029"].sort((a, b) => Number(a) - Number(b)));
+  });
+
+  // The adjacency trap, and the reason the scanner uses a LOOKBEHIND rather than consuming `[{,]`.
+  // Entries abut, so a delimiter-consuming match eats the comma the next entry needs as its own
+  // delimiter and silently drops every other one — a half-length list that looks like a working scan.
+  it("captures ADJACENT entries — a delimiter-consuming scan would drop every other one", () => {
+    const ids = extractAsarGateIds(filesOf("var m={111111111:a,222222222:b,333333333:c,444444444:d};"));
+    expect(ids).toEqual(["111111111", "222222222", "333333333", "444444444"]);
+  });
+
+  // The narrowness that distinguishes this from the bare-NUMBER scan the header rejects (which adds 1687
+  // ids over the real bundle). A bare numeric that is not a defaults-map ENTRY must stay out: the id-space
+  // filter alone does not carry this, since these are all in range.
+  it("does NOT admit bare numerics that are not `<id>:<identifier>` entries", () => {
+    const ids = extractAsarGateIds(filesOf("var n=123456789;f(987654321);const t=[135792468];x.y=246813579;"));
+    expect(ids).toEqual([]);
+  });
+
+  // 2^22 — a real false positive from the hand-verification pass (a zlib table bound and a JSON read cap).
+  // It is excluded by the id-space filter, not by the shape rule, so this pins the two working together.
+  it("still excludes a sub-8-digit constant that happens to sit in an object literal", () => {
+    expect(extractAsarGateIds(filesOf("var z={4194304:bw,748063099:bw};"))).toEqual(["748063099"]);
+  });
+});
+
 describe("extractAsarGateIds — what it keeps", () => {
   it("extracts quoted gate ids across every quote style the bundle emits", () => {
     // Minifiers emit all three; anchoring on backticks alone under-reported a real gate delta before.

@@ -162,7 +162,7 @@ const full: RunResult = {
   runLabel: "gen-3",
   skillCommit: "0123456789abcdef0123456789abcdef01234567",
   fidelityWarnings: ["referenced asset not found"],
-  l0PluginDivergence: false,
+  l0HostConfigContamination: false,
   missingCapabilityUse: ["office_convert"],
   gateProvenance: {
     total: 1,

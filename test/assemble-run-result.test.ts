@@ -85,7 +85,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     mutation: undefined,
     skippedAssertions: undefined,
     toolResults: undefined,
-    l0PluginDivergence: undefined,
+    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     gateProvenance: undefined,
     skillsInvoked: undefined,

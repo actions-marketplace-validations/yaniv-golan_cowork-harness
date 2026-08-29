@@ -431,6 +431,7 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
+  allow_host_hooks: () => 0,
 };
 
 /** The minimum cassette format version a reader needs to correctly interpret this scenario — what gets
@@ -4708,7 +4709,7 @@ function replayErrorResult(file: string): RunResult {
     mutation: undefined, // the protocol-error stub carries no mutation report
     skippedAssertions: undefined,
     toolResults: undefined,
-    l0PluginDivergence: undefined,
+    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     gateProvenance: undefined,
     skillsInvoked: undefined,
@@ -6972,7 +6973,7 @@ export async function replayCassette(
       ...MANIFEST_KEYS,
       ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
-      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_plugin_divergence
+      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_host_config_contamination
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
@@ -7552,7 +7553,7 @@ export async function replayCassette(
       permissiveAutoAllow: undefined,
       scan: undefined,
       fidelityWarnings: undefined,
-      l0PluginDivergence: undefined,
+      l0HostConfigContamination: undefined,
       missingCapabilityUse: undefined,
       gateProvenance: undefined,
       // F46: cassette.fingerprint is the record-time snapshot; frozenFingerprint (above) is it plus a

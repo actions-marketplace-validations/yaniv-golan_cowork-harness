@@ -1124,6 +1124,34 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(renamed)).toEqual([]);
   });
 
+  // 1b2. Desktop 1.40609.0 extracted W2's inline 3p-entrypoint ternary into a hoisted helper
+  // (`CLAUDE_CODE_ENTRYPOINT:uH(n.type)`). It is a pure refactor — same two literals, same predicate — so
+  // derivation must be byte-identical. A body that is NOT that ternary must stay a hard fail rather than
+  // resolve to whatever literal happens to be in it: the helper is the only thing vouching for the value.
+  it("hoisted-entrypoint-helper regression: uH(n.type) derives the identical pin map; a foreign body hard-fails", () => {
+    const INLINE = 'CLAUDE_CODE_ENTRYPOINT:t.type==="3p"?"claude-desktop-3p":"claude-desktop"';
+    const HELPER = 'function FKep(e){return e==="3p"?"claude-desktop-3p":"claude-desktop"};';
+    const hoisted = fixture().replace(INLINE, "CLAUDE_CODE_ENTRYPOINT:FKep(t.type)").replace("HEADER;", `HEADER;${HELPER}`);
+    expect(hoisted).not.toBe(fixture()); // the mutation actually applied
+    expect(hoisted).not.toContain(INLINE);
+    const { env, flags } = deriveSpawnEnv(hoisted, greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual(EXPECTED_GREEN);
+
+    // Same call site, helper body changed → unresolvable, not silently re-read as the old value.
+    const foreign = hoisted.replace(HELPER, 'function FKep(e){return e==="3p"?"a":lookup(e)};');
+    expect(foreign).not.toBe(hoisted);
+    const bad = deriveSpawnEnv(foreign, greenGates());
+    expect(bad.env).toBeNull();
+    expect(bad.flags.some((f) => f.includes("CLAUDE_CODE_ENTRYPOINT") && f.includes("unrecognized value expression"))).toBe(true);
+
+    // And with no helper in the bundle at all (the call site alone proves nothing).
+    const missing = hoisted.replace(HELPER, "");
+    const none = deriveSpawnEnv(missing, greenGates());
+    expect(none.env).toBeNull();
+    expect(none.flags.some((f) => f.includes("CLAUDE_CODE_ENTRYPOINT"))).toBe(true);
+  });
+
   // 1c. Build-shape regression: the three anchors that drifted on the Vite/SDK bundle refactor must stay
   // clean in their NEW shapes. CI runs on Linux with no Desktop, so the live-asar tests skip there; this
   // exercises the new shapes synthetically so the regex branches are covered in CI too:

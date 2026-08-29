@@ -172,9 +172,15 @@ export const PINNED_GATES: Record<string, string> = {
   // is not: the harness never constructs `settings.autoMode` on ANY tier (grep autoMode in src/ — only
   // gate-name constants; argv passes --permission-mode and --setting-sources, never an autoMode payload),
   // so the rubric is STRUCTURALLY unreachable here rather than excluded. Live effect in production, for
-  // VM-loop non-chat sessions: the PreToolUse hook can answer `deferred_to_classifier` (an empty result)
+  // non-chat sessions: the PreToolUse hook can answer `deferred_to_classifier` (an empty result)
   // INSTEAD of permissionDecision:"ask", so a tool this harness models as always-gated may raise no
   // prompt there. Documented in docs/fidelity-gaps.md, not modeled.
+  // WIDENED at Desktop 1.40609.0: the rule-inclusion predicate dropped its `!hostLoopMode` conjunct
+  // (`!isChatSession && !hostLoopMode && gate` -> `{includeRules: !isChatSession && gate, hostLoop}`), so
+  // this is no longer VM-loop-only, and `hostLoop` now selects between two Filesystem sections — the VM
+  // one, and a new host-loop one describing real host paths for file tools with shell confined to the VM.
+  // Sync cannot see any of it: the `settings:` call site is byte-identical and the baseline has no
+  // `spawn.settings` key at all. This comment said "VM-loop non-chat" until that release; do not restore it.
   // NAME CAVEAT: same as above — bare id at the call site, no name in the asar; kebab-case descriptor.
   "3424551112": "automode-permission-rubric",
   // Selects which of Cowork's two mutually exclusive artifact mechanisms a session gets. force/on for a
@@ -351,9 +357,25 @@ export function decodeFcacheProvenance(path = join(SUPPORT, "fcache")): FcachePr
  *  because a constant is invisible in the DELTA, which is what this field is read for. */
 export function extractAsarGateIds(files: Map<string, string>): string[] {
   const re = /["'`](\d{5,13})["'`]/g;
+  // SECOND SHAPE (added 2026-08-29): the gate-DEFAULTS map keys its entries on BARE numerics —
+  // `{…,748063099:bw,3586389629:tvt(6e4),3927880029:Sw({value:3}),…}` — so a quoted-literal-only scan
+  // misses every gate that is only ever defaulted and never read through a quoted id. That is not
+  // hypothetical: it under-reported 1.30096.1's new gates 3 -> 1, and — because it was recorded as a
+  // maintainer note rather than as a test — recurred unchanged at 1.40609.0 (+27 extracted vs +30 real).
+  //
+  // This is NOT the bare-number scan the header rejects. That one matches ANY bare numeric and adds 1687
+  // ids over this bundle. This one requires the defaults-map ENTRY shape — `<id>:<identifier>` immediately
+  // after a `{` or `,` — and adds 39, of which 38 match `<id>:<ctor>` with only three distinct constructor
+  // tokens (`xw` 30, `Sw` 7, `tvt` 1); the 39th (`748063099:bw`) is the same shape and is missed by a
+  // verification regex only because an adjacent entry consumed its leading comma. A tight, structurally
+  // coherent population, 43x less noisy than the rejected form.
+  //
+  // The lookbehind (rather than consuming `[{,]`) is load-bearing: entries are adjacent, so a
+  // delimiter-consuming match eats the comma the NEXT entry needs and silently drops every other one.
+  const bareKeyRe = /(?<=[{,])(\d{5,13}):(?=[A-Za-z_$])/g;
   const out = new Set<string>();
   for (const text of files.values())
-    for (const m of text.matchAll(re)) {
+    for (const m of [...text.matchAll(re), ...text.matchAll(bareKeyRe)]) {
       const id = m[1];
       // `length > 10` is REDUNDANT and deliberately kept: any 11+ digit run is >= 1e10 > 2^32, so the
       // range check already rejects it. Mutation-verified — relaxing it to `> 11` changes nothing, on
@@ -2458,6 +2480,21 @@ export function resolveSpawnValue(
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="staging"\?"1":""$/.test(e)) return { value: "" };
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="local"\?"1":""$/.test(e)) return { value: "" };
   if ((m = e.match(/^[\w$]+\.type==="3p"\?"[^"]*":"([^"]*)"$/))) return { value: m[1] };
+  // B13 (Desktop 1.40609.0): the 3p-entrypoint ternary directly above was extracted out of W2 into a
+  // hoisted one-line helper — `CLAUDE_CODE_ENTRYPOINT:uH(n.type)`, with
+  // `function uH(e){return e==="3p"?"claude-desktop-3p":"claude-desktop"}`. Same semantics as the inline
+  // form, so it resolves the same way: the non-3p arm, because the harness models a FIRST-PARTY session.
+  // Deliberately narrow — the argument must be a `.type` member (so an unrelated 1-arg call cannot reach
+  // here) and the callee body must be exactly that literal ternary over its own parameter, found in the
+  // window's OWN chunk (`scope`) when the caller knows it, since a bare 2-char minified name hopped
+  // against the joined bundle can land on an unrelated helper. Anything else stays `unknown` rather than
+  // being guessed at.
+  if ((m = e.match(/^([A-Za-z_$][\w$]*)\([\w$]+\.type\)$/))) {
+    const site = scope ?? bundle;
+    const esc = m[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const fm = site.match(new RegExp(`function ${esc}\\(([\\w$]+)\\)\\{return \\1==="3p"\\?"[^"]*":"([^"]*)"\\}`));
+    return fm ? { value: fm[2] } : { unknown: true };
+  }
   return { unknown: true };
 }
 
