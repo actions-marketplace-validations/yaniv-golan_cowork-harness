@@ -2458,6 +2458,21 @@ export function resolveSpawnValue(
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="staging"\?"1":""$/.test(e)) return { value: "" };
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="local"\?"1":""$/.test(e)) return { value: "" };
   if ((m = e.match(/^[\w$]+\.type==="3p"\?"[^"]*":"([^"]*)"$/))) return { value: m[1] };
+  // B13 (Desktop 1.40609.0): the 3p-entrypoint ternary directly above was extracted out of W2 into a
+  // hoisted one-line helper — `CLAUDE_CODE_ENTRYPOINT:uH(n.type)`, with
+  // `function uH(e){return e==="3p"?"claude-desktop-3p":"claude-desktop"}`. Same semantics as the inline
+  // form, so it resolves the same way: the non-3p arm, because the harness models a FIRST-PARTY session.
+  // Deliberately narrow — the argument must be a `.type` member (so an unrelated 1-arg call cannot reach
+  // here) and the callee body must be exactly that literal ternary over its own parameter, found in the
+  // window's OWN chunk (`scope`) when the caller knows it, since a bare 2-char minified name hopped
+  // against the joined bundle can land on an unrelated helper. Anything else stays `unknown` rather than
+  // being guessed at.
+  if ((m = e.match(/^([A-Za-z_$][\w$]*)\([\w$]+\.type\)$/))) {
+    const site = scope ?? bundle;
+    const esc = m[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const fm = site.match(new RegExp(`function ${esc}\\(([\\w$]+)\\)\\{return \\1==="3p"\\?"[^"]*":"([^"]*)"\\}`));
+    return fm ? { value: fm[2] } : { unknown: true };
+  }
   return { unknown: true };
 }
 
