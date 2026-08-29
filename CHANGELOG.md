@@ -50,6 +50,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`microvm` resolves its agent binary through the shared resolver instead of deriving the path itself.**
+  It read `agentBinary.stagedPath` raw and handed it to the guest mount, so a pin that Claude Desktop had
+  pruned surfaced as `env: 'claude': No such file or directory` and exit 127 — the least informative
+  message possible for a condition the other three tiers name precisely. The quieter half mattered more:
+  the raw path also skipped `verifiedElf`, leaving the one tier that actually **executes** the ELF in a VM
+  as the only one not verifying it against the baseline pin, while `container` hard-fails on the same
+  mismatch. Routing it through `resolveAgentBinary` restores all three safeguards at once — existence
+  check, sha verification and the pruned-binary fallback — and removes a fourth derivation of a rule
+  `baseline.ts` already documented `microvm` as following. Resolution happens **before** the
+  already-Running reuse short-circuit, since a VM created while the binary was present keeps a mount at
+  the pruned path — the originally reported state. `vm status` / `vm prune` / `doctor` keep working when
+  the binary is missing (that is when an operator reaches for them) and degrade to the pinned path rather
+  than throwing.
+
 - **`sync` resolves a spawn-env value expression that is a hoisted one-line helper** (`uH(n.type)`), where
   it previously refused the baseline. The branch is narrow by construction: the argument must be a `.type`
   member and the callee body must be exactly the literal deployment ternary over its own parameter, resolved
