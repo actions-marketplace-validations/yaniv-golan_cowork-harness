@@ -115,11 +115,27 @@ export function baseAgentArgs(
     // Session persistence: pin the agent's native session id (so we can resume it), or resume a prior
     // one. Only emitted when a stable session was requested — default omits both → goldens unchanged.
     ...(plan.agentSessionId ? (plan.resume ? ["--resume", plan.agentSessionId] : ["--session-id", plan.agentSessionId]) : []),
-    ...plan.pluginDirs.flatMap((p) => ["--plugin-dir", `${opts.mntRoot}/${p}`]),
+    ...pluginDirArgs(plan, opts.mntRoot),
     // variadic flags LAST so they don't swallow other options
     ...(tools.length ? ["--tools", ...tools] : []),
     ...(allowed.length ? ["--allowedTools", ...allowed] : []),
   ];
+}
+
+/**
+ * `--plugin-dir` args for every plugin root the plan declares, rooted at the tree the caller actually
+ * staged. THE single derivation of this rule (docs/invariants.md: every agent-visible path is composed
+ * from the tree the harness stages) — `baseAgentArgs` passes the guest `mnt` root, `spawnProtocol` passes
+ * its real host work dir. Both spellings are POSIX, so one template join serves both.
+ *
+ * `protocol` used to pass NO `--plugin-dir` at all, on the theory that L0 could not reproduce Cowork's
+ * cache layout. That was a self-inflicted limitation, not a capability one: the host CLI accepts the flag
+ * (live-verified), and without it a declared plugin — or a bare skill dir — was never delivered to the
+ * agent, so the positional argument was silently inert. Passing it makes L0 MORE faithful, not less; the
+ * residual divergence is the ROOT, not the mechanism.
+ */
+export function pluginDirArgs(plan: Pick<LaunchPlan, "pluginDirs">, root: string): string[] {
+  return plan.pluginDirs.flatMap((p) => ["--plugin-dir", `${root}/${p}`]);
 }
 
 /** The full `claude …` args (container/hostloop): the shared base prefixed with the binary token. */

@@ -35,7 +35,7 @@ import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
-import { warnUnservedHookEvents } from "./hook-events.js";
+import { warnUnservedHookEvents, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { spawnMicroVm, snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import {
@@ -597,6 +597,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane);
+
+  // Same layer, protocol's own hazard: this tier passes --plugin-dir, so a staged plugin's hooks execute
+  // as native host processes. Gate only when a plugin actually declares runnable hooks.
+  if (effectiveFidelity === "protocol") {
+    const roots = plan.mounts
+      .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
+      .map((m) => m.hostPath);
+    checkHostHookConsent(roots, scenario.allow_host_hooks ?? false);
+    logHostHookNotice(roots, warn);
+  }
   if (agentSessionId) {
     plan.agentSessionId = agentSessionId;
     plan.resume = !!opts.resume;

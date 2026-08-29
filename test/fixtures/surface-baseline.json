@@ -2924,6 +2924,9 @@
         "type": "object",
         "closed": true
       },
+      ".allow_host_hooks": {
+        "type": "boolean"
+      },
       ".allow_host_writes": {
         "type": "boolean"
       },

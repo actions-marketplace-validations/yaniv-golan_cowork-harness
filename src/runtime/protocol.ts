@@ -1,6 +1,7 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, cpSync, existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
@@ -9,6 +10,7 @@ import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
+import { pluginDirArgs } from "./argv.js";
 
 /**
  * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
@@ -21,7 +23,62 @@ export function buildProtocolEnv(plan: LaunchPlan): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...plan.baseEnv };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
   Object.assign(env, plan.agentEnv ?? {});
+  // Auth for the managed branch, applied HERE so the documented `knob > operator env` layering stays in
+  // one function — an `env.X = …` at the call site would silently outrank `plan.agentEnv`.
+  //
+  // The token must be read from `process.env`, NOT from `env`: `CLAUDE_CODE_OAUTH_TOKEN` is the first
+  // entry of every baseline's `bgEnvStrip.knownVars`, so `strippedEnv` has already deleted it from
+  // `plan.baseEnv`. Gating on `env.CLAUDE_CODE_OAUTH_TOKEN` would be a branch that can never be taken.
+  //
+  // Inject ONLY the token, and ONLY when it is what selected the managed branch. Merging `runtimeAuthEnv()`
+  // wholesale would be wrong twice: it only ADDS (the sealed tiers get their API-key drop by OMISSION,
+  // from an env that never inherited the operator's keys — protocol's env IS the operator's shell env, and
+  // ANTHROPIC_API_KEY is not stripped), so it would put BOTH credentials in one child env on the existing
+  // CI path; and it rewrites TZ unconditionally, which would give managed-branch L0 normalized timezones
+  // and non-managed L0 the raw export — same tier, two date semantics, and dates reach the model.
+  if (managedConfigMode(env) && !env.ANTHROPIC_API_KEY) {
+    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN;
+    if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  }
   return env;
+}
+
+/**
+ * Does this run use the hermetic managed config dir, or the operator's real one?
+ *
+ * A fresh `CLAUDE_CONFIG_DIR` severs plugin/skill/MCP discovery (live-verified) — which is the isolation
+ * we want — but it also breaks local OAuth, whose login state lives in the real dir. `doctor.ts` carries
+ * the measurement: default config dir ⇒ authenticated; fresh managed dir ⇒ "Not logged in". So the managed
+ * branch is only safe when a credential travels in the environment.
+ *
+ * `ANTHROPIC_AUTH_TOKEN` is included because `doctor` already recognises it as a credential; it was
+ * missing from the original disjunct, leaving those operators silently on the contaminated branch.
+ *
+ * `COWORK_MANAGED_CONFIG=0` suppresses ONLY the credential-derived disjuncts — never the explicit `=1`.
+ * It deliberately does NOT revoke the `ANTHROPIC_API_KEY` branch, whose hermeticity is a documented CI
+ * promise (README "the CI path"). An unrecognised value THROWS: with a bare `=== "1"` test,
+ * `COWORK_MANAGED_CONFIG=false` would fall through and silently select MANAGED — the opposite of intent.
+ */
+export function managedConfigMode(env: NodeJS.ProcessEnv): boolean {
+  const raw = process.env.COWORK_MANAGED_CONFIG;
+  if (raw !== undefined && raw !== "" && raw !== "0" && raw !== "1")
+    throw new Error(
+      `COWORK_MANAGED_CONFIG must be "0" or "1" (got ${JSON.stringify(raw)}) — an unrecognized value would silently pick a branch`,
+    );
+  if (raw === "1") return true;
+  if (!!env.ANTHROPIC_API_KEY) return true; // documented CI path; `=0` does not revoke it
+  if (raw === "0") return false;
+  return !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN);
+}
+
+/** realpath when the path exists, else the path itself — a config dir that does not exist yet is still
+ *  comparable by spelling, and a symlinked HOME (macOS /tmp, /var) must not read as a different dir. */
+function realpathIfPossible(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 /**
@@ -98,7 +155,7 @@ export function spawnProtocol(
   // Scrub the inheritance-asymmetric operator keys, then overlay the agent_env knob — see buildProtocolEnv.
   const env: NodeJS.ProcessEnv = buildProtocolEnv(plan);
   const settingsFile = join(plan.configDir, "settings.json");
-  const useManagedConfig = !!env.ANTHROPIC_API_KEY || process.env.COWORK_MANAGED_CONFIG === "1";
+  const useManagedConfig = managedConfigMode(env);
   const discoveryArgs: string[] = [];
   if (useManagedConfig) {
     env.CLAUDE_CONFIG_DIR = plan.configDir;
@@ -125,24 +182,40 @@ export function spawnProtocol(
     "--effort",
     plan.effort ?? baseline.spawn?.effortDefault ?? "medium",
     ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
+    // Plugin roots, rooted at the tree THIS function staged (`workReal`) — never re-derived by a caller.
+    // Shared derivation with container/hostloop/microvm; see pluginDirArgs.
+    ...pluginDirArgs(plan, workReal),
     // Thread the rendered system prompt append into L0, matching container/microvm/host-loop.
     // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
     // records can carry Cowork framing instead of running with no system prompt extension at all.
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
   ];
 
-  // Make the L0 divergence LOUD when the session declares plugins — L0 neither
-  // applies the Cowork auth-env drop nor passes --plugin-dir, so plugin fidelity is not what
-  // a cowork tier would give. Mirrors the L0 "network tool ran at L0" warning in execute.ts.
-  // this also sets l0PluginDivergence=true so execute.ts can surface a FAILING fidelity
-  // signal in the RunResult — a warn-only was insufficient since the run could still appear green.
-  let l0PluginDivergence = false;
-  if (plan.pluginDirs.length > 0) {
-    l0PluginDivergence = true;
+  // The L0 divergence is no longer about DELIVERY — --plugin-dir is passed above, so a declared plugin
+  // or skill dir now reaches the agent. What remains is CONTAMINATION: off the managed branch the agent
+  // reads the operator's real config dir, so their installed plugins, skills, auto-memory and MCP servers
+  // are all live alongside the thing under test.
+  //
+  // This stays a FAIL signal (via computeVerdict), not a warn. Nothing else catches it: scanHostInventory
+  // is reachable only from the cassette RECORD path and never reaches the verdict, host_path_leak's
+  // default-fail is deliberately skipped at this tier, and a host plugin's own `plugins[]` entry exempts
+  // its namespaced skills from the record-time inventory scan.
+  //
+  // `useManagedConfig` is NOT the same as "sealed": a pinned `plugins.config_dir` pointing at the real
+  // config dir reaches host discovery with that boolean TRUE. So test the dir the agent will actually
+  // read, not the branch that chose it.
+  const operatorConfigDir = realpathIfPossible(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"));
+  const agentConfigDir = realpathIfPossible(
+    useManagedConfig ? plan.configDir : (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")),
+  );
+  const l0PluginDivergence = agentConfigDir === operatorConfigDir;
+  if (l0PluginDivergence) {
     warn(
-      `::warning:: ${scenario.name}: L0 (protocol) does not apply the Cowork auth-env drop or --plugin-dir; ` +
-        `${plan.pluginDirs.length} plugin dir(s) load via --settings/managed config, not the --plugin-dir cache layout — ` +
-        `use container/microvm for auth+plugin fidelity.\n`,
+      `::warning:: ${scenario.name}: L0 (protocol) is reading your REAL config dir (${agentConfigDir}), so your ` +
+        `installed plugins, skills, auto-memory and MCP servers are visible to the agent and may answer INSTEAD of ` +
+        `the plugin/skill under test. Set COWORK_MANAGED_CONFIG=1 AND provide a token ` +
+        `(echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env) — the flag alone yields "Not logged in" — ` +
+        `or run 'cowork-harness doctor'. Use container/microvm for full isolation.\n`,
     );
   }
 

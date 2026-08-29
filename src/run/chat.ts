@@ -3,7 +3,7 @@ import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { mkdirSync, existsSync, readdirSync, writeFileSync } from "node:fs";
-import { writeTextAtomic } from "../io.js";
+import { writeTextAtomic, warn } from "../io.js";
 import type { InfraErrorSource } from "../types.js";
 import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
@@ -29,6 +29,7 @@ import { Chain, ScriptedDecider, PermissionDefaultDecider, PromptDecider } from 
 import { readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
+import { checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
@@ -88,6 +89,7 @@ const CHAT_OPTIONS = [
   { flag: "--upload", kind: "value", usage: "[--upload <file>]..." },
   { flag: "--folder", kind: "value", usage: "[--folder <dir>]..." },
   { flag: "--plugin", kind: "value", usage: "[--plugin <dir>]..." },
+  { flag: "--allow-host-hooks", kind: "bool", usage: "[--allow-host-hooks]" },
   { flag: "--allow-host-writes", kind: "boolean", usage: "[--allow-host-writes]" },
 ] as const;
 
@@ -124,6 +126,7 @@ export async function cmdChat(args: string[]) {
   let model: string | undefined = process.env.COWORK_HARNESS_MODEL;
   let verbose = false;
   let allowHostWrites = false;
+  let allowHostHooks = false;
   const uploads: string[] = [];
   const folders: Array<{ from: string; mode: "rw" }> = [];
   const localPlugins: string[] = [];
@@ -158,6 +161,9 @@ export async function cmdChat(args: string[]) {
     else if (a === "--allow-host-writes") {
       allowHostWrites = true;
       seenFlags.add("--allow-host-writes");
+    } else if (a === "--allow-host-hooks") {
+      allowHostHooks = true;
+      seenFlags.add("--allow-host-hooks");
     } else if (a === "--fidelity") {
       const v = ++i < args.length ? args[i] : undefined; // bounds check
       if (v === undefined || !(CHAT_FIDELITY_TIERS as readonly string[]).includes(v)) {
@@ -234,6 +240,13 @@ export async function cmdChat(args: string[]) {
   // opts in with --allow-host-writes (chat sessions are ad-hoc, not committed YAML, so there's no
   // scenario field to set — this is the CLI-flag equivalent).
   if (fidelity === "hostloop") checkHostLoopWriteConsent(session, allowHostWrites);
+  // protocol passes --plugin-dir, so a staged plugin's hooks run as native host processes. `chat` has no
+  // YAML to carry consent, so --allow-host-hooks is the only spelling here (mirrors --allow-host-writes).
+  if (fidelity === "protocol") {
+    const hookRoots = [folder, ...localPlugins];
+    checkHostHookConsent(hookRoots, allowHostHooks);
+    logHostHookNotice(hookRoots, warn);
+  }
   const baseline = loadBaseline("latest");
   const sessionId = `local_${process.hrtime.bigint().toString(36)}`;
   const outDir = join(runsWriteRoot(), "chat", sessionId);

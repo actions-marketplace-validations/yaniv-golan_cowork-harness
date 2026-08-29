@@ -62,6 +62,9 @@ requires_capabilities: [pdf_tables]       # OPTIONAL — capability families the
 
 allow_host_writes: true                  # OPTIONAL — required consent to run `hostloop` with a WRITABLE
                                          # connected folder (session `folders:` mode rw/rwd) — and so ALSO
+allow_host_hooks: true                   # OPTIONAL — required consent to run `protocol` when a staged plugin
+                                         # declares runnable hooks (`<plugin>/hooks/hooks.json`); the CLI runs
+                                         # them as NATIVE HOST processes, no container sandbox
                                          # for `fidelity: cowork` whenever the baseline's gate resolves it
                                          # to hostloop, which is what the shipped baselines do: the native
                                          # agent process gets genuine host filesystem access there, gated
@@ -818,7 +821,7 @@ Two consequences for CI:
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities` and `allow_host_writes` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes` and `allow_host_hooks` — every field the schema defines — are
 all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.
 

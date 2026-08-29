@@ -755,7 +755,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
+      "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
     ),
   allow_missing_capability: z
     .literal(true)
@@ -967,6 +967,16 @@ export const ScenarioObject = z.strictObject({
     .optional()
     .describe(
       "required consent for `fidelity: hostloop` with a writable connected folder (mode rw/rwd) — the agent gets real, software-checked-only host filesystem access there, no container sandbox; read-only/folder-less hostloop runs need no opt-in",
+    ),
+  // `protocol` passes --plugin-dir, so the CLI executes a staged plugin's hooks as NATIVE HOST processes.
+  // Gated only when a staged plugin actually declares runnable hooks (see checkHostHookConsent) — an
+  // ordinary skill-under-test declares none and needs no opt-in. Top-level like allow_host_writes, NOT a
+  // verdict modifier: it gates the SPAWN, it does not suppress a signal.
+  allow_host_hooks: z
+    .boolean()
+    .optional()
+    .describe(
+      "required consent for `fidelity: protocol` when a staged plugin declares runnable hooks (`<plugin>/hooks/hooks.json`) — the CLI runs them as native host processes under your account with no container sandbox; plugins without hooks need no opt-in",
     ),
 });
 /** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key
@@ -1752,8 +1762,11 @@ export interface RunResult {
    *  display cap) for cassettes recorded before this field was added. */
   toolResults?: { toolUseId?: string; isError: boolean; text: string; assertText?: string }[];
   /** true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
-   *  --plugin-dir (the Cowork cache layout). computeVerdict fails on this unless allow_l0_plugin_divergence
-   *  is asserted — a warn-only was insufficient since the run could still appear green. */
+   *  the operator's REAL config dir, so their installed plugins/skills/auto-memory/MCP servers were visible
+   *  to the agent and may have answered instead of the thing under test. computeVerdict fails on this unless
+   *  allow_l0_plugin_divergence is asserted — a warn-only was insufficient since the run could still appear
+   *  green. (Pre-`--plugin-dir` this field meant "plugins were not delivered at L0"; delivery is fixed, the
+   *  contamination is what remains.) */
   l0PluginDivergence?: boolean;
   /** Capability families the agent image OMITS but the skill was observed USING (live lane only; the
    *  intersection of the image's probed `omitted` set and capability-usage detected in events.jsonl).

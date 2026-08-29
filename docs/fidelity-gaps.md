@@ -174,6 +174,10 @@ fails, Desktop refuses to start the session rather than launching with unenforce
 **What the harness does:** nothing. Plugins are staged with `--plugin-dir` and the CLI reads each plugin's
 own declaration, so a plugin under test gets **working** MCP servers with their real tools.
 
+**Tier note:** this applies at `protocol` as well — L0 passes `--plugin-dir`, so a plugin's declared MCP
+servers are opened there too. Whether the harness should model production's stubbing is an open question,
+deliberately kept separate from plugin delivery.
+
 **Why this is not inherited by running the real binary.** The rewriting is Desktop's, upstream of the spawn
 — unlike, say, bundled-skill registration, which the agent decides for itself from `CLAUDE_CODE_ENTRYPOINT`
 and therefore behaves identically here. Anything Desktop computes and hands over is absent unless the
@@ -729,6 +733,14 @@ failures were the served-set parity guards, which is precisely their job — reg
 The table above is what **Desktop** installs. A plugin's *own* hooks reach the agent by a different
 route — the `--plugin-dir` argv — and the agent binary loads and executes them itself. The harness
 neither serves nor blocks that path.
+
+> **`protocol` is in this list too, and it is the sharpest case.** L0 passes `--plugin-dir` and runs the
+> agent natively, so a staged plugin's hooks execute as **native host processes** — the operator's account,
+> the operator's environment, no container sandbox. `protocol` therefore refuses to spawn when a staged
+> plugin declares runnable hooks unless the scenario sets `allow_host_hooks: true` (or `--allow-host-hooks`
+> for `chat`/`skill`/`critique`); a plugin without hooks needs no opt-in, and a misplaced root-level
+> `hooks.json` cannot execute so it does not trigger the gate. At `container`/`microvm` the same hooks run
+> inside the sandbox; at `hostloop` they run on the host under that tier's own consent gate.
 
 **Live-verified 2026-08-01, both tiers.** A fixture plugin declaring `SessionStart`, `UserPromptSubmit`
 and `PostToolUse` had **all three fire** at `container` *and* at `hostloop` (each hook appended a sentinel;

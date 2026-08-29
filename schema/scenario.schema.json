@@ -709,7 +709,7 @@
             }
           },
           "allow_l0_plugin_divergence": {
-            "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs with plugins that load via --settings/managed config instead of --plugin-dir — for tests that deliberately test at L0 with plugins",
+            "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
             "type": "boolean",
             "const": true
           },
@@ -839,6 +839,10 @@
     },
     "allow_host_writes": {
       "description": "required consent for `fidelity: hostloop` with a writable connected folder (mode rw/rwd) — the agent gets real, software-checked-only host filesystem access there, no container sandbox; read-only/folder-less hostloop runs need no opt-in",
+      "type": "boolean"
+    },
+    "allow_host_hooks": {
+      "description": "required consent for `fidelity: protocol` when a staged plugin declares runnable hooks (`<plugin>/hooks/hooks.json`) — the CLI runs them as native host processes under your account with no container sandbox; plugins without hooks need no opt-in",
       "type": "boolean"
     }
   },

@@ -8,6 +8,39 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`protocol` (L0) now passes `--plugin-dir`, so a declared plugin or skill dir is actually delivered.**
+  It previously passed no `--plugin-dir` and `local_plugins` never reached the generated `settings.json`,
+  so **the positional argument was silently inert**: `cowork-harness chat <dir> --fidelity protocol` (and
+  the `skill` / `probe-dispatch` equivalents) measured whatever the operator had installed rather than the
+  tree they passed. Live-verified: a bare skill dir and a plugin root both register at L0 now, with their
+  skills and their declared agents. Expect scenarios that previously passed *vacuously* — asserting against
+  an agent that never had the plugin — to start failing honestly.
+
+- **A plugin's hooks and MCP servers now run at `protocol`, and hooks require consent.** Loading a plugin
+  means the CLI executes its `<plugin>/hooks/hooks.json` as **native host processes** — the operator's
+  account and environment, no container sandbox — and opens its declared MCP servers. `protocol` therefore
+  refuses to spawn when a staged plugin declares runnable hooks unless the scenario sets
+  `allow_host_hooks: true` (or `--allow-host-hooks` for `chat`/`skill`/`critique`); a plugin without hooks
+  needs no opt-in, and a misplaced root-level `hooks.json` (which cannot execute) does not trigger it. A
+  per-run disclosure is printed even when consent was given. Mirrors the existing `allow_host_writes` gate.
+
+- **`protocol` takes the managed config dir when any credential is in the environment.**
+  `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN` now select it alongside `ANTHROPIC_API_KEY`, and the
+  token is injected into the agent's env (a managed config dir with no credential yields "Not logged in").
+  This severs host plugin/skill/MCP discovery — verified: a token-only L0 run delivered the plugin under
+  test and **zero** host plugins. `COWORK_MANAGED_CONFIG=0` suppresses only the token-derived branch,
+  never the `ANTHROPIC_API_KEY` CI path; an unrecognized value is now rejected rather than silently
+  selecting the managed branch (`COWORK_MANAGED_CONFIG=false` previously did).
+
+- **`l0_plugin_divergence` now reports contamination rather than the `--plugin-dir` layout.** Delivery is
+  fixed, so the signal fires when L0 runs against the operator's **real** config dir, and it tests the dir
+  the agent will actually read — a pinned `plugins.config_dir` reaches host discovery with the managed
+  branch nominally active. It stays a hard fail: nothing else catches this (the host-inventory scan runs
+  only at cassette-record time, and `host_path_leak`'s default-fail is skipped at this tier).
+
+- **`workflow-authoring` added to the built-in skill roster** (`KNOWN_BUILTIN_SKILLS`), measured against a
+  sealed `protocol` run rather than a contaminated one.
+
 - **Platform baseline `desktop-1.40609.0` (agent `2.1.247`).** The Cowork system prompt, both sub-agent
   appends, the egress allowlist, `spawn.env`, `tools[]`/`allowedTools` and `mountLayout` are all re-derived
   unchanged. The one `sync` delta was a pure refactor: W2's `CLAUDE_CODE_ENTRYPOINT` deployment ternary is

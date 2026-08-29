@@ -431,6 +431,7 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
+  allow_host_hooks: () => 0,
 };
 
 /** The minimum cassette format version a reader needs to correctly interpret this scenario — what gets

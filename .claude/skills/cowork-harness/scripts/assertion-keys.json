@@ -83,6 +83,7 @@
     "vm_path_denied"
   ],
   "topLevelKeys": [
+    "allow_host_hooks",
     "allow_host_writes",
     "answers",
     "assert",

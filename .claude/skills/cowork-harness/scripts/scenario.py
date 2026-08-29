@@ -262,7 +262,8 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "assert",
     "skills",  # opt-in skill-staleness hash scope
     "requires_capabilities",  # Fix 4b: scenario-level required-capability declaration (pre-flight gate)
-    "allow_host_writes",  # hostloop native-split: consent for a writable connected folder (pre-run gate)
+    "allow_host_writes",
+    "allow_host_hooks",  # protocol consent: a staged plugin's hooks run as NATIVE HOST processes  # hostloop native-split: consent for a writable connected folder (pre-run gate)
 }
 
 
