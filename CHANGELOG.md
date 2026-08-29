@@ -8,16 +8,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
-- **`permissive_auto_allow` and script-running skills is a `protocol`-specific hazard, not a general
-  one.** `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow), but the harness only
-  decides how to ANSWER a permission ask — whether the agent ASKS varies by command AND tier. Measured:
-  at `protocol`, `echo hello` produces no ask (green) while `python3 -c "print(42)"` produces one and
-  fails the guard; the identical command at `container` produces no ask (green), and `hostloop` routes
-  shell through `mcp__workspace__bash` entirely. So a skill running `python3 ${CLAUDE_SKILL_DIR}/…` goes
-  red at L0 and green on the sandboxed tiers, while a hello-world probe is green everywhere and teaches
-  the wrong expectation. `references/fidelity-and-answers.md` carries the measured table and the three
-  ways through; why the host CLI asks for one command and not another is explicitly left untraced.
-
+- **`permissive_auto_allow` and script-running skills is a `protocol`-specific hazard, not a general one.**
+  `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow), but the harness only decides how to
+  ANSWER a permission ask — whether the agent ASKS varies by command AND tier. Measured: at `protocol`, `echo
+  hello` produces no ask (green) while `python3 -c "print(42)"` produces one and fails the guard; the
+  identical command at `container` produces no ask (green), and `hostloop` routes shell through
+  `mcp__workspace__bash` entirely. So a skill running `python3 ${CLAUDE_SKILL_DIR}/scripts/…` goes red at L0
+  and green on the sandboxed tiers, while a hello-world probe is green everywhere and teaches the wrong
+  expectation. `references/fidelity-and-answers.md` carries the measured table and the three ways through; why
+  the host CLI asks for one command and not another is explicitly left untraced, and `microvm` is named as
+  unmeasured.
 
 ## [3.0.0] — 2026-08-29
 
