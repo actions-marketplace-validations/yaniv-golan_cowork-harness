@@ -155,35 +155,38 @@ hands `fn` exactly this dict.
 - `agent` is **retired** — `on_unanswered: agent` is rejected by the schema. The enum is
   `["fail", "prompt", "llm", "first"]`.
 
-### A script-running skill trips `permissive_auto_allow` unless you script the gate
+### A script-running skill trips `permissive_auto_allow` — at `protocol` specifically
 
 The default `permission_parity: cowork` auto-allows an unscripted, off-registry tool ask — and records
 it, because real Cowork would have BLOCKED for the user. `computeVerdict` then FAILS the run: a green
 carrying one would not be a faithful pass. Only `Read`, `Glob` and `Grep` are default-allow; **`Bash` is
 off-registry**.
 
-The part that surprises people is that it depends on the COMMAND, not just the tool. Measured at
-`protocol`, same scenario shape, same session, only the command differing:
+Two things decide whether you ever see it, and neither is obvious. The harness only decides how to
+ANSWER a permission ask; whether the agent ASKS is the agent binary's own logic, and that varies by
+both the command and the tier. All rows below are measured, same scenario shape, same session:
 
-| Bash command | `can_use_tool` ask | verdict |
-|---|---|---|
-| `echo hello` | none | ✓ green |
-| `python3 -c "print(42)"` | one | ✗ `permissive_auto_allow` |
+| Tier | Bash command | tool used | ask | verdict |
+|---|---|---|---|---|
+| `protocol` | `echo hello` | `Bash` | none | ✓ green |
+| `protocol` | `python3 -c "print(42)"` | `Bash` | **one** | ✗ `permissive_auto_allow` |
+| `container` | `python3 -c "print(42)"` | `Bash` | none | ✓ green |
+| `hostloop` | `python3 -c "print(42)"` | `mcp__workspace__bash` | none | ✓ green |
 
-The agent's own permission logic decides whether to ask; the harness only decides how to answer. So a
-hello-world probe stays green and teaches the wrong expectation, while **a skill that runs its bundled
-scripts** (`python3 ${CLAUDE_SKILL_DIR}/scripts/…`) asks every time and goes red on a run that was
-otherwise correct. That is close to the common case, not an edge case.
+So the guard is **not** a general hazard for script-running skills — it is a `protocol` one. The host
+CLI that L0 spawns asks for a command like `python3 -c …` and not for `echo`; the staged agent at
+`container` asks for neither, and `hostloop` routes shell through `mcp__workspace__bash` and so is not
+even the same tool. A skill that runs `python3 ${CLAUDE_SKILL_DIR}/scripts/…` therefore goes red at
+`protocol` on an otherwise-correct run, while the same skill is green on the sandboxed tiers — and a
+hello-world probe is green everywhere and teaches the wrong expectation.
 
 Three ways through, in preference order: script the gate (`--answer` / `answers:`), which is what the
 warning tells you and keeps the run deterministic; set `permission_parity: strict` to deny instead of
 allow, if refusal is what you want to test; or assert `allow_permissive_auto_allow: true` when the
 permissive behaviour is deliberately what the scenario is about.
 
-> **Scope, stated honestly.** The two rows above are measured at `protocol`. The decider is built once
-> from the session's `permission_parity` (`execute.ts`), not per tier, so the ANSWER is tier-independent
-> by construction — but whether the agent ASKS is the agent binary's own logic, and that was not
-> re-measured at `container`/`microvm`/`hostloop`. Do not assume the table transfers unchanged.
+> **What is NOT established.** Why the host CLI asks for one command and not another was observed, not
+> traced — do not infer a rule for which commands ask from these rows. `microvm` was not measured.
 
 ### Determinism contract
 

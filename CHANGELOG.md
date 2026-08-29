@@ -8,15 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
-- **A skill that runs its bundled scripts trips `permissive_auto_allow`, and it depends on the Bash
-  COMMAND rather than the tool.** `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow),
-  but the agent decides whether to ASK: measured at `protocol`, `echo hello` produces no `can_use_tool`
-  request and goes green, while `python3 -c "print(42)"` produces one and fails the guard. So a
-  hello-world probe teaches the wrong expectation while a real script-bearing skill goes red on an
-  otherwise-correct run. `references/fidelity-and-answers.md` now names the three ways through, in
-  preference order. Scope is stated in the doc: the rows are measured at `protocol`, and while the
-  decider is built once from the session's `permission_parity` rather than per tier, whether the agent
-  asks was not re-measured on the sandboxed tiers.
+- **`permissive_auto_allow` and script-running skills is a `protocol`-specific hazard, not a general
+  one.** `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow), but the harness only
+  decides how to ANSWER a permission ask — whether the agent ASKS varies by command AND tier. Measured:
+  at `protocol`, `echo hello` produces no ask (green) while `python3 -c "print(42)"` produces one and
+  fails the guard; the identical command at `container` produces no ask (green), and `hostloop` routes
+  shell through `mcp__workspace__bash` entirely. So a skill running `python3 ${CLAUDE_SKILL_DIR}/…` goes
+  red at L0 and green on the sandboxed tiers, while a hello-world probe is green everywhere and teaches
+  the wrong expectation. `references/fidelity-and-answers.md` carries the measured table and the three
+  ways through; why the host CLI asks for one command and not another is explicitly left untraced.
 
 
 ## [3.0.0] — 2026-08-29
