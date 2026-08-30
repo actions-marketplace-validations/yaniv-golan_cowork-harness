@@ -235,6 +235,9 @@ a global install has them locally too, not just on GitHub.
 
 | Doc | Read it for |
 |---|---|
+| [docs/cli.md](./docs/cli.md) | **The CLI page** — install, prerequisites per tier, the command table, the two files you author, run output, and the `COWORK_*` knobs. |
+| [docs/companion-skill.md](./docs/companion-skill.md) | **The companion skill** — install and orientation; usage itself lives in the skill's `SKILL.md`. |
+| [docs/ci.md](./docs/ci.md) | **CI** — the token-free gate, the packaged GitHub Action, the live lane, and what the two version pins mean. |
 | [docs/README.md](./docs/README.md) | The docs index — a one-line map of every guide below. |
 | [docs/boundary.md](./docs/boundary.md) | The limitations model — sealed FS, default-deny egress, MCP-only crossing; how each tier enforces it; how to verify. |
 | [docs/session.md](./docs/session.md) | Every `sessions/*.yaml` field and its Cowork mapping. |

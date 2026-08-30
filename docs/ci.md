@@ -1,3 +1,8 @@
+<!-- extraction note: if this page becomes a standalone Action repo README, fix:
+     ../.github/… → ./.github/…, repo-relative doc links (./cli.md, ./maintenance.md) → absolute
+     https://github.com/yaniv-golan/cowork-harness/blob/main/… URLs, and drop the CONTRIBUTING.md
+     pointer (this repo's own CI is not that repo's concern). action.yml is already an absolute URL. -->
+
 # CI / the packaged GitHub Action
 
 Run the harness in CI: the token-free gate you can copy into any skill repo, the packaged GitHub
@@ -47,6 +52,7 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
     command: replay              # replay | lint | lint-skill | analyze-skill | verify-cassettes | run
     path: cassettes/my-skill.cassette.json
     version: "^3"                # hold the CLI major; the input defaults to `latest`
+    summary: true                # already the default — shown so the CI self-test twin matches verbatim
 ```
 
 | Lane | Commands | Runner requirements | What you get |
@@ -84,4 +90,25 @@ Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/tu
 CI uses `ANTHROPIC_API_KEY` specifically because there's no interactive browser available to run
 `claude setup-token`'s OAuth flow in a GitHub Actions runner; locally, the OAuth token is preferred because
 it mirrors what Desktop itself uses (no separate API-billing setup).
+
+## Versioning: two independent pins
+
+A CI job that uses this Action pins **two different things**, and confusing them is the usual source of
+"why did my pipeline change when I didn't touch it".
+
+| Pin | What it selects | Recommended |
+|---|---|---|
+| the `uses:` ref — `@v3` | which **Action** runs (this repo's composite action + its reporter) | `@v3` — a floating major alias, moved to each release, so you get fixes without editing your workflow |
+| the `version:` input | which **CLI** the Action installs from npm | `"^3"` — holds the major. The input's own default is `latest`, which takes a new CLI major the moment it is promoted, even though your `uses:` ref never changed |
+
+`@v3.0` exists too (floating minor), and an exact `@v3.0.0` is the maximally reproducible choice. The
+same spectrum applies to `version:`: `"^3"` for fixes, an exact `"3.0.0"` for byte-reproducible CI.
+
+> **The Marketplace install box says something different, and both are correct.** GitHub's Marketplace
+> listing renders its own auto-generated snippet pinned to the latest *exact release tag* (e.g.
+> `@v3.0.0`), shown beside this page's `@v3` guidance. They are not in conflict — they are two points on
+> the same pinning spectrum. `@v3` auto-adopts patch and minor fixes and is right for most consumers;
+> the exact tag never moves and is right for security-sensitive or audit-bound pipelines.
+
+The Action's inputs and outputs are a semver-covered surface — see [SPEC.md](https://github.com/yaniv-golan/cowork-harness/blob/main/SPEC.md) §12.
 
