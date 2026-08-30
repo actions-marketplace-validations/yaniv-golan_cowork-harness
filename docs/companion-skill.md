@@ -54,5 +54,5 @@ ones that still need a source checkout. (The marketplace
 skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
 assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
 above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@^3.0.0"` — see
-[above](#drive-it-from-claude-code-companion-skill) — which pulls the same npm package as the global-install row.)
+[above](#install) — which pulls the same npm package as the global-install row.)
 

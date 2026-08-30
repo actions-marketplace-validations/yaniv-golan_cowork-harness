@@ -6,8 +6,8 @@
 
 [![ci](https://github.com/yaniv-golan/cowork-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/yaniv-golan/cowork-harness/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![node: >=22](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](#quick-start)
-[![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-F97316)](#drive-it-from-claude-code-companion-skill)
+[![node: >=22](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](./docs/cli.md#quick-start)
+[![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-F97316)](./docs/companion-skill.md)
 [![Built with Skill Creator Plus](https://img.shields.io/badge/Built_with-Skill_Creator_Plus-4ecdc4)](https://github.com/yaniv-golan/skill-creator-plus)
 [![Agent Skills compatible](https://img.shields.io/badge/Agent_Skills-compatible-4A90D9)](https://agentskills.io)
 
@@ -20,22 +20,20 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 
 And because every run is recorded, you get the thing a transcript can't give you: **evidence of what the agent actually did, not what it said it did** — which skill was invoked (if any), which files a sub-agent really read, which hosts it reached, which options a person was really shown. See [Why not just `claude -p` or the Agent SDK?](#why-not-just-claude--p-or-the-agent-sdk).
 
-**Getting started:** [Why it works](#why-this-works-for-skill-testing) · [Why not `claude -p`/the SDK?](#why-not-just-claude--p-or-the-agent-sdk) · [Quick start](#quick-start) · [Test a local skill](#test-a-local-skill-in-one-command) · [Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job) · [Commands at a glance](#commands-at-a-glance)
 
-**Reference:** [Session + scenario](#two-files-session--scenario) · [Sandboxing](#sandboxing-container-vs-the-real-vm) · [Discovery](#discovery-marketplaces-plugins-skills-mcp) · [What you get out](#what-you-get-out-inspectable-output) · [Architecture](#architecture) · [Testing & CI/CD](#testing--cicd) · [Maintenance](#maintenance-parity-between-releases) · [Limitations](#limitations) · [For AI agents](#for-ai-agents) · [Docs](#documentation) · [Versioning](#versioning) · [Status](#status)
 
 **Debugging a run?** → [docs/debugging.md](./docs/debugging.md) — a separate page, not a section below.
 
-> **Requirements at a glance** (a summary — full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below)
+> **Requirements at a glance** (a summary — full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) below)
 > - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
-> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below.
+> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) below.
 > - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
 > - **Live tiers** need three things:
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
 >   - **A Claude token** — real per-run cost, runs take minutes; mint one with `claude setup-token` (needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`).
 >   - **A runtime** — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`.
 >   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `cowork-harness doctor --tier <t>` to check exactly what a given tier needs.
-> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](#prerequisites-for-anything-above-protocol-fidelity) below.
+> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) below.
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 
@@ -53,7 +51,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 (Installing globally — `npm install -g cowork-harness` — gives you the `cowork-harness` CLI for your own
 scenarios and cassettes; the bundled example above also replays from a global install — see the `$(npm root -g)` path below.)
 
-Full setup → [Quick start](#quick-start).
+Full setup → [Quick start](./docs/cli.md#quick-start).
 
 ---
 
@@ -80,7 +78,7 @@ A skill's behavior under Cowork is determined by four things, all reproducible o
 | **Egress** | gVisor (a userspace network stack) with a compiled domain allowlist (`vmAllowedDomains()` + `coworkEgressAllowedHosts`) | Default-deny egress proxy enforcing the **pinned** allowlist | **Med-High** — domain-exact against a reconstructed list, transport-approximate |
 | **Permissions / questions** | `onToolPermissionRequest` → `respondToToolPermission`; AskUserQuestion answered by the UI | The **Agent SDK `can_use_tool` control protocol** — the exact same channel — answered by your scenario script | **High** — same protocol Desktop uses |
 
-The permission/question protocol is the backbone, and it's the *most stable* surface — it's the documented Agent SDK control protocol (`can_use_tool`, `hook_callback`, `mcp_message`, …). Everything fragile (agent version, mount paths, allowlist contents) is pushed into a **versioned baseline** that you re-sync per release. See [Maintenance](#maintenance-parity-between-releases).
+The permission/question protocol is the backbone, and it's the *most stable* surface — it's the documented Agent SDK control protocol (`can_use_tool`, `hook_callback`, `mcp_message`, …). Everything fragile (agent version, mount paths, allowlist contents) is pushed into a **versioned baseline** that you re-sync per release. See [Maintenance](./docs/maintenance.md).
 
 > **Design principle: fail loud, never silently wrong.** An unscripted question, a stale cassette, an unadded skill file, a missing capability — every one of these is a hard error or a loud warning, never a silent pass. Where you see "fails loud" or "no silent false-greens" elsewhere in this doc, it's this same principle applied to one specific mechanism.
 
@@ -95,7 +93,7 @@ Both are excellent, and if you're building an *agent* you should use them. This 
 | **The real Cowork agent, in cowork mode** | `claude -p` runs the CLI on your `PATH`. Cowork runs the *staged* `claude-code-vm/<ver>/claude` under `CLAUDE_CODE_IS_COWORK=1`, which changes the system prompt, the tool registry, and the permission flow. The harness runs that binary. See [Why this works](#why-this-works-for-skill-testing). |
 | **A test of the real router, not your reimplementation of it** | Whether your skill triggers is a decision the agent makes when it sees your `description` alongside every other skill. The harness populates a real `CLAUDE_CONFIG_DIR` + the Cowork plugin mounts and lets the binary do the choosing — so `skill_triggered` / `no_skill_triggered` is a genuine check on a description edit. Drive the loop yourself and you're testing your own dispatcher. See [discovery.md](./docs/discovery.md). |
 | **Real plugin loading** | Staging delivers the **git-tracked** file set, modelling an install from a repo that sees only committed files. So a plugin that fails to load — a bad manifest, an unadded file — shows up the way it will in production: the skill simply isn't in `context.availableSkills`. An SDK harness hands the model a prompt and never exercises loading at all, so that whole class of bug is invisible to it. |
-| **Derived evidence, not a raw event stream** | `--output-format stream-json` gives you `tool_use` events. It does not give you `skillActivity` (which skill was active when a tool fired), `skillsInvoked`, `subagents[].referencesRead` (which files each sub-agent actually read), `presentedFiles`, `ablated`, or `gateProvenance` — those are computed. `context.availableSkills` isn't in the stream at all: it's read off each staged skill's `SKILL.md` frontmatter, so you can compare *what was offered* against *what was used*. See [What you get out](#what-you-get-out-inspectable-output). |
+| **Derived evidence, not a raw event stream** | `--output-format stream-json` gives you `tool_use` events. It does not give you `skillActivity` (which skill was active when a tool fired), `skillsInvoked`, `subagents[].referencesRead` (which files each sub-agent actually read), `presentedFiles`, `ablated`, or `gateProvenance` — those are computed. `context.availableSkills` isn't in the stream at all: it's read off each staged skill's `SKILL.md` frontmatter, so you can compare *what was offered* against *what was used*. See [What you get out](./docs/cli.md#what-you-get-out-inspectable-output). |
 | **The limitations, not just the behaviour** | Sealed filesystem, default-deny egress, MCP-only crossing. A pass here can't be riding on your laptop's network access or a file the sandbox would never have had — and `egress_denied` / `transcript_no_host_path` let you assert that directly. See [boundary.md](./docs/boundary.md). |
 
 Two more that matter in practice:
@@ -154,7 +152,7 @@ L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ
 
 Note: `cowork` above is one value of `fidelity:`. Two other `cowork`-named settings are unrelated —
 `permission_parity: cowork` (a session setting for how unscripted tool calls are treated; see
-[Two files: session + scenario](#two-files-session--scenario)) and "cowork mode" (the
+[Two files: session + scenario](./docs/cli.md#two-files-session--scenario)) and "cowork mode" (the
 `CLAUDE_CODE_IS_COWORK=1` env flag every live tier passes to the agent binary, regardless of which
 fidelity tier you picked).
 
@@ -222,7 +220,7 @@ These are documented per-tier in [DESIGN.md](./DESIGN.md) so a green test means 
 This repo is built to be driven by agents, not just read by humans:
 
 - **[AGENTS.md](./AGENTS.md)** — the canonical agent-instructions file (architecture seams, the build gate, invariants, ethos). Read it before changing code. Also indexed in **[llms.txt](./llms.txt)**.
-- **Companion skill** — [`.claude/skills/cowork-harness/`](./.claude/skills/cowork-harness/SKILL.md) teaches an agent to drive the harness; install it via the marketplace (see [above](#drive-it-from-claude-code-companion-skill)).
+- **Companion skill** — [`.claude/skills/cowork-harness/`](./.claude/skills/cowork-harness/SKILL.md) teaches an agent to drive the harness; install it via the marketplace (see [above](./docs/companion-skill.md)).
 - **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`/`3`, with a couple of documented per-command exceptions — see [SPEC.md](./SPEC.md) for the full table), and `--help` on every command.
 - **JSON Schemas** — [`schema/scenario.schema.json`](./schema/scenario.schema.json) and [`schema/session.schema.json`](./schema/session.schema.json) describe every field of the YAML you author (generated from the source schemas; `npm run schema`). [`schema/protocol.v1.json`](./schema/protocol.v1.json) (hand-authored) schemas the harness's own control-channel wire protocol, with a golden vector pack at [`fixtures/protocol/v1/`](./fixtures/protocol/v1/) — see [docs/protocol.md](./docs/protocol.md). [`schema/critique-report.json`](./schema/critique-report.json) describes `critique`'s JSON report / `critique-report.json` artifact for automation consumers (budget pacers, harvesters) — **descriptive, not §12-frozen** while critique is EXPERIMENTAL (see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 

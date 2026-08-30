@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, relative } from "node:path";
 
 // C1b: repo-docs anchor integrity.
 //
@@ -168,5 +168,47 @@ describe("docs' sibling-doc anchors resolve to real headings in the target doc",
       broken,
       broken.map((r) => `${r.file.replace(resolve(".") + "/", "")}: ${r.raw} — #${r.slug} has no matching heading`).join("\n"),
     ).toEqual([]);
+  });
+});
+
+/**
+ * SAME-PAGE anchors (`](#slug)`) across every tracked markdown page.
+ *
+ * The two suites above validate links pointing INTO README and INTO a sibling doc. Neither looks at a
+ * page's links to its OWN headings — and that is the gap the router split fell straight through: moving
+ * 11 `##` sections out of README left 19 `](#…)` links in README pointing at headings that no longer
+ * existed, plus three more in AGENTS.md, docs/ci.md and docs/companion-skill.md. Every file-path link
+ * still resolved, every existing guard stayed green, and GitHub fails these silently — the page just
+ * does not scroll. Two independent reviewers found it by hand; nothing in CI could.
+ *
+ * Deliberately broader than `repoDocFiles()`: a root page (AGENTS.md, CONTRIBUTING.md) carries these
+ * links too, and one of the three stragglers lived in AGENTS.md.
+ */
+function allMarkdownPages(): string[] {
+  const roots = ["README.md", "AGENTS.md", "CONTRIBUTING.md", "SPEC.md", "DESIGN.md", "RELEASING.md", "SECURITY.md"]
+    .map((f) => resolve(f))
+    .filter((f) => existsSync(f));
+  return [...roots, ...repoDocFiles()];
+}
+
+describe("same-page (#slug) anchors resolve to a heading on that same page", () => {
+  const dangling = allMarkdownPages().flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    const own = new Set(extractHeadings(text).map(githubSlug));
+    // `](#slug)` only — a link with any path before the `#` is another suite's job.
+    return [...text.matchAll(/\]\(#([^)\s]+)\)/g)]
+      .map((m) => ({ file: relative(resolve("."), file), slug: m[1], raw: m[0] }))
+      .filter((r) => !own.has(r.slug));
+  });
+
+  it("every ](#slug) link points at a heading in its own file", () => {
+    const msg = dangling.map((d) => `${d.file}: ${d.raw} — #${d.slug} is not a heading in that file`).join("\n");
+    expect(dangling, msg).toEqual([]);
+  });
+
+  // Canary: a checker that extracted nothing would report zero dangling links and pass forever.
+  it("actually found same-page anchors to check (guards against a vacuous pass)", () => {
+    const total = allMarkdownPages().reduce((n, f) => n + [...readFileSync(f, "utf8").matchAll(/\]\(#([^)\s]+)\)/g)].length, 0);
+    expect(total).toBeGreaterThan(0);
   });
 });

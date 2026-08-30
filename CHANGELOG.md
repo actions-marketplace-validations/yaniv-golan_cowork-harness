@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **22 dead anchor links introduced by the README router split, and the guard gap that let them ship.**
+  Moving 11 `##` sections out of README left every `](#slug)` link pointing at them dangling — 19 in
+  README (including two badges and the two nav lines the page opened with), plus one each in `AGENTS.md`,
+  `docs/ci.md` and `docs/companion-skill.md`. GitHub fails these silently: the page simply does not
+  scroll. Every file-path link still resolved and every existing guard stayed green, because the anchor
+  suite validated links *into* README and *into* sibling docs but never a page's links to its **own**
+  headings. `test/repo-docs-anchors.test.ts` now covers that third case across root pages and `docs/`,
+  with a canary against a checker that extracts nothing, and was confirmed to fail against the exact
+  regression that shipped. The two nav lines are deleted rather than repointed — they were a
+  table-of-contents for a 975-line page, and "Pick your path" plus the Documentation table now do that job.
+
+  Found by two independent reviewers; the second caught the three non-README instances a README-scoped
+  fix would have missed.
+
 ### Changed
 
 - **The README is now a router, not the whole manual.** It was 975 lines carrying three unrelated
