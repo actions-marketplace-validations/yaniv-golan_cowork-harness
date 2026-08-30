@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **The pruned-agent-binary failure now has a documented remedy, with the tradeoffs named.** A Desktop
+  update deletes the prior version's staged ELF while often leaving an empty version directory, so a
+  scenario pinning that agent version dies with `baseline agent binary not found`. The code anticipates
+  this by name, but the remedy appeared in no skill surface at all — and an installed companion skill
+  ships without repo `docs/`, so the agent most likely to hit it had nothing to read. Now in
+  `docs/gotchas.md` and the skill's own reference, stating that the three remedies are NOT equivalent:
+  repin for a reproducibility-bound suite, `latest` for a one-off (a pin rots silently, `latest` drifts
+  silently — opposite failure modes), and `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` only to unblock once,
+  never in CI, since it runs the newest sibling and downgrades the sha check to advisory.
+
 ### Changed
 
 - **The README now shows the product, not just the argument for it.** Three independent reviews found

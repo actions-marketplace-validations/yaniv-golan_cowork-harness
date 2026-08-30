@@ -189,6 +189,19 @@ permissive behaviour is deliberately what the scenario is about.
 > **What is NOT established.** Why the host CLI asks for one command and not another was observed, not
 > traced — do not infer a rule for which commands ask from these rows. `microvm` was not measured.
 
+### `baseline agent binary not found` — a Desktop update pruned the pinned ELF
+
+A Desktop update deletes the prior version's staged agent while often leaving an empty version dir, so
+a scenario pinning that agent version resolves to nothing. `doctor` validates the agent for its own
+current baseline, not what each scenario pins, so it can report ready seconds before the run fails.
+
+Prefer **repinning `baseline:` to an installed version** (`cowork-harness list`) for anything
+reproducibility-bound — you keep an exact pin and move it deliberately. `baseline: latest` never rots
+but silently drifts, so two runs weeks apart are not comparable; a pin and `latest` have opposite
+failure modes. `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` runs the newest sibling instead of the pinned
+binary and downgrades the sha check to advisory — that is the substitution the hard failure exists to
+prevent, so use it to unblock once, never in CI.
+
 ### Determinism contract
 
 - `fail` — the default for `run`. On an unscripted gate it hard-errors; the error names the exact

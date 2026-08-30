@@ -4,6 +4,22 @@
 
 ## Setup & environment
 
+- **`baseline agent binary not found` — a Desktop update pruned the ELF your scenario pins.** A Desktop
+  update deletes the previous version's staged payload while often leaving an EMPTY version directory
+  behind, so a `baseline:` pinning that agent version now resolves to nothing. `doctor` does not catch
+  this: it validates the agent for its OWN current baseline, not the one each scenario pins, so it can
+  print `✓ ready for container` seconds before the run dies. Three remedies, and they are NOT
+  equivalent:
+  - **Repin `baseline:` to a version you actually have** (`cowork-harness list`). Correct for a
+    reproducibility-bound suite — you keep an exact pin, you just move it deliberately and can say which
+    agent the run used.
+  - **`baseline: latest`.** Correct for a one-off capture or an inner loop. It never rots, but it drifts:
+    the run silently follows whatever Desktop last staged, so two runs a month apart are not comparable.
+    A hard pin and `latest` have OPPOSITE failure modes — a pin rots silently, `latest` drifts silently.
+  - **`COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.** Last resort. It runs the newest sibling binary instead
+    of the pinned one, which is exactly the substitution the hard failure exists to prevent, and the sha
+    check downgrades to advisory. Use it to get unblocked once, never in CI, and never when the answer
+    depends on which agent version ran.
 - **`lint` exits 127.** `python3` isn't on `PATH`. Install it or point `PYTHON` at an interpreter.
 - **A local skill folder mounts empty.** Untracked files are invisible to the mount — `git add` the skill
   first (see [README → Test a local skill in one command](./cli.md#test-a-local-skill-in-one-command)).
