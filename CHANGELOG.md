@@ -6,17 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Documentation
-
-- **The pruned-agent-binary failure now has a documented remedy, with the tradeoffs named.** A Desktop
-  update deletes the prior version's staged ELF while often leaving an empty version directory, so a
-  scenario pinning that agent version dies with `baseline agent binary not found`. The code anticipates
-  this by name, but the remedy appeared in no skill surface at all — and an installed companion skill
-  ships without repo `docs/`, so the agent most likely to hit it had nothing to read. Now in
-  `docs/gotchas.md` and the skill's own reference, stating that the three remedies are NOT equivalent:
-  repin for a reproducibility-bound suite, `latest` for a one-off (a pin rots silently, `latest` drifts
-  silently — opposite failure modes), and `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` only to unblock once,
-  never in CI, since it runs the newest sibling and downgrades the sha check to advisory.
+## [3.0.1] — 2026-08-30
 
 ### Changed
 
@@ -33,7 +23,29 @@ All notable changes to this project are documented here. The format is based on
   can fail before trusting it. The requirements block moves below the `claude -p` argument — three
   reviewers independently reported reading install prerequisites before any reason to want them.
 
+- **The README is now a router, not the whole manual.** It was 975 lines carrying three unrelated
+  audiences at once; it is now **282** and branches to per-audience pages: **`docs/cli.md`** (install,
+  prerequisites, commands, the two files, run output, env knobs), **`docs/companion-skill.md`** (install
+  + orientation; usage stays in `SKILL.md`), and **`docs/ci.md`** (the token-free gate, the packaged
+  Action, the live lane — written to stand alone). The harness's own pipeline and contributor suite moved
+  to `CONTRIBUTING.md`, which keeps `docs/ci.md` about *consuming* the Action rather than about this repo.
+  README keeps what all three audiences share: the fidelity-tier vocabulary, architecture, limitations,
+  the docs index, and versioning. Content moved verbatim — this is a relocation, not a rewrite.
+
+  Nothing is dropped: `Sandboxing` folded into `docs/boundary.md` and `Maintenance` into
+  `docs/maintenance.md`; `Discovery` was already covered in `docs/discovery.md`, so it was deleted rather
+  than duplicated. Every moved relative link was rewritten for its new depth, and every deep link into a
+  moved section was repointed across `docs/`, `examples/README.md`, `llms.txt` and the docs index.
+
 ### Fixed
+
+- **`bump-version` did not know about the router-split pages.** `docs/cli.md`, `docs/ci.md` and
+  `docs/companion-skill.md` carry `cowork-harness@^X.Y.Z` install floors that `check:versions` enforces,
+  but the bump tool's target list predated them — so `npm run bump` rewrote every other floor and then
+  failed its own post-write lockstep check. Caught at release time by that self-check rather than
+  shipping a repo with mismatched floors. All three are now registered, and the test pinning that list
+  carries the reason.
+
 
 - **22 dead anchor links introduced by the README router split, and the guard gap that let them ship.**
   Moving 11 `##` sections out of README left every `](#slug)` link pointing at them dangling — 19 in
@@ -54,24 +66,6 @@ All notable changes to this project are documented here. The format is based on
   page. Reworded, and guarded: a cross-page link followed closely by "below"/"above" now fails the suite.
   This half is the nastier one — the link works, so every link checker stays green forever.
 
-### Changed
-
-- **The README is now a router, not the whole manual.** It was 975 lines carrying three unrelated
-  audiences at once; it is now **282** and branches to per-audience pages: **`docs/cli.md`** (install,
-  prerequisites, commands, the two files, run output, env knobs), **`docs/companion-skill.md`** (install
-  + orientation; usage stays in `SKILL.md`), and **`docs/ci.md`** (the token-free gate, the packaged
-  Action, the live lane — written to stand alone). The harness's own pipeline and contributor suite moved
-  to `CONTRIBUTING.md`, which keeps `docs/ci.md` about *consuming* the Action rather than about this repo.
-  README keeps what all three audiences share: the fidelity-tier vocabulary, architecture, limitations,
-  the docs index, and versioning. Content moved verbatim — this is a relocation, not a rewrite.
-
-  Nothing is dropped: `Sandboxing` folded into `docs/boundary.md` and `Maintenance` into
-  `docs/maintenance.md`; `Discovery` was already covered in `docs/discovery.md`, so it was deleted rather
-  than duplicated. Every moved relative link was rewritten for its new depth, and every deep link into a
-  moved section was repointed across `docs/`, `examples/README.md`, `llms.txt` and the docs index.
-
-### Fixed
-
 - **The `protocol` host-hook consent gate was defeatable by a spelling choice.** `allow_host_hooks`
   (3.0.0) refuses a spawn until the operator consents to a staged plugin's hooks running as native host
   processes — but detection keyed only on a file named `hooks.json`, and a plugin may equally declare its
@@ -89,6 +83,16 @@ All notable changes to this project are documented here. The format is based on
   declaration, including one recorded at `container`.
 
 ### Documentation
+
+- **The pruned-agent-binary failure now has a documented remedy, with the tradeoffs named.** A Desktop
+  update deletes the prior version's staged ELF while often leaving an empty version directory, so a
+  scenario pinning that agent version dies with `baseline agent binary not found`. The code anticipates
+  this by name, but the remedy appeared in no skill surface at all — and an installed companion skill
+  ships without repo `docs/`, so the agent most likely to hit it had nothing to read. Now in
+  `docs/gotchas.md` and the skill's own reference, stating that the three remedies are NOT equivalent:
+  repin for a reproducibility-bound suite, `latest` for a one-off (a pin rots silently, `latest` drifts
+  silently — opposite failure modes), and `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` only to unblock once,
+  never in CI, since it runs the newest sibling and downgrades the sha check to advisory.
 
 - **`permissive_auto_allow` and script-running skills is a `protocol`-specific hazard, not a general one.**
   `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow), but the harness only decides how to

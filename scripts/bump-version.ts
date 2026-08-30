@@ -107,6 +107,11 @@ const CRITIQUE_MD = ".claude/skills/cowork-harness/references/critique.md";
 const PLUGIN_JSON = ".claude/skills/cowork-harness/.claude-plugin/plugin.json";
 const MARKETPLACE_JSON = ".claude-plugin/marketplace.json";
 const REPLAYS_README = "examples/replays/README.md";
+// Router-split pages (docs/cli.md, docs/companion-skill.md, docs/ci.md) carry install floors too.
+// Missing one fails `check:versions` at bump time, which is exactly how docs/companion-skill.md was caught.
+const COMPANION_SKILL_MD = "docs/companion-skill.md";
+const CLI_MD = "docs/cli.md";
+const CI_MD = "docs/ci.md";
 
 /** Files this script knows how to edit, in the order they're reported. */
 export const TARGET_FILES: readonly string[] = [
@@ -120,6 +125,9 @@ export const TARGET_FILES: readonly string[] = [
   CRITIQUE_MD,
   CI_RECIPE_MD,
   REPLAYS_README,
+  COMPANION_SKILL_MD,
+  CLI_MD,
+  CI_MD,
   "README.md",
 ];
 
@@ -163,7 +171,10 @@ export function rewriteFileContent(relPath: string, content: string, newVersion:
     case REPLAYS_README:
       return bumpHarnessFloors(content, newVersion);
 
-    case "README.md": {
+    case "README.md":
+    case COMPANION_SKILL_MD:
+    case CLI_MD:
+    case CI_MD: {
       let next = content;
       next = bumpHarnessFloors(next, newVersion);
       next = bumpBareFloors(next, newVersion);
