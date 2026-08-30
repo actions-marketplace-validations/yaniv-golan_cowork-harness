@@ -160,8 +160,14 @@ The model declined the skill and answered from its own knowledge. The guidance b
 correct and simply never consulted — so the run was measuring the model, not the skill. No transcript
 of the *answer* would have shown that, because the answer was fine.
 
-That is the general shape of what this is for: not "did the output look right", but "did the thing I
-am shipping actually run, under the constraints it will meet in production".
+They widened the skill's description in response, re-ran the same probe, and it now invokes — then
+pinned the fix with a scenario so it cannot regress silently. **That is the loop this is for:** find a
+failure the output hides, fix it, and verify with the same instrument that found it. The snapshot
+above is a moment, not a standing bug — reproduce it today against that skill and it passes, which is
+the point.
+
+That is the general shape: not "did the output look right", but "did the thing I am shipping actually
+run, under the constraints it will meet in production".
 
 > **Requirements at a glance** (a summary — full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page)
 > - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).

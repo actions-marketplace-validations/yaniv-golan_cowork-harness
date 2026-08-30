@@ -14,7 +14,9 @@ All notable changes to this project are documented here. The format is based on
   answers, assertions) with its verdict output — the scenario is extracted and linted in place, so it is
   a real file rather than plausible-looking YAML — plus a "What that catches" section built from an
   actual run where a named skill was offered, declined, and the green answer looked fine anyway
-  (`skillsInvoked: []`, `toolCounts: {}`). Also names two things the docs asserted but never taught:
+  (`skillsInvoked: []`, `toolCounts: {}`) — framed as a closed loop, since the author fixed and re-verified
+  it with the same instrument roughly ninety minutes later. An outcome example is a claim about a MOMENT;
+  the better the tool works the faster its own examples get fixed out from under it, so it needs a tense. Also names two things the docs asserted but never taught:
   diffing the same scenario across two fidelity tiers as a discovery technique, and proving an assertion
   can fail before trusting it. The requirements block moves below the `claude -p` argument — three
   reviewers independently reported reading install prerequisites before any reason to want them.
