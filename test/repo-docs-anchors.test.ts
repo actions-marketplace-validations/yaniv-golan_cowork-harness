@@ -212,3 +212,36 @@ describe("same-page (#slug) anchors resolve to a heading on that same page", () 
     expect(total).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Prose that asserts a SPATIAL relationship ("below", "above") next to a CROSS-PAGE link.
+ *
+ * A sibling of the dangling-anchor class, and the nastier half: these links RESOLVE, so every link
+ * checker stays green while the sentence lies. The router split produced three — "full detail in
+ * [Prerequisites](./docs/cli.md#…) below" — where Prerequisites had moved to another page and "below"
+ * silently became false.
+ *
+ * Scoped to links carrying a PATH (`](./…md#…)`), never same-page `](#…)` links: on another page,
+ * "below"/"above" cannot be true, whereas on the same page it usually is. That is what keeps this from
+ * false-positiving on legitimate in-page phrasing.
+ */
+describe("cross-page links don't claim a same-page position", () => {
+  const SPATIAL = /\]\(\.[^)\s]*\.md#[^)\s]*\)[^.]{0,40}\b(below|above)\b/g;
+
+  const offenders = allMarkdownPages().flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    return [...text.matchAll(SPATIAL)].map((m) => ({
+      file: relative(resolve("."), file),
+      snippet: m[0].replace(/\s+/g, " ").slice(0, 120),
+    }));
+  });
+
+  it("no `](./other.md#x) … below/above` — the target is on another page", () => {
+    const msg = offenders.map((o) => `${o.file}: ${o.snippet}`).join("\n");
+    expect(offenders, msg).toEqual([]);
+  });
+
+  it("the pattern actually matches when the defect is present (guards against a dead regex)", () => {
+    expect("see [x](./docs/cli.md#y) below".match(SPATIAL)).not.toBeNull();
+  });
+});

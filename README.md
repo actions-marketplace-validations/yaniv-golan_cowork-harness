@@ -20,20 +20,18 @@ Scriptable, CI-friendly test harness that reproduces **Claude Cowork's observabl
 
 And because every run is recorded, you get the thing a transcript can't give you: **evidence of what the agent actually did, not what it said it did** — which skill was invoked (if any), which files a sub-agent really read, which hosts it reached, which options a person was really shown. See [Why not just `claude -p` or the Agent SDK?](#why-not-just-claude--p-or-the-agent-sdk).
 
-
-
 **Debugging a run?** → [docs/debugging.md](./docs/debugging.md) — a separate page, not a section below.
 
-> **Requirements at a glance** (a summary — full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) below)
+> **Requirements at a glance** (a summary — full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page)
 > - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
-> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) below.
+> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
 > - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
 > - **Live tiers** need three things:
 >   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
 >   - **A Claude token** — real per-run cost, runs take minutes; mint one with `claude setup-token` (needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`).
 >   - **A runtime** — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`.
 >   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `cowork-harness doctor --tier <t>` to check exactly what a given tier needs.
-> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) below.
+> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 

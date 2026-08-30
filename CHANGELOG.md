@@ -22,6 +22,11 @@ All notable changes to this project are documented here. The format is based on
   Found by two independent reviewers; the second caught the three non-README instances a README-scoped
   fix would have missed.
 
+  Follow-up from the same review: three cross-page links still read "…\[Prerequisites](./docs/cli.md#…)
+  **below**" — resolving correctly while the sentence lied, because Prerequisites had moved to another
+  page. Reworded, and guarded: a cross-page link followed closely by "below"/"above" now fails the suite.
+  This half is the nastier one — the link works, so every link checker stays green forever.
+
 ### Changed
 
 - **The README is now a router, not the whole manual.** It was 975 lines carrying three unrelated
