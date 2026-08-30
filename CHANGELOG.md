@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The pre-coverage cassette note was a paragraph repeated per file.** It fires on every cassette
+  recorded before `model` joined the session shape — for a consumer with a dozen, a dozen identical
+  paragraphs burying the findings that are genuinely per-file. Cut to one line (370 chars to 157), matching
+  the prompt-assets note beside it; the reasoning stays in `docs/fidelity-gaps.md`. Notes are deliberately
+  **not** aggregated in `verify-cassettes` — it is a per-file audit, and collapsing them would destroy the
+  attribution — so length was the part to fix. The note has always been non-failing: a pre-coverage
+  cassette stays clean, and `replay --strict` exits 0.
 - **The unpinned-model warning told `run` users the flag lived on other lanes.** It named the `skill`,
   `probe-dispatch` and `chat` lanes for a flag `run` and `record` now accept — caught by running it, not
   by reading it.

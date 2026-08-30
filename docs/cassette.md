@@ -875,6 +875,13 @@ for the `cowork` → `hostloop`/`container` resolution.
   ("`prompt-assets:` cassette predates prompt-asset fingerprinting"), not a finding. Notes are emitted at
   `::notice::` and, on a directory replay, collapsed to one summary line per note kind.
 
+- **`session-fingerprint: predates \`model\` coverage …`** — the same non-failing shape one bullet up, for
+  the session shape rather than the prompt assets. A cassette recorded before `model` joined the hashed
+  session shape carries a hash that says nothing about the pinned model, so a model change since record is
+  undetectable on it — while everything the hash *does* cover still matches. It stays **clean** (exit 0);
+  re-record only if you want that coverage. The reason it matters is that the agent selects part of its
+  system prompt by model capability — see [fidelity-gaps.md](./fidelity-gaps.md#model-selection--the-harness-inherits-the-local-cli-default).
+
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /
 `Thumbs.db` / `desktop.ini`) is always excluded, so a Finder touch never re-stales a cassette. Opt out of git

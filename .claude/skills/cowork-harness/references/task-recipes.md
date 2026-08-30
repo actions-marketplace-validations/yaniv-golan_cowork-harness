@@ -46,6 +46,11 @@ what production would do. Two layers of defense:
   statically knowable and only produce a non-failing informational note.
 - **Manual (one-liner):** `grep -h '"effectiveFidelity"' cassettes/*.cassette.json | sort | uniq -c`
   shows the tier distribution of the fleet at a glance.
+- **Do NOT re-record for a `[note]` alone.** A `·`/`[note]` row is informational and the run still exits
+  **0** — `session-fingerprint: predates \`model\` coverage` and `prompt-assets: cassette predates …` both
+  mean "this cassette was recorded before that field existed, and everything the hash *does* cover still
+  matches". Re-recording buys the new coverage and nothing else, so on a fleet of heavy cassettes it is a
+  real bill for no verdict change. Re-record when a `✗` says to (baseline moved, skill drift, tier moved).
 
 ### Cassette anatomy (what you're looking at when you open one)
 
