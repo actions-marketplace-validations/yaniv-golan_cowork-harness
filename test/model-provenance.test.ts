@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { loadBaseline } from "../src/baseline.js";
 import { loadSession, buildLaunchPlan, applySessionOverrides } from "../src/session.js";
@@ -363,4 +362,62 @@ describe("SPEC CB-2 — an empty --model value never reaches a run", () => {
       expect(out).not.toMatch(/running…/);
     });
   }
+});
+
+/** The `model_fallback` chain, end to end through the REAL CLI — the only way it can be exercised.
+ *
+ *  **Why synthetic and not live:** none of the six triggers can be provoked on demand. Measured
+ *  2026-08-30 against a real agent: `--model <nonexistent>` does NOT fall back — the binary validates at
+ *  startup and refuses the turn ("There's an issue with the selected model … It may not exist or you may
+ *  not have access to it"), exiting with `resultErrorKind: "agent"` for $0.0000. So `model_not_found` is
+ *  pre-empted before a turn exists. `overloaded`/`server_error` are transient, and
+ *  `permission_denied`/`model_blocked` need an entitlement-restricted model. The agent-emits half is
+ *  therefore unexerciseable by choice; the harness half — every line of code this repo owns — is fully
+ *  exerciseable by injecting the frame the agent would have sent, which is what this does.
+ *
+ *  Injecting into a real cassette and replaying covers the whole path (parseMessage → Run → record →
+ *  assembleRunResult → verdict) rather than the unit seams the tests above cover individually. */
+describe("model_fallback surfaces through a real replay", () => {
+  const FIXTURE = resolve("examples/replays/example-multiselect-gate.cassette.json");
+
+  const replayWithFallback = (frame: Record<string, unknown>) => {
+    const cassette = JSON.parse(readFileSync(FIXTURE, "utf8"));
+    // After the init frame, so it lands mid-stream the way a real one would.
+    cassette.events.splice(1, 0, JSON.stringify(frame));
+    const dir = mkdtempSync(join(tmpdir(), "cwh-fb-"));
+    const path = join(dir, "fb.cassette.json");
+    writeFileSync(path, JSON.stringify(cassette));
+    const r = spawnSync("npx", ["tsx", "src/cli.ts", "replay", path], { encoding: "utf8", cwd: resolve(".") });
+    return `${r.stdout}${r.stderr}`;
+  };
+
+  it("a persistent trigger reaches the verdict as a warn signal, naming both models", () => {
+    const out = replayWithFallback({
+      type: "system",
+      subtype: "model_fallback",
+      trigger: "model_not_found",
+      original_model: "claude-opus-5",
+      fallback_model: "claude-sonnet-5",
+    });
+    expect(out).toMatch(/model_fallback:/);
+    expect(out).toMatch(/fell back off claude-opus-5 to claude-sonnet-5/);
+    expect(out).toMatch(/trigger: model_not_found/);
+    // Persistent triggers must say so — that is the half that tells a reader whether to act.
+    expect(out).toMatch(/persistent rather than transient/);
+    // A warn never flips the verdict.
+    expect(out).toMatch(/✓ success/);
+  });
+
+  it("a transient trigger says a re-run may hold", () => {
+    const out = replayWithFallback({ type: "system", subtype: "model_fallback", trigger: "overloaded" });
+    expect(out).toMatch(/trigger: overloaded/);
+    expect(out).toMatch(/transient — a re-run may well hold/);
+  });
+
+  it("on replay — which pins nothing — it never claims a pinned model exists", () => {
+    // Replay resolves no model by design, so the "change the pinned id" advice would name nothing.
+    const out = replayWithFallback({ type: "system", subtype: "model_fallback", trigger: "model_not_found" });
+    expect(out).not.toMatch(/until the pinned id is changed/);
+    expect(out).toMatch(/nor any model the scenario names/);
+  });
 });
