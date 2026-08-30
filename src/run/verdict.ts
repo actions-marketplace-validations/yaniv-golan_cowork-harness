@@ -13,6 +13,7 @@ export interface VerdictSignal {
     | "mount_delete"
     | "host_path_leak"
     | "non_deterministic"
+    | "model_fallback"
     | "l0_host_config_contamination"
     | "missing_capability"
     | "infra_error"
@@ -525,6 +526,34 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           "necessarily measure it. Set COWORK_MANAGED_CONFIG=1 with a token in the environment, use container/microvm, " +
           "or assert allow_l0_host_config_contamination: true to opt in.",
       });
+  }
+
+  // The agent did not run the model the scenario asked for. Reported from the SDK's own
+  // `system`/`model_fallback` event, so the TRIGGER is the binary's word, not our inference — that is what
+  // separates a retired/blocked pin (the scenario is wrong, and every future run is wrong the same way)
+  // from a transient overload (this run only). Both are warnings: the run still happened and its
+  // assertions still mean something, but the model that produced it is not the one on record.
+  for (const f of result.modelFallbacks ?? []) {
+    const persistent = f.trigger === "model_not_found" || f.trigger === "model_blocked" || f.trigger === "permission_denied";
+    // Whether a PIN existed changes what this event means, so the sentence has to know. On an unpinned run
+    // — and on every replay, which resolves no model by design — there is no pinned id to change, and
+    // telling the reader to change one names a thing that does not exist.
+    const pinned = result.modelSource === "user_setting";
+    signals.push({
+      code: "model_fallback",
+      severity: "warn",
+      message:
+        `the agent fell back off ${f.originalModel ?? "the requested model"} to ` +
+        `${f.fallbackModel ?? "another model"} (trigger: ${f.trigger}) — ` +
+        (pinned
+          ? "this run did NOT use the pinned model. "
+          : "this run used neither the model it started on nor any model the scenario names. ") +
+        (persistent
+          ? pinned
+            ? "This trigger is a property of the pin, not of the moment: every run of this scenario falls back the same way until the pinned id is changed."
+            : "This trigger is persistent rather than transient, so a re-run falls back the same way; pin `model:` to make the model a stated fact."
+          : "This trigger is transient — a re-run may well hold."),
+    });
   }
 
   if (result.nonDeterministic)

@@ -17,13 +17,13 @@ import { checkFingerprintFieldClaims, fingerprintShapeKeys } from "../scripts/ch
  * rather than left to look covered.
  */
 
-const KEYS = ["agent_env", "egress", "folders", "mcp", "plugins", "projects", "skills", "web_fetch"];
+const KEYS = ["agent_env", "egress", "folders", "mcp", "model", "plugins", "projects", "skills", "web_fetch"];
 const site = (text: string, path = "docs/x.md") => [{ path, text }];
 
 describe("fingerprintShapeKeys — parse-or-error, never parse-and-pass", () => {
   const src = readFileSync(join(process.cwd(), "src/run/cassette.ts"), "utf8");
 
-  it("extracts all 8 keys, literal and spread, from the real source", () => {
+  it("extracts all 9 keys, literal and spread, from the real source", () => {
     const { keys, error } = fingerprintShapeKeys(src);
     expect(error).toBeUndefined();
     expect(keys).toEqual(KEYS);
@@ -50,7 +50,7 @@ describe("checkFingerprintFieldClaims", () => {
       corpus: site("| `sessionFingerprint` | hash of the session's content-relevant SHAPE (folders/projects/plugins/skills/mcp/egress). |"),
     });
     expect(errs).toHaveLength(1);
-    expect(errs[0]).toMatch(/omits `agent_env`, `web_fetch`/);
+    expect(errs[0]).toMatch(/omits `agent_env`, `model`, `web_fetch`/);
   });
 
   it("M0b: rejects the historical prose that also omitted `skills`", () => {
@@ -61,14 +61,14 @@ describe("checkFingerprintFieldClaims", () => {
       ),
     });
     // The shipped prose said `MCP`, not `mcp` — strict case matching is why that counts as missing.
-    expect(errs[0]).toMatch(/omits `agent_env`, `mcp`, `plugins`, `skills`, `web_fetch`/);
+    expect(errs[0]).toMatch(/omits `agent_env`, `mcp`, `model`, `plugins`, `skills`, `web_fetch`/);
   });
 
   it("accepts a complete enumeration", () => {
     const errs = checkFingerprintFieldClaims({
       keys: KEYS,
       corpus: site(
-        "`sessionFingerprint`: SHAPE hash of folders, plugins, skills, mcp, egress, web_fetch, plus projects and agent_env when set.",
+        "`sessionFingerprint`: SHAPE hash of folders, plugins, skills, mcp, model, egress, web_fetch, plus projects and agent_env when set.",
       ),
     });
     expect(errs).toEqual([]);
@@ -82,13 +82,13 @@ describe("checkFingerprintFieldClaims", () => {
     });
     expect(errs).toHaveLength(1);
     expect(errs[0]).toContain("docs/only-me.md:1");
-    expect(errs[0]).toMatch(/omits `web_fetch`/);
+    expect(errs[0]).toMatch(/omits `model`, `web_fetch`/);
   });
 
   // M2 — a NEW key in the shape must invalidate every previously-complete site. Uses a 9th key rather
   // than removing one, because that is the direction the shape actually grows.
   it("M2: a 9th key in the shape fails a site that was complete without it", () => {
-    const complete = "`sessionFingerprint`: folders, plugins, skills, mcp, egress, web_fetch, projects, agent_env.";
+    const complete = "`sessionFingerprint`: folders, plugins, skills, mcp, model, egress, web_fetch, projects, agent_env.";
     expect(checkFingerprintFieldClaims({ keys: KEYS, corpus: site(complete) })).toEqual([]);
     const errs = checkFingerprintFieldClaims({ keys: [...KEYS, "sandbox_net"], corpus: site(complete) });
     expect(errs[0]).toMatch(/omits `sandbox_net`/);
@@ -125,7 +125,7 @@ describe("checkFingerprintFieldClaims", () => {
     ].join("\n");
     const errs = checkFingerprintFieldClaims({ keys: KEYS, corpus: [{ path: "schema/cassette.v12.json", text: json }] });
     expect(errs).toHaveLength(1);
-    expect(errs[0]).toMatch(/omits `agent_env`, `projects`, `web_fetch`/);
+    expect(errs[0]).toMatch(/omits `agent_env`, `model`, `projects`, `web_fetch`/);
   });
 
   it("reports one error per claim when a JSON key sits above its own description", () => {
@@ -187,7 +187,7 @@ describe("checkFingerprintFieldClaims", () => {
   it("does not catch a deleted conditional qualifier (documented limitation)", () => {
     const errs = checkFingerprintFieldClaims({
       keys: KEYS,
-      corpus: site("`sessionFingerprint`: folders, plugins, skills, mcp, egress, web_fetch, projects, agent_env."),
+      corpus: site("`sessionFingerprint`: folders, plugins, skills, mcp, model, egress, web_fetch, projects, agent_env."),
     });
     expect(errs).toEqual([]);
   });

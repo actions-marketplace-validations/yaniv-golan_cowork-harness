@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { unpinnedModelWarning } from "./model-provenance.js";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -260,6 +261,9 @@ export async function cmdChat(args: string[]) {
   // keeps ONE turn-start ritual instead of two.
   const turnNumber = beginTurn(outDir);
   const plan = buildLaunchPlan(session, baseline, outDir, fidelity, false); // chat has no resume concept
+  // Chat warns on the same condition but in its own words: an interactive session makes no
+  // reproducibility claim, so the consequence differs even though the missing input is identical.
+  if (plan.model === undefined) warn(unpinnedModelWarning("chat") + "\n");
   // mounts.json (see vm-path-ctx-file.ts's header): mirror execute.ts's unconditional write.
   // Chat's `fidelity` is fixed at CLI-parse time (no "cowork" gate resolution here, unlike execute.ts's
   // effectiveFidelity), so it IS the effective tier this session actually runs at. Best-effort; never
@@ -545,6 +549,7 @@ export async function cmdChat(args: string[]) {
       prompt: seedPrompt ?? "",
       fidelity,
       baseline: baseline.appVersion,
+      pinnedModel: session.model,
       outDir,
       workRoot,
       userVisibleRoots: userVisibleRootsFromPlan(plan),

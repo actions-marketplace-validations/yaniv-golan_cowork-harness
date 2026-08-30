@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { deriveModelProvenance, noModelProvenance } from "./model-provenance.js";
 import { warn, writeAllSync, tildeify } from "../io.js";
 import {
   readFileSync,
@@ -28,6 +29,7 @@ import {
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
   FIDELITY_TIERS,
+  isLiveModelId,
 } from "../types.js";
 import { executeScenario, assertContradiction, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
 import { UsageError } from "../errors.js";
@@ -158,18 +160,34 @@ export function buildEnvironmentProvenance(
   tier: string | undefined,
   agentBinaryFormat: string | undefined,
   agentImage?: AgentImageProvenance,
+  /** The model this recording actually ran, and where it came from. Recorded because a cassette freezes
+   *  a run whose model may have been the RECORDING MACHINE's default rather than anything the scenario
+   *  states — `modelSource: "unresolved"` says exactly that, and is the difference between "this cassette
+   *  was recorded on opus-5 by choice" and "on whatever that laptop happened to pick". */
+  model?: { id?: string; source?: string },
 ): {
   location: "local";
   tier?: string;
   agentBinaryFormat?: string;
   harnessVersion: string;
   agentImage?: AgentImageProvenance;
+  model?: { id?: string; source?: string };
 } {
   // Spread rather than `agentImage,`: a non-container tier ran no image, and an explicit
   // `agentImage: undefined` would both dirty every protocol cassette and break the schema's
   // "absence is meaningful" contract, which readers rely on to tell "no image" from "field predates
   // this harness". Pinned by a `"agentImage" in …` assertion, not a toEqual.
-  return { location: "local", tier, agentBinaryFormat, harnessVersion: pkgVersion(), ...(agentImage ? { agentImage } : {}) };
+  // `model` is spread on the same "absence is meaningful" terms as `agentImage` above: a cassette
+  // recorded before this field carries no `model` key at all, which a reader must be able to tell apart
+  // from a recording that genuinely resolved nothing (that one carries `source: "unresolved"`).
+  return {
+    location: "local",
+    tier,
+    agentBinaryFormat,
+    harnessVersion: pkgVersion(),
+    ...(agentImage ? { agentImage } : {}),
+    ...(model && (model.id !== undefined || model.source !== undefined) ? { model } : {}),
+  };
 }
 
 /** Compare a cassette's recorded image identity against the one about to be replayed. Returns a warning
@@ -336,6 +354,7 @@ export interface Cassette {
     agentBinaryFormat?: string;
     harnessVersion?: string;
     agentImage?: AgentImageProvenance;
+    model?: { id?: string; source?: string };
   };
 }
 
@@ -1168,9 +1187,10 @@ export function buildSessionFingerprint(
   sessionPath: string,
   cassetteDir?: string,
   override?: string,
-  /** `omitProjects` reproduces the PRE-`projects` shape. Only `sessionFingerprintDrift` passes it, to tell
-   *  "this recording predates `projects` coverage" apart from "your session changed" — see there. */
-  opts?: { omitProjects?: boolean },
+  /** `omitProjects`/`omitModel` reproduce the shape as it stood BEFORE each field joined it. Only
+   *  `sessionFingerprintDrift` passes them, to tell "this recording predates that coverage" apart from
+   *  "your session changed" — see there. They compose: a pre-`projects` recording is also pre-`model`. */
+  opts?: { omitProjects?: boolean; omitModel?: boolean },
 ): string | undefined {
   if (sessionPath === "(inline)") return undefined;
   // Same resolver as skillSourceDirs: an override that reached only ONE of them would verify skill
@@ -1191,6 +1211,22 @@ export function buildSessionFingerprint(
   }
   const agentEnv = agentEnvOverrides(cfg.agent_env);
   const shape = {
+    // The model the session FILE pins. Part of the hashed shape because it is a real INPUT to the run: the
+    // agent's system prompt selects a "communicating with the user" section by model capability, so
+    // editing `model:` after recording changes what the agent was told, not merely how well it answered.
+    //
+    // SCOPE, precisely: this covers the FILE, not the model that ran. A recording made with `--model`
+    // (or the env default) ran a model this hash does not name, and that is deliberate — verification
+    // recomputes from the same file, so hashing the effective model instead would report every
+    // override-recorded cassette as permanently drifted. What actually ran is recorded separately, in
+    // `environment.model`. Read the two together: this answers "did the session file change?", that one
+    // answers "what model produced this recording?".
+    //
+    // Hashed UNCONDITIONALLY (no non-empty-only hedge like `agent_env`/`projects`): those hedges exist to
+    // keep existing cassettes from moving, and every cassette's hash moves here anyway — `model` is a
+    // long-standing field that most sessions already set, so a conditional would only make the rule
+    // harder to state without saving anyone a re-record.
+    ...(!opts?.omitModel ? { model: cfg.model ?? null } : {}),
     folders: [...cfg.folders].map((f) => ({ from: f.from, mode: f.mode })).sort((a, b) => a.from.localeCompare(b.from)),
     plugins: {
       config_dir: cfg.plugins.config_dir,
@@ -1358,7 +1394,7 @@ export interface ScannableCassette {
   // inventory leak this repo already shipped, so the projection must carry them.
   userVisibleRoots?: string[];
   scenarioSource?: string;
-  environment?: { agentImage?: { ref?: string } };
+  environment?: { agentImage?: { ref?: string }; model?: { id?: string } };
   // `folderPrefixMap[].from` is the RECORD-TIME connected-folder HOST path (`/Users/<name>/...`), persisted
   // by `buildRecordTimeFolderPrefixMap`. It is a path field like `userVisibleRoots`, and it was invisible to
   // both privacy layers: `scanCassette` never read it and `redactCassette` passed it through the `...cassette`
@@ -1490,6 +1526,11 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
   // The digests are content hashes, not user-controlled, so only `ref` is scanned.
   if (cassette.environment?.agentImage?.ref)
     findings.push(...scanText(cassette.environment.agentImage.ref, "metadata:environment.agentImage.ref", allow, FULL));
+  // Same reasoning as `agentImage.ref` immediately above, and the same leak shape: `isLiveModelId` only
+  // rejects `<…>`-wrapped markers, so a Bedrock/Vertex deployment reports a routed id here — an ARN
+  // carrying an ACCOUNT NUMBER — and an unscanned metadata field would carry it into a committed fixture.
+  if (cassette.environment?.model?.id)
+    findings.push(...scanText(cassette.environment.model.id, "metadata:environment.model.id", allow, FULL));
   return findings;
 }
 
@@ -2122,6 +2163,7 @@ function minimalRec(): RunRecord {
     presentFilesCalls: 0,
     webSearches: [],
     infraErrors: [],
+    modelFallbacks: [],
     evidenceErrors: { taskTracking: 0, webSearchParse: 0, presentFilesMalformed: 0 },
   };
 }
@@ -2444,12 +2486,21 @@ export function redactCassette(cassette: Cassette, policy: RedactionPolicy): Cas
     // host must rewrite it here too, or `scanCassette` keeps finding what `redactCassette` cannot fix.
     // The digests are content hashes with no PII and are deliberately left intact — rewriting them would
     // destroy the only identity Task 6's comparison can use.
-    environment: cassette.environment?.agentImage
-      ? {
-          ...cassette.environment,
-          agentImage: { ...cassette.environment.agentImage, ref: redactText(cassette.environment.agentImage.ref, policy) },
-        }
-      : cassette.environment,
+    // `model.id` gets the same treatment for the same reason: it is a verbatim agent-reported id, which on
+    // a Bedrock/Vertex deployment is a routed ARN. Leaving it unredacted would leave `scanCassette`
+    // finding what `redactCassette` cannot fix — the standing invariant between these two.
+    environment:
+      cassette.environment?.agentImage || cassette.environment?.model
+        ? {
+            ...cassette.environment,
+            ...(cassette.environment.agentImage
+              ? { agentImage: { ...cassette.environment.agentImage, ref: redactText(cassette.environment.agentImage.ref, policy) } }
+              : {}),
+            ...(cassette.environment.model?.id !== undefined
+              ? { model: { ...cassette.environment.model, id: redactText(cassette.environment.model.id, policy) } }
+              : {}),
+          }
+        : cassette.environment,
   };
 }
 
@@ -2717,6 +2768,7 @@ export function readCassetteForScan(path: string): { scannable: ScannableCassett
   const fingerprint = obj(o.fingerprint);
   const environment = obj(o.environment);
   const agentImage = environment ? obj(environment.agentImage) : undefined;
+  const envModel = environment ? obj(environment.model) : undefined;
 
   return {
     scannable: {
@@ -2751,7 +2803,17 @@ export function readCassetteForScan(path: string): { scannable: ScannableCassett
         return el === undefined ? [] : [{ from: str(el.from), mount: str(el.mount) }];
       }),
       scenarioSource: str(o.scenarioSource),
-      environment: agentImage === undefined ? undefined : { agentImage: { ref: str(agentImage.ref) } },
+      // This reader REBUILDS `environment` field by field, so anything not named here is dropped before
+      // the privacy scan ever sees it — a scanner reading a field this line forgot would report `0
+      // findings` from an instrument that never received the data. Both sub-objects are carried, and each
+      // is emitted only when present so an absent one stays absent (the "absence is meaningful" contract).
+      environment:
+        agentImage === undefined && envModel === undefined
+          ? undefined
+          : {
+              ...(agentImage === undefined ? {} : { agentImage: { ref: str(agentImage.ref) } }),
+              ...(envModel === undefined ? {} : { model: { id: str(envModel.id) } }),
+            },
       scenario: {
         prompt: str(scenario.prompt),
         fidelity: knownTier(scenario.fidelity),
@@ -2944,6 +3006,10 @@ export function selectStaleCassettes(dir: string): { path: string; staleness: st
 }
 
 interface RecordOpts {
+  /** `--model <id>`: a one-off pin for this recording, overriding the session file's `model:`. A cassette
+   *  freezes whatever model recorded it, so pinning at record time is what makes the recording's model a
+   *  stated fact rather than a property of the recording machine. */
+  modelOverride?: string;
   noRedact: boolean;
   allowFailing: boolean;
   force?: boolean; // --force: overwrite a default-path cassette even if it belongs to a different scenario (slug collision)
@@ -3328,6 +3394,7 @@ export const RECORD_VALUE_FLAGS = [
   "--decider-dir",
   "--intent",
   "--decider-model",
+  "--model",
   "--on-unanswered",
   "--concurrency",
   "--max-budget-usd",
@@ -3418,7 +3485,8 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "       --model <id>: pin the model for this recording, overriding the session's `model:` (env COWORK_HARNESS_MODEL sets a default). A cassette freezes whatever model recorded it, so pinning here is what makes the recording's model a stated fact rather than a property of this machine.\n" +
   "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
   "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse'/'would-warn' notes instead, labelled by verdict kind (a dir target takes no --out, so the destination is a guess), and gates only on the path-independent ones.\n" +
   "       --allow-host-inventory-findings: write a recording the scan DID flag. The separate, louder decision; needed only when the captured inventory is genuinely part of the fixture.\n" +
@@ -3463,6 +3531,9 @@ export async function cmdRecord(args: string[]) {
     maxArtifactBytes = n;
   }
   const noRedact = p.flags["--no-redact"] ?? false;
+  // `--model <id>` — the EXPLICIT flag only. `COWORK_HARNESS_MODEL` is applied in `executeScenario`, and
+  // only when the session declares no `model:` of its own: an env var must not outrank a session file.
+  const modelOverride = p.options["--model"];
   const allowHostInventoryFixture = p.flags["--allow-host-inventory-fixture"] ?? false;
   const allowHostInventoryFindings = p.flags["--allow-host-inventory-findings"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
@@ -3918,6 +3989,7 @@ export async function cmdRecord(args: string[]) {
           // re-record from the on-disk scenario YAML so any edits (e.g. added `skills:`) take effect.
           r = await recordScenarioFile(diskScenario, {
             noRedact,
+            modelOverride,
             allowFailing,
             cassettePath: cp,
             maxArtifactBytes,
@@ -3943,6 +4015,7 @@ export async function cmdRecord(args: string[]) {
             { ...cassette.scenario, session: sessionRef },
             {
               noRedact,
+              modelOverride,
               allowFailing,
               cassettePath: cp,
               maxArtifactBytes,
@@ -4043,6 +4116,7 @@ export async function cmdRecord(args: string[]) {
       try {
         const r = await recordScenarioFile(f, {
           noRedact,
+          modelOverride,
           allowFailing,
           maxArtifactBytes,
           skipRedactionPreflight: true,
@@ -4089,6 +4163,7 @@ export async function cmdRecord(args: string[]) {
     const cassettePath = p.options["--out"];
     const r = await recordScenarioFile(target, {
       noRedact,
+      modelOverride,
       allowFailing,
       force,
       cassettePath,
@@ -4280,6 +4355,7 @@ async function recordScenarioObject(
   // previous opt-less call (executeScenario defaults onUnanswered to scenario.on_unanswered ?? "fail").
   const result = await executeScenario(scenario, {
     command: "record",
+    modelOverride: opts.modelOverride,
     onUnanswered: opts.onUnanswered,
     // record's `onUnanswered` is already explicit-only (`p.options["--on-unanswered"]`, undefined when
     // the flag is absent), unlike run's resolved `policy` — so the same value serves both roles here.
@@ -4498,6 +4574,10 @@ async function recordScenarioObject(
       result.effectiveFidelity === "container" || result.effectiveFidelity === "hostloop"
         ? resolveAgentImageProvenance(resolveContainerRuntime(), resolveAgentImage())
         : undefined,
+      // Stamp from the RESULT, not from the session: `models` is what the agent reported running, which
+      // is the only value that survives a mid-run fallback. Taking the pinned id here would record the
+      // model we ASKED for as though it were the one that answered.
+      { id: (result.models ?? []).filter(isLiveModelId)[0], source: result.modelSource },
     ),
   };
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
@@ -4669,6 +4749,7 @@ function replayErrorResult(file: string): RunResult {
     toolDurations: undefined,
     skillActivity: undefined,
     models: undefined,
+    ...noModelProvenance(),
     thinking: undefined,
     thinkingElided: undefined,
     toolErrors: undefined,
@@ -4874,6 +4955,30 @@ export function sessionFingerprintDrift(
       unverifiable: true,
       note: "session-fingerprint: this cassette was recorded before `projects` was part of the session shape, so its hash covers everything EXCEPT `projects[]` — and everything it does cover matches. A change to a project mount since record time is therefore not detectable here. Re-record to gain that coverage.",
     };
+  // Same reasoning one field later: a recording made BEFORE `model` joined the shape carries a hash that
+  // says nothing about the pinned model. Report UNVERIFIABLE rather than clean — the recorded value cannot
+  // tell "the field was never covered" from "the pin changed since", and the pin is exactly the input
+  // whose silent drift this coverage was added to catch. Both flags are tried, so a recording that
+  // predates BOTH fields still lands here instead of reading as a genuine mismatch.
+  for (const probe of [{ omitModel: true }, { omitProjects: true, omitModel: true }] as const) {
+    const preModel = buildSessionFingerprint(cassette.scenario.session, cassetteDir, sessionOverride, probe);
+    if (preModel !== undefined && preModel === cassette.sessionFingerprint) {
+      // Name the fields the MATCHING probe actually omitted. `model` is hashed unconditionally, so a
+      // genuinely pre-`projects` recording can only match the second probe — reporting just `model` there
+      // would understate what the hash fails to cover and send the reader looking for the wrong change.
+      const missing = "omitProjects" in probe ? "`projects[]` and the pinned model" : "the pinned model";
+      return {
+        drifted: false,
+        unverifiable: true,
+        note:
+          `session-fingerprint: this cassette predates ${missing} being part of the session shape, so its hash ` +
+          `covers everything EXCEPT ${missing} — and everything it does cover matches. The agent selects part of ` +
+          "its system prompt by model capability, so a model change since record time is both undetectable here and " +
+          "capable of changing what the agent was told. Re-record to gain that coverage.",
+      };
+    }
+  }
+
   // Only "name-lookup" (a scenario WAS found, but not at its persisted/expected offset — the SAME
   // low-confidence signal scenarioContentDrift downgrades on) is grounds to distrust this mismatch.
   // "none" means "nothing to compare the layout against" (mirrors scenarioContentDrift's own `!src.path`
@@ -5941,7 +6046,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
-          "session-shape fingerprint differs from the current session file (connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects and agent_env are hashed only when set) — re-record",
+          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects and agent_env are hashed only when set) — re-record",
         );
       if (sfd.note) notes.push(sfd.note);
     }
@@ -7478,6 +7583,11 @@ export async function replayCassette(
       toolDurations: cassette.timeline ? foldToolDurations(cassette.timeline) : undefined,
       skillActivity: cassette.timeline ? foldSkillActivity(cassette.timeline) : undefined,
       models: rec.models.length ? rec.models : undefined,
+      // Replay re-drives FROZEN events and resolves no model of its own, so the pin is genuinely
+      // unverifiable here (passing `undefined` yields modelSource "unresolved" / modelPinHonored
+      // undefined). The recorded `modelFallbacks` are still carried through: those are real facts the
+      // recording captured, and dropping them would lose evidence the cassette actually holds.
+      ...deriveModelProvenance(undefined, rec.models.length ? rec.models : undefined, rec.modelFallbacks),
       thinking: rec.thinking.length ? rec.thinking : undefined,
       thinkingElided: rec.thinkingElided,
       toolErrors: rec.toolErrors,

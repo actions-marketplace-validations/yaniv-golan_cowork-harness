@@ -303,6 +303,59 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 ---
 
+## Model selection — the harness inherits the local CLI default
+
+**Real Cowork behaviour:** every session resolves a model before the agent is spawned, and the choice
+reaches the spawn as session config. The effort selector is indexed by it — each entry in the baseline's
+`spawn.effortByModel` carries its own level set and its own `recommended` value, and the `fable|mythos`
+regex default covers the rest. The model is also more than a quality knob: a capability lookup on the
+resolved model selects which *communicating with the user* section the system prompt renders, so two
+models can be handed materially different instructions about how much to narrate their work. The
+capability map that decides it is delivered with the account, not built into the app.
+
+**Harness behaviour:** `--model` is emitted only when something pins it — a session `model:`, a `--model`
+flag, a matrix `models:` axis, or `COWORK_HARNESS_MODEL`. With nothing pinned the harness passes no model
+flag at all and the agent binary falls back to whatever the local CLI would pick — a function of the
+machine and the account running the test, not of the baseline. `--effort` is not symmetric: it is always
+emitted, resolving to the baseline's synced `spawn.effortDefault`. An unpinned run therefore pins the
+effort and leaves the model it applies to floating.
+
+**Why it isn't defaulted:** there is nothing to default it *to*. Production does not choose a model
+either — where a Cowork session pins none, Desktop forwards the literal sentinel `default` and the agent
+resolves it against the account. A baseline records per-model effort configuration for the models it has
+seen; it records neither the set Cowork offers nor which one a session gets, because the app decides
+neither. Hardcoding a model id would be the harness asserting a fact it cannot re-derive at sync time,
+and it would go stale silently on the first server-side change, which is the failure mode baselines exist
+to prevent. The one divergence this leaves is shape, not outcome: production sends a sentinel the agent
+resolves away, the harness sends nothing and the agent resolves its own default — both end at
+"the account decides", which is why the harness warns rather than inventing a value.
+
+**What this means for a test result:** an unpinned model is not just a quality variable. Because the
+prompt section is model-selected, it moves the *instructions* the agent is given — a scenario that
+asserts on how much the agent narrates, or that runs `semantic_matches` over its prose, can flip between
+two machines running the same harness, the same baseline and the same skill. Cost and latency
+comparisons across runs are unsound for the same reason.
+
+**Pin it.** Set `model:` in the session file (see [session.md](./session.md)) for anything you will
+re-run or compare. Every lane also takes `--model <id>` for a one-off — `run`, `record`, `skill`,
+`probe-dispatch` and `chat` — overriding the session for that invocation, with `COWORK_HARNESS_MODEL` as
+the default and a matrix `models:` axis outranking both. On the ad-hoc `skill` lane there is no session
+file, so the flag is the only way. A run with nothing pinned warns; omitting it is deprecated and becomes
+an error in the next major.
+
+**What a result tells you.** `modelSource` says where the run's model came from — `user_setting` when
+something pinned it, `unresolved` when nothing did. `modelPinHonored` answers whether the pin survived,
+in three states: `true`, `false`, and **absent for unverifiable** (nothing pinned, or no model evidence
+in the run) — absence is not a pass. `modelFallbacks` carries the agent's own `model_fallback` events
+when a turn switched off the requested model, each with the trigger the agent reported; a
+`model_not_found` or `model_blocked` trigger repeats on every run until the pinned id changes, while
+`overloaded` is transient. A cassette additionally records what produced it in `environment.model`, and
+the session fingerprint hashes the session file's `model:`, so editing that file after recording is
+reported as staleness rather than passing silently — the fingerprint covers the *file*, while
+`environment.model` names the model that actually ran, which differ when a recording used `--model`.
+
+---
+
 ## Browser↔webview↔human-interaction boundary (interactive artifacts)
 
 **Real Cowork behaviour:** Desktop can render a self-contained HTML/React artifact in an embedded

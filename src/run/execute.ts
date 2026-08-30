@@ -12,6 +12,7 @@ import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion } from "../types.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
+import { deriveModelProvenance, unpinnedModelWarning, resolvePinnedModel } from "./model-provenance.js";
 // Runtime-only circular import: cassette.ts imports executeScenario from here, and we import buildFingerprint
 // from there. Both bindings are used only inside function bodies (call time), never at module load, so the
 // ESM live-binding cycle is safe. buildFingerprint's deps (skillSourceDirs → parseSessionFile) live here, so
@@ -29,6 +30,7 @@ import {
   deleteDeniedRootsFromPlan,
   pluginSkillRootsFromPlan,
   isConnectedContent,
+  applySessionOverrides,
 } from "../session.js";
 import { spawnProtocol } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
@@ -106,6 +108,11 @@ const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cow
 
 export interface ExecuteOptions {
   session?: ReturnType<typeof loadSession>;
+  /** `--model <id>`: a one-off pin that overrides the session file's `model:`. Applied to whichever
+   *  session this run ends up using, so `run`/`record` gain the flag the `skill`/`chat` lanes already had.
+   *  A caller that passes an explicit `session` with its own model (a matrix cell axis) has already made
+   *  the more specific choice — it resolves the axis before calling, so nothing here can outrank it. */
+  modelOverride?: string;
   /** input policy for unscripted questions/dialogs. Default: scenario.on_unanswered ?? "fail". */
   onUnanswered?: OnUnanswered;
   /** The user's EXPLICIT `--on-unanswered`, or undefined when they passed none — distinct from
@@ -397,7 +404,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Ablation: strip ALL skill/plugin discovery so no skill-under-test mounts — the agent answers the
   // same prompt from its own priors (a deterministic negative control for skill-lift). An empty
   // local_plugins means no mount is attempted, so the empty-mount hard-fail guard never fires.
-  const session = opts.ablateSkill ? ablateSession(loadedSession) : loadedSession;
+  // Precedence, and the reason it is written out rather than collapsed into a `??` chain: an EXPLICIT
+  // `--model` (or matrix axis, already applied into `opts.session`) outranks the session file, because the
+  // author stated it for this invocation. `COWORK_HARNESS_MODEL` is a machine-scoped DEFAULT and must only
+  // fill a gap — letting it outrank a declared `model:` would make the run's model a property of the shell
+  // it was launched from, which is the exact defect this field exists to prevent.
+  const resolvedModel = resolvePinnedModel(opts.modelOverride, loadedSession.model, process.env.COWORK_HARNESS_MODEL || undefined);
+  const withModel =
+    resolvedModel !== undefined && resolvedModel !== loadedSession.model
+      ? applySessionOverrides(loadedSession, { model: resolvedModel })
+      : loadedSession;
+  const session = opts.ablateSkill ? ablateSession(withModel) : withModel;
 
   // Session identity. Without a stable handle: a fresh ephemeral id (current behavior). WITH one
   // (--session-id / resume): a STABLE cwd id + run dir, so the agent's native sessionFile persists and
@@ -597,6 +614,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane);
+  // Ship 1: warn (not fail) on an unpinned model. Placed HERE, at the caller, rather than inside
+  // buildLaunchPlan — that function receives no command identity, so it cannot tell a verdict-bearing
+  // run from an exploratory chat and would have to warn identically for both.
+  if (plan.model === undefined) warn(unpinnedModelWarning("verdict") + "\n");
 
   // Same layer, protocol's own hazard: this tier passes --plugin-dir, so a staged plugin's hooks execute
   // as native host processes. Gate only when a plugin actually declares runnable hooks.
@@ -1225,6 +1246,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         turn,
+        // Without this the salvage lane reported `modelSource: "unresolved"` on a run that WAS pinned —
+        // a positive false statement, and one `CompleteRunResult` cannot catch (it guards the result's
+        // fields, not the assembler's inputs, so the spread satisfied it with a lie).
+        pinnedModel: plan.model,
         ablated: opts.ablateSkill,
         runLabel: opts.runLabel, // run-identity: a salvaged partial is still a labeled generation
         skillCommit: skillCommit(scenario.session, loadedSession),
@@ -1658,6 +1683,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       toolDurations: timelineEvents ? foldToolDurations(timelineEvents) : undefined,
       skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
       models: record.models.length ? record.models : undefined,
+      ...deriveModelProvenance(plan.model, record.models.length ? record.models : undefined, record.modelFallbacks),
       thinking: record.thinking.length ? record.thinking : undefined,
       thinkingElided: record.thinkingElided,
       toolErrors: record.toolErrors,
@@ -2107,6 +2133,9 @@ export function buildPartialResult(args: {
   egress: { host: string; decision: "allow" | "deny" }[];
   durationMs: number;
   unanswered: { message: string; hint?: string };
+  /** The model the scenario/session pinned, if any — threaded in so a salvaged run reports the same model
+   *  provenance a complete one does. Undefined means nothing pinned it (modelSource "unresolved"). */
+  pinnedModel?: string;
   fingerprint?: RunResult["fingerprint"];
   /** Run-identity metadata — threaded from `executeScenario` so a salvaged PARTIAL run is still a labeled,
    *  identifiable generation (same basis as the success path). See RunResult.runLabel/skillCommit. */
@@ -2199,6 +2228,7 @@ export function buildPartialResult(args: {
     toolDurations: timelineEvents ? foldToolDurations(timelineEvents) : undefined,
     skillActivity: timelineEvents ? foldSkillActivity(timelineEvents) : undefined,
     models: record.models.length ? record.models : undefined,
+    ...deriveModelProvenance(args.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks),
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
     toolErrors: record.toolErrors,

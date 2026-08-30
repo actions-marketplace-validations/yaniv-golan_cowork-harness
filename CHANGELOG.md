@@ -6,6 +6,48 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`run --model ""` started a spending run instead of failing.** SPEC §CB-2 requires an empty or
+  whitespace model value to be a usage error, never a silently-propagated empty string. `record` inherits
+  that from the shared flag parser; `run` hand-rolls its own loop (the session-less lanes take `--model`
+  out of the leftovers themselves, so the shared parser cannot consume it) and did not enforce it.
+
+### Added
+
+- **`--model <id>` on `run` and `record`.** The `skill`, `probe-dispatch` and `chat` lanes already had it;
+  the two lanes that produce cassettes and CI verdicts did not, so the only way to pin them was editing the
+  session file. Precedence is explicit: an `--model` flag or a `--matrix` `models:` axis (a per-invocation
+  act) outranks the session's `model:`, while `COWORK_HARNESS_MODEL` only fills a gap — a machine-scoped
+  variable must never silently outrank a model the scenario declares, or the run's model becomes a
+  property of the shell it was launched from.
+- **Model provenance on every run, and a warning when nothing pins the model.** `--model` reaches the
+  agent only when a session declares `model:`, so an unset session inherits whatever the local CLI would
+  pick — and because the agent selects part of its system prompt by model capability, that moves the
+  *instructions* it is given, not just answer quality. `--effort` is not symmetric: it is always emitted
+  from the baseline's `spawn.effortDefault`, so an unset session pinned the effort and left the model it
+  applies to floating. Runs now warn when no model resolves (`chat` in its own words), naming the key and
+  the flag. Omitting it is deprecated and becomes an error in the next major — the same path
+  `Scenario.fidelity` took, and deliberately not a hard fail today: the repo chose deprecation for a
+  default with a larger blast radius, and a harder gate for a lesser field would be incoherent with that.
+- **`RunResult.modelFallbacks`, `modelPinHonored` and `modelSource`.** Fallbacks come from the agent's own
+  `system`/`model_fallback` event rather than a diff of `models[]` — the event names the trigger, which is
+  what separates a retired or blocked pin (every run falls back the same way until the id changes) from a
+  transient overload. A new `model_fallback` warn signal surfaces it in the verdict; it cannot fire on a
+  healthy run, so it adds no volume to a currently-green one. `modelPinHonored` is three-state on purpose:
+  `true`, `false`, and **absent for unverifiable** — nothing pinned, or no live model evidence. The
+  natural two-state shape reports "we could not tell" as "the pin held", which is a false green, so the
+  no-evidence cases are asserted explicitly rather than left to a truthiness check.
+- **A cassette records the model it was recorded with**, in its `environment` block: the id the agent
+  reported (so it survives a mid-run fallback) plus the source. A cassette recorded with nothing pinned
+  says `unresolved`, which is the difference between "recorded on opus-5 by choice" and "on whatever that
+  laptop happened to pick".
+- **The session fingerprint now covers the pinned model.** Editing `model:` after recording previously
+  moved nothing and `verify-cassettes` said nothing, even though the edit changes what the agent was told.
+  A cassette recorded before this coverage reports **unverifiable** rather than clean — its hash cannot
+  tell "the field was never covered" from "the pin changed since", and claiming otherwise in the remedy
+  would reintroduce the false green the coverage exists to close.
+
 ## [3.0.1] — 2026-08-30
 
 ### Changed

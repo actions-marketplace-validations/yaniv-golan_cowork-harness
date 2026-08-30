@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { deriveModelProvenance } from "./model-provenance.js";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
 import { infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
@@ -28,6 +29,10 @@ export interface ChatResultOpts {
    *  the wrong turn's samples. Distinct from the `turn` FIELD on the assembled RunResult below, which
    *  stays `undefined` by contract — see that field's comment. */
   turn: number;
+  /** The model this chat session pinned (session `model:` or `--model`), if any. Chat is the one lane
+   *  that proceeds unpinned by design, so this is legitimately undefined there — which is exactly the
+   *  state `modelSource: "unresolved"` exists to record rather than paper over. */
+  pinnedModel?: string;
 }
 
 /**
@@ -109,6 +114,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     toolDurations: timeline ? foldToolDurations(timeline.events) : undefined,
     skillActivity: timeline ? foldSkillActivity(timeline.events) : undefined,
     models: record.models.length ? record.models : undefined,
+    ...deriveModelProvenance(opts.pinnedModel, record.models.length ? record.models : undefined, record.modelFallbacks),
     thinking: record.thinking.length ? record.thinking : undefined,
     thinkingElided: record.thinkingElided,
     toolErrors: record.toolErrors,

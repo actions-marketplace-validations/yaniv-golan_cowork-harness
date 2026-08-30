@@ -9,6 +9,7 @@ import type { RunRecord } from "../src/run/run.js";
 function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
   return {
     runId: "run-x",
+    modelFallbacks: [],
     result: "error",
     initTools: [],
     transcript: "I read the PDF and extracted the cap table.",

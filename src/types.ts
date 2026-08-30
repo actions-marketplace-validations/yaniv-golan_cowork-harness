@@ -1335,6 +1335,36 @@ export interface RunResult {
   // learned this the hard way: an unfiltered `<synthetic>` flipped its observed answerer and refused a
   // valid gate).
   models?: string[];
+  /** Turns where the agent fell back off the requested model, from the SDK's own `system`/`model_fallback`
+   *  event. Each entry carries the binary's own `trigger` — `model_not_found` (the pinned id is retired or
+   *  unknown), `model_blocked`/`permission_denied` (the account may not use it), or a transient
+   *  `overloaded`/`server_error`/`last_resort`.
+   *
+   *  Read this INSTEAD of diffing `models`: a diff cannot distinguish a retired pin from a transient
+   *  overload, and `models` legitimately holds several ids for reasons unrelated to fallback (sub-agent
+   *  turns, the `<synthetic>` marker). An EMPTY array means no fallback event was observed — which is not
+   *  the same as "the pin was honored"; see `modelPinHonored`. Absent on runs recorded before this field. */
+  modelFallbacks?: Array<{ trigger: string; originalModel?: string; fallbackModel?: string }>;
+  /** Did the model the scenario pinned survive the run? A THREE-state answer, and the third state is the
+   *  point: `true` = pinned and no fallback observed; `false` = pinned and the agent fell back off it;
+   *  `undefined` = **unverifiable** — nothing was pinned, or the run produced no model evidence at all
+   *  (the unreadable-cassette lane sets `models: undefined`). A boolean would have to render the third
+   *  case as one of the first two, and rendering "we could not tell" as `true` is a false green of exactly
+   *  the kind this repo's own guards exist to prevent. */
+  modelPinHonored?: boolean;
+  /** Where the run's model came from. `user_setting` is production's own term (Desktop stamps
+   *  `source: "user_setting" | "global_default"` on its resolved model) and means something pinned the
+   *  model here — a session `model:`, `--model`, a matrix axis or `COWORK_HARNESS_MODEL`; the harness
+   *  does not distinguish those, because the distinction production draws is user-chose vs system-chose,
+   *  not which surface carried it. `unresolved` is the state only the harness can occupy: nothing pinned
+   *  the model, so the agent binary chose its own default and the run's model is a property of the
+   *  machine rather than of the scenario.
+   *
+   *  Production's `global_default` is deliberately NOT mirrored: it names an account-resolved default the
+   *  harness never observes — when nothing is pinned here the agent resolves privately and reports only
+   *  the id it ran. Carrying an unreachable member would invite consumers to branch on a value that never
+   *  arrives. */
+  modelSource?: "user_setting" | "unresolved";
   // reasoning blocks surfaced for debugging — capped at the last 50 blocks (older ones
   // silently dropped; see `thinkingElided` below for the dropped count). An author reads the
   // tail of reasoning, not a full history.
@@ -1477,6 +1507,7 @@ export interface RunResult {
         | "mount_delete"
         | "host_path_leak"
         | "non_deterministic"
+        | "model_fallback"
         | "l0_host_config_contamination"
         | "missing_capability"
         | "infra_error"

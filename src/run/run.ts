@@ -468,6 +468,14 @@ export interface RunRecord {
   referencesAccessed: Array<{ path: string; via: ReferenceChannel[] }>;
   filesRead: string[]; // DERIVED: the `read` (Read-tool) subset of referencesAccessed, deduped, first-seen order
   models: string[]; // distinct model ids seen across assistant_text/tool_use/thinking events, first-seen order, deduped
+  // Turns the agent SWITCHED off the requested model, from the SDK's own `system`/`model_fallback`
+  // event — NOT inferred by diffing `models`. The binary emits this whenever a turn falls back
+  // (trigger `model_not_found` = the pinned id is retired/unknown, `model_blocked`/`permission_denied`
+  // = the account may not use it, plus transient overloaded/server_error). Recording the event rather
+  // than a derived diff is the difference between "the ids disagree, we guess why" and the agent
+  // stating the reason itself. Empty = no fallback observed, which is NOT the same as "the pin held" —
+  // see modelPinHonored in the assemblers for the unverifiable case.
+  modelFallbacks: Array<{ trigger: string; originalModel?: string; fallbackModel?: string }>;
   thinking: { text: string; redacted?: boolean }[]; // reasoning blocks, capped: last 50 × 10KB each. redacted:true = reasoned but text omitted by request (see noteThinking / RunResult.thinking)
   thinkingElided: number; // count of older thinking blocks dropped past the 50-block cap
   toolErrors: Record<string, { calls: number; errors: number }>; // per-tool call/error rollup
@@ -666,6 +674,7 @@ export class Run {
       gateDeliveries: [],
       skillsInvoked: [],
       models: [],
+      modelFallbacks: [],
       thinking: [],
       thinkingElided: 0,
       toolErrors: {},
@@ -1070,6 +1079,17 @@ export class Run {
             break;
           case "system_event":
             this.rec.contextEvents.push({ subtype: ev.subtype, data: ev.data });
+            // The agent switched models mid-run. Captured from the SDK's typed event rather than
+            // reconstructed from `models[]`: the event names the TRIGGER, which is what tells a retired
+            // pin (`model_not_found`) apart from a transient overload — a distinction no id-diff can make.
+            if (ev.subtype === "model_fallback") {
+              const d = ev.data as Record<string, unknown>;
+              this.rec.modelFallbacks.push({
+                trigger: typeof d.trigger === "string" ? d.trigger : "unknown",
+                ...(typeof d.original_model === "string" ? { originalModel: d.original_model } : {}),
+                ...(typeof d.fallback_model === "string" ? { fallbackModel: d.fallback_model } : {}),
+              });
+            }
             // Task-event FAMILY (task_started + siblings) — written against the whole family so a new
             // sibling lands here, not in a subtype-specific dead end. task_started carries the
             // binary-RESOLVED child type (incl. the general-purpose fallback); join strictly by id.

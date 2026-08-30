@@ -601,6 +601,15 @@
         "enum": ["local", "cloud"],
         "required": true
       },
+      ".environment.model": {
+        "type": "object"
+      },
+      ".environment.model.id": {
+        "type": "string"
+      },
+      ".environment.model.source": {
+        "type": "string"
+      },
       ".environment.tier": {
         "type": "string"
       },
@@ -2148,6 +2157,29 @@
         "type": "string",
         "enum": ["run", "chat"]
       },
+      ".modelFallbacks": {
+        "type": "array"
+      },
+      ".modelFallbacks[]": {
+        "type": "object"
+      },
+      ".modelFallbacks[].fallbackModel": {
+        "type": "string"
+      },
+      ".modelFallbacks[].originalModel": {
+        "type": "string"
+      },
+      ".modelFallbacks[].trigger": {
+        "type": "string",
+        "required": true
+      },
+      ".modelPinHonored": {
+        "type": "boolean"
+      },
+      ".modelSource": {
+        "type": "string",
+        "enum": ["user_setting", "unresolved"]
+      },
       ".modelUsage": {
         "type": "object"
       },
@@ -2838,6 +2870,7 @@
           "mount_delete",
           "host_path_leak",
           "non_deterministic",
+          "model_fallback",
           "l0_host_config_contamination",
           "missing_capability",
           "infra_error",

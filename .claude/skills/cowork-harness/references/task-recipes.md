@@ -66,7 +66,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v12.json`](htt
 | `preRunOrigin` | How that pre-run baseline was obtained — `local-walk` (real), `remote-unavailable` or `local-unreadable`. Only `local-walk` supports a verdict: replay fails `no_unexpected_files` as evidence-unavailable on the other two rather than passing vacuously |
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
-| `sessionFingerprint` | Optional even on v9+ (the minimum readable version): hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress/web_fetch, plus projects and agent_env when set). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent → not checked |
+| `sessionFingerprint` | Optional even on v9+ (the minimum readable version): hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects and agent_env when set). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent → not checked |
 | `folderPrefixMap` | Optional even on v9+: the record-time connected-folder host-path → mount-name map. Replay's `computer_links_resolve` uses THIS (never the current session file); absent → the link is treated as evidence-unavailable, never reconstructed from the current session |
 | `timeline`, `timelineHeader` | The recorded per-event timeline (harness-observation timestamps for tool_use/tool_result/subagent_dispatch/thinking/decision/result, in total order) plus its header (`startedAtWall`/`startedAtMono` anchors); informational only — never affects the replay verdict. Absent on a cassette recorded before this field existed |
 | `environment` | Recording provenance: `location` (`"local"` on every cassette this harness produces), the resolved `tier`, `agentBinaryFormat`, and `harnessVersion` — the CLI that RECORDED the cassette (≥1.11.0). A harness-code change can shift recorded behaviour at an UNCHANGED baseline, which no staleness class keys off, so this is the only provenance for that class. **Absent** on pre-1.11.0 cassettes, and never backfilled — the absence is itself the signal |
@@ -241,10 +241,13 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
    unrecoverable if skipped. `skillHash` is content-exact, so an edit mid-batch silently splits the
    dataset into two generations — `stats --group-by skill-hash` separates them afterwards, but a hash
    whose source was never committed names a generation that is unrecoverable, which makes the
-   comparison uninterpretable rather than merely noisy. And with no `model:` in the session (or
-   `--model` on the `skill` lane) each run uses whatever the staged agent binary defaults to, so a
-   before/after can silently straddle two models; read `result.json`'s `models` back to confirm —
-   ignoring any `<…>`-wrapped entry (`<synthetic>` marks a turn the agent fabricated locally, not a model).
+   comparison uninterpretable rather than merely noisy. And with no `model:` in the session and no
+   `--model` on the command (every lane takes it), each run uses whatever the staged agent binary
+   defaults to, so a before/after can silently straddle two models — the run warns when nothing pinned
+   one. Read `result.json` back to confirm: `modelSource` says whether anything pinned the model at all,
+   and `modelPinHonored` whether the pin survived (**absent means unverifiable, not "yes"**). `models`
+   lists what served the run — ignore any `<…>`-wrapped entry (`<synthetic>` marks a turn the agent
+   fabricated locally, not a model).
 3. **Don't cross-pair generations.** When you run the same skill across fixes, never pair a *pre-fix*
    `result.json` with a *post-fix* critique. The authoritative version key is `fingerprint.skillHash` —
    content-exact, on every live `run`/`skill` run that mounts a skill or plugin — **but only on ≥ 1.5.0; earlier CLIs emit
