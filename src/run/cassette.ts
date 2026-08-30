@@ -4966,15 +4966,18 @@ export function sessionFingerprintDrift(
       // Name the fields the MATCHING probe actually omitted. `model` is hashed unconditionally, so a
       // genuinely pre-`projects` recording can only match the second probe — reporting just `model` there
       // would understate what the hash fails to cover and send the reader looking for the wrong change.
-      const missing = "omitProjects" in probe ? "`projects[]` and the pinned model" : "the pinned model";
+      const missing = "omitProjects" in probe ? "`projects[]` + `model`" : "`model`";
+      // Kept to ONE line, matching the prompt-assets note beside it. This note fires on every cassette
+      // recorded before the field existed — i.e. on all of them, at once, for a consumer with a dozen —
+      // so a paragraph repeated per file buries the findings that are actually per file. The renderer
+      // deliberately keeps notes per-file for attribution; length is the part that was ours to fix. The
+      // reasoning lives in docs/fidelity-gaps.md, where it is read once instead of N times.
       return {
         drifted: false,
         unverifiable: true,
         note:
-          `session-fingerprint: this cassette predates ${missing} being part of the session shape, so its hash ` +
-          `covers everything EXCEPT ${missing} — and everything it does cover matches. The agent selects part of ` +
-          "its system prompt by model capability, so a model change since record time is both undetectable here and " +
-          "capable of changing what the agent was told. Re-record to gain that coverage.",
+          `session-fingerprint: predates ${missing} coverage — everything else matches, but a change to ` +
+          `${missing} since record is undetectable here. Re-record to adopt it.`,
       };
     }
   }

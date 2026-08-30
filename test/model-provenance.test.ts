@@ -421,3 +421,34 @@ describe("model_fallback surfaces through a real replay", () => {
     expect(out).toMatch(/nor any model the scenario names/);
   });
 });
+
+/** The pre-coverage note fires on EVERY cassette recorded before the field existed — for a consumer with
+ *  a dozen heavy cassettes that is a dozen identical lines competing with the findings that are genuinely
+ *  per-file. The renderer keeps notes per-file deliberately (attribution is what a verify sweep is for),
+ *  so LENGTH is the part that was ours to fix: the note states what and what-to-do, and the reasoning
+ *  lives in docs/fidelity-gaps.md where it is read once instead of N times. */
+describe("the pre-coverage note stays terse", () => {
+  it("is one line, in the same register as the prompt-assets note beside it", () => {
+    const out = spawnSync("npx", ["tsx", "src/cli.ts", "verify-cassettes", "examples/replays"], {
+      encoding: "utf8",
+      cwd: resolve("."),
+    });
+    const line = `${out.stdout}${out.stderr}`.split("\n").find((l) => l.includes("[note] session-fingerprint"));
+    expect(line, "expected a pre-coverage note on the committed example cassettes").toBeDefined();
+    const message = line!.split("[note] ")[1];
+    // The prompt-assets precedent is ~130 chars. A paragraph here regressed to ~370.
+    expect(message.length).toBeLessThan(200);
+    // Still actionable: it must name the field and the remedy.
+    expect(message).toMatch(/model/);
+    expect(message).toMatch(/Re-record/);
+  });
+
+  it("never fails the gate — a consumer upgrading must not see red for this", () => {
+    const out = spawnSync("npx", ["tsx", "src/cli.ts", "verify-cassettes", "examples/replays"], {
+      encoding: "utf8",
+      cwd: resolve("."),
+    });
+    expect(out.status, "pre-coverage cassettes must stay clean").toBe(0);
+    expect(`${out.stdout}${out.stderr}`).toMatch(/cassette\(s\) clean/);
+  });
+});
