@@ -195,10 +195,18 @@ A Desktop update deletes the prior version's staged agent while often leaving an
 a scenario pinning that agent version resolves to nothing. `doctor` validates the agent for its own
 current baseline, not what each scenario pins, so it can report ready seconds before the run fails.
 
-Prefer **repinning `baseline:` to an installed version** (`cowork-harness list`) for anything
+Prefer **repinning `baseline:` to an installed version** for anything
 reproducibility-bound — you keep an exact pin and move it deliberately. `baseline: latest` never rots
 but silently drifts, so two runs weeks apart are not comparable; a pin and `latest` have opposite
-failure modes. `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` runs the newest sibling instead of the pinned
+failure modes.
+
+To find which versions you actually have, do NOT use `cowork-harness list` — it enumerates the baseline
+definitions shipped with the harness, which are present regardless of what Desktop pruned from this
+machine, so a pruned pin lists as healthy. Test the staged binary: read `agentBinary.stagedPath` from
+the baseline JSON, expand the leading `~`, and check it is a FILE — the pruned case leaves the empty
+directory behind, so a directory test passes on exactly the case that fails.
+
+`COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` runs the newest sibling instead of the pinned
 binary and downgrades the sha check to advisory — that is the substitution the hard failure exists to
 prevent, so use it to unblock once, never in CI.
 

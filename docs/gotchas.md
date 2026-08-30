@@ -10,7 +10,16 @@
   this: it validates the agent for its OWN current baseline, not the one each scenario pins, so it can
   print `✓ ready for container` seconds before the run dies. Three remedies, and they are NOT
   equivalent:
-  - **Repin `baseline:` to a version you actually have** (`cowork-harness list`). Correct for a
+  - **Repin `baseline:` to a version you actually have.** `cowork-harness list` does NOT answer this — it enumerates the baseline
+    definitions shipped with the harness, which are present whatever Desktop pruned locally, so a pruned
+    pin lists as healthy. Check the staged binary itself (note `stagedPath` is `~`-prefixed, and the
+    pruned case leaves the DIRECTORY behind, so only the file test discriminates):
+
+    ```bash
+    python3 -c "import json,os;d=json.load(open('baselines/desktop-X.Y.Z.json'));\
+    p=os.path.expanduser(d['agentBinary']['stagedPath']);print(os.path.isfile(p))"
+    ```
+    Correct for a
     reproducibility-bound suite — you keep an exact pin, you just move it deliberately and can say which
     agent the run used.
   - **`baseline: latest`.** Correct for a one-off capture or an inner loop. It never rots, but it drifts:
