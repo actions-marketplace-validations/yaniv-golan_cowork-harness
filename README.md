@@ -22,16 +22,6 @@ And because every run is recorded, you get the thing a transcript can't give you
 
 **Debugging a run?** → [docs/debugging.md](./docs/debugging.md) — a separate page, not a section below.
 
-> **Requirements at a glance** (a summary — full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page)
-> - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
-> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
-> - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
-> - **Live tiers** need three things:
->   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
->   - **A Claude token** — real per-run cost, runs take minutes; mint one with `claude setup-token` (needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`).
->   - **A runtime** — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`.
->   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `cowork-harness doctor --tier <t>` to check exactly what a given tier needs.
-> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 
@@ -102,6 +92,87 @@ Two more that matter in practice:
 **What it doesn't do.** It runs and records; it does not design your experiment. Comparing "with skill" against "without skill" credibly — scrubbing tells, shuffling, judging blind, unblinding after grading — is still yours to build; the harness contributes the run execution and the control arm (`--ablate-skill`, one arm per invocation). And it emulates the *contract*, not the Desktop runtime: see [Limitations](#limitations) and [fidelity-gaps.md](./docs/fidelity-gaps.md) for what it deliberately does not reproduce.
 
 ---
+
+
+## What a test looks like
+
+You author one file. It is the prompt, the answers to any questions the skill asks, and what must be
+true when it finishes:
+
+```yaml
+# scenarios/pdf.yaml
+session: ../sessions/default.yaml
+fidelity: container
+
+prompt: |
+  Summarize report.pdf and write the action items to outputs/actions.md
+
+answers:                                   # the same control channel Desktop's question UI uses
+  - when_question: "Which output format"   # regex on an AskUserQuestion gate
+    choose: "Markdown"
+  - when_tool: Bash
+    allow_if: "!command.includes('rm -rf')"
+    else: deny
+
+expect_denied: ["evil.example.com"]        # this host must be refused egress
+
+assert:
+  - user_visible_artifact: outputs/actions.md   # the file actually reached the user
+  - tool_called: Write
+  - transcript_contains: "action items"
+```
+
+`cowork-harness run scenarios/pdf.yaml` prints a verdict and writes the whole run to disk:
+
+```text
+✓ success [container] · 7 tools · 24.3s · $0.18
+   [provenance] model=claude-sonnet-5  skill=offered,invoked  ablated=false
+   guards: capability-use ✓  permissive-auto-allow ✓  host-path ✓  outputs-delete ✓
+```
+
+That `skill=offered,invoked` is the part a transcript cannot give you: whether the skill was *selected*,
+not just whether the answer looked right. `offered,NOT-invoked` on a green run means the model solved
+it without your skill — which is a finding, not a pass.
+
+**Two runs are often worth more than one.** The same scenario at two fidelity tiers, diffed, is a
+discovery technique in its own right: a skill that passes at `container` and fails at `hostloop` has
+told you something specific about where it will break, and the difference *is* the finding. See
+[Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job).
+
+**Prove your assertions can fail.** The harness fails loud rather than passing silently, but it cannot
+stop you writing an assertion that could never go red. Break the thing under test on purpose once —
+move the file, rename the skill — and confirm you get the ✗. An assertion you have never seen fail is
+not yet evidence.
+
+### What that catches
+
+A real one, from someone dogfooding a skill of their own. The prompt named their skill outright; the
+run came back green and the answer read fine. The record said otherwise:
+
+```text
+skillsInvoked: []          # the skill was offered and never invoked
+toolCounts:    {}          # zero tools — it never read anything
+finalMessage:  "This is a quick syntax question, not a full skill-creation
+                workflow, so I'll just answer it directly."
+```
+
+The model declined the skill and answered from its own knowledge. The guidance being tested was
+correct and simply never consulted — so the run was measuring the model, not the skill. No transcript
+of the *answer* would have shown that, because the answer was fine.
+
+That is the general shape of what this is for: not "did the output look right", but "did the thing I
+am shipping actually run, under the constraints it will meet in production".
+
+> **Requirements at a glance** (a summary — full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page)
+> - **Free demo (`replay`):** Node ≥ 22 — nothing else (no Docker, token, or Claude Desktop).
+> - **Global `npm install -g`:** ships the runnable `examples/` subtrees — `replays/`, `scenarios/`, `sessions/`, `skills/`, `data/` — under `$(npm root -g)/cowork-harness/`, so `replay` and `run examples/scenarios/…` both work from one; `matrices/`, `answer-policies/` and `probes/` still need a source checkout. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
+> - **`lint` (optional, token-free):** also needs **`python3`** on PATH — the scenario linter shells out to it (PyYAML is bundled); a missing `python3` is a hard `exit 127`.
+> - **Live tiers** need three things:
+>   - **Claude Desktop, opened once** — stages the agent; nothing is bundled.
+>   - **A Claude token** — real per-run cost, runs take minutes; mint one with `claude setup-token` (needs the **`claude` CLI**: `npm i -g @anthropic-ai/claude-code`).
+>   - **A runtime** — **Docker (arm64)** for `container` (default) / `hostloop`, or **Lima (Apple-VZ)** for `microvm`.
+>   - The `protocol` tier skips the runtime + the staged agent but still calls a real model, so it still needs the token. Run `cowork-harness doctor --tier <t>` to check exactly what a given tier needs.
+> - **Platform:** best on **macOS Apple Silicon**; **Windows is not supported** for the live tiers (use the token-free `replay`); `sync` and `microvm` are **macOS-arm64 only**. Full detail in [Prerequisites](./docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) on the CLI page.
 
 ## Fidelity tiers (pick per scenario / per CI job)
 

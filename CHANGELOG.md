@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The README now shows the product, not just the argument for it.** Three independent reviews found
+  the same gap: for a test harness, the file a user authors is the most persuasive thing the project
+  owns, and the router split had left it with zero examples. Adds a worked scenario (prompt, scripted
+  answers, assertions) with its verdict output — the scenario is extracted and linted in place, so it is
+  a real file rather than plausible-looking YAML — plus a "What that catches" section built from an
+  actual run where a named skill was offered, declined, and the green answer looked fine anyway
+  (`skillsInvoked: []`, `toolCounts: {}`). Also names two things the docs asserted but never taught:
+  diffing the same scenario across two fidelity tiers as a discovery technique, and proving an assertion
+  can fail before trusting it. The requirements block moves below the `claude -p` argument — three
+  reviewers independently reported reading install prerequisites before any reason to want them.
+
 ### Fixed
 
 - **22 dead anchor links introduced by the README router split, and the guard gap that let them ship.**
