@@ -345,8 +345,10 @@ an error in the next major.
 
 **What a result tells you.** `modelSource` says where the run's model came from — `user_setting` when
 something pinned it, `unresolved` when nothing did. `modelPinHonored` answers whether the pin survived,
-in three states: `true`, `false`, and **absent for unverifiable** (nothing pinned, or no model evidence
-in the run) — absence is not a pass. `modelFallbacks` carries the agent's own `model_fallback` events
+in three states: `true`, `false`, and **absent for unverifiable** (nothing pinned, no model evidence in
+the run, or a pin like `best`/`opusplan` that names no comparable model) — absence is not a pass. A
+family pin (`opus`, `sonnet`) is checked as family membership rather than equality: the agent resolves an
+alias to a concrete id, and which member it resolves to is account-supplied. `modelFallbacks` carries the agent's own `model_fallback` events
 when a turn switched off the requested model, each with the trigger the agent reported; a
 `model_not_found` or `model_blocked` trigger repeats on every run until the pinned id changes, while
 `overloaded` is transient. A cassette additionally records what produced it in `environment.model`, and

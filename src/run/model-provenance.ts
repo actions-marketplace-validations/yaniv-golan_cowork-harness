@@ -36,7 +36,11 @@ export interface ModelProvenance {
  *  false-verdict class as the false green above, in the other direction. So an alias pin is `unverifiable`:
  *  the harness cannot know which concrete id the account resolves an alias to. Mirrors the binary's own
  *  list (verified in the staged 2.1.247 agent). */
-const ALIAS_PINS = new Set(["sonnet", "opus", "haiku", "fable", "best", "opusplan"]);
+const FAMILY_ALIASES = ["sonnet", "opus", "haiku", "fable"] as const;
+
+/** Aliases that name no family at all, so a resolved id cannot be checked against them: `best` can map to
+ *  anything the account offers, and `opusplan` selects a planning MODE. These stay unverifiable. */
+const UNRESOLVABLE_ALIASES = new Set(["best", "opusplan"]);
 
 /** Normalize an id the way the agent binary's own comparator does — `y(e)=e.replace(/\[1m\]$/i,"")` then
  *  a case-insensitive compare. `[1m]` is a CONTEXT-WINDOW selector Cowork's picker appends to the same
@@ -60,10 +64,21 @@ export function deriveModelProvenance(
     // A pinned model is a user setting whatever its channel (session key, --model flag, matrix axis, env):
     // the distinction production draws is user-chose vs system-chose, not which UI surface carried it.
     modelSource: pinnedModel === undefined ? "unresolved" : "user_setting",
-    modelPinHonored:
-      pinned === undefined || observed.length === 0 || ALIAS_PINS.has(pinned)
-        ? undefined // unverifiable: nothing to honor, no evidence either way, or a family alias
-        : !fellOffPin && observed.some((m) => normalizeModelId(m) === pinned),
+    modelPinHonored: (() => {
+      if (pinned === undefined || observed.length === 0) return undefined; // nothing to honor, or no evidence
+      if (UNRESOLVABLE_ALIASES.has(pinned)) return undefined; // names no family — nothing to compare against
+      // A FAMILY alias is checkable as membership, not equality. Live-verified: `--model opus` runs and
+      // the agent reports `claude-opus-5` — it resolves the alias rather than echoing it, and WHICH member
+      // it resolves to is account-supplied, so equality would report a false `false`. Family membership is
+      // exactly what the author asked for, and it still catches the real violation (pin `opus`, get a
+      // sonnet). The `-` anchor keeps `opus` from matching a hypothetical `opusplan-*` id.
+      const family = FAMILY_ALIASES.find((f) => pinned === f);
+      if (family !== undefined)
+        return (
+          !fellOffPin && observed.some((m) => normalizeModelId(m).includes(`-${family}-`) || normalizeModelId(m).startsWith(`${family}-`))
+        );
+      return !fellOffPin && observed.some((m) => normalizeModelId(m) === pinned);
+    })(),
     modelFallbacks: fallbacks,
   };
 }
@@ -93,8 +108,7 @@ export function unpinnedModelWarning(lane: "verdict" | "chat"): string {
   return (
     `::warning:: no model is pinned, ${consequence}. The agent selects part of its system prompt by model ` +
     `capability, so an unpinned model changes the INSTRUCTIONS the agent is given, not just answer quality. ` +
-    `Set \`model:\` in the session${lane === "chat" ? "" : " (the route that covers `run` and `record`)"}, or ` +
-    `pass \`--model <id>\` on the \`skill\`, \`probe-dispatch\` and \`chat\` lanes. ` +
+    `Set \`model:\` in the session, or pass \`--model <id>\` — every lane takes it. ` +
     `Omitting it is deprecated and becomes an error in the next major.`
   );
 }

@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The unpinned-model warning told `run` users the flag lived on other lanes.** It named the `skill`,
+  `probe-dispatch` and `chat` lanes for a flag `run` and `record` now accept — caught by running it, not
+  by reading it.
+
 - **`run --model ""` started a spending run instead of failing.** SPEC §CB-2 requires an empty or
   whitespace model value to be a usage error, never a silently-propagated empty string. `record` inherits
   that from the shared flag parser; `run` hand-rolls its own loop (the session-less lanes take `--model`

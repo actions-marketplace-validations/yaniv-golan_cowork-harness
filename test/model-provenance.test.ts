@@ -81,10 +81,25 @@ describe("deriveModelProvenance", () => {
   // The mirror image of the false green above. `false` is documented as "the agent fell back off it";
   // asserting that from a string mismatch the binary itself does not make is a false RED.
 
-  it("a family-alias pin is unverifiable, not false", () => {
-    // `opus` names a family; the binary resolves it to a concrete id the harness cannot predict, so
-    // there is nothing to compare and `undefined` is the only honest answer.
-    for (const alias of ["opus", "sonnet", "haiku", "fable", "best", "opusplan"])
+  // LIVE-VERIFIED 2026-08-30: `run --model opus` ran and the agent reported `claude-opus-5` — it RESOLVES
+  // a family alias to a concrete id rather than echoing the alias back. So a family pin is checkable as
+  // MEMBERSHIP (equality would report a false `false`), while an alias naming no family is not.
+  it("a family-alias pin is honored by any member of that family", () => {
+    expect(deriveModelProvenance("opus", ["claude-opus-4-8"], []).modelPinHonored).toBe(true);
+    expect(deriveModelProvenance("opus", ["claude-opus-5"], []).modelPinHonored).toBe(true);
+    expect(deriveModelProvenance("sonnet", ["claude-sonnet-4-6"], []).modelPinHonored).toBe(true);
+  });
+
+  it("a family-alias pin still catches a model from the WRONG family", () => {
+    // The check must not be so loose that it can no longer fail — the whole point of the field.
+    expect(deriveModelProvenance("opus", ["claude-sonnet-5"], []).modelPinHonored).toBe(false);
+    expect(deriveModelProvenance("haiku", ["claude-opus-5"], []).modelPinHonored).toBe(false);
+  });
+
+  it("an alias naming no family stays unverifiable", () => {
+    // `best` can map to anything the account offers; `opusplan` selects a planning mode. Neither can be
+    // checked against a resolved id, so `undefined` is the only honest answer.
+    for (const alias of ["best", "opusplan"])
       expect(deriveModelProvenance(alias, ["claude-opus-4-8"], []).modelPinHonored, alias).toBeUndefined();
   });
 
@@ -140,6 +155,13 @@ describe("deriveModelProvenance", () => {
 });
 
 describe("unpinnedModelWarning", () => {
+  it("does not tell a `run` user the flag lives on OTHER lanes", () => {
+    // The live run caught this: the warning fired on a `run` invocation and pointed the reader at the
+    // `skill`/`probe-dispatch`/`chat` lanes for a flag `run` itself now accepts.
+    expect(unpinnedModelWarning("verdict")).not.toMatch(/on the `skill`|`probe-dispatch` and `chat` lanes/);
+    expect(unpinnedModelWarning("verdict")).toMatch(/every lane takes it/);
+  });
+
   it("names the key and the flag, never a file path", () => {
     for (const lane of ["verdict", "chat"] as const) {
       const w = unpinnedModelWarning(lane);
