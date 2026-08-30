@@ -1225,7 +1225,7 @@ This dogfoods the documented pattern and pins the fixture against future `parseM
 `Run` regressions on every PR without spending a token.
 
 For the complete CI pipeline (unit, boundary, scenarios, replay), see `.github/workflows/ci.yml` and
-the [README Testing section](../README.md#testing--cicd).
+the [README Testing section](./ci.md#testing--cicd).
 
 ## Cross-references
 

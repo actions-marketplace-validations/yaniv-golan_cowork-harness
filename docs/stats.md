@@ -13,7 +13,7 @@ reads it back.
   `run` invocation in aggregate stats.
 - **NOT indexed**: `replay` results (they're re-checks against a frozen recording, not new evidence).
   `chat` sessions ARE indexed (`command:"chat"`) once the REPL ends, so a chat session shows up in
-  `stats`/`trace`/`scaffold` too — see [README → Commands at a glance](../README.md#commands-at-a-glance).
+  `stats`/`trace`/`scaffold` too — see [README → Commands at a glance](./cli.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
 runLabel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,

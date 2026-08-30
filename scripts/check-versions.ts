@@ -637,7 +637,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   if (maxBaseline) {
     maxAgentVersion = json(`baselines/desktop-${maxBaseline}.json`).agentVersion as string | undefined;
   }
-  const vPinFiles = ["README.md", ".claude/skills/cowork-harness/references/ci-recipe.md", "docs/maintenance.md"];
+  const vPinFiles = ["docs/ci.md", ".claude/skills/cowork-harness/references/ci-recipe.md", "docs/maintenance.md"];
   if (maxAgentVersion) {
     for (const f of vPinFiles) {
       const pin = r(f).match(/\bV=(\d+\.\d+\.\d+)\b/)?.[1];

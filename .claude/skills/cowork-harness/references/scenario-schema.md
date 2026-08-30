@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, full gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.0.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.0.1`
 (baseline `desktop-1.40609.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -100,7 +100,8 @@ allow_host_writes: true             # OPTIONAL — required to run `hostloop` fi
                                     # Read-only folders and folder-less runs need no opt-in.
 
 allow_host_hooks: true              # OPTIONAL — required to run `protocol` fidelity when a staged plugin
-                                    # declares runnable hooks (`<plugin>/hooks/hooks.json`): L0 passes
+                                    # declares runnable hooks — either `<plugin>/hooks/hooks.json` OR
+                                    # the manifest's `hooks` key: L0 passes
                                     # --plugin-dir, so the CLI executes those hooks as NATIVE HOST
                                     # processes under your account, with no container sandbox. A plugin
                                     # that declares no hooks needs no opt-in, and a misplaced root-level

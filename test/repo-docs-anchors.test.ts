@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, relative } from "node:path";
 
 // C1b: repo-docs anchor integrity.
 //
@@ -88,8 +88,13 @@ describe("repo docs' ../README.md anchors resolve to real README headings (C1b)"
   const slugs = readmeSlugSet();
 
   it("parsed a sane README heading set (guards against extraction silently breaking)", () => {
-    expect(slugs.size).toBeGreaterThan(10);
-    expect(slugs.has("commands-at-a-glance")).toBe(true);
+    expect(slugs.size).toBeGreaterThan(5);
+    // Canary against the extractor silently returning nothing. Must name a heading the README still
+    // OWNS: `commands-at-a-glance` was the old canary and moved to docs/cli.md in the router split, so
+    // it would now assert the extractor is broken when it is working correctly. `fidelity-tiers…` is a
+    // deliberate choice — the plan pins its heading text as verbatim-unchanged precisely because other
+    // pages deep-link it, which is what makes it a stable canary.
+    expect(slugs.has("fidelity-tiers-pick-per-scenario--per-ci-job")).toBe(true);
   });
 
   const files = repoDocFiles();
@@ -163,5 +168,80 @@ describe("docs' sibling-doc anchors resolve to real headings in the target doc",
       broken,
       broken.map((r) => `${r.file.replace(resolve(".") + "/", "")}: ${r.raw} — #${r.slug} has no matching heading`).join("\n"),
     ).toEqual([]);
+  });
+});
+
+/**
+ * SAME-PAGE anchors (`](#slug)`) across every tracked markdown page.
+ *
+ * The two suites above validate links pointing INTO README and INTO a sibling doc. Neither looks at a
+ * page's links to its OWN headings — and that is the gap the router split fell straight through: moving
+ * 11 `##` sections out of README left 19 `](#…)` links in README pointing at headings that no longer
+ * existed, plus three more in AGENTS.md, docs/ci.md and docs/companion-skill.md. Every file-path link
+ * still resolved, every existing guard stayed green, and GitHub fails these silently — the page just
+ * does not scroll. Two independent reviewers found it by hand; nothing in CI could.
+ *
+ * Deliberately broader than `repoDocFiles()`: a root page (AGENTS.md, CONTRIBUTING.md) carries these
+ * links too, and one of the three stragglers lived in AGENTS.md.
+ */
+function allMarkdownPages(): string[] {
+  const roots = ["README.md", "AGENTS.md", "CONTRIBUTING.md", "SPEC.md", "DESIGN.md", "RELEASING.md", "SECURITY.md"]
+    .map((f) => resolve(f))
+    .filter((f) => existsSync(f));
+  return [...roots, ...repoDocFiles()];
+}
+
+describe("same-page (#slug) anchors resolve to a heading on that same page", () => {
+  const dangling = allMarkdownPages().flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    const own = new Set(extractHeadings(text).map(githubSlug));
+    // `](#slug)` only — a link with any path before the `#` is another suite's job.
+    return [...text.matchAll(/\]\(#([^)\s]+)\)/g)]
+      .map((m) => ({ file: relative(resolve("."), file), slug: m[1], raw: m[0] }))
+      .filter((r) => !own.has(r.slug));
+  });
+
+  it("every ](#slug) link points at a heading in its own file", () => {
+    const msg = dangling.map((d) => `${d.file}: ${d.raw} — #${d.slug} is not a heading in that file`).join("\n");
+    expect(dangling, msg).toEqual([]);
+  });
+
+  // Canary: a checker that extracted nothing would report zero dangling links and pass forever.
+  it("actually found same-page anchors to check (guards against a vacuous pass)", () => {
+    const total = allMarkdownPages().reduce((n, f) => n + [...readFileSync(f, "utf8").matchAll(/\]\(#([^)\s]+)\)/g)].length, 0);
+    expect(total).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Prose that asserts a SPATIAL relationship ("below", "above") next to a CROSS-PAGE link.
+ *
+ * A sibling of the dangling-anchor class, and the nastier half: these links RESOLVE, so every link
+ * checker stays green while the sentence lies. The router split produced three — "full detail in
+ * [Prerequisites](./docs/cli.md#…) below" — where Prerequisites had moved to another page and "below"
+ * silently became false.
+ *
+ * Scoped to links carrying a PATH (`](./…md#…)`), never same-page `](#…)` links: on another page,
+ * "below"/"above" cannot be true, whereas on the same page it usually is. That is what keeps this from
+ * false-positiving on legitimate in-page phrasing.
+ */
+describe("cross-page links don't claim a same-page position", () => {
+  const SPATIAL = /\]\(\.[^)\s]*\.md#[^)\s]*\)[^.]{0,40}\b(below|above)\b/g;
+
+  const offenders = allMarkdownPages().flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    return [...text.matchAll(SPATIAL)].map((m) => ({
+      file: relative(resolve("."), file),
+      snippet: m[0].replace(/\s+/g, " ").slice(0, 120),
+    }));
+  });
+
+  it("no `](./other.md#x) … below/above` — the target is on another page", () => {
+    const msg = offenders.map((o) => `${o.file}: ${o.snippet}`).join("\n");
+    expect(offenders, msg).toEqual([]);
+  });
+
+  it("the pattern actually matches when the defect is present (guards against a dead regex)", () => {
+    expect("see [x](./docs/cli.md#y) below".match(SPATIAL)).not.toBeNull();
   });
 });

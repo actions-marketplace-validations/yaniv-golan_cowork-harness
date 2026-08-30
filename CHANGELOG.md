@@ -6,6 +6,105 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.0.1] — 2026-08-30
+
+### Changed
+
+- **The README now shows the product, not just the argument for it.** Three independent reviews found
+  the same gap: for a test harness, the file a user authors is the most persuasive thing the project
+  owns, and the router split had left it with zero examples. Adds a worked scenario (prompt, scripted
+  answers, assertions) with its verdict output — the scenario is extracted and linted in place, so it is
+  a real file rather than plausible-looking YAML — plus a "What that catches" section built from an
+  actual run where a named skill was offered, declined, and the green answer looked fine anyway
+  (`skillsInvoked: []`, `toolCounts: {}`) — framed as a closed loop, since the author fixed and re-verified
+  it with the same instrument roughly ninety minutes later. An outcome example is a claim about a MOMENT;
+  the better the tool works the faster its own examples get fixed out from under it, so it needs a tense. Also names two things the docs asserted but never taught:
+  diffing the same scenario across two fidelity tiers as a discovery technique, and proving an assertion
+  can fail before trusting it. The requirements block moves below the `claude -p` argument — three
+  reviewers independently reported reading install prerequisites before any reason to want them.
+
+- **The README is now a router, not the whole manual.** It was 975 lines carrying three unrelated
+  audiences at once; it is now **282** and branches to per-audience pages: **`docs/cli.md`** (install,
+  prerequisites, commands, the two files, run output, env knobs), **`docs/companion-skill.md`** (install
+  + orientation; usage stays in `SKILL.md`), and **`docs/ci.md`** (the token-free gate, the packaged
+  Action, the live lane — written to stand alone). The harness's own pipeline and contributor suite moved
+  to `CONTRIBUTING.md`, which keeps `docs/ci.md` about *consuming* the Action rather than about this repo.
+  README keeps what all three audiences share: the fidelity-tier vocabulary, architecture, limitations,
+  the docs index, and versioning. Content moved verbatim — this is a relocation, not a rewrite.
+
+  Nothing is dropped: `Sandboxing` folded into `docs/boundary.md` and `Maintenance` into
+  `docs/maintenance.md`; `Discovery` was already covered in `docs/discovery.md`, so it was deleted rather
+  than duplicated. Every moved relative link was rewritten for its new depth, and every deep link into a
+  moved section was repointed across `docs/`, `examples/README.md`, `llms.txt` and the docs index.
+
+### Fixed
+
+- **`bump-version` did not know about the router-split pages.** `docs/cli.md`, `docs/ci.md` and
+  `docs/companion-skill.md` carry `cowork-harness@^X.Y.Z` install floors that `check:versions` enforces,
+  but the bump tool's target list predated them — so `npm run bump` rewrote every other floor and then
+  failed its own post-write lockstep check. Caught at release time by that self-check rather than
+  shipping a repo with mismatched floors. All three are now registered, and the test pinning that list
+  carries the reason.
+
+
+- **22 dead anchor links introduced by the README router split, and the guard gap that let them ship.**
+  Moving 11 `##` sections out of README left every `](#slug)` link pointing at them dangling — 19 in
+  README (including two badges and the two nav lines the page opened with), plus one each in `AGENTS.md`,
+  `docs/ci.md` and `docs/companion-skill.md`. GitHub fails these silently: the page simply does not
+  scroll. Every file-path link still resolved and every existing guard stayed green, because the anchor
+  suite validated links *into* README and *into* sibling docs but never a page's links to its **own**
+  headings. `test/repo-docs-anchors.test.ts` now covers that third case across root pages and `docs/`,
+  with a canary against a checker that extracts nothing, and was confirmed to fail against the exact
+  regression that shipped. The two nav lines are deleted rather than repointed — they were a
+  table-of-contents for a 975-line page, and "Pick your path" plus the Documentation table now do that job.
+
+  Found by two independent reviewers; the second caught the three non-README instances a README-scoped
+  fix would have missed.
+
+  Follow-up from the same review: three cross-page links still read "…\[Prerequisites](./docs/cli.md#…)
+  **below**" — resolving correctly while the sentence lied, because Prerequisites had moved to another
+  page. Reworded, and guarded: a cross-page link followed closely by "below"/"above" now fails the suite.
+  This half is the nastier one — the link works, so every link checker stays green forever.
+
+- **The `protocol` host-hook consent gate was defeatable by a spelling choice.** `allow_host_hooks`
+  (3.0.0) refuses a spawn until the operator consents to a staged plugin's hooks running as native host
+  processes — but detection keyed only on a file named `hooks.json`, and a plugin may equally declare its
+  hooks in the manifest's `hooks` key (`.claude-plugin/plugin.json`, or a bare `plugin.json`), which is
+  the more common spelling. Such a plugin sailed past the gate: reproduced end-to-end, the hook executed
+  under the operator's own account while the run went green, no consent was asked and no disclosure
+  printed. The same blind predicate feeds the tier-independent disclosure, so those hooks also ran
+  unannounced at `hostloop`. Detection now returns the UNION of both channels, which fixes the gate and
+  the disclosure together since both call through it. The `hooks/hooks.json` placement carve-out is
+  deliberately NOT extended to the manifest — that carve-out exists because a misplaced `hooks.json` is
+  inert, and a manifest-declared hook is live wherever the manifest sits.
+
+  Reported by a consumer during a 3.0.0 adoption pass, with the defect proven from committed cassettes:
+  10 of theirs carried a `SessionStart:startup` hook_started/hook_response pair from a manifest-only
+  declaration, including one recorded at `container`.
+
+### Documentation
+
+- **The pruned-agent-binary failure now has a documented remedy, with the tradeoffs named.** A Desktop
+  update deletes the prior version's staged ELF while often leaving an empty version directory, so a
+  scenario pinning that agent version dies with `baseline agent binary not found`. The code anticipates
+  this by name, but the remedy appeared in no skill surface at all — and an installed companion skill
+  ships without repo `docs/`, so the agent most likely to hit it had nothing to read. Now in
+  `docs/gotchas.md` and the skill's own reference, stating that the three remedies are NOT equivalent:
+  repin for a reproducibility-bound suite, `latest` for a one-off (a pin rots silently, `latest` drifts
+  silently — opposite failure modes), and `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` only to unblock once,
+  never in CI, since it runs the newest sibling and downgrades the sha check to advisory.
+
+- **`permissive_auto_allow` and script-running skills is a `protocol`-specific hazard, not a general one.**
+  `Bash` is off-registry (only `Read`/`Glob`/`Grep` are default-allow), but the harness only decides how to
+  ANSWER a permission ask — whether the agent ASKS varies by command AND tier. Measured: at `protocol`, `echo
+  hello` produces no ask (green) while `python3 -c "print(42)"` produces one and fails the guard; the
+  identical command at `container` produces no ask (green), and `hostloop` routes shell through
+  `mcp__workspace__bash` entirely. So a skill running `python3 ${CLAUDE_SKILL_DIR}/scripts/…` goes red at L0
+  and green on the sandboxed tiers, while a hello-world probe is green everywhere and teaches the wrong
+  expectation. `references/fidelity-and-answers.md` carries the measured table and the three ways through; why
+  the host CLI asks for one command and not another is explicitly left untraced, and `microvm` is named as
+  unmeasured.
+
 ## [3.0.0] — 2026-08-29
 
 ### Breaking

@@ -24,7 +24,7 @@ See `.github/workflows/ci.yml`.
 
 > **Untracked files don't mount.** Inside a git repo, the harness stages only **git-tracked** files
 > into the sandbox — `git add` a new skill/scenario file here or it (or the whole folder) mounts
-> empty. See [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command).
+> empty. See [README → Test a local skill in one command](../docs/cli.md#test-a-local-skill-in-one-command).
 
 **New here?** [docs/boundary.md](../docs/boundary.md) explains what the sandbox does and doesn't
 enforce (the limitations model); [docs/README.md](../docs/README.md) is the full documentation
@@ -51,7 +51,7 @@ examples/
 
 Answer policies: see [docs/scenario.md § Reusable answer policies](../docs/scenario.md#reusable-answer-policies---answer-policy).
 
-Matrices: the worked matrix config is `matrices/csv-metrics-matrix.yaml` — see the `run --matrix` bullet under [README → Commands at a glance](../README.md#commands-at-a-glance) ("Flags worth knowing").
+Matrices: the worked matrix config is `matrices/csv-metrics-matrix.yaml` — see the `run --matrix` bullet under [README → Commands at a glance](../docs/cli.md#commands-at-a-glance) ("Flags worth knowing").
 
 `replays/` has its own [README](./replays/README.md) explaining what each committed cassette covers.
 One cassette, `replays/example-multiselect-gate.cassette.json`, records a `scenarioSource` pointer
@@ -121,4 +121,4 @@ cowork-harness run examples/scenarios/                    # every top-level *.ya
 The `container` scenarios above are **live `run`s**: they spawn the staged Cowork agent in a
 sandboxed arm64 container, so they need Docker (arm64) + the agent image, a Claude Desktop agent
 ELF staged once, and an auth token. The full setup (and the resolution order for each) is in the
-README's [Prerequisites](../README.md#prerequisites-for-anything-above-protocol-fidelity) — it isn't duplicated here.
+README's [Prerequisites](../docs/cli.md#prerequisites-for-anything-above-protocol-fidelity) — it isn't duplicated here.

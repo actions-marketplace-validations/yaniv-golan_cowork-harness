@@ -56,22 +56,26 @@ describe("debug-triage tool order: canonical table row ↔ numbered prose sectio
     expect(numberedOrder).toEqual(canonicalOrder);
   });
 
-  it("README.md and docs/README.md debugging blurbs mention all five tools, in canonical order", () => {
+  it("docs/cli.md, README.md and docs/README.md debugging blurbs mention all five tools, in canonical order", () => {
     const skillRow = debuggingText.split("\n").find((l) => l.includes("The skill misbehaved"));
     const canonicalOrder = [...skillRow!.matchAll(/`([a-z-]+)/g)].map((m) => m[1]);
 
-    const readme = readFileSync(resolve("README.md"), "utf8");
+    // The router split put these two blurbs in DIFFERENT files: the prose one moved to the CLI page
+    // with the rest of the run-output reference, while the Documentation index table stayed in the
+    // README. Reading both from one file is what a blanket repoint gets wrong.
+    const cliPage = readFileSync(resolve("docs/cli.md"), "utf8");
+    const rootReadme = readFileSync(resolve("README.md"), "utf8");
     const docsIndex = readFileSync(resolve("docs/README.md"), "utf8");
     const llmsTxt = readFileSync(resolve("llms.txt"), "utf8");
 
     // Scope each check to its specific blurb line (not the whole file — all five names appear dozens
     // of times repo-wide, so a whole-file membership check would be vacuous).
-    const proseBlurb = readme.split("\n").find((l) => l.includes("**Debugging a run**"));
-    const tableBlurb = readme.split("\n").find((l) => l.startsWith("| [docs/debugging.md](./docs/debugging.md)"));
+    const proseBlurb = cliPage.split("\n").find((l) => l.includes("**Debugging a run**"));
+    const tableBlurb = rootReadme.split("\n").find((l) => l.startsWith("| [docs/debugging.md](./docs/debugging.md)"));
     const indexBlurb = docsIndex.split("\n").find((l) => l.startsWith("| [debugging.md](./debugging.md)"));
     const llmsBlurb = llmsTxt.split("\n").find((l) => l.startsWith("- [docs/debugging.md]"));
     for (const [label, blurb] of [
-      ["README.md prose blurb", proseBlurb],
+      ["docs/cli.md prose blurb", proseBlurb],
       ["README.md docs-table row", tableBlurb],
       ["docs/README.md index row", indexBlurb],
       ["llms.txt index row", llmsBlurb],

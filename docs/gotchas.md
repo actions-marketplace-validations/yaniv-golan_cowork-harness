@@ -4,9 +4,34 @@
 
 ## Setup & environment
 
+- **`baseline agent binary not found` — a Desktop update pruned the ELF your scenario pins.** A Desktop
+  update deletes the previous version's staged payload while often leaving an EMPTY version directory
+  behind, so a `baseline:` pinning that agent version now resolves to nothing. `doctor` does not catch
+  this: it validates the agent for its OWN current baseline, not the one each scenario pins, so it can
+  print `✓ ready for container` seconds before the run dies. Three remedies, and they are NOT
+  equivalent:
+  - **Repin `baseline:` to a version you actually have.** `cowork-harness list` does NOT answer this — it enumerates the baseline
+    definitions shipped with the harness, which are present whatever Desktop pruned locally, so a pruned
+    pin lists as healthy. Check the staged binary itself (note `stagedPath` is `~`-prefixed, and the
+    pruned case leaves the DIRECTORY behind, so only the file test discriminates):
+
+    ```bash
+    python3 -c "import json,os;d=json.load(open('baselines/desktop-X.Y.Z.json'));\
+    p=os.path.expanduser(d['agentBinary']['stagedPath']);print(os.path.isfile(p))"
+    ```
+    Correct for a
+    reproducibility-bound suite — you keep an exact pin, you just move it deliberately and can say which
+    agent the run used.
+  - **`baseline: latest`.** Correct for a one-off capture or an inner loop. It never rots, but it drifts:
+    the run silently follows whatever Desktop last staged, so two runs a month apart are not comparable.
+    A hard pin and `latest` have OPPOSITE failure modes — a pin rots silently, `latest` drifts silently.
+  - **`COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`.** Last resort. It runs the newest sibling binary instead
+    of the pinned one, which is exactly the substitution the hard failure exists to prevent, and the sha
+    check downgrades to advisory. Use it to get unblocked once, never in CI, and never when the answer
+    depends on which agent version ran.
 - **`lint` exits 127.** `python3` isn't on `PATH`. Install it or point `PYTHON` at an interpreter.
 - **A local skill folder mounts empty.** Untracked files are invisible to the mount — `git add` the skill
-  first (see [README → Test a local skill in one command](../README.md#test-a-local-skill-in-one-command)).
+  first (see [README → Test a local skill in one command](./cli.md#test-a-local-skill-in-one-command)).
 - **`docker build` fails or the agent won't start on Apple Silicon.** Confirm `--platform linux/arm64` is in
   your `docker build` invocation and that Docker Desktop's VM is arm64, not Rosetta-emulated.
 - **A git worktree can't find your token.** A worktree's `./.env` is gitignored and absent there even if the
@@ -22,7 +47,7 @@
   committed scenario's `prompt`, `baseline`, `fidelity`, `answers`, `skills`, or `requires_capabilities`
   without re-recording — the frozen cassette no longer matches the on-disk scenario on one of these six
   recording-shaping fields. Either re-record, or pass `--skip-scenario-drift` if you're intentionally
-  verifying the rest of the gate against an out-of-date recording (see [README → Commands at a glance](../README.md#commands-at-a-glance)).
+  verifying the rest of the gate against an out-of-date recording (see [README → Commands at a glance](./cli.md#commands-at-a-glance)).
 
 ## Operational tools when you're stuck
 

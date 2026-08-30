@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 3.0.0` (baseline `desktop-1.40609.0`).
+Self-contained reference. Tracks `cowork-harness 3.0.1` (baseline `desktop-1.40609.0`).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 
@@ -20,7 +20,8 @@ Self-contained reference. Tracks `cowork-harness 3.0.0` (baseline `desktop-1.406
 - A `hostloop` scenario with a **writable** connected folder (`mode: rw`/`rwd`) needs `allow_host_writes:
   true` — with no container around the native file tools, that combination gives the agent genuine,
   software-checked-only host filesystem access. Read-only folders and folder-less runs need no opt-in.
-- A `protocol` scenario staging a plugin that declares runnable hooks needs `allow_host_hooks: true`
+- A `protocol` scenario staging a plugin that declares runnable hooks — in `<plugin>/hooks/hooks.json`
+  or the plugin manifest's `hooks` key, both live — needs `allow_host_hooks: true`
   (`--allow-host-hooks` on `chat`/`skill`). L0 passes `--plugin-dir`, so the CLI runs those
   hooks as native host processes under your account with no sandbox. Plugins without hooks need no opt-in.
   Needs cowork-harness >= 3.0.0 — an older CLI rejects the key outright (`Unrecognized key`, exit 2), it
@@ -154,6 +155,60 @@ hands `fn` exactly this dict.
   `--decider-llm` (CLI) or `on_unanswered: llm` (YAML).
 - `agent` is **retired** — `on_unanswered: agent` is rejected by the schema. The enum is
   `["fail", "prompt", "llm", "first"]`.
+
+### A script-running skill trips `permissive_auto_allow` — at `protocol` specifically
+
+The default `permission_parity: cowork` auto-allows an unscripted, off-registry tool ask — and records
+it, because real Cowork would have BLOCKED for the user. `computeVerdict` then FAILS the run: a green
+carrying one would not be a faithful pass. Only `Read`, `Glob` and `Grep` are default-allow; **`Bash` is
+off-registry**.
+
+Two things decide whether you ever see it, and neither is obvious. The harness only decides how to
+ANSWER a permission ask; whether the agent ASKS is the agent binary's own logic, and that varies by
+both the command and the tier. All rows below are measured, same scenario shape, same session:
+
+| Tier | Bash command | tool used | ask | verdict |
+|---|---|---|---|---|
+| `protocol` | `echo hello` | `Bash` | none | ✓ green |
+| `protocol` | `python3 -c "print(42)"` | `Bash` | **one** | ✗ `permissive_auto_allow` |
+| `container` | `python3 -c "print(42)"` | `Bash` | none | ✓ green |
+| `hostloop` | `python3 -c "print(42)"` | `mcp__workspace__bash` | none | ✓ green |
+
+So the guard is **not** a general hazard for script-running skills — it is a `protocol` one. The host
+CLI that L0 spawns asks for a command like `python3 -c …` and not for `echo`; the staged agent at
+`container` asks for neither, and `hostloop` routes shell through `mcp__workspace__bash` and so is not
+even the same tool. A skill that runs `python3 ${CLAUDE_SKILL_DIR}/scripts/…` therefore goes red at
+`protocol` on an otherwise-correct run, while the same skill is green on the sandboxed tiers — and a
+hello-world probe is green everywhere and teaches the wrong expectation.
+
+Three ways through, in preference order: script the gate (`--answer` / `answers:`), which is what the
+warning tells you and keeps the run deterministic; set `permission_parity: strict` to deny instead of
+allow, if refusal is what you want to test; or assert `allow_permissive_auto_allow: true` when the
+permissive behaviour is deliberately what the scenario is about.
+
+> **What is NOT established.** Why the host CLI asks for one command and not another was observed, not
+> traced — do not infer a rule for which commands ask from these rows. `microvm` was not measured.
+
+### `baseline agent binary not found` — a Desktop update pruned the pinned ELF
+
+A Desktop update deletes the prior version's staged agent while often leaving an empty version dir, so
+a scenario pinning that agent version resolves to nothing. `doctor` validates the agent for its own
+current baseline, not what each scenario pins, so it can report ready seconds before the run fails.
+
+Prefer **repinning `baseline:` to an installed version** for anything
+reproducibility-bound — you keep an exact pin and move it deliberately. `baseline: latest` never rots
+but silently drifts, so two runs weeks apart are not comparable; a pin and `latest` have opposite
+failure modes.
+
+To find which versions you actually have, do NOT use `cowork-harness list` — it enumerates the baseline
+definitions shipped with the harness, which are present regardless of what Desktop pruned from this
+machine, so a pruned pin lists as healthy. Test the staged binary: read `agentBinary.stagedPath` from
+the baseline JSON, expand the leading `~`, and check it is a FILE — the pruned case leaves the empty
+directory behind, so a directory test passes on exactly the case that fails.
+
+`COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` runs the newest sibling instead of the pinned
+binary and downgrades the sha check to advisory — that is the substitution the hard failure exists to
+prevent, so use it to unblock once, never in CI.
 
 ### Determinism contract
 

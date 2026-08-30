@@ -237,6 +237,12 @@ describe("TARGET_FILES", () => {
       ".claude/skills/cowork-harness/references/critique.md",
       ".claude/skills/cowork-harness/references/ci-recipe.md",
       "examples/replays/README.md",
+      // Router-split pages (3.0.1). These carry `cowork-harness@^X.Y.Z` install floors that
+      // `check:versions` enforces, so omitting one makes `bump` fail its own lockstep check —
+      // which is how docs/companion-skill.md was caught, at release time rather than by this list.
+      "docs/companion-skill.md",
+      "docs/cli.md",
+      "docs/ci.md",
       "README.md",
     ]);
   });

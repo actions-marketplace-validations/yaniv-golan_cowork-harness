@@ -58,7 +58,9 @@ describe("semantic-judge default model ↔ docs", () => {
     // fail loud on a const rename — a null match must never degrade into a skipped sync check
     expect(m).not.toBeNull();
     const id = m![1];
-    expect(readFileSync(resolve("README.md"), "utf8")).toContain(id);
+    // The judge default is named on the CLI page since the router split moved the commands/flags
+    // reference out of README.md; the README is a router and names no model ids.
+    expect(readFileSync(resolve("docs/cli.md"), "utf8")).toContain(id);
     expect(readFileSync(resolve("docs/scenario.md"), "utf8")).toContain(id);
     expect(readFileSync(resolve(".claude/skills/cowork-harness/references/scenario-schema.md"), "utf8")).toContain(id);
   });
