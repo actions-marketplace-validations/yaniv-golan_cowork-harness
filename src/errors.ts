@@ -22,10 +22,68 @@ export class BoundaryError extends Error {
  * masquerading as a harness bug).
  */
 export class UsageError extends Error {
-  constructor(message: string) {
+  /** Long-form detail for a message that had to be compact. Mirrors `UnansweredError.hint`, which is
+   *  the convention this repo already uses for a short/long pair, and lands in the CONTRACTED
+   *  `error.hint` envelope field — so a caller that wants the full Zod issue array can still read it
+   *  while a terminal gets one line. */
+  hint?: string;
+  constructor(message: string, hint?: string) {
     super(message);
     this.name = "UsageError";
+    this.hint = hint;
   }
+}
+
+/**
+ * One line from a Zod issue list (or from an already-formatted Zod message).
+ *
+ * `ZodError.message` is `JSON.stringify(issues, null, 2)` — 13-16 lines per file, mostly punctuation.
+ * In a batch that is the difference between a readable listing and a wall of JSON: a 35-file corpus
+ * break printed ~455 lines, none of which `--quiet` suppresses (correctly — they are the failure, not
+ * the preview).
+ *
+ * Takes the ISSUES where a caller has them (no round-trip through formatted text) and falls back to
+ * parsing the message where it does not. Paths render bracketed — `assert[0].path_denied.source`, the
+ * shape a YAML author can actually locate — never `assert.0`.
+ *
+ * MUST NOT THROW: it runs on error-reporting paths, where an error raised while *reporting* an error is
+ * the bug this is guarded against. Lives here, in the leaf module, because both `execute.ts` (which
+ * throws) and `cassette.ts` (which renders) need it and `cassette.ts` already imports `execute.ts`.
+ */
+export function compactSchemaError(messageOrIssues: string | unknown[], limit = 200, maxIssues = 3): string {
+  const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
+  const truncate = (s: string) => (s.length > limit ? s.slice(0, limit - 1) + "…" : s);
+  const renderPath = (path: unknown): string => {
+    if (!Array.isArray(path) || path.length === 0) return "(root)";
+    return path.reduce<string>((acc, seg) => (typeof seg === "number" ? `${acc}[${seg}]` : acc ? `${acc}.${seg}` : String(seg)), "");
+  };
+  try {
+    let issues: unknown = messageOrIssues;
+    if (typeof messageOrIssues === "string") {
+      const start = messageOrIssues.indexOf("[");
+      if (start === -1) return truncate(collapse(messageOrIssues));
+      issues = JSON.parse(messageOrIssues.slice(start));
+    }
+    if (Array.isArray(issues)) {
+      const parts = issues
+        .map((i) => {
+          if (!i || typeof i !== "object") return "";
+          const msg = (i as { message?: unknown }).message;
+          if (typeof msg !== "string") return "";
+          const where = renderPath((i as { path?: unknown }).path);
+          return `${msg} at ${where}`;
+        })
+        .filter(Boolean);
+      if (parts.length) {
+        const shown = parts.slice(0, maxIssues);
+        const more = parts.length - shown.length;
+        return truncate(collapse(shown.join("; ") + (more > 0 ? ` … +${more} more` : "")));
+      }
+    }
+  } catch {
+    /* fall through to the raw-message fallback below */
+  }
+  return truncate(collapse(typeof messageOrIssues === "string" ? messageOrIssues : String(messageOrIssues)));
 }
 
 /**

@@ -1,6 +1,6 @@
-# Scenario & session schema, assertion catalog, web_fetch, full gotchas
+# Scenario & session schema, assertion catalog, web_fetch, authoring gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.1.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.2.0`
 (baseline `desktop-1.40609.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -22,7 +22,7 @@ Everything below is the full field + assertion catalog.
 - [Replay class — which assertions survive `replay`](#replay-class)
 - [The web_fetch model](#the-web_fetch-model)
 - [Scenario YAML vs the pytest lane](#scenario-yaml-vs-the-pytest-lane)
-- [Full gotcha list](#full-gotcha-list)
+- [Authoring gotcha list](#authoring-gotcha-list)
 
 ## Scenario YAML
 
@@ -307,7 +307,7 @@ same set live from the schema.
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace) **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text emitted inside a tool call (a gate question, an option label or description) can never match; use `question_context`/`question_asked` or `tool_result_contains` for those. |
 | `file_exists: <path>` | the path exists under the run's `work/` (anchored at `mnt/`, e.g. `outputs/x.md`). For a user-facing deliverable prefer `user_visible_artifact` — with a connected folder the file lands in `mnt/<folder>` (= `{{workspaceFolder}}`), not `mnt/outputs`, so `file_exists: outputs/x.md` misses it |
 | `user_visible_artifact: <path>` | exists **and** under a user-visible root (`outputs/` + each connected folder's mount name) — the right primitive for a workspace deliverable when a folder is connected |
-| `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected (omit to allow deletes) |
+| `no_delete_in_outputs: true` | no delete op touched `mnt/outputs` — **only `true` is valid**; `false` is rejected. **Omitting it does NOT allow deletes** — a detected delete still fails via the `outputs_delete` verdict signal, which fires *because* the key was not authored; use `allow_outputs_delete: true` to accept an intended one. Detection is a post-run bash-command scan, not mount enforcement, so a green means none was *detected* |
 | `no_delete_in_mounts: true` | no delete op touched ANY delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount, so `no_delete_in_outputs` covers only part of the real rule. **only `true` is valid** |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 glob (workRoot-relative paths; `**` = whole path segment for any depth — use `outputs/handoff/**` for per-run subdirs); `[]` = no new files; **new-files-only** — overwriting a pre-existing file in place is invisible (use content-level producer stamping); live/verify-run without a pre-run manifest ⇒ evidence-unavailable hard-fail (live runs capture the baseline only when this key is asserted; recordings always capture); an **incomplete post-run filesystem walk** (an unreadable subtree — a permission/I-O error) also fails evidence-unavailable rather than reporting "no strays" over a partial tree — distinct from the missing-manifest case (a `--resume` run), which fails for a different reason; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay needs `cassette.preRunPaths` (≥0.24 recordings) — cassettes without it **exclude** the key with a loud warning. ⚠️ **Not a stand-in for "file X must not exist":** there is no negative-existence key, and inverting this one is a different claim — it is new-files-only (a pre-existing file is invisible to it) and needs a pre-run manifest. Assert the content-level consequence instead (`tool_not_called`, or the absent `artifact_json`) rather than widening an allowlist for every incidental lock/temp file |
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. uploaded files under `uploads/**`) whose workRoot-relative path matches ≥1 glob keeps an unchanged content hash after the run — the in-place-mutation companion to `no_unexpected_files`'s new-files check (`[]` is rejected by the schema — list at least one glob); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise verify zero files and pass vacuously); a matched file that was deleted counts as a content change (fails); live/verify-run without a pre-run hash manifest ⇒ evidence-unavailable hard-fail (a `--resume` run); captured on every live sandbox tier including microvm; replay needs `cassette.preRunHashes` — cassettes without it **exclude** the key with a loud warning; on replay it compares against the manifest's recorded `sha256`, never a re-hash of the materialized tree |
@@ -401,9 +401,9 @@ paraphrases (that re-records red). Structured JSON → assert it in YAML with **
 `path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
 dotted path.
 
-**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; most
+**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; eleven
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and only four are **warn**-severity (informational, never flip pass/fail). Current signal
+`"success"`) and nine are **warn**-severity (informational, never flip pass/fail). All twenty signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -431,7 +431,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the five **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the nine **warn** codes are truly benign.
 
 ## Replay class
 
@@ -546,14 +546,14 @@ real predicate over a skill's **structured JSON output**:
 Find an artifact's real field paths by running once with `--keep`, then `cowork-harness inspect <run-dir>`
 (a shallow field preview of each JSON artifact) or by reading the JSON directly.
 
-## Full gotcha list
+## Authoring gotcha list
 
 The "✓ passed ≠ correct" landmines relevant to **scenario/assertion authoring**, as
 *symptom → why → fix*. `file:line` pointers track the version at the top of this file.
-**Scope note:** this is the assertion/replay-focused view; the **companion `SKILL.md`'s Gotchas
-section is the full landmine catalog** (it adds workflow/record/answer-path landmines this schema
-reference omits). Neither list is a strict superset of the other — reach for this one while authoring
-`assert:`, and SKILL's when debugging a run's behavior.
+**Scope note:** this is the assertion/replay-focused view; the companion `SKILL.md`'s Gotchas section
+is the broader one (it adds workflow/record/answer-path landmines this reference omits). **Neither list
+is a strict superset of the other** — reach for this one while authoring `assert:`, and SKILL's when
+debugging a run's behavior. The two are **numbered independently**: a bare "gotcha N" means this list.
 
 1. **Replay skips filesystem/egress assertions (two shapes) — with a loud warning.** *Full skip:* a pure
    live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a
@@ -591,7 +591,8 @@ reference omits). Neither list is a strict superset of the other — reach for t
    one concatenated string → use `[\s\S]`, not `.`. `transcript_matches` is case-insensitive.
 
 7. **Multi-key assertion item = AND.** Passes iff every key passes. One concern per item unless
-   conjunction is intended (and a mixed-class conjunction loses its filesystem half on replay — gotcha 1).
+   conjunction is intended (and a mixed-class conjunction loses its filesystem half on replay — gotcha 1
+   of THIS list; the two gotcha lists are numbered independently).
 
 8. **`tool_called` proves a tool ran, not that it was attempted.** Tool counts are authoritative and
    de-duped: a requested-then-denied tool does NOT register as called; the synthetic

@@ -147,6 +147,25 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
     expect(new Set(omitted)).toEqual(SKILL_MD_UNDOCUMENTED);
   });
 
+  // The three counts below rotted in exactly the way this file's header warns about: the schema
+  // reference's TABLE was guarded (above) and stayed correct, while the two prose sentences wrapping it
+  // and SKILL.md's pointer to it drifted to "four", "five" and "17" against an actual 11/9/20. A count
+  // stated in prose beside a guarded table is not covered by the table's guard — pin it explicitly.
+  const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+
+  it("the schema reference's prose fail/warn counts match the table it introduces", () => {
+    const warnCount = [...SEVERITY].filter(([, s]) => s === "warn").length;
+    const failCount = [...SEVERITY].filter(([, s]) => s === "fail").length;
+    expect(warnCount + failCount).toBe(CODES.length); // every code has a static severity
+    expect(schemaRefMd, `${SCHEMA_REF} fail-count prose`).toContain(`${WORDS[failCount]}\nare **fail**-severity`);
+    expect(schemaRefMd, `${SCHEMA_REF} warn-count prose`).toContain(`${WORDS[warnCount]} are **warn**-severity`);
+    expect(schemaRefMd, `${SCHEMA_REF} benign-warn prose`).toContain(`Only the ${WORDS[warnCount]} **warn** codes`);
+  });
+
+  it("SKILL.md's pointer states the real size of the signal table", () => {
+    expect(skillMd, "SKILL.md N-code signal table pointer").toContain(`The full ${CODES.length}-code signal table`);
+  });
+
   it("docs/scenario.md enumerates every warn-severity code, and claims the right count", () => {
     const warnCodes = [...SEVERITY].filter(([, s]) => s === "warn").map(([c]) => c);
     expect(warnCodes.length).toBeGreaterThan(3);

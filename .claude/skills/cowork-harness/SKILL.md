@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 3.1.0
-  tracks-harness: cowork-harness 3.1.0 (baseline desktop-1.40609.0)
+  version: 3.2.0
+  tracks-harness: cowork-harness 3.2.0 (baseline desktop-1.40609.0)
 ---
 
 # cowork-harness
@@ -25,7 +25,7 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 3.1.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 3.2.0` (baseline
 > `desktop-1.40609.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -42,7 +42,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 3.1.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^3.1.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^3.1.0"`. **Pin `@^3.1.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 3.2.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^3.2.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^3.2.0"`. **Pin `@^3.2.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -57,21 +57,15 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 Everything you do with the harness is one of **three loops**, and the rest of this skill is organized
 into three Parts to match: **author** a scenario (Part I), **run / record / lock** it into a
 reproducible regression (Part II), and **debug** a run that misbehaved or greened when it shouldn't
-(Part III — reachable straight from here in one hop). Pick the loop you're in:
+(Part III — reachable straight from here in one hop).
+
+Pick the entry point you need. The first three are the everyday path — a quick liveness check, the
+CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that hang off them:
 
 - **"Is it even alive?"** (inner loop) → `cowork-harness skill <folder> "<prompt>"`. Fastest; no
   scenario file.
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
-- **Regression-test your skill's ANSWER quality** (not just its behavior — does its guidance still lead to
-  correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
-  profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
-- **"What is WRONG with this skill?"** (a graded critique, not a pass/fail) → `cowork-harness critique
-  <folder> --prompt "<probe>"`. Four model workloads and 10–20 minutes; budget from
-  `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
-  **DO**" — routing, artifact location, narration — use `skill` instead**: no evaluator, a fraction of
-  the cost, and it answers that question directly. Report and evidence-package shapes:
-  `references/critique.md`.
 - **A run failed — or greened and you don't trust it** (the debugging loop) → don't re-run and hope.
   The run already wrote its evidence to a **kept run dir** (`~/.cowork-harness/runs/…`; `--keep` prints
   the path, `trace <run-id>` finds it). **Localize the failure post-hoc** from that evidence:
@@ -83,6 +77,15 @@ reproducible regression (Part II), and **debug** a run that misbehaved or greene
   **"Evidence" here means the RUN's own record** — events, trace, transcript. `critique`'s evaluator
   grades against a different artifact, `critique-evidence-package.txt`, which none of these tools
   surface; see `references/critique.md`.
+- **Regression-test your skill's ANSWER quality** (not just its behavior — does its guidance still lead to
+  correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
+  profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
+- **"What is WRONG with this skill?"** (a graded critique, not a pass/fail) → `cowork-harness critique
+  <folder> --prompt "<probe>"`. Four model workloads and 10–20 minutes; budget from
+  `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
+  **DO**" — routing, artifact location, narration — use `skill` instead**: no evaluator, a fraction of
+  the cost, and it answers that question directly. Report and evidence-package shapes:
+  `references/critique.md`.
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in **Part III — Debug**).
   **"Interactive" splits two ways — don't take the wrong branch.** Want to answer gates yourself *and*
@@ -380,7 +383,10 @@ emits a scenario `lint` would reject.
 `lint` (exit 0) but a **hard error** in the runtime (`Unrecognized key: "<k>"`, exit 2) — so a scenario
 that lints with warnings may still not run. To check whether a scenario actually loads, without spending:
 `cowork-harness record <file.yaml> --dry-run` (exit 2 on a schema error; a directory reports each
-`✗ broken:` file and exits 1). Corollary: **the loader** fails LOUD on an unknown key (never silently) —
+`✗ broken:` file and exits 1). **Read the exit code, not just its sign:** `record <file>` — with or without
+`--dry-run` — answers `2` for "did not load" and `1` for "loaded fine, but this record is refused" (a
+pre-spend policy refusal; `--max-budget-usd` is the one refusal that keeps exit 2). Treating any non-zero
+as "scenario broken" mis-reports every refused-but-valid scenario. Corollary: **the loader** fails LOUD on an unknown key (never silently) —
 but **`replay` does not**: a frozen top-level key it doesn't recognize (e.g. `lane:` recorded pre-1.16.0) is
 silently ignored and can flip a lane-sensitive verdict green; only frozen **assertion** keys stay
 hard-rejected there. Full split + the v11 version-regime:
@@ -416,6 +422,28 @@ contradiction, duplicate cassette target) gate the batch. So a directory dry-run
 real `record` would refuse; re-run that one file with its real flags for a binding answer. A directory also
 reports every offender and the batch cost estimate. `lint` checks the assertion invariants (both above).
 
+**Which arm to reach for.** They answer different questions, and picking the wrong one is why a consumer
+concluded the free pre-flight was unavailable:
+- **"Does my whole corpus still load?"** → the **directory** arm (`record scenarios/ --dry-run --quiet`,
+  the CI shape in `references/ci-recipe.md`). It reports every offender in one pass, and the
+  destination-policy verdict cannot red it: that arm knows no `--out`, so host-inventory and portability
+  are advisory `notes[]` at exit 0 while a file that cannot load is `✗ broken:` at exit 1. Limits worth
+  knowing: it is **non-recursive** (`readdirSync` — scenarios in subdirectories are never opened), a file
+  with no `prompt:` key reports as `· skipped:` rather than broken (so a renamed or mis-indented
+  `prompt:` reads as "not a scenario" and the batch still exits 0), exit 1 covers **refused**
+  (path-independent only — prompt policy, assert contradiction, duplicate target) as well as broken, and
+  `--quiet` suppresses the advisory notes entirely — it keeps `✗ broken:` / `✗ refused:` / `· skipped:`,
+  which is what you want in CI but means the notes are not a thing you will see there.
+- **"Would THIS record be refused?"** → the **single-file** arm **with the flags and `--out` the real
+  record will get**. The destination it evaluates is `--out` if given, else `cassettes/<slug>.cassette.json`
+  *relative to your cwd* — so previewing from the repo root a record that really runs from a subdirectory
+  asks about a path that may not even exist, and a scenario whose cassette IS committed can come back
+  refused. Point it at the real destination and the answer is binding.
+
+Neither question is answered by passing `--allow-host-inventory-fixture` to get past the refusal: that
+flag is consent for a recording you intend to make, and reaching for it as a load-check habit is how it
+stops meaning anything.
+
 **Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
 Without `--out`, `record` writes `cassettes/<scenario-name-slug>.cassette.json` (gitignored by
 default); pass `--out <path>` to put it somewhere tracked, e.g. `examples/replays/<name>.cassette.json`.
@@ -429,7 +457,7 @@ warns when the cassette would be written outside the scenario's tree, or when `s
 outside it (an absolute or `~` path: the mirror case, invisible to a check that only looks at where the
 cassette lands). A warning, not a refusal — an out-of-tree throwaway cassette is legitimate; what was
 missing was anything saying so while you could still act. Related: recording at a **host-inheriting** tier
-(`protocol`/`hostloop`/`cowork`→hostloop) into a repo-visible path is refused outright (gotcha 25).
+(`protocol`/`hostloop`/`cowork`→hostloop) into a repo-visible path is refused outright (gotcha 25 below).
 The clean answer there is `fidelity: container` (sealed, `HOME=/tmp`, nothing to leak) — **not**
 redirecting `--out` outside the repo and moving the file in afterwards, which trades a loud refusal
 for a cassette that cannot verify staleness from its own location — recoverable only by passing
@@ -600,7 +628,7 @@ Recognize these before "fixing" a non-bug:
   `RunResult.scan` is undefined and the host-path + outputs-delete guards **did not run this run**. Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 
-The full 17-code signal table (severity + per-signal opt-out) is in
+The full 20-code signal table (severity + per-signal opt-out) is in
 [`references/scenario-schema.md`](./references/scenario-schema.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 
@@ -750,7 +778,8 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
   plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and
   `--group-by scenario|skill-hash|label|fidelity` to split per generation — or per effective fidelity
-  tier — instead of aggregating across them (a window spanning >1 generation warns — see Gotcha 6;
+  tier — instead of aggregating across them (a window spanning >1 generation warns, so an un-split A/B
+  average announces itself rather than passing as one number;
   >1 tier warns too, independently, with `--group-by fidelity` as its own remedy). `--runs` lists the
   individual runs behind each summary with their `skillHash`/`runLabel`, so
   you can tell which arm a run belonged to without opening its `result.json`. `--last <n>` windows per group.
@@ -773,7 +802,7 @@ decide which assertions from *Assertions: two orthogonal axes* are worth adding)
   `outputTruncated` on a matched tool result). Three separately-shaped rollups, easy to conflate in a
   `jq` recipe: `toolCounts` is a flat `{tool: number}` call-count map, `toolErrors` is
   `{tool: {calls, errors}}`, and `toolDurations` is `{tool: {calls, totalMs, maxMs}}`. (Full per-field
-  semantics: the README's "Observability fields" section — repo-only; [`schema/run-result.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/run-result.json) is the
+  semantics: [`docs/cli.md` → What you get out](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md#what-you-get-out-inspectable-output) (repo-only); [`schema/run-result.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/run-result.json) is the
   machine source.)
 - **Opaque failure?** A failed run also records **`errorSource`** (where the failure originated) and
   **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
@@ -830,8 +859,12 @@ The startup banner now reads `type your message (/help for commands)` as a remin
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
-Stated as *symptom → why → fix*. **This is the full landmine catalog;** `references/scenario-schema.md`
-repeats the assertion/replay-relevant ones alongside the schema (a scoped subset, not a fuller list).
+Stated as *symptom → why → fix*. This is the **workflow/record/answer-path** view — the broader of the
+two lists, but **not a strict superset**: `references/scenario-schema.md`'s *Authoring gotcha list*
+carries a few assertion-level landmines this one omits (`transcript_no_host_path`'s scan width,
+`egress.extra_allow`'s no-op on the provenanced `web_fetch` path, `replay_protocol_fidelity` not being
+authorable). Reach for this list when debugging a run's behavior, that one while authoring `assert:`.
+**The two lists are numbered independently** — a bare "gotcha N" means the list you are reading.
 
 1. **An assertion passed but tested nothing on the PR gate.** *Why:* on a manifest-less cassette
    `replay` skips filesystem/egress keys (`file_exists`, `user_visible_artifact`, `artifact_json`,
@@ -857,7 +890,7 @@ repeats the assertion/replay-relevant ones alongside the schema (a scoped subset
 
 3. **A multi-key `assert:` item is an AND.** A single list item with more than one key passes iff
    **every** key passes. *Fix:* one concern per item unless you genuinely mean conjunction (and a
-   mixed-class conjunction still loses its filesystem half on replay — see gotcha 1).
+   mixed-class conjunction still loses its filesystem half on replay — see gotcha 1 below).
 
 4. **`tool_called` doesn't mean "attempted".** Tool counts are authoritative and de-duped: a tool
    that was *requested then denied* does **not** register as called. *Fix:* don't assert `tool_called`

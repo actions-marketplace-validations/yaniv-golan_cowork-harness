@@ -23,7 +23,10 @@ lint flags (see references/scenario-schema.md for the why of each):
                                                   (runtime rejects at LOAD time; tier rules suppressed)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)
-  E  on_unanswered: agent / invalid value            (schema rejects `agent`)
+  E  `enum-value-invalid`      any enum-valued field carries a value the schema rejects (fidelity,
+                               execution, lane, on_unanswered, answers[].decide/else/grant,
+                               assert[].result/path_denied.*/question_options.order) — `agent` gets a
+                               `on_unanswered: agent` → `llm` rename hint
   E  authored `replay_protocol_fidelity` assertion   (replay-synthesized only)
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
   E  a presence assert + its absence sibling            (unsatisfiable; run/skill/record refuse it:
@@ -302,8 +305,82 @@ REGEX_KEYS = {
     "reference_read",
     "no_observed_reference_access",
 }
-VALID_ON_UNANSWERED = {"fail", "prompt", "first", "llm"}
-VALID_TIERS = ("protocol", "container", "microvm", "hostloop", "cowork")
+# The authoritative enum-value map: field id -> allowed values, generated from the Zod schemas into
+# `assertion-keys.json`'s `enums` block by walking BOTH the top-level ScenarioObject fields and the
+# nested answers[]/assert[] item shapes (gen-schema.ts's buildEnumMap). Backs the generic
+# `enum-value-invalid` lint rule below, and replaces two independent hand-copies that used to drift from
+# the schema on their own: VALID_TIERS (now `ENUM_VALUES["fidelity"]`) and the old bespoke
+# on_unanswered check's VALID_ON_UNANSWERED set (now `ENUM_VALUES["on_unanswered"]`).
+_EMBEDDED_ENUMS = {
+    "fidelity": ["protocol", "container", "microvm", "hostloop", "cowork"],
+    # "cloud-describe" IS a valid schema value here -- the runtime rejects it as RESERVED at load
+    # (src/run/execute.ts: no cloud runner exists yet), so it must never be handed back to an author as
+    # the FIX for some other invalid `execution:` value. See _enum_fix_values below, which is where that
+    # carve-out is applied -- this map itself stays a faithful mirror of what the schema accepts.
+    "execution": ["local", "cloud-describe"],
+    "lane": ["local", "remote"],
+    "on_unanswered": ["fail", "prompt", "llm", "first"],
+    "answers.decide": ["allow", "deny"],
+    "answers.else": ["allow", "deny"],
+    "answers.grant": ["once", "domain"],
+    "assert.result": ["success", "error"],
+    "assert.path_denied.source": ["pretooluse", "can_use_tool", "permission_denied"],
+    "assert.path_denied.agent_scope": ["main", "subagent", "any"],
+    "assert.question_options.order": ["exact", "any"],
+}
+
+
+def _load_enums():
+    """The authoritative enum-value map, from the generated assertion-keys.json sidecar. Falls back to
+    the embedded `_EMBEDDED_ENUMS` (kept equal to the generated map) with a loud warning if the file is
+    missing or predates the `enums` field."""
+    p = Path(__file__).resolve().parent / "assertion-keys.json"
+    try:
+        enums = json.loads(p.read_text(encoding="utf-8")).get("enums")
+        if not enums:
+            raise KeyError("enums")
+        return enums
+    except Exception:
+        print(
+            f"::warning:: assertion-keys.json missing or has no enums next to scenario.py ({p}) — "
+            "using a built-in enum-value map that may be stale (run `npm run schema`).",
+            file=sys.stderr,
+        )
+        return dict(_EMBEDDED_ENUMS)
+
+
+# field id -> allowed values (generated from the zod schemas; see _load_enums)
+ENUM_VALUES = _load_enums()
+VALID_TIERS = tuple(ENUM_VALUES.get("fidelity", _EMBEDDED_ENUMS["fidelity"]))
+
+
+def _enum_fix_values(field, allowed):
+    """Allowed values to SHOW an author as the fix for an invalid `field`. Identical to the validation
+    set except for `execution`, where `cloud-describe` is schema-valid but runtime-RESERVED (a load-time
+    error at record/run/skill — src/run/execute.ts) — offering it as a remedy would just relocate the
+    failure from `lint` to `record --dry-run` rather than resolve it."""
+    if field == "execution":
+        return [v for v in allowed if v != "cloud-describe"]
+    return allowed
+
+
+def _enum_finding(field, value, path):
+    """An `enum-value-invalid` Finding if `value` is not in `field`'s allowed set, else None. Unknown
+    `field`s (not in ENUM_VALUES) are silently skipped -- that would be a linter bug, not an authoring
+    one, and every field this is called with is a schema enum by construction."""
+    allowed = ENUM_VALUES.get(field)
+    if not allowed or value in allowed:
+        return None
+    hint = " (`agent` was renamed to `llm`)" if field == "on_unanswered" and value == "agent" else ""
+    # A present-but-null key reads as `fidelity: None` in Python; show the YAML the author wrote.
+    shown = "null" if value is None else value
+    return Finding(
+        "ERROR",
+        "enum-value-invalid",
+        f"`{field}: {shown}` is not a valid value{hint}.",
+        f"Use one of: {' | '.join(_enum_fix_values(field, allowed))}.",
+        path,
+    )
 
 # Gate-id tripwire: the `host-path-assert-cowork` WARN below embeds Cowork's
 # host-loop gate id in offline Python (the linter never reads a baseline). The
@@ -747,19 +824,54 @@ def lint_doc(doc, path, raw_lines):
                 )
             )
 
-    # E: retired/invalid on_unanswered
-    ou = doc.get("on_unanswered")
-    if ou is not None and ou not in VALID_ON_UNANSWERED:
-        extra = " (`agent` was renamed to `llm`)" if ou == "agent" else ""
-        findings.append(
-            Finding(
-                "ERROR",
-                "on-unanswered-invalid",
-                f"on_unanswered: {ou} is not a valid value{extra}.",
-                "Use one of: fail | prompt | first | llm (YAML). For a live model use on_unanswered: llm.",
-                path,
-            )
-        )
+    # E: enum-value-invalid — every enum-valued scenario field, top-level and nested. Schema-invalid
+    # values here are refused at load (`run`/`skill`/`record` all raise zod's `invalid_value`, exit 2)
+    # regardless of what `lint` says, so a scenario `lint --strict` calls clean while the loader hard-
+    # rejects it is exactly the false-green class this linter exists to catch. Generalizes what used to
+    # be a single bespoke check for `on_unanswered` alone — a fifth of the schema's actual enum surface
+    # (see ENUM_VALUES above); the `agent` -> `llm` rename hint survives as a field-specific case in
+    # _enum_finding.
+    # Membership, NOT `.get(...) is not None`: a key present with an empty value (`fidelity:` and
+    # nothing after it -- a one-keystroke slip) parses as null, which the loader rejects and which the
+    # retired on_unanswered check let through. Absent keys stay absent; they default legitimately.
+    for _field in ("fidelity", "execution", "lane", "on_unanswered"):
+        if _field in doc:
+            _value = doc[_field]
+            _f = _enum_finding(_field, _value, path)
+            if _f is not None:
+                findings.append(_f)
+    _answers = doc.get("answers")
+    if isinstance(_answers, list):
+        for _rule in _answers:
+            if not isinstance(_rule, dict):
+                continue
+            for _key in ("decide", "else", "grant"):
+                if _key in _rule:
+                    _value = _rule[_key]
+                    _f = _enum_finding(f"answers.{_key}", _value, path)
+                    if _f is not None:
+                        findings.append(_f)
+    for _item in items:
+        if "result" in _item:
+            _value = _item["result"]
+            _f = _enum_finding("assert.result", _value, path)
+            if _f is not None:
+                findings.append(_f)
+        _path_denied = _item.get("path_denied")
+        if isinstance(_path_denied, dict):
+            for _key in ("source", "agent_scope"):
+                if _key in _path_denied:
+                    _value = _path_denied[_key]
+                    _f = _enum_finding(f"assert.path_denied.{_key}", _value, path)
+                    if _f is not None:
+                        findings.append(_f)
+        _question_options = _item.get("question_options")
+        if isinstance(_question_options, dict):
+            if "order" in _question_options:
+                _value = _question_options["order"]
+                _f = _enum_finding("assert.question_options.order", _value, path)
+                if _f is not None:
+                    findings.append(_f)
 
     # E: authored replay_protocol_fidelity
     if "replay_protocol_fidelity" in assert_keys:

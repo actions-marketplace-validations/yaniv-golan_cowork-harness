@@ -25,11 +25,14 @@ or Lima for `microvm`).
    ```bash
    docker build --platform linux/arm64 -t cowork-agent-base:2 -f docker/Dockerfile.agent .
    # or pull the prebuilt image and retag to the local tag the harness resolves:
-   docker pull ghcr.io/yaniv-golan/cowork-agent-base:2 && docker tag ghcr.io/yaniv-golan/cowork-agent-base:2 cowork-agent-base:2
+   docker pull ghcr.io/yaniv-golan/cowork-agent-base:2-r1 && docker tag ghcr.io/yaniv-golan/cowork-agent-base:2-r1 cowork-agent-base:2
    ```
-   (For OCR / Office / PDF-table skills, swap `-base` → `-full` in both the build/pull and the tag. The
-   images carry **no Anthropic binary** — the agent is bind-mounted from your own install. `doctor` warns if
-   a pulled image drifts from the current published `:2`; re-pull to refresh.) The `microvm` tier uses
+   (Pull the **revision-qualified** `:2-r1` — that is the digest this release pins, so `doctor` can verify
+   it; the bare `:2` is a floating alias that moves. Either way retag to the local `cowork-agent-base:2`,
+   which is the ref the harness resolves. For OCR / Office / PDF-table skills, swap `-base` → `-full` in
+   both the build/pull and the tag. The images carry **no Anthropic binary** — the agent is bind-mounted
+   from your own install. `doctor` warns if the local image is not the pinned digest; re-pull to refresh.
+   Full prerequisites, including the full-parity variant: [docs/cli.md](../docs/cli.md).) The `microvm` tier uses
    **Lima + Apple Virtualization.framework** instead (macOS arm64 only), **not** Docker — `brew install
    lima`. Run `cowork-harness doctor --tier microvm` to see what's missing.
 3. **An auth token** for runs that actually call the model (not needed for the replay-only path).

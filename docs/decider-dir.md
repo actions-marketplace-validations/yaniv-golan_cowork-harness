@@ -22,7 +22,9 @@ The harness and the driver rendezvous through files in `<dir>`:
    renames `req-N.json` → `req-N.json.done` (so it can't be re-emitted), and the run resumes.
 3. Gates are strictly serial — one outstanding gate at a time: `req-1` → `resp-1` → `req-2` → … .
 4. On run completion the harness writes `<dir>/done.json`, which tells a `gates --follow` watcher to
-   emit a terminal `{"done":true}` and exit.
+   emit a terminal `{"done":true}` and exit. "Completion" includes **not starting**: if the scenario
+   cannot be loaded at all, the marker is still written, so a watcher already following the dir
+   terminates instead of hanging on a run that will never produce a gate.
 
 For a **question** gate you do not hand-write those files — two CLI subcommands wrap the protocol:
 

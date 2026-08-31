@@ -13,6 +13,16 @@ Start with the [project README](../README.md) for the overview and quick start, 
 > - **Replay-only usage** (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches.
 > - **Every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model. (At `protocol` specifically, a Keychain-only login downgrades this to a **`!` warn** rather than a `✗`: that tier keeps your real `CLAUDE_CONFIG_DIR`, so the agent can self-source local login state. Every other tier uses a managed config dir and genuinely needs the token in env / `.env`.) A further reason replay-only users simply skip `doctor`: a token ✗ there is expected, not a blocker for replay.
 
+## Start here
+
+The three entry points, one per way of driving the harness.
+
+| Doc | What it covers |
+|---|---|
+| [cli.md](./cli.md) | **Start here for the CLI** — install, prerequisites per fidelity tier, the command table, the two files you author, what a run leaves on disk, and the `COWORK_*` env knobs. |
+| [companion-skill.md](./companion-skill.md) | **Install/orientation** for the companion skill that lets Claude Code drive the harness. Usage itself lives in the skill's own `SKILL.md`. |
+| [ci.md](./ci.md) | **CI** — the token-free gate to copy into a skill repo, the packaged GitHub Action, and the live lane's requirements. |
+
 ## Common tasks (I want to…)
 
 A shortcut into the guides below for a handful of frequent goals — the full picture is still the
@@ -33,10 +43,8 @@ reading order and tables that follow.
 | **Assert on how the run *behaved*, not what it produced** | [CLI page → Assert on the run, not the output](./cli.md#assert-on-the-run-not-the-output) — `subagent_tool_absent`, `dispatch_count_max`, `no_delete_in_outputs`: claims no output diff can reach |
 | **See exactly what a gate put in front of the user** (option labels *and* descriptions) | `trace <run> --view questions`; assert it with `question_context` ([scenario.md](./scenario.md#full-schema)). When no view renders the field you need, read `events.jsonl` directly — [debugging.md → investigate the run](./debugging.md#the-skill-misbehaved--investigate-the-run) has the `jq` recipes |
 | Debug a run that no-ops an assertion | [debugging.md](./debugging.md) |
-| Check whether the sandbox really enforces the boundary | [cli.md](./cli.md) | **Start here for the CLI** — install, prerequisites per fidelity tier, the command table, the two files you author, what a run leaves on disk, and the `COWORK_*` env knobs. |
-| [companion-skill.md](./companion-skill.md) | **Install/orientation** for the companion skill that lets Claude Code drive the harness. Usage itself lives in the skill's own `SKILL.md`. |
-| [ci.md](./ci.md) | **CI** — the token-free gate to copy into a skill repo, the packaged GitHub Action, and the live lane's requirements. |
-| [boundary.md](./boundary.md) |
+| **My skill wrote the file to the wrong place** — `outputs/foo.md` vs a bare `foo.md` | [scenario.md → Assertions](./scenario.md#assertions) — the lane-dependent delivery-path tables. A **bare filename** is right on production's desktop-local host-loop (the file-tool base is `outputs/`, so `outputs/foo.md` DOUBLES the prefix and is invisible), and WRONG at the harness's default `container`/`microvm` tier, where the base is the scratchpad. Name the tier you mean. [subagents.md](./subagents.md#canonical-outputs-addressing--tier-qualified-there-is-no-single-cross-tier-literal-form) has the sub-agent case |
+| Check whether the sandbox really enforces the boundary | [boundary.md](./boundary.md) |
 | Sync after a Claude Desktop update | [maintenance.md](./maintenance.md) |
 
 ## Guides

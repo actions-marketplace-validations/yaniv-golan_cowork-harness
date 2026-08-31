@@ -19,6 +19,8 @@ This project is a **test harness**, and its sandbox is a **fidelity fixture, not
 | Testing your own skills' behavior + constraints | `container` (default) | Faithful + CI-native |
 | Testing isolation of untrusted/3rd-party skills | `microvm` | VM-grade escape resistance |
 | Fast logic-only iteration | `protocol` | No sandbox — boundary assertions are refused to avoid false passes |
+| Reproducing production's host-side tool routing | `hostloop` | Highest behavioural fidelity, **weakest isolation**: the agent's file tools run against real host paths and `web_fetch` is host-routed, so the egress allowlist is the only network check on that path. Trusted code only |
+| Matching whichever loop production is actually on | `cowork` | **Not a sandbox of its own** — it resolves at run time to `hostloop` or `container`, read from the synced baseline's host-loop gate, so its isolation is whichever tier it landed on. Pin `hostloop`/`container` explicitly when a boundary result depends on the distinction |
 
 Set the tier with the scenario's **`fidelity:`** field (see [docs/scenario.md](./docs/scenario.md)); how each tier enforces (or doesn't) the boundary is detailed in [docs/boundary.md](./docs/boundary.md).
 

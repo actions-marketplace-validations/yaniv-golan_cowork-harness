@@ -96,7 +96,11 @@ about how loudly to say so, and the difference matters:
 Two consequences worth internalising:
 
 - **A scenario that lints with only warnings may still be unloadable.** `lint` is the more permissive
-  check, not the stricter one. A clean-ish lint is not proof the file runs.
+  check, not the stricter one. A clean-ish lint is not proof the file runs. It is not *uniformly* more
+  permissive, though: an invalid **enum value** (`fidelity: bogus`, `assert: - result: succes`,
+  `answers[].decide: allowe`, or one of those keys left empty, which parses as null) is a lint **ERROR**
+  (`enum-value-invalid`), because the loader rejects it outright and a green lint there was a false one.
+  Unknown *keys* remain a warning — see the next point.
 - **Unknown *top-level* scenario keys are handled differently by the two paths.** The **loader**
   (`run`/`skill`/`record`, reading scenario YAML) rejects one outright: exit 2 for a single file, or exit 1
   for a directory, which reports each `✗ broken:` file. **`replay` does not.** A cassette's frozen scenario
@@ -119,9 +123,10 @@ Two consequences worth internalising:
 **To check whether a scenario loads, without spending anything:**
 
 ```bash
-cowork-harness record path/to/scenario.yaml --dry-run   # runs the real loader; exit 2 on a schema error,
-                                                        # and refuses what the real record would (unsatisfiable
-                                                        # assert pairing, on_unanswered: prompt)
+cowork-harness record path/to/scenario.yaml --dry-run   # runs the real loader; exit 2 if it does NOT load,
+                                                        # and exit 1 if it loads but the real record would
+                                                        # refuse it (unsatisfiable assert pairing,
+                                                        # on_unanswered: prompt, host-inventory destination)
 ```
 
 `--dry-run` writes nothing and needs no token or staged agent to report a schema error, so it is the
@@ -311,6 +316,16 @@ the CLI's `--decider-llm`). It is **non-deterministic** by construction, so a ru
 > answers *any* gate — use it only as a **last-resort fallback for a single expected gate per turn**, and
 > always place it *after* more-specific rules. This covers stochastic *labels*; it does **not** cover
 > structural stochasticity (whether/which gate appears), which still needs a live decider as above.
+>
+> **When the labels *and* the order both regenerate, neither anchor holds** — a partial anchor has no
+> stable leading text to bind, and a positional index has no stable slot to land on. The only remedy is
+> free-text `answer:`, Cowork's **"Other"** free-text path (above): it is order- and label-independent
+> because it is never validated against the offered labels at all. That is also its cost — the harness
+> delivers whatever string you wrote, so it cannot tell you the gate still offers the option you meant,
+> which is exactly the guard `choose:` gives up. A `choose:` whose label vanished fails loud; an `answer:`
+> for an option the skill stopped offering sails through and the run keeps passing. Pin with `answer:`
+> when nothing else binds, and treat it as un-anchored: it survives drift because it does not check.
+> There is no `choose_matching:` or other regex-over-options key.
 
 > **Batched gates are answered atomically.** A gate with several sub-questions is answered (and delivered)
 > as one unit. If your scripted rules match only *some* sub-questions, the **whole gate** falls through to
@@ -475,7 +490,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`). **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`) |
 | `user_visible_artifact: <path>` | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — the agent's cwd already **is** the outputs dir (`src/run/execute.ts` sets `hostCwd` to `mnt/outputs`), so a file written there is already under a user-visible root and this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. **The correct path is LANE-DEPENDENT** — see "Where a relative path actually lands" above. On the desktop-local **host-loop** lane (production today) the file tools are already rooted at `outputs/`, so the literal prefix DOUBLES: `outputs/actions.md` lands at `outputs/outputs/actions.md` and the user never sees it — write a **bare filename** there. At `fidelity: container`/`microvm` (VM-loop, the harness default) the base is the session root instead, so a bare filename lands in the scratchpad and you want `{{workspaceFolder}}` or `present_files`. Measured 2026-08-27. Describing the OUTCOME rather than a path also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
-| `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (Cowork's outputs mount fails `unlink`/`rmdir` with `EPERM`) — **only `true` is valid**; writing `false` is rejected by the schema. **Omitting the key does NOT allow deletes**: a detected delete still fails the run via the `outputs_delete` verdict signal, which fires precisely *because* the key was not authored — authoring it turns that signal into an explicit assertion. To accept an intended delete, use `allow_outputs_delete: true`. Detects operations that UNLINK a name; emptying a file in place (`truncate`, `>`, `shred` without `-u`) is not a delete and is permitted by Cowork, so it is not flagged |
+| `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` (Cowork's outputs mount fails `unlink`/`rmdir` with `EPERM`) — **only `true` is valid**; writing `false` is rejected by the schema. **Omitting the key does NOT allow deletes**: a detected delete still fails the run via the `outputs_delete` verdict signal, which fires precisely *because* the key was not authored — authoring it turns that signal into an explicit assertion. To accept an intended delete, use `allow_outputs_delete: true`. Detects operations that UNLINK a name — a post-run bash-command scan, not mount-level enforcement, so a green means none was *detected*, not that the mount enforced anything; emptying a file in place (`truncate`, `>`, `shred` without `-u`) is not a delete and is permitted by Cowork, so it is not flagged |
 | `no_delete_in_mounts: true` | no delete op touched **any** delete-denied mount — `outputs` plus every `rw` connected folder — except those waived by `allow_delete_in`. Production denies `unlink`/`rmdir` on every such mount until per-mount approval, so `no_delete_in_outputs` asserts only part of the real rule; this is the mount-wide form. **Only `true` is valid.** Same post-run-scan caveat: a green means none was *detected*, not that the mount enforced anything |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay-checkable when the cassette carries `artifacts` **and** `preRunPaths`; an **incomplete** post-run filesystem walk (an unreadable subtree — permission/I-O error — not just a missing pre-run manifest) also ⇒ evidence-unavailable, so "no strays" is never trusted from a partial walk |
 | `input_unmodified: <glob>` or `[<glob>, …]` | a single glob or a list; every **pre-existing** file (incl. `uploads/**`) whose workRoot-relative path matches has an unchanged content hash after the run (the in-place-mutation detector — the counterpart to `no_unexpected_files`, which only watches for *new* files); a glob that matches **no** pre-run path fails loud (a typo or renamed mount would otherwise pass vacuously, verifying nothing); needs the pre-run content-hash manifest (harness ≥0.24 recordings) — same capture caveats as `no_unexpected_files` |
@@ -607,11 +622,11 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 
 #### Verdict signals
 
-Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
-are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only nine codes are **warn**-severity (informational, never flip
-pass/fail):
+Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
+are twenty codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
+`result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
+`result.verdict.signals[].severity` or the run's exit code instead.
+Only nine codes are **warn**-severity (informational, never flip pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
 - `model_fallback` (**warn**) — the agent switched off the requested model mid-run, reported from the

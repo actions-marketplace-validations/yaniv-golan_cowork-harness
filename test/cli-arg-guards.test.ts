@@ -371,7 +371,11 @@ describe.skipIf(!can)("record rejects on_unanswered: prompt in the scenario, as 
     const d = mkdtempSync(join(tmpdir(), "rp-"));
     writeFileSync(join(d, "s.yaml"), "prompt: hi\non_unanswered: prompt\n");
     const r = run(["record", "s.yaml", "--dry-run"], d);
-    expect(r.code).toBe(2);
+    // 1, not 2: this is a PRE-SPEND REFUSAL, and the preview gives the code the real `record` gives it
+    // (SPEC.md §11's per-command convention). Exit 2 on this arm is reserved for a scenario the LOADER
+    // rejects, so that "did it load?" and "will this record be refused?" are separable — they were not
+    // while both answered 2. See test/record-dry-run-preflight.test.ts for the paired 1-vs-2 case.
+    expect(r.code).toBe(1);
     expect(r.out).toMatch(/prompt/);
   });
 

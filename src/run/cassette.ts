@@ -32,7 +32,7 @@ import {
   isLiveModelId,
 } from "../types.js";
 import { executeScenario, assertContradiction, parseScenarioFile, collectArtifactPaths, parseSessionFile, slugForPath } from "./execute.js";
-import { UsageError } from "../errors.js";
+import { UsageError, compactSchemaError } from "../errors.js";
 import { preflightBudget, preflightBatchBudget, batchBudgetTracker, estimateBatchCost, batchCostEstimateLine } from "./budget.js";
 
 /** One wording for the `--max-budget-usd` × `--concurrency` degradation, emitted from the dry-run preview
@@ -77,7 +77,7 @@ import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-ima
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
 import { foldToolDurations, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
-import { fileChannel, type DecisionChannel } from "../decide/external-channel.js";
+import { fileChannel, writeDoneMarker, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
 import { isVmSessionsPath } from "../vm-paths.js";
 
@@ -2665,6 +2665,14 @@ export interface ScenarioDiscovery {
  *  POSITIVE `prompt:` signal — NOT on "Scenario.parse threw", because a session YAML and a broken scenario
  *  both throw the same error. A doc with `prompt:` that fails to parse is BROKEN (a batch failure), never a
  *  silent skip — silently swallowing a broken scenario as a non-scenario is the false-green this guards. */
+/** Drop a leading `invalid scenario <file>: ` from a discovery error — the listing already names the
+ *  file, and repeating an absolute path is most of the line. Returns the message untouched when the
+ *  prefix is absent (a YAML parse error, or a shape we did not produce). */
+export function stripScenarioPrefix(error: string, file: string): string {
+  const prefix = `invalid scenario ${file}: `;
+  return error.startsWith(prefix) ? error.slice(prefix.length) : error;
+}
+
 export function discoverScenarios(dir: string): ScenarioDiscovery {
   const files = readdirSync(dir)
     .filter((f) => /\.ya?ml$/i.test(f))
@@ -2676,7 +2684,11 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
     try {
       raw = parseYaml(readFileSync(f, "utf8"));
     } catch (e) {
-      out.broken.push({ file: f, error: `YAML parse error: ${(e as Error).message}` });
+      // Collapsed for the same reason the schema branch is compact: the `yaml` package's message is a
+      // CODE FRAME (~6 lines per file, two of them blank), not a sentence. A corpus broken by one bad
+      // indent — the likeliest way a whole directory breaks at once — would otherwise stay a wall of
+      // text after the schema half was fixed. Blank lines are worse than JSON in a CI log.
+      out.broken.push({ file: f, error: compactSchemaError(`YAML parse error: ${(e as Error).message}`) });
       continue;
     }
     const hasPrompt = raw !== null && typeof raw === "object" && "prompt" in (raw as Record<string, unknown>);
@@ -3786,7 +3798,10 @@ export async function cmdRecord(args: string[]) {
         );
       } else {
         for (const s of disc.skipped) log(`· skipped: ${s}`);
-        for (const b of disc.broken) log(`✗ broken: ${b.file}: ${b.error}`);
+        // `stripScenarioPrefix`: the message already opens with `invalid scenario <path>:`, so printing
+        // it after `✗ broken: <path>:` put the same absolute path on the line twice — 284 chars of
+        // prefix before the finding, measured on CI-shaped paths.
+        for (const b of disc.broken) log(`✗ broken: ${b.file}: ${stripScenarioPrefix(b.error, b.file)}`);
         // `--quiet` mutes the readiness PREVIEW only; a refusal is the loud half of "silent on success,
         // loud on failure" and must survive it, exactly as `broken:` does.
         for (const r of refusals) log(`✗ refused: ${r.file}: ${r.message}`);
@@ -3816,6 +3831,13 @@ export async function cmdRecord(args: string[]) {
           return process.exit(2); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
+        // The SUMMARY belongs here too, not only on the real arm. This is the arm CI runs (the directory
+        // dry-run is what `references/ci-recipe.md` teaches and what this repo's own workflow calls), and
+        // it is the arm that says the least: a corpus-wide schema break prints one `✗ broken:` block per
+        // file — hundreds of lines of parser output — with nothing at the end stating that NOTHING loaded.
+        // Survives `--quiet` for the same reason the `✗ broken:` lines do: it is the failure, not the
+        // preview.
+        if (!asJson) log(`✗ record --dry-run: no loadable scenarios under ${target} — all ${disc.broken.length} file(s) failed to load`);
         return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
       }
       if (!asJson && !quiet) {
@@ -3844,13 +3866,18 @@ export async function cmdRecord(args: string[]) {
     try {
       scenario = parseScenarioFile(target);
     } catch (e) {
-      return fail("record", "usage", `record --dry-run: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
+      // Forward the HINT: the message is now compact, and `error.hint` is where the full Zod issue
+      // array lives for anyone who wants it. Passing `undefined` here would drop it on the floor and
+      // make "nothing is lost, it only moved" false for this path.
+      return fail("record", "usage", `record --dry-run: cannot parse scenario: ${(e as Error).message}`, (e as UsageError).hint, asJson);
     }
     // `assertContradiction` is NOT in preSpendVerdicts: on the real path it fires from inside
     // `executeScenario` (execute.ts), which every lane funnels through — including library callers that
     // never touch this file. Checked here explicitly so the preview matches.
     const contradiction = assertContradiction(scenario);
-    if (contradiction) return fail("record", "usage", contradiction, undefined, asJson);
+    // Exit 1, not the `fail()` default of 2 — see the refusal below for why the preview owes the real
+    // command's code.
+    if (contradiction) return fail("record", "usage", contradiction, undefined, asJson, 1);
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
@@ -3871,7 +3898,20 @@ export async function cmdRecord(args: string[]) {
     const dryRefusal = verdicts.find((v) => v.kind === "refuse");
     // Warnings ride along with the preview in both modes; a refusal replaces it.
     if (!dryRefusal) for (const v of verdicts) warn(v.message);
-    if (dryRefusal) return fail("record", "usage", dryRefusal.message, undefined, asJson);
+    // Exit 1 — the code the REAL `record` gives this same refusal (`recordScenarioObject` throws it,
+    // caught below at the `fail(…, 1)` in `cmdRecord`), and the convention SPEC.md §11 states for the
+    // command ("exit 2 on run/skill, 1 on record"). `fail()`'s default of 2 made a valid scenario refused
+    // for path policy indistinguishable, by exit code, from one with a SCHEMA error — which the preview
+    // exists to report and which still exits 2 above. A consumer wrapping `--dry-run` as "does this load?"
+    // read every host-inventory refusal as a broken scenario.
+    if (dryRefusal) return fail("record", "usage", dryRefusal.message, undefined, asJson, 1);
+    // The budget gate is part of the preview (see the dir branch above), and it REFUSES — so it belongs
+    // here, with the other refusals, not after the payload. It used to run below the envelope, which put
+    // two envelopes on stdout with the FIRST one `ok: true` — the exact false green the comment above
+    // says was designed out for `dryRefusal`, reintroduced three lines later by a gate that also exits.
+    // Its own exit code is unchanged (2, `runtime`-category): the real `record`'s budget refusal exits 2
+    // as well, so moving it keeps preview and real path agreeing, which is the property that matters.
+    if (maxBudgetUsd !== undefined) preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
     if (asJson) {
       out(
         jsonPayloadEnvelope("record", true, {
@@ -3893,9 +3933,52 @@ export async function cmdRecord(args: string[]) {
       log(tokenLine);
       log(agentLine);
     }
-    // See the dir branch above: the budget gate is part of the preview, not skipped by it.
-    if (maxBudgetUsd !== undefined) preflightBudget("record", scenario.name, maxBudgetUsd, asJson);
     return process.exit(0);
+  }
+
+  // "Does this file load?" is answered BEFORE credentials, budget, or the decider channel — the same
+  // order `run` uses, and the reason this sits above the auth guard rather than inside the single-file
+  // arm below: a scenario that cannot be read has nothing to do with whether you hold a token, and
+  // reporting "no model credentials" for a typo'd assert key sends the reader to the wrong problem.
+  //
+  // It also settles the exit code. The parse used to happen twice, in two places with different error
+  // handling: the budget block caught it and exited 2, while `recordScenarioFile` parsed inside the big
+  // record `try` whose catch stamps 1 — so `record broken.yaml` answered 1, and answered 2 if you
+  // happened to pass --max-budget-usd. Neither was a decision; the parse was just riding in whichever
+  // catch it landed in. Now: 2 means it did not load (matching `run`, `replay`, and `--dry-run`), 1 means
+  // it loaded and was refused (or the recording failed).
+  //
+  // `rerecordStale` is excluded: it resolves its scenarios from the cassettes it finds, not from `target`.
+  // `--decider-dir` promises a terminal {done:true} on EVERY exit path (external-channel.ts) so a
+  // `gates --follow` watcher never hangs. `fileChannel` guarantees that with a process `exit` handler —
+  // but it is not opened until further down, leaving every pre-spend exit above it (a scenario that will
+  // not load, a missing file, the auth guard, the `--max-budget-usd` gate) silently marker-less. Fixing
+  // those one at a time is how the gap got here: the budget gate MOVED next to the other refusals in this
+  // release and did not pick up the terminal write, and a per-call-site write also missed that the
+  // directory may not exist yet (fileChannel mkdirs; a bare `writeDoneMarker` throws).
+  //
+  // So register the same handler once, here, before the first guard that can exit. `fileChannel` will
+  // register its own later — the write is idempotent, and two handlers writing one file is cheaper than
+  // an audit of every exit between here and there.
+  if (deciderDir !== undefined) {
+    try {
+      mkdirSync(deciderDir, { recursive: true });
+      process.on("exit", () => writeDoneMarker(deciderDir));
+    } catch {
+      /* a dir we cannot create is the channel's problem to report, not a reason to fail early here */
+    }
+  }
+
+  let scenario: Scenario | undefined;
+  if (!isDir && !rerecordStale) {
+    // Mirrors `run`'s own existence check, message included: an ENOENT surfaced through the parser reads
+    // as "cannot parse scenario: ENOENT …", which says the file is malformed when it is simply absent.
+    if (!existsSync(target)) return fail("record", "usage", `record: scenario path not found: ${target}`, undefined, asJson);
+    try {
+      scenario = parseScenarioFile(target);
+    } catch (e) {
+      return fail("record", "usage", `record: cannot parse scenario: ${(e as Error).message}`, (e as UsageError).hint, asJson);
+    }
   }
 
   // Auth guard: fail with a clear message if no model token is present.
@@ -4043,8 +4126,23 @@ export async function cmdRecord(args: string[]) {
   if (isDir) {
     const disc = discoverScenarios(target);
     for (const s of disc.skipped) log(`· skipped (not a scenario — no \`prompt:\`): ${s}`);
-    for (const b of disc.broken) log(`✗ ${b.file}: ${b.error}`);
+    for (const b of disc.broken) log(`✗ ${b.file}: ${stripScenarioPrefix(b.error, b.file)}`);
     if (disc.scenarios.length === 0) {
+      // BROKEN is not NOTHING, and the two get different codes — the same split the preview arm has
+      // always made. A directory whose files all fail to load (one schema tightening away, and the case
+      // where the question "does my corpus still load?" is most urgent) used to report `no scenarios
+      // discovered` and exit 2: a wrong description — there ARE scenarios, they do not load — and it
+      // disagreed with `--dry-run` on the same directory, which exits 1. Exit 1 here is also the limiting
+      // case of the partial batch below, whose `failures` count already includes `disc.broken.length`.
+      if (disc.broken.length > 0)
+        return fail(
+          "record",
+          "usage",
+          `record: no loadable scenarios under ${target} — all ${disc.broken.length} file(s) failed to load (listed above)`,
+          undefined,
+          asJson,
+          1,
+        );
       return fail(
         "record",
         "usage",
@@ -4149,30 +4247,33 @@ export async function cmdRecord(args: string[]) {
 
   // Single scenario file. Budget pre-flight BEFORE the spawn — identical semantics to `run`'s single-run
   // gate (worst observed cost from this scenario's own history; loud degradation when it has none).
-  if (maxBudgetUsd !== undefined) {
-    try {
-      preflightBudget("record", parseScenarioFile(target).name, maxBudgetUsd, asJson);
-    } catch (e) {
-      return fail("record", "usage", `record: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
-    }
-  }
+  // Reads the scenario parsed above — the second parse (and its divergent catch, which is why this flag
+  // used to change a broken file's exit code) is gone. `preflightBudget` never throws; it `fail()`s.
+  if (maxBudgetUsd !== undefined) preflightBudget("record", scenario!.name, maxBudgetUsd, asJson);
   // `--decider-dir` opens an in-band file rendezvous for the driving agent; close it after the run
   // (mirrors `run`'s one-channel lifecycle).
   const channel = deciderDir !== undefined ? fileChannel(deciderDir) : undefined;
   try {
     const cassettePath = p.options["--out"];
-    const r = await recordScenarioFile(target, {
-      noRedact,
-      modelOverride,
-      allowFailing,
-      force,
-      cassettePath,
-      maxArtifactBytes,
-      allowHostInventoryFixture,
-      allowHostInventoryFindings,
-      externalChannel: channel,
-      ...liveDecider,
-    });
+    // The scenario is already parsed (above, before the auth guard) — this is `recordScenarioFile`'s body
+    // with the parse hoisted out, so a parse failure can carry its own exit code instead of the catch's.
+    const r = await recordScenarioObject(
+      scenario!,
+      {
+        noRedact,
+        modelOverride,
+        allowFailing,
+        force,
+        cassettePath,
+        maxArtifactBytes,
+        allowHostInventoryFixture,
+        allowHostInventoryFindings,
+        externalChannel: channel,
+        ...liveDecider,
+        scenarioSourceFile: target,
+      },
+      [dirname(target)],
+    );
     if (asJson) out(jsonEnvelope("record", [r.result], { extra: { artifacts: r.artifacts, cassette: r.cassettePath } }));
     else {
       log(`✓ recorded ${r.result.result} · ${r.artifacts} artifact(s) → ${r.cassettePath}`);
@@ -4876,7 +4977,10 @@ export function scenarioContentDrift(
       // note. Mirror the default replay lane: a mid-edit/invalid on-disk YAML must NEVER abort verify-cassettes.
       return {
         verifiable: false,
-        reason: `on-disk scenario ${src.path} did not parse (${(e as Error).message}) — prompt drift not checked`,
+        // COMPACT, deliberately: this string lands in the `notes[]` array of a schema-covered envelope.
+        // The raw Zod message put 13 lines of JSON between the `(` and the `— prompt drift not checked`
+        // that closes the sentence.
+        reason: `on-disk scenario ${src.path} did not parse (${compactSchemaError((e as Error).message)}) — prompt drift not checked`,
       };
     }
     const drifted = recordingShapingDrift(cassette.scenario as Scenario, onDisk);
@@ -5171,40 +5275,6 @@ async function writeReassertedAssertBlock(
  *  `assert:`+`expect_denied:`; on that path recording-shaping drift (prompt/baseline/fidelity/lane/answers/skills/
  *  requires_capabilities — see RECORDING_SHAPING_FIELDS) and skill staleness HARD-FAIL, so on-disk asserts can
  *  never green against events a different scenario/skill produced. */
-/**
- * Compact a `parseScenarioFile` UsageError down to one readable clause for a `::notice::`.
- *
- * The underlying Zod message is a pretty-printed JSON issue array — many lines, mostly punctuation —
- * which would swamp a notice line. Pull out each issue's `message` ("Unrecognized key: \"lane\"") and
- * join them. Anything unexpected falls back to a whitespace-collapsed truncation, so a message shape
- * we did not anticipate still produces a usable line rather than a wall of JSON.
- *
- * MUST NOT THROW: it runs on the default replay lane's decoration path, where an error raised while
- * *reporting* an error would be exactly the bug this whole block is guarded against.
- */
-export function compactSchemaError(message: string, limit = 200): string {
-  const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
-  const truncate = (s: string) => (s.length > limit ? s.slice(0, limit - 1) + "…" : s);
-  try {
-    const start = message.indexOf("[");
-    if (start !== -1) {
-      const issues: unknown = JSON.parse(message.slice(start));
-      if (Array.isArray(issues)) {
-        const parts = issues
-          .map((i) =>
-            i && typeof i === "object" && typeof (i as { message?: unknown }).message === "string"
-              ? (i as { message: string }).message
-              : "",
-          )
-          .filter(Boolean);
-        if (parts.length) return truncate(collapse(parts.join("; ")));
-      }
-    }
-  } catch {
-    /* fall through to the raw-message fallback below */
-  }
-  return truncate(collapse(message));
-}
 
 // `replay`'s accepted flags — hoisted to exported consts for the same reason as RECORD_BOOLEAN_FLAGS/
 // RECORD_VALUE_FLAGS above (P9 generalizes P3's guard to this command). --quiet/--verbose are accepted
@@ -5497,7 +5567,7 @@ export async function cmdReplay(args: string[]) {
         try {
           onDisk = parseScenarioFile(srcPath);
         } catch (e) {
-          throw new Error(`--assert-from: failed to parse ${srcPath}: ${(e as Error).message}`);
+          throw new Error(`--assert-from: failed to parse ${srcPath}: ${compactSchemaError((e as Error).message)}`);
         }
         const drift = recordingShapingDrift(rc.cassette.scenario, onDisk);
         if (drift.length)

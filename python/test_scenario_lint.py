@@ -987,3 +987,134 @@ def test_prompt_slash_absent_when_leading(tmp_path):
         encoding="utf-8",
     )
     assert [x for x in scenario.lint_file(str(f)) if x.rule == "prompt-slash-not-leading"] == []
+
+
+# --- enum-value-invalid: generic enum validation (top-level + nested answers[]/assert[]) ------------
+#
+# The bug this rule fixes: `lint --strict` reported these scenarios CLEAN while `record --dry-run`
+# hard-rejected them (zod `invalid_value`, exit 2) — the exact silent-false-green class `lint` exists to
+# catch. Each test asserts on the finding's `rule`/`severity` from JSON, and checks the EXIT CODE
+# WITHOUT `--strict` — `--strict` exits 1 on ANY finding (including INFO), so a `--strict`-gated
+# assertion would still pass with this rule reverted and proves nothing (measured:
+# `cowork-harness lint examples/scenarios/protocol-smoke.yaml --strict` exits 1 on 0 errors/0 warnings/2
+# info alone).
+
+
+def test_enum_value_invalid_on_fidelity(tmp_path):
+    f = _write_at(tmp_path, "bogus", "assert:\n  - result: success\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "ERROR"
+    assert "fidelity: bogus" in hits[0]["message"]
+    assert code == 1  # ERROR alone (no --strict) already fails the run
+
+
+def test_enum_value_invalid_on_present_but_null_value(tmp_path):
+    # `fidelity:` with nothing after it parses as null. The loader rejects it; the rule must too.
+    # The retired on_unanswered check guarded with `.get(...) is not None`, which skipped exactly this
+    # case -- so the rule reads key MEMBERSHIP. An ABSENT key must stay clean (it defaults legitimately),
+    # which test_enum_value_valid_values_stay_clean and the whole example corpus cover.
+    f = tmp_path / "sc.yaml"
+    f.write_text("name: t\nbaseline: latest\nsession: (inline)\nfidelity:\nprompt: hi\nassert:\n  - result: success\n", encoding="utf-8")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "ERROR"
+    # rendered as YAML `null`, not Python `None`
+    assert "fidelity: null" in hits[0]["message"]
+    assert code == 1
+
+
+def test_enum_value_invalid_on_nested_assert_result(tmp_path):
+    # `result: succes` — the single most-authored typo of the most-authored assertion key.
+    f = _write_at(tmp_path, "container", "assert:\n  - result: succes\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "ERROR"
+    assert "assert.result: succes" in hits[0]["message"]
+    assert "success" in hits[0]["fix"] and "error" in hits[0]["fix"]
+    assert code == 1
+
+
+def test_enum_value_invalid_on_answers_decide(tmp_path):
+    body = "answers:\n  - when_tool: Bash\n    decide: bogus\nassert:\n  - result: success\n"
+    f = _write_at(tmp_path, "container", body)
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "ERROR"
+    assert "answers.decide: bogus" in hits[0]["message"]
+    assert code == 1
+
+
+def test_enum_value_invalid_on_unanswered_agent_gets_rename_hint(tmp_path):
+    # regression: the retired bespoke on-unanswered-invalid check's `agent` -> `llm` rename hint must
+    # survive the generalization to enum-value-invalid.
+    f = _write_at(tmp_path, "container", "on_unanswered: agent\nassert:\n  - result: success\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "ERROR"
+    assert "renamed to `llm`" in hits[0]["message"]
+    assert code == 1
+
+
+def test_enum_value_invalid_valid_values_are_clean(tmp_path):
+    # regression guard: every schema-valid value across the covered fields must stay silent.
+    body = (
+        "on_unanswered: llm\n"
+        "answers:\n"
+        "  - when_tool: Bash\n"
+        "    decide: allow\n"
+        "assert:\n"
+        "  - result: success\n"
+        "  - path_denied: {source: pretooluse, agent_scope: any}\n"
+        "  - question_options: {equals: [a, b], order: any}\n"
+    )
+    f = _write_at(tmp_path, "hostloop", body)
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    assert [x for x in findings if x["rule"] == "enum-value-invalid"] == []
+
+
+def test_enum_value_invalid_execution_fix_never_offers_cloud_describe(tmp_path):
+    # the trap: `cloud-describe` IS a valid schema enum value for `execution`, but the runtime REJECTS it
+    # at load as reserved (no cloud runner exists yet) -- offering it back as the FIX for some other
+    # invalid `execution:` value would just relocate the failure to `record --dry-run`.
+    f = _write_at(tmp_path, "container", "execution: bogus\nassert:\n  - result: success\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1
+    assert "cloud-describe" not in hits[0]["fix"]
+    assert "local" in hits[0]["fix"]
+    assert code == 1
+
+
+def test_enum_value_invalid_execution_cloud_describe_itself_is_schema_valid(tmp_path):
+    # `execution: cloud-describe` is NOT an enum-value-invalid finding -- it IS a valid schema value.
+    # (The runtime's load-time reject of it is a separate, already-existing concern this linter's
+    # generic enum check does not need to duplicate: `record --dry-run` already refuses it loudly.)
+    f = _write_at(tmp_path, "container", "execution: cloud-describe\nassert:\n  - result: success\n")
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    assert [x for x in findings if x["rule"] == "enum-value-invalid"] == []
+
+
+def test_on_unanswered_invalid_rule_id_retired():
+    # the bespoke check this generalizes is gone -- VALID_ON_UNANSWERED must not linger unused.
+    assert not hasattr(scenario, "VALID_ON_UNANSWERED")
+
+
+def test_valid_tiers_derived_from_enum_map_not_hand_copied():
+    assert scenario.VALID_TIERS == tuple(scenario.ENUM_VALUES["fidelity"])
+
+
+def test_enum_values_parity_with_generated():
+    generated = json.loads(KEYS_JSON.read_text(encoding="utf-8"))["enums"]
+    assert scenario.ENUM_VALUES == generated
+
+
+def test_embedded_enums_equals_generated():
+    # the in-code fallback must equal the generated map, else a missing file silently reintroduces drift
+    generated = json.loads(KEYS_JSON.read_text(encoding="utf-8"))["enums"]
+    assert scenario._EMBEDDED_ENUMS == generated

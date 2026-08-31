@@ -675,6 +675,26 @@ cassette (e.g. a corrupt `events` line, a bad control frame) — those surface a
 assertion failures** (`replay_protocol_error` / `replay_protocol_fidelity`) via the normal `0`/`1`
 verdict, not exit `2`. `sync` exits `2` on a non-macOS platform (the platform guard,
 alongside the `sync` hard-failure → `1` note below).
+**`record <file>` separates a refused scenario from a broken one by exit code, and `--dry-run` answers
+identically.** A scenario the **loader** rejects — absent file, unparseable YAML, an unknown key, an
+invalid enum value — exits **`2`**, matching `run` and `replay`. A **pre-spend policy refusal** — a
+scenario no run could satisfy, `on_unanswered: prompt`, the host-inventory destination refusal, a slug
+collision — exits **`1`**. So `2` means it did not load and `1` means it loaded and this record was
+refused, on the preview and the real command alike; `--max-budget-usd` is the one refusal that reports
+`2` (it is a `runtime`-category gate on both paths). That split is what makes `record <file> --dry-run`
+usable as a "does this still load?" check: a corpus where the destination refusal is routine would
+otherwise report every valid scenario with the same code as a broken one. The scenario is parsed once,
+BEFORE the credential guard, so "does this file load" never depends on holding a token.
+A `record <dir/>` target keeps the same 1-vs-2 meaning at batch scale: a directory whose files all fail
+to load exits `1` (they are broken, not absent), while a directory with no scenarios at all exits `2`.
+Where a `--max-budget-usd` cap could also refuse, the outcome follows from which check can even apply:
+**all** files broken exits `1` (nothing loaded, so there is nothing to spend on and the budget gate never
+runs), while **some** broken alongside a loadable scenario over the cap exits `2` (the budget refusal is
+about the run you were about to pay for). That split is unchanged from earlier releases.
+On a `record <dir/>` target only the **path-independent** refusals (prompt policy,
+assert contradiction, duplicate cassette target) join `broken[]` in exiting `1`; the path-DEPENDENT ones
+(host-inventory destination, cassette portability) are advisory `notes[]` that do not affect the exit
+code, because a dir target takes no `--out` and the preview would be guessing the destination.
 **`verify-cassettes` uses its OWN three-way split, not the `run`/`skill` meanings above:** `0` clean ·
 `1` verification RAN and found a real problem (any PII finding, any staleness finding whose
 `StalenessFinding.class` is NOT `unverifiable-*`, or scenario-prompt drift) · `2` usage · `3`
