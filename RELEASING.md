@@ -237,8 +237,26 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       (Force-moving these ALIAS tags is expected; never force-move the immutable `vX.Y.Z` release tag.
       As of 1.0.4 the alias tags do NOT trigger `release.yml` / `publish-image.yml` — their `on.push.tags`
       globs match full `vX.Y.Z` semver only — so pushing them produces no workflow runs at all.)
-- [ ] Smoke the published artifact: `npx cowork-harness@X.Y.Z --version` and
-      `npx cowork-harness@X.Y.Z doctor --tier protocol`.
+- [ ] **Smoke the published artifact — and use THIS invocation, not a bare `npx`:**
+      ```
+      cd <repo root>                                   # NOT /tmp — see the replay note below
+      npx -y --package=cowork-harness@X.Y.Z -- cowork-harness --version
+      npx -y --package=cowork-harness@X.Y.Z -- cowork-harness doctor --tier protocol
+      npx -y --package=cowork-harness@X.Y.Z -- cowork-harness replay examples/replays/example-pdf-skill.cassette.json
+      ```
+      **`npx cowork-harness@X.Y.Z …` is NOT good enough, and fails silently.** If a `cowork-harness` is
+      already on PATH (a global `npm i -g`, Homebrew shim, …), npx runs THAT binary and ignores the
+      `@X.Y.Z` spec entirely — no warning. Observed 2026-08-31 releasing 3.1.0: the smoke printed `3.0.1`
+      for a correctly-published 3.1.0, and the release was ~30 seconds from being declared broken. Note
+      `npx --ignore-existing` does **not** fix this: npm 11 removed that flag (`npx: the
+      --ignore-existing argument has been removed`). `--package=` is what actually pins the fetch.
+      **Run the replay from the repo root.** A cassette resolves its session file *relative to its own
+      location* (`../sessions/default.yaml`), so a copy in `/tmp` exits 1 with "skill dirs not resolvable
+      … cannot verify skill staleness" — a test-setup artifact that is indistinguishable at a glance from
+      the 2.0.0 regression this gate exists to catch. (The harness is right to refuse: can't verify ⇒ not
+      green.) The replay is the load-bearing check — `--version` only proves the tarball's `package.json`.
+      Afterwards, keep your own global in step (`npm i -g cowork-harness@X.Y.Z`) or the next release's
+      smoke reads stale again.
 - [ ] **Promote to `latest`** — CI publishes to the **`next`** dist-tag, never `latest`
       (`release.yml`, "staged publish"). Until you run this, the release is installable only as
       `cowork-harness@next` or by exact version; a bare `npm i cowork-harness` and the Action's
@@ -254,6 +272,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       `npm/lib/utils/auth.js` re-throws `EOTP` outright unless both stdin and stdout are TTYs. On a
       passkey/WebAuthn account npm opens a browser ("Authenticate your account at…") and **no `--otp`
       flag is needed** — passing one forces the TOTP branch, which a passkey cannot satisfy.
+      Concretely: an agent session's shell is not a TTY (Claude Code's `!` prefix included — `[ -t 0 ]`
+      and `[ -t 1 ]` both fail there), so this step is the user's, at a real terminal window. The failure
+      is `npm error code EOTP … requires a one-time password`, and npm's own advice to pass `--otp=<code>`
+      is the wrong fix on a passkey account — it is npm's generic message, not a read of your 2FA mode.
 
       *Why this step exists:* 2.0.0 became the default install for every unpinned consumer the moment CI
       went green — a breaking hash-format epoch plus a flagship replay that exits 1 from an npm install —
