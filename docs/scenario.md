@@ -622,11 +622,11 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 
 #### Verdict signals
 
-Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
-are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only nine codes are **warn**-severity (informational, never flip
-pass/fail):
+Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
+are twenty codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
+`result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
+`result.verdict.signals[].severity` or the run's exit code instead.
+Only nine codes are **warn**-severity (informational, never flip pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
 - `model_fallback` (**warn**) — the agent switched off the requested model mid-run, reported from the

@@ -1,4 +1,4 @@
-# Scenario & session schema, assertion catalog, web_fetch, full gotchas
+# Scenario & session schema, assertion catalog, web_fetch, authoring gotchas
 
 Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.2.0`
 (baseline `desktop-1.40609.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
@@ -22,7 +22,7 @@ Everything below is the full field + assertion catalog.
 - [Replay class — which assertions survive `replay`](#replay-class)
 - [The web_fetch model](#the-web_fetch-model)
 - [Scenario YAML vs the pytest lane](#scenario-yaml-vs-the-pytest-lane)
-- [Full gotcha list](#full-gotcha-list)
+- [Authoring gotcha list](#authoring-gotcha-list)
 
 ## Scenario YAML
 
@@ -401,9 +401,9 @@ paraphrases (that re-records red). Structured JSON → assert it in YAML with **
 `path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
 dotted path.
 
-**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; most
+**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; eleven
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and only four are **warn**-severity (informational, never flip pass/fail). Current signal
+`"success"`) and nine are **warn**-severity (informational, never flip pass/fail). All twenty signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -431,7 +431,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the five **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the nine **warn** codes are truly benign.
 
 ## Replay class
 
@@ -546,14 +546,14 @@ real predicate over a skill's **structured JSON output**:
 Find an artifact's real field paths by running once with `--keep`, then `cowork-harness inspect <run-dir>`
 (a shallow field preview of each JSON artifact) or by reading the JSON directly.
 
-## Full gotcha list
+## Authoring gotcha list
 
 The "✓ passed ≠ correct" landmines relevant to **scenario/assertion authoring**, as
 *symptom → why → fix*. `file:line` pointers track the version at the top of this file.
-**Scope note:** this is the assertion/replay-focused view; the **companion `SKILL.md`'s Gotchas
-section is the full landmine catalog** (it adds workflow/record/answer-path landmines this schema
-reference omits). Neither list is a strict superset of the other — reach for this one while authoring
-`assert:`, and SKILL's when debugging a run's behavior.
+**Scope note:** this is the assertion/replay-focused view; the companion `SKILL.md`'s Gotchas section
+is the broader one (it adds workflow/record/answer-path landmines this reference omits). **Neither list
+is a strict superset of the other** — reach for this one while authoring `assert:`, and SKILL's when
+debugging a run's behavior. The two are **numbered independently**: a bare "gotcha N" means this list.
 
 1. **Replay skips filesystem/egress assertions (two shapes) — with a loud warning.** *Full skip:* a pure
    live-only `egress_*`/`no_delete_in_outputs`/`self_heal_ran`/`transcript_no_host_path` item on a
@@ -591,7 +591,8 @@ reference omits). Neither list is a strict superset of the other — reach for t
    one concatenated string → use `[\s\S]`, not `.`. `transcript_matches` is case-insensitive.
 
 7. **Multi-key assertion item = AND.** Passes iff every key passes. One concern per item unless
-   conjunction is intended (and a mixed-class conjunction loses its filesystem half on replay — gotcha 1).
+   conjunction is intended (and a mixed-class conjunction loses its filesystem half on replay — gotcha 1
+   of THIS list; the two gotcha lists are numbered independently).
 
 8. **`tool_called` proves a tool ran, not that it was attempted.** Tool counts are authoritative and
    de-duped: a requested-then-denied tool does NOT register as called; the synthetic

@@ -36,7 +36,7 @@ npm ci && npm run build
 node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 ```
 
-(Installing globally — `npm install -g cowork-harness` — gives you the `cowork-harness` CLI for your own
+(Installing globally — `npm install -g "cowork-harness@^3.2.0"` — gives you the `cowork-harness` CLI for your own
 scenarios and cassettes; the bundled example above also replays from a global install — see the `$(npm root -g)` path below.)
 
 Full setup → [Quick start](./docs/cli.md#quick-start).
@@ -328,7 +328,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/discovery.md](./docs/discovery.md) | Where plugins/skills/MCP are found + overrides. |
 | [docs/plugin-root.md](./docs/plugin-root.md) | How `${CLAUDE_PLUGIN_ROOT}` resolves per execution mode (host-loop vs VM-loop) — for when a skill's bundled-file path doesn't resolve. |
 | [docs/maintenance.md](./docs/maintenance.md) | Parity across Desktop releases via `sync`. |
-| [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) | The binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements. |
+| [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) | The binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements — **frozen historical research**, verified on `desktop-1.12603.1` and re-verified unchanged through `desktop-1.20186.0`. Volatile fields (`agentVersion`, egress allowlist, gates) live in `baselines/`, not here. |
 | [docs/decisions/](./docs/decisions/) | Architecture decision records — the "why" behind a cross-cutting default. |
 | [DESIGN.md](./DESIGN.md) | Architecture deep-dive + full parity matrix. |
 | [SPEC.md](./SPEC.md) | The authoritative testable contract (scenario/session schema, `RunResult`, exit codes). |

@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g cowork-harness    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^3.2.0"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -233,17 +233,28 @@ scenario can instead set `on_unanswered: llm` as a secondary escape valve for a 
 drifts run-to-run — the default for `run`/CI), `prompt` (ask at the TTY — the default for `skill`
 when interactive), or `first` (pick
 option 1, loudly warn). Pick with `--on-unanswered`; left unset, `skill` is **adaptive** (`prompt` on
-a TTY, `fail` when piped/CI) and `run` is always `fail`. Exit codes: `0`
-pass · `1` assertion/agent failure · `2` usage / unanswered-under-`fail` / runtime · `3` boundary/integrity.
-Exceptions worth knowing:
+a TTY, `fail` when piped/CI) and `run` is always `fail`.
 
-- the `boundary-check` **command**'s own probe failures follow the assertion convention and exit `1` (see SPEC.md §11);
-- `verify-cassettes` reuses exit `3` with a different meaning — "could not verify" (vs. a verified failure's `1`); see the command table;
-- `rehash` uses **exit `4` for PARTIAL success** — some cassettes migrated, some could not. That and a total
-  failure (`1`, nothing migrated) demand opposite responses, so they are separate codes; `0` means all
-  migrated or nothing needed migrating (SPEC §11);
-- exit `4` is otherwise reserved on the `run`/`skill` family, where it is still unused (SPEC §11) — the code
-  space is per-command, so `rehash`'s `4` above does not touch that reservation.
+## Exit codes
+
+**Exit-code space is per-command, not global** — the same number means different things on different
+commands, so a CI script branching across commands must not conflate them. [SPEC.md](../SPEC.md) §11 is
+the contract; this is the summary.
+
+| Code | `run` / `skill` / `chat` / `record` | `verify-cassettes` | `doctor` | `rehash` |
+|---|---|---|---|---|
+| `0` | pass — every evaluated assertion passed | clean | all required checks passed | all migrated (or nothing needed it) |
+| `1` | assertion or agent failure | verification RAN and found a real problem | a required check failed | nothing migrated, ≥1 could not |
+| `2` | usage / unanswered-under-`fail` / runtime | usage | usage | usage |
+| `3` | boundary/integrity (a typed `BoundaryError`) | **could not verify** — unrelated to the `run` family's `3` | — | — |
+| `4` | *reserved* (a future "needs input" outcome; currently unused) | — | — | **PARTIAL** — some migrated, some could not |
+
+Two footnotes the table cannot carry:
+
+- the `boundary-check` **command**'s own probe failures follow the assertion convention and exit `1` —
+  distinct from the `run`-family `3`, which is a typed `BoundaryError` raised *during* a run (SPEC §11);
+- `rehash`'s `4` and the `run`/`skill` family's reserved `4` are unrelated. Because the space is
+  per-command, `rehash` spending `4` on PARTIAL does not consume that reservation (SPEC §11).
 
 After a run, the footer **echoes every auto-answered
 question as a copy-pasteable `--answer "<q>=<choice>"` line** — run once exploratorily, then paste them

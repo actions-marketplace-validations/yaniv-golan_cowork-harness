@@ -39,8 +39,9 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 > *Action* runs; which *CLI* it installs is the separate `version:` input below, which defaults to
 > `latest`. The two move independently — so a workflow whose `uses:` ref has not changed in months still
 > picks up a CLI **major** the moment one is promoted to `latest`. That is not hypothetical: `@v1` points
-> at 1.24.0 and has not moved, yet an `@v1` workflow without a `version:` input installs 2.x today.
-> **To hold a major, pin the input** — `version: ^2` (or `^1`) — not the `uses:` ref.
+> at 1.24.0 and has not moved, yet an `@v1` workflow without a `version:` input installs 3.x today.
+> **To hold a major, pin the input** — `version: "^3"` for the current major, `"^2"`/`"^1"` to stay on an
+> older one — not the `uses:` ref.
 >
 > Upgrading across the 1.x → 2.x boundary this way means the hash-format epoch: cassettes recorded before
 > format v12 need `cowork-harness rehash <dir/>` (no re-record). See the 2.0.0 entry in
@@ -74,7 +75,12 @@ jobs:
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
           V=2.1.247   # match your scenario's pinned baseline's agentVersion
+          # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here,
+          # or read it with jq if you vendor the baseline. An unverified download is an unverified
+          # agent: this step FAILS rather than staging one, which is the point of calling it verified.
+          EXPECTED=<paste agentBinary.sha256 for $V>
           curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "$RUNNER_TEMP/claude-$V"
+          echo "$EXPECTED  $RUNNER_TEMP/claude-$V" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/claude-$V"
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
       - uses: yaniv-golan/cowork-harness@v3
@@ -85,7 +91,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^2` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^3.2.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^3` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^3.2.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
 
 CI uses `ANTHROPIC_API_KEY` specifically because there's no interactive browser available to run
 `claude setup-token`'s OAuth flow in a GitHub Actions runner; locally, the OAuth token is preferred because

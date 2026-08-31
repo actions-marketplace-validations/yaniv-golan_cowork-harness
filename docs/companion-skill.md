@@ -38,7 +38,7 @@ npx skills add yaniv-golan/cowork-harness --skill cowork-harness
 
 (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
-| What ships | npm global (`npm install -g cowork-harness`) | Source checkout (`git clone` + `npm ci`) |
+| What ships | npm global (`npm install -g "cowork-harness@^3.2.0"`) | Source checkout (`git clone` + `npm ci`) |
 |---|---|---|
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
