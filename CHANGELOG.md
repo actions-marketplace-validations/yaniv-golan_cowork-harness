@@ -62,7 +62,12 @@ All notable changes to this project are documented here. The format is based on
 
 - **`no_delete_in_outputs` now carries the same post-run-scan caveat its sibling row already had** —
   a green means no delete was *detected* by a bash-command scan, not that the mount enforced anything.
-  Reading the row without it, a consumer took a false positive for a documented contradiction.
+  Reading the row without it, a consumer took a false positive for a documented contradiction. The
+  companion skill's reference table said something stronger and wrong — that omitting the key "allows
+  deletes", when omitting it allows nothing — and now matches.
+- **`lint`'s strict-vs-lenient section names the one place lint is now the stricter check** (an invalid
+  enum value is an ERROR, while an unknown key stays a warning), and `docs/decider-dir.md` says that the
+  `done.json` completion marker is written even when the scenario never loaded.
 - **The host-inventory record refusal states its full predicate where the refusal is explained.** The
   existing-cassette exemption was documented only as an aside under `--rerecord-stale`, ~130 lines from
   the block a reader lands on. It is now stated as a rule — host-inheriting tier **and** repo-visible

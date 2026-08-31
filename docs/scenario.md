@@ -96,7 +96,11 @@ about how loudly to say so, and the difference matters:
 Two consequences worth internalising:
 
 - **A scenario that lints with only warnings may still be unloadable.** `lint` is the more permissive
-  check, not the stricter one. A clean-ish lint is not proof the file runs.
+  check, not the stricter one. A clean-ish lint is not proof the file runs. It is not *uniformly* more
+  permissive, though: an invalid **enum value** (`fidelity: bogus`, `assert: - result: succes`,
+  `answers[].decide: allowe`, or one of those keys left empty, which parses as null) is a lint **ERROR**
+  (`enum-value-invalid`), because the loader rejects it outright and a green lint there was a false one.
+  Unknown *keys* remain a warning — see the next point.
 - **Unknown *top-level* scenario keys are handled differently by the two paths.** The **loader**
   (`run`/`skill`/`record`, reading scenario YAML) rejects one outright: exit 2 for a single file, or exit 1
   for a directory, which reports each `✗ broken:` file. **`replay` does not.** A cassette's frozen scenario
