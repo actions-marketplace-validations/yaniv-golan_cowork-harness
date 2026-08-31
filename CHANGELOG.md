@@ -26,14 +26,19 @@ All notable changes to this project are documented here. The format is based on
   parsed once, **before the credential guard**, so a broken scenario reports as broken whether or not you
   hold a token — matching `run` and `replay`, and matching what `docs/scenario.md` and `docs/cassette.md`
   have said all along. A missing file now says `scenario path not found` (exit `2`) instead of surfacing an
-  ENOENT as a parse error. Refusals still exit `1`. Related: with `--decider-dir`, a scenario that fails to
-  load now still writes the terminal `done.json`, so a `gates --follow` watcher gets its frame instead of
-  hanging — previously it hung whenever `--max-budget-usd` was also passed.
+  ENOENT as a parse error. Refusals still exit `1`. Related: with `--decider-dir`, the terminal
+  `done.json` is now written on **every** pre-spend exit — a scenario that will not load, a missing file,
+  the credentials guard, and the `--max-budget-usd` refusal — so a `gates --follow` watcher gets its frame
+  instead of hanging. It is registered once, before the first guard that can exit, rather than at each
+  call site: the budget gate moved next to the other refusals in this release without picking up the
+  write, and a per-site write also assumed the directory already existed (it may not; `fileChannel`
+  creates it).
 - **`record <dir/>` where every file fails to load now exits `1`, not `2`,** and says
   `no loadable scenarios under <dir> — all N file(s) failed to load` instead of `no scenarios discovered`.
-  Broken is not nothing: there ARE scenarios there, they do not load. The preview arm has always drawn
-  that line, so the two disagreed on exactly the corpus-wide-schema-break case where a CI step compares
-  them. An empty directory still exits `2` on both arms.
+  Broken is not nothing: there ARE scenarios there, they do not load. An empty directory still exits `2`
+  on both arms. **`record <dir/> --dry-run` prints the same summary**, and it survives `--quiet`: the
+  directory dry-run is the arm CI runs, and a corpus-wide schema break printed one parser dump per file
+  with nothing at the end saying that nothing loaded.
 - **A `record --dry-run --max-budget-usd` refusal no longer prints a green envelope before the error.**
   The budget gate ran *after* the preview payload, so JSON mode emitted `ok:true` and then `ok:false` —
   a false green for any consumer reading the first line. It now runs with the other pre-spend refusals,

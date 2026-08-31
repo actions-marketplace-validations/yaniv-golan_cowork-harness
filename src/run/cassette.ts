@@ -3816,6 +3816,13 @@ export async function cmdRecord(args: string[]) {
           return process.exit(2); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
+        // The SUMMARY belongs here too, not only on the real arm. This is the arm CI runs (the directory
+        // dry-run is what `references/ci-recipe.md` teaches and what this repo's own workflow calls), and
+        // it is the arm that says the least: a corpus-wide schema break prints one `✗ broken:` block per
+        // file — hundreds of lines of parser output — with nothing at the end stating that NOTHING loaded.
+        // Survives `--quiet` for the same reason the `✗ broken:` lines do: it is the failure, not the
+        // preview.
+        if (!asJson) log(`✗ record --dry-run: no loadable scenarios under ${target} — all ${disc.broken.length} file(s) failed to load`);
         return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope already emitted above
       }
       if (!asJson && !quiet) {
@@ -3924,29 +3931,35 @@ export async function cmdRecord(args: string[]) {
   // it loaded and was refused (or the recording failed).
   //
   // `rerecordStale` is excluded: it resolves its scenarios from the cassettes it finds, not from `target`.
+  // `--decider-dir` promises a terminal {done:true} on EVERY exit path (external-channel.ts) so a
+  // `gates --follow` watcher never hangs. `fileChannel` guarantees that with a process `exit` handler —
+  // but it is not opened until further down, leaving every pre-spend exit above it (a scenario that will
+  // not load, a missing file, the auth guard, the `--max-budget-usd` gate) silently marker-less. Fixing
+  // those one at a time is how the gap got here: the budget gate MOVED next to the other refusals in this
+  // release and did not pick up the terminal write, and a per-call-site write also missed that the
+  // directory may not exist yet (fileChannel mkdirs; a bare `writeDoneMarker` throws).
+  //
+  // So register the same handler once, here, before the first guard that can exit. `fileChannel` will
+  // register its own later — the write is idempotent, and two handlers writing one file is cheaper than
+  // an audit of every exit between here and there.
+  if (deciderDir !== undefined) {
+    try {
+      mkdirSync(deciderDir, { recursive: true });
+      process.on("exit", () => writeDoneMarker(deciderDir));
+    } catch {
+      /* a dir we cannot create is the channel's problem to report, not a reason to fail early here */
+    }
+  }
+
   let scenario: Scenario | undefined;
   if (!isDir && !rerecordStale) {
-    // `--decider-dir` promises a terminal {done:true} on EVERY exit path (external-channel.ts) so a
-    // `gates --follow` watcher never hangs. The channel is opened further down, so failing here would
-    // strand a watcher that is already following. Write the marker directly — best-effort, and never
-    // allowed to mask the parse error that is the actual finding.
-    const bail = (msg: string): never => {
-      if (deciderDir !== undefined) {
-        try {
-          writeDoneMarker(deciderDir);
-        } catch {
-          /* the parse failure is the finding; a marker we could not write must not replace it */
-        }
-      }
-      return fail("record", "usage", msg, undefined, asJson);
-    };
     // Mirrors `run`'s own existence check, message included: an ENOENT surfaced through the parser reads
     // as "cannot parse scenario: ENOENT …", which says the file is malformed when it is simply absent.
-    if (!existsSync(target)) bail(`record: scenario path not found: ${target}`);
+    if (!existsSync(target)) return fail("record", "usage", `record: scenario path not found: ${target}`, undefined, asJson);
     try {
       scenario = parseScenarioFile(target);
     } catch (e) {
-      bail(`record: cannot parse scenario: ${(e as Error).message}`);
+      return fail("record", "usage", `record: cannot parse scenario: ${(e as Error).message}`, undefined, asJson);
     }
   }
 

@@ -23,12 +23,13 @@ const can = existsSync(CLI);
 function tmpWork() {
   return mkdtempSync(join(tmpdir(), "rec-dry-preflight-"));
 }
-function cli(args: string[]) {
+function cli(args: string[], extraEnv: Record<string, string> = {}) {
   const r = spawnSync("node", [CLI, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
       COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "rec-dry-runs-")),
+      ...extraEnv,
       // A PLACEHOLDER credential, and it spends nothing. `record`'s auth guard (cassette.ts) sits ABOVE
       // the single-file arm, so on the real path — with no token in the environment — every pre-spend
       // refusal is preempted by "no model credentials" (exit 2) and the refusal never runs. That is the
@@ -109,6 +110,74 @@ describe.skipIf(!can)("record --dry-run — scenario-level refusals (no false pr
     expect(cli(["record", allBroken, "--dry-run"]).code, "all-broken, preview").toBe(1);
     expect(cli(["record", empty]).code, "empty dir, real path").toBe(2);
     expect(cli(["record", empty, "--dry-run"]).code, "empty dir, preview").toBe(2);
+  });
+
+  it("writes the --decider-dir terminal marker on EVERY pre-spend exit, existing dir or not", () => {
+    // A `gates --follow` watcher hangs without {done:true}. `fileChannel` guarantees it via an exit
+    // handler, but it is opened AFTER the pre-spend guards, so each guard above it used to strand a
+    // watcher. Fixing them one at a time is how this was missed twice: the budget gate moved next to the
+    // other refusals without picking up the write, and a per-site write assumed the dir already existed.
+    const w = tmpWork();
+    writeFileSync(join(w, "broken.yaml"), CLEAN("broken").replace("assert:", "assert:\n  - not_a_real_key: true"));
+    const marker = (dir: string) => existsSync(join(dir, "done.json"));
+
+    const existing = join(w, "d-existing");
+    mkdirSync(existing);
+    expect(cli(["record", join(w, "broken.yaml"), "--decider-dir", existing]).code).toBe(2);
+    expect(marker(existing), "load failure, dir already there").toBe(true);
+
+    // NOT pre-created: `fileChannel` mkdirs, so a watcher's dir may legitimately not exist yet.
+    const absent = join(w, "d-absent");
+    expect(cli(["record", join(w, "nope.yaml"), "--decider-dir", absent]).code).toBe(2);
+    expect(marker(absent), "missing scenario, dir not pre-created").toBe(true);
+
+    // The reported case: a --max-budget-usd refusal, which needs priced history to fire at all.
+    const runs = mkdtempSync(join(tmpdir(), "rec-budget-runs-"));
+    writeFileSync(join(w, "ok.yaml"), CLEAN("budget-probe"));
+    writeFileSync(
+      join(runs, "index.jsonl"),
+      JSON.stringify({
+        v: 1,
+        ts: "2026-08-30T00:00:00Z",
+        command: "record",
+        scenario: "budget-probe",
+        slug: "budget-probe",
+        runId: "x1",
+        fidelity: "protocol",
+        baseline: "latest",
+        result: "success",
+        pass: true,
+        signals: [],
+        partial: false,
+        nonDeterministic: false,
+        outDir: "/tmp/x1",
+        costUsd: 5,
+        git: { branch: "main", sha: "abc" },
+      }) + "\n",
+    );
+    const budget = join(w, "d-budget");
+    const r = cli(
+      ["record", join(w, "ok.yaml"), "--out", join(w, "b.cassette.json"), "--max-budget-usd", "0.01", "--decider-dir", budget],
+      {
+        COWORK_HARNESS_RUNS_DIR: runs,
+      },
+    );
+    expect(r.all, "the budget gate must be what refused (not some earlier guard)").toMatch(/refused before spending/);
+    expect(marker(budget), "budget refusal").toBe(true);
+  });
+
+  it("the PREVIEW arm summarises an all-broken directory too — it is the arm CI runs", () => {
+    // The real arm got this summary first; the directory dry-run is what ci-recipe.md teaches and what
+    // this repo's own workflow calls, and it printed one parser dump per file with nothing saying that
+    // NOTHING loaded. Survives --quiet, like the ✗ broken: lines: it is the failure, not the preview.
+    const w = tmpWork();
+    const dir = join(w, "allbroken");
+    mkdirSync(dir);
+    for (const n of ["b1.yaml", "b2.yaml", "b3.yaml"])
+      writeFileSync(join(dir, n), CLEAN("b").replace("assert:", "assert:\n  - not_a_real_key: true"));
+    const r = cli(["record", dir, "--dry-run", "--quiet"]);
+    expect(r.code).toBe(1);
+    expect(r.all).toMatch(/no loadable scenarios under .* — all 3 file\(s\) failed to load/);
   });
 
   it("separates a policy refusal (1) from a schema error (2)", () => {
