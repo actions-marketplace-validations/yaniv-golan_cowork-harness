@@ -681,11 +681,28 @@ describe("fail-on-break — stubbing isVmSessionsPath to always-false clears eve
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 
+/** Per-spawn wall-clock budget — a HANG ceiling, not an expected duration. Most spawns in this file are
+ *  static scans (~0.2s), for which vitest's default 5000ms is ample and no explicit `it()` timeout is
+ *  needed. It matters for the `--runtime` tests, whose spawns each pay a cold jsdom import (~1.5-1.8s
+ *  measured local, more on a loaded runner): their enclosing timeout should REACH N × this, so a stuck
+ *  spawn dies on its own budget — surfacing the diagnosable `code: null` + stderr that budget exists to
+ *  produce — rather than the test dying first on an opaque, output-less vitest timeout. */
+const SPAWN_TIMEOUT_MS = 10_000;
+
+/** Enclosing timeout for the two-spawn `--runtime` test below. DERIVED, not hardcoded: a literal 15_000
+ *  sat BELOW the two spawns' combined budget and the test really did flake on it in a full-suite run —
+ *  the pair costs ~3.5s unloaded, but under 364-file parallelism it stretched past 15s while each spawn
+ *  stayed inside its own 10s ceiling, so vitest killed the test before either spawn could report why.
+ *  The +5s is margin over the realistic cost so a slow runner is not a red build. Keeping it derived is
+ *  worth the prettier reflow it forces at the call site: an identifier there is what stops this from
+ *  silently falling below `SPAWN_TIMEOUT_MS` again if that budget is ever raised. */
+const RUNTIME_IT_TIMEOUT_MS = 2 * SPAWN_TIMEOUT_MS + 5_000;
+
 function run(args: string[], cwd: string) {
   // A generous but finite timeout (fail loud with a diagnosable `code: null`, not an indefinite hang) —
   // exists specifically so a broken symlink-loop guard in the walker fails FAST as a test failure rather
   // than stalling the whole suite.
-  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, timeout: 10_000 });
+  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, timeout: SPAWN_TIMEOUT_MS });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 
@@ -1406,34 +1423,40 @@ describe.skipIf(!can)("analyze-skill CLI — Tier A interactive-artifact write-b
 
 // ── Item 1 (Tier B) — optional --runtime confirmation, wired through cmdAnalyzeSkill ─────────────── //
 describe.skipIf(!can)("analyze-skill CLI — Tier B --runtime enrichment", () => {
-  it("--runtime observes a lost write-back and adds runtimeConfirmations WITHOUT changing the exit code", () => {
-    const d = mkdtempSync(join(tmpdir(), "as-rt-"));
-    writeFileSync(
-      join(d, "viewer.html"),
-      [
-        "<!DOCTYPE html><html><body><button id='s'>Save</button><script>",
-        "document.getElementById('s').addEventListener('click',function(){",
-        "  fetch('/api/save',{method:'POST'}).then(function(){document.body.innerHTML='Saved!';});",
-        "});",
-        "</script></body></html>",
-      ].join("\n"),
-    );
-    // Tier B enriches only: --runtime must NOT change Tier A's exit code. The --strict run proves Tier B
-    // doesn't SUPPRESS Tier A's strict gate (the unique --runtime × --strict interaction — still exits 1).
-    expect(run(["analyze-skill", join(d, "viewer.html"), "--runtime", "--strict"], d).code).toBe(1);
-    // A single --runtime json run covers BOTH the non-strict exit code (0) AND the runtimeConfirmations shape
-    // — no need for a separate bare `--runtime` spawn, which was redundant (json doesn't alter the exit code).
-    const j = run(["analyze-skill", join(d, "viewer.html"), "--runtime", "--output-format", "json"], d);
-    expect(j.code).toBe(0);
-    const env = JSON.parse(j.out);
-    expect(Array.isArray(env.runtimeConfirmations)).toBe(true);
-    const c = env.runtimeConfirmations[0];
-    // Either an observed verdict (jsdom present) or a graceful unavailable — both are valid, never a throw.
-    expect(c.available === false || (c.available === true && ["lost", "suspect", "clean", "inconclusive"].includes(c.verdict))).toBe(true);
-    // Two jsdom `--runtime` spawns (each: cold jsdom import + a double-run headless DOM with fixed settle
-    // timers — ~0.8s local / ~1.7s CI). Explicit timeout so a loaded CI runner doesn't flake against vitest's
-    // 5000ms default; ceiling = 2 spawns × the 10s per-spawn budget. (Was 3 spawns — the third was redundant.)
-  }, 15_000);
+  it(
+    "--runtime observes a lost write-back and adds runtimeConfirmations WITHOUT changing the exit code",
+    () => {
+      const d = mkdtempSync(join(tmpdir(), "as-rt-"));
+      writeFileSync(
+        join(d, "viewer.html"),
+        [
+          "<!DOCTYPE html><html><body><button id='s'>Save</button><script>",
+          "document.getElementById('s').addEventListener('click',function(){",
+          "  fetch('/api/save',{method:'POST'}).then(function(){document.body.innerHTML='Saved!';});",
+          "});",
+          "</script></body></html>",
+        ].join("\n"),
+      );
+      // Tier B enriches only: --runtime must NOT change Tier A's exit code. The --strict run proves Tier B
+      // doesn't SUPPRESS Tier A's strict gate (the unique --runtime × --strict interaction — still exits 1).
+      expect(run(["analyze-skill", join(d, "viewer.html"), "--runtime", "--strict"], d).code).toBe(1);
+      // A single --runtime json run covers BOTH the non-strict exit code (0) AND the runtimeConfirmations shape
+      // — no need for a separate bare `--runtime` spawn, which was redundant (json doesn't alter the exit code).
+      const j = run(["analyze-skill", join(d, "viewer.html"), "--runtime", "--output-format", "json"], d);
+      expect(j.code).toBe(0);
+      const env = JSON.parse(j.out);
+      expect(Array.isArray(env.runtimeConfirmations)).toBe(true);
+      const c = env.runtimeConfirmations[0];
+      // Either an observed verdict (jsdom present) or a graceful unavailable — both are valid, never a throw.
+      expect(c.available === false || (c.available === true && ["lost", "suspect", "clean", "inconclusive"].includes(c.verdict))).toBe(
+        true,
+      );
+      // Two jsdom `--runtime` spawns (each: cold jsdom import + a double-run headless DOM with fixed settle
+      // timers). Explicit timeout so a loaded runner doesn't flake against vitest's 5000ms default; see
+      // RUNTIME_IT_TIMEOUT_MS for why it is derived. (Was 3 spawns — the third was redundant.)
+    },
+    RUNTIME_IT_TIMEOUT_MS,
+  );
 
   it("without --runtime, no runtimeConfirmations key is emitted", () => {
     const d = mkdtempSync(join(tmpdir(), "as-nort-"));
