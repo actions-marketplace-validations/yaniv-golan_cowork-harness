@@ -41,6 +41,11 @@ All notable changes to this project are documented here. The format is based on
   the flag. Omitting it is deprecated and becomes an error in the next major — the same path
   `Scenario.fidelity` took, and deliberately not a hard fail today: the repo chose deprecation for a
   default with a larger blast radius, and a harder gate for a lesser field would be incoherent with that.
+- **A family pin is checked as family membership, not equality.** `--model opus` is resolved by the agent
+  to a concrete id (`claude-opus-5`), never echoed back, and which member an account resolves it to is not
+  something the harness can know — so comparing the two as strings would report a pinned-and-honored run as
+  `modelPinHonored: false`. `opus`/`sonnet`/`haiku`/`fable` now compare by family and still fail on a
+  wrong-family model; `best` and `opusplan` name no comparable model and stay unverifiable.
 - **`RunResult.modelFallbacks`, `modelPinHonored` and `modelSource`.** Fallbacks come from the agent's own
   `system`/`model_fallback` event rather than a diff of `models[]` — the event names the trigger, which is
   what separates a retired or blocked pin (every run falls back the same way until the id changes) from a
