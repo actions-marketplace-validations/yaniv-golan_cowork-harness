@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 
@@ -26,7 +26,18 @@ function tmpWork() {
 function cli(args: string[]) {
   const r = spawnSync("node", [CLI, ...args], {
     encoding: "utf8",
-    env: { ...process.env, COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "rec-dry-runs-")) },
+    env: {
+      ...process.env,
+      COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "rec-dry-runs-")),
+      // A PLACEHOLDER credential, and it spends nothing. `record`'s auth guard (cassette.ts) sits ABOVE
+      // the single-file arm, so on the real path — with no token in the environment — every pre-spend
+      // refusal is preempted by "no model credentials" (exit 2) and the refusal never runs. That is the
+      // state in CI, which sets no token; locally this repo's gitignored `.env` supplies one, so without
+      // this line the real-vs-preview comparison below passes here and FAILS in CI. The guard is
+      // presence-only and every case in this file is refused or previewed before any spawn, so a dummy
+      // value cannot reach the API.
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "placeholder-not-used-no-spawn-in-this-suite",
+    },
   });
   return { code: r.status, all: (r.stdout ?? "") + (r.stderr ?? "") };
 }
@@ -55,7 +66,61 @@ describe.skipIf(!can)("record --dry-run — scenario-level refusals (no false pr
     const real = cli(["record", join(w, "c.yaml"), "--out", join(w, "c.cassette.json")]);
     expect(dry.code).not.toBe(0);
     expect(real.code).not.toBe(0);
+    // The EXIT CODE is part of "agrees with the real record path". `.not.toBe(0)` on both sides passed
+    // for months while the preview answered 2 and the real command answered 1 — so a consumer wrapping
+    // `--dry-run` could not tell a scenario refused for policy from one with a schema error (which
+    // legitimately exits 2, and still does; see the sibling test below).
+    expect(dry.code, "the preview must give the code the real record gives").toBe(real.code);
     expect(existsSync(join(w, "c.cassette.json")), "the real path must not have written a cassette").toBe(false);
+  });
+
+  it("answers the same code for a broken scenario on every arm, flags included", () => {
+    // The table this pins used to read 1 / 2 / 2: `record broken.yaml` exited 1, and exited 2 if you
+    // happened to pass an unrelated cost-cap flag, because the parse ran in two places under two
+    // different catches. Nothing decided that. `--max-budget-usd` is the row that would have caught the
+    // class, so it is the row that must stay.
+    const w = tmpWork();
+    writeFileSync(join(w, "broken.yaml"), CLEAN("broken").replace("assert:", "assert:\n  - not_a_real_key: true"));
+    const f = join(w, "broken.yaml");
+    expect(cli(["record", f]).code, "no flags").toBe(2);
+    expect(cli(["record", f, "--max-budget-usd", "1"]).code, "an unrelated flag must not change the answer").toBe(2);
+    expect(cli(["record", f, "--dry-run"]).code, "the preview").toBe(2);
+    // A file that is simply absent is not a parse failure, and does not report as one.
+    const missing = cli(["record", join(w, "nope.yaml")]);
+    expect(missing.code).toBe(2);
+    expect(missing.all).toMatch(/scenario path not found/);
+  });
+
+  it("a directory of all-broken files exits 1 on BOTH arms; an empty directory exits 2 on both", () => {
+    // "broken" is not "nothing". The real arm used to answer `no scenarios discovered` (exit 2) for a
+    // directory whose files all fail to load — the wrong description, and disagreeing with the preview
+    // (1) on precisely the corpus-wide-schema-break case where the two get compared.
+    // NOTE both dirs here are unrunnable by construction (all-broken / empty), so neither arm spawns.
+    const w = tmpWork();
+    const allBroken = join(w, "allbroken");
+    const empty = join(w, "empty");
+    mkdirSync(allBroken);
+    mkdirSync(empty);
+    for (const n of ["b1.yaml", "b2.yaml"])
+      writeFileSync(join(allBroken, n), CLEAN("b").replace("assert:", "assert:\n  - not_a_real_key: true"));
+    const real = cli(["record", allBroken]);
+    expect(real.code, "all-broken, real path").toBe(1);
+    expect(real.all).toMatch(/no loadable scenarios/);
+    expect(cli(["record", allBroken, "--dry-run"]).code, "all-broken, preview").toBe(1);
+    expect(cli(["record", empty]).code, "empty dir, real path").toBe(2);
+    expect(cli(["record", empty, "--dry-run"]).code, "empty dir, preview").toBe(2);
+  });
+
+  it("separates a policy refusal (1) from a schema error (2)", () => {
+    // Both used to exit 2, which is what made `record <file> --dry-run` unusable as a "does this load?"
+    // check on any corpus where the refusal is routine.
+    const w = tmpWork();
+    writeFileSync(join(w, "c.yaml"), CONTRADICTORY("contra"));
+    writeFileSync(join(w, "broken.yaml"), CLEAN("broken").replace("assert:", "assert:\n  - not_a_real_key: true"));
+    expect(cli(["record", join(w, "c.yaml"), "--dry-run"]).code, "a pre-spend refusal").toBe(1);
+    const bad = cli(["record", join(w, "broken.yaml"), "--dry-run"]);
+    expect(bad.code, "a scenario the loader rejects").toBe(2);
+    expect(bad.all).toMatch(/not_a_real_key/);
   });
 
   it("still greens a clean scenario (the refusal is not a blanket non-zero)", () => {
