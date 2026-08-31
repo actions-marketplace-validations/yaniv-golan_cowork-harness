@@ -239,11 +239,21 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       globs match full `vX.Y.Z` semver only — so pushing them produces no workflow runs at all.)
 - [ ] **Smoke the published artifact — and use THIS invocation, not a bare `npx`:**
       ```
-      cd <repo root>                                   # NOT /tmp — see the replay note below
-      npx -y --package=cowork-harness@X.Y.Z -- cowork-harness --version
-      npx -y --package=cowork-harness@X.Y.Z -- cowork-harness doctor --tier protocol
-      npx -y --package=cowork-harness@X.Y.Z -- cowork-harness replay examples/replays/example-pdf-skill.cassette.json
+      # 1. version — from OUTSIDE the repo (see "cwd matters", below)
+      (cd /tmp && npx -y --package=cowork-harness@X.Y.Z -- cowork-harness --version)   # must print X.Y.Z
+      # 2. install the published artifact, then smoke it from the repo root
+      npm i -g cowork-harness@X.Y.Z && cowork-harness --version                        # must print X.Y.Z
+      cd <repo root>
+      cowork-harness doctor --tier protocol
+      cowork-harness replay examples/replays/example-pdf-skill.cassette.json
       ```
+      **`--package=` is necessary but NOT sufficient — cwd matters too.** Observed releasing 3.2.0:
+      run from the repo root, `npx -y --package=cowork-harness@3.2.0 -- cowork-harness --version` printed
+      **3.1.0** (the stale Homebrew global); the identical command from `/tmp` printed 3.2.0. So inside
+      the repo, npx still resolves the bin off PATH and the `--package=` pin buys you nothing — the same
+      false smoke `--package=` was added to prevent, one release later. Hence the split above: take the
+      `--version` reading from outside the repo, then `npm i -g` the published version so the binary on
+      PATH *is* the artifact under test, and run the repo-root checks against that.
       **`npx cowork-harness@X.Y.Z …` is NOT good enough, and fails silently.** If a `cowork-harness` is
       already on PATH (a global `npm i -g`, Homebrew shim, …), npx runs THAT binary and ignores the
       `@X.Y.Z` spec entirely — no warning. Observed 2026-08-31 releasing 3.1.0: the smoke printed `3.0.1`
