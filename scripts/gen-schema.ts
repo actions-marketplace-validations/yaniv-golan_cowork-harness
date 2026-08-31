@@ -20,6 +20,55 @@ export const SCHEMA_DIR = join(REPO_ROOT, "schema");
  *  is. Writer + the drift-guard test both reference this one constant. */
 export const ASSERTION_KEYS_PATH = join(REPO_ROOT, ".claude/skills/cowork-harness/scripts/assertion-keys.json");
 
+/** Recursively collect every `enum` array in a JSON Schema node, keyed by a stable dotted field
+ *  identifier built from object PROPERTY names only — an array's `items` contributes no path segment
+ *  (there is exactly one item shape per array, so `assert.result`, not `assert.items.result`). Walking
+ *  the compiled JSON Schema (rather than the Zod internals) keeps this immune to zod's wrapper
+ *  representation for optional/default/refine — z.toJSONSchema has already resolved all of that. */
+function collectEnums(node: unknown, path: string, out: Record<string, string[]>): void {
+  if (!node || typeof node !== "object") return;
+  const obj = node as Record<string, unknown>;
+  const en = obj.enum;
+  if (Array.isArray(en) && en.every((v) => typeof v === "string")) {
+    if (path) {
+      // Array `items` contribute no path segment, so two enums at different depths CAN collide on one
+      // dotted key (a future `assert[].something.result` would shadow `assert.result`). Silently keeping
+      // the last one would leave the linter validating one field against another's values while the
+      // key-set test still passed — a wrong rule that looks right. Fail the generator instead.
+      if (out[path])
+        throw new Error(`enum path collision in the scenario schema: "${path}" — give one of them a distinct key before regenerating`);
+      out[path] = en as string[];
+    }
+    return; // an enum leaf has nothing further worth walking
+  }
+  const props = obj.properties as Record<string, unknown> | undefined;
+  if (props) {
+    for (const [k, v] of Object.entries(props)) collectEnums(v, path ? `${path}.${k}` : k, out);
+  }
+  if (obj.items !== undefined) collectEnums(obj.items, path, out); // array items: same path, no segment
+}
+
+/** Every enum-valued field in the scenario schema, keyed by a stable field id: a top-level key
+ *  (`fidelity`), an `answers:` item key (`answers.decide`), an `assert:` item key (`assert.result`), or
+ *  a nested assert-item object key (`assert.path_denied.source`). scenario.py's `enum-value-invalid`
+ *  rule validates authored values against this — walking the schema (rather than hand-copying four
+ *  top-level fields, which is the bug this map fixes) is what makes the nested `answers[]`/`assert[]`
+ *  enums covered too.
+ *
+ *  `execution` legitimately includes `cloud-describe` here — it IS a valid schema value. The runtime
+ *  REJECTS it at load anyway, as reserved (src/run/execute.ts — no cloud runner exists yet), so it must
+ *  never be offered back to an author as the FIX for some other invalid `execution:` value. That
+ *  carve-out belongs in scenario.py, where fix text gets composed — this map stays a faithful,
+ *  mechanical mirror of what the schema actually accepts. */
+function buildEnumMap(): Record<string, string[]> {
+  const json = z.toJSONSchema(ScenarioObject, { target: "draft-7" }) as Record<string, unknown>;
+  const out: Record<string, string[]> = {};
+  collectEnums(json, "", out);
+  const sorted: Record<string, string[]> = {};
+  for (const k of Object.keys(out).sort()) sorted[k] = out[k];
+  return sorted;
+}
+
 /** The authoritative key lists `scenario.py` reads — derived from the Zod schemas (the same source
  *  `assertions --list` reads). Generating them keeps the linter's unknown-key checks from drifting: `keys` is
  *  the `assert:` catalog, `topLevelKeys` the scenario top-level catalog (an earlier hand-maintained copy
@@ -47,6 +96,10 @@ export function buildAssertionKeys(): string {
         // src/agent/session.ts for why the served set is narrower than production's install.
         servedHookEvents: [...SERVED_HOOK_EVENTS].sort(),
         knownHookEvents: [...KNOWN_HOOK_EVENTS].sort(),
+        // Every enum-valued scenario field, top-level AND nested (answers[]/assert[] item keys), keyed
+        // by a stable dotted field id. See collectEnums/buildEnumMap above. scenario.py's
+        // `enum-value-invalid` rule keeps an embedded fallback parity-tested against this.
+        enums: buildEnumMap(),
       },
       null,
       2,

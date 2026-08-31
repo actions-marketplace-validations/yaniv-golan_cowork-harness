@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
-import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS } from "../src/types.js";
+import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS, FIDELITY_TIERS } from "../src/types.js";
 import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
@@ -15,6 +15,19 @@ function pyKeySet(name: string): string[] {
 s=importlib.util.spec_from_file_location('scn',${JSON.stringify(SCENARIO_PY)})
 m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 print(json.dumps(sorted(getattr(m,${JSON.stringify(name)}))))`;
+  const r = spawnSync(PY, ["-c", code], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`python extract of ${name} failed: ${r.stderr}`);
+  return JSON.parse(r.stdout.trim());
+}
+
+/** Same idea as pyKeySet, but for a module-level DICT constant (e.g. `_EMBEDDED_ENUMS`) — pyKeySet's
+ *  `sorted(getattr(...))` iterates a dict's KEYS only, silently dropping every value, so a dict needs its
+ *  own reader rather than being forced through the set-shaped one. */
+function pyDict(name: string): Record<string, unknown> {
+  const code = `import importlib.util,json,sys
+s=importlib.util.spec_from_file_location('scn',${JSON.stringify(SCENARIO_PY)})
+m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+print(json.dumps(getattr(m,${JSON.stringify(name)})))`;
   const r = spawnSync(PY, ["-c", code], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`python extract of ${name} failed: ${r.stderr}`);
   return JSON.parse(r.stdout.trim());
@@ -169,6 +182,37 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
   it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_KNOWN_HOOK_EVENTS equals the generated knownHookEvents", () => {
     const gen = (JSON.parse(buildAssertionKeys()).knownHookEvents as string[]).slice().sort();
     expect(pyKeySet("_FALLBACK_KNOWN_HOOK_EVENTS")).toEqual(gen);
+  });
+
+  // The enum-value map backs scenario.py's `enum-value-invalid` rule — a hand-picked list of four
+  // top-level fields (fidelity/execution/lane/on_unanswered) was the bug being fixed here, so pin
+  // coverage of the nested answers[]/assert[] enums too, not just the top-level ones.
+  it("enums covers every enum-valued scenario field, top-level and nested", () => {
+    const enums = JSON.parse(buildAssertionKeys()).enums as Record<string, string[]>;
+    expect(Object.keys(enums).sort()).toEqual(
+      [
+        "fidelity",
+        "execution",
+        "lane",
+        "on_unanswered",
+        "answers.decide",
+        "answers.else",
+        "answers.grant",
+        "assert.result",
+        "assert.path_denied.source",
+        "assert.path_denied.agent_scope",
+        "assert.question_options.order",
+      ].sort(),
+    );
+    expect(enums.fidelity).toEqual([...FIDELITY_TIERS]);
+    // `cloud-describe` IS a valid schema value for `execution` — the runtime-reserved carve-out lives in
+    // scenario.py's fix-text composition (_enum_fix_values), not in this map, which stays a faithful
+    // mirror of what the schema accepts.
+    expect(enums.execution).toEqual(["local", "cloud-describe"]);
+  });
+  it.skipIf(!HAVE_PY)("scenario.py _EMBEDDED_ENUMS equals the generated enums", () => {
+    const gen = JSON.parse(buildAssertionKeys()).enums as Record<string, string[]>;
+    expect(pyDict("_EMBEDDED_ENUMS")).toEqual(gen);
   });
 });
 

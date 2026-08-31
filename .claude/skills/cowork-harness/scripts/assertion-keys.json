@@ -122,5 +122,58 @@
     "Stop",
     "SubagentStop",
     "UserPromptSubmit"
-  ]
+  ],
+  "enums": {
+    "answers.decide": [
+      "allow",
+      "deny"
+    ],
+    "answers.else": [
+      "allow",
+      "deny"
+    ],
+    "answers.grant": [
+      "once",
+      "domain"
+    ],
+    "assert.path_denied.agent_scope": [
+      "main",
+      "subagent",
+      "any"
+    ],
+    "assert.path_denied.source": [
+      "pretooluse",
+      "can_use_tool",
+      "permission_denied"
+    ],
+    "assert.question_options.order": [
+      "exact",
+      "any"
+    ],
+    "assert.result": [
+      "success",
+      "error"
+    ],
+    "execution": [
+      "local",
+      "cloud-describe"
+    ],
+    "fidelity": [
+      "protocol",
+      "container",
+      "microvm",
+      "hostloop",
+      "cowork"
+    ],
+    "lane": [
+      "local",
+      "remote"
+    ],
+    "on_unanswered": [
+      "fail",
+      "prompt",
+      "llm",
+      "first"
+    ]
+  }
 }
