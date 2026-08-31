@@ -312,7 +312,9 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
    This is the shape a CI step wants: **silent on success (no output, exit 0), loud and specific on
    failure** — `--quiet` suppresses the readiness preview but never the `✗ broken:` lines, which name the
-   offending file *and* the rejected key, and the step still exits 1. A scenario that lints with only
+   offending file *and* the rejected key, one line per file, and the step still exits 1. (Silent is
+   literal only when your scenarios name a `fidelity:`; one still in the deprecation window prints one
+   defaulted-fidelity notice per scenario.) A scenario that lints with only
    warnings can still be unloadable, so a green `lint` is not evidence the suite runs.
 3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
    Token-free; content + structure + gate delivery.
