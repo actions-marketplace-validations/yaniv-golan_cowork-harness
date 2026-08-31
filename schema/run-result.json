@@ -431,6 +431,34 @@
         "type": "string"
       }
     },
+    "modelFallbacks": {
+      "type": "array",
+      "description": "turns where the agent fell back off the requested model, from the SDK's own system/model_fallback event. Each entry carries the binary's own trigger: 'model_not_found' (the pinned id is retired or unknown), 'model_blocked'/'permission_denied' (the account may not use it), or a transient 'overloaded'/'server_error'/'last_resort'. Read this instead of diffing `models` \u2014 a diff cannot tell a retired pin from a transient overload. An EMPTY array means no fallback was observed, which is not the same as 'the pin was honored' (see modelPinHonored).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "trigger": {
+            "type": "string"
+          },
+          "originalModel": {
+            "type": "string"
+          },
+          "fallbackModel": {
+            "type": "string"
+          }
+        },
+        "required": ["trigger"]
+      }
+    },
+    "modelPinHonored": {
+      "type": "boolean",
+      "description": "did the model the scenario pinned survive the run? THREE-state: true = pinned and no fallback observed; false = pinned and the agent fell back off it; ABSENT = unverifiable (nothing was pinned, or the run produced no live model evidence). Absence is not a pass \u2014 a consumer that reads a missing value as true is asserting something the run cannot support."
+    },
+    "modelSource": {
+      "type": "string",
+      "enum": ["user_setting", "unresolved"],
+      "description": "where the run's model came from. 'user_setting' means something pinned it (a session `model:`, `--model`, a matrix axis, or COWORK_HARNESS_MODEL \u2014 the harness does not distinguish those, because the distinction production draws is user-chose vs system-chose, not which surface carried it). 'unresolved' is the state only the harness can occupy: nothing pinned the model, so the agent binary chose its own default and the run's model is a property of the machine rather than of the scenario. Production's 'global_default' is not mirrored \u2014 it names an account-resolved default the harness never observes."
+    },
     "thinking": {
       "type": "array",
       "description": "main-loop reasoning blocks (capped at the last 50). NOTE: on newer models (Opus 4.8, Sonnet 5) the API defaults the thinking display mode to 'omitted', so blocks arrive with empty text + a signature and are surfaced as {text:'', redacted:true} \u2014 read that as 'reasoned, text omitted by request', NOT 'no reasoning'. The harness passes no --thinking-display (faithful to real Cowork); the fenced debug.thinking_display:'summarized' opt-in can surface summarized (never raw) text. redacted is omitted (not false) on blocks that carry text.",
@@ -595,6 +623,7 @@
                   "mount_delete",
                   "host_path_leak",
                   "non_deterministic",
+                  "model_fallback",
                   "l0_host_config_contamination",
                   "missing_capability",
                   "infra_error",
@@ -1137,7 +1166,7 @@
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS the default verdict since 2.0.0 — \"could not be checked\" is not \"checked and unchanged\". --strict fails on every class; --fail-on-skill-drift adds skill/shared-root. See SPEC \u00a711 for per-class semantics.",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS the default verdict since 2.0.0 \u2014 \"could not be checked\" is not \"checked and unchanged\". --strict fails on every class; --fail-on-skill-drift adds skill/shared-root. See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
         "required": ["class", "message"],

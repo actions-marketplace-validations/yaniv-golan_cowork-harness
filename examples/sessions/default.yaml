@@ -4,7 +4,7 @@
 # (Separate from baselines/desktop-*.json, which is the auto-synced runtime baseline.)
 
 # --- model & reasoning (Cowork model picker + toggles) ---
-model: claude-opus-4-8 # setModel; omit to use the agent default
+model: claude-opus-4-8 # setModel; pin it -- omitting warns (deprecated, an error in the next major)
 effort: high # setEffort: low | medium | high | xhigh
 extended_thinking: true # real Cowork on/off toggle; default true (ON) -- see docs/session.md
 permission_mode: default # setPermissionMode: default | acceptEdits | plan | bypassPermissions

@@ -134,7 +134,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
     { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
   "fingerprint": { "baseline": "1.15962.1", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
-  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (folders/plugins/skills/mcp/egress/web_fetch, plus projects and agent_env when set) — verify-cassettes-only, never the default replay verdict
+  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects and agent_env when set) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "timeline": [ /* … */ ], // harness-observation timeline (see src/agent/timeline.ts): seq/ts/line/type per meaningful in-run event, in total order; `ts` is wall-clock-observation-time, frozen not recomputed on replay — informational only, no verdict impact. ABSENT on a pre-timeline cassette or when timeline.jsonl was empty/unreadable at record time
   "timelineHeader": { "startedAtMono": "…", "startedAtWall": "…" }, // written once as timeline.jsonl's first line; `startedAtMono` is the raw `process.hrtime.bigint()` start value (as a string) that every `timeline[].ts` is milliseconds-elapsed-since; `startedAtWall` is the wall-clock anchor so absolute times are recoverable from the relative `ts` stream
@@ -819,7 +819,7 @@ possible.
   **both** buckets change you get **both** messages — a co-occurring shared change does not mask the skill's
   own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
   matching the hash boundary.)
-- **`session-shape fingerprint differs from the current session file (connected folders/plugins/skills/mcp/egress/web_fetch
+- **`session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch
   config changed since record; projects and agent_env are hashed only when set) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
@@ -874,6 +874,13 @@ for the `cowork` → `hostloop`/`container` resolution.
   **before** `promptAssetsHash` existed carries no field at all — that's a non-failing informational note
   ("`prompt-assets:` cassette predates prompt-asset fingerprinting"), not a finding. Notes are emitted at
   `::notice::` and, on a directory replay, collapsed to one summary line per note kind.
+
+- **`session-fingerprint: predates \`model\` coverage …`** — the same non-failing shape one bullet up, for
+  the session shape rather than the prompt assets. A cassette recorded before `model` joined the hashed
+  session shape carries a hash that says nothing about the pinned model, so a model change since record is
+  undetectable on it — while everything the hash *does* cover still matches. It stays **clean** (exit 0);
+  re-record only if you want that coverage. The reason it matters is that the agent selects part of its
+  system prompt by model capability — see [fidelity-gaps.md](./fidelity-gaps.md#model-selection--the-harness-inherits-the-local-cli-default).
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

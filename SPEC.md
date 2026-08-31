@@ -78,7 +78,8 @@ claude -p --verbose
   (--max-thinking-tokens 31999 | --thinking disabled)   # session.extended_thinking on|off (default on)
                                                 #   debug.max_thinking_tokens → --max-thinking-tokens <N> (fenced, non-Cowork)
   [--append-system-prompt <rendered cowork sections>]
-  [--model <session.model>]
+  [--model <resolved model>]                   # --model flag / matrix axis > session.model > COWORK_HARNESS_MODEL;
+                                                #   omitted when none pin one (the agent picks its own default — warns)
   [--mcp-config <configGuest>/mcp.json]         # if session.mcp.config set — HONORED in plain cowork mode (§6)
   (--plugin-dir <mntRoot>/<p>)…                 # one per pluginDirs entry
   --tools <baseline.spawn.tools…>                # variadic, LAST

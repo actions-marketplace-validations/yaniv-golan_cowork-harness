@@ -421,6 +421,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `infra_error` | fail | A supervising process died mid-run (VM/egress sidecar) — the run's evidence is contaminated, not author-suppressible |
 | `stalled` | fail | The run ended on an unanswered question, or on a trailing-`?` final turn with no tool work after the last gate (opt out: `allow_stall`) |
 | `non_deterministic` | warn | The run was LLM/external/human-decided — not reproducible |
+| `model_fallback` | warn | The agent fell back off the requested model mid-run (SDK `model_fallback` event); a `model_not_found`/`model_blocked` trigger repeats every run until the pin changes |
 | `prompt_asset_missing` | warn | The run proceeded with a missing prompt asset (`COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded |
 | `scan_unavailable` | warn | Post-run scan evidence unavailable (`RunResult.scan` undefined) — the host-path and outputs-delete guards did not run this run |
 | `ended_with_question` | warn | Live-lane heuristic: the final answer contains a question and the run wrote no deliverable to `outputs/` — the lenient sibling of `stalled` (covers a mid-message `?`, or tool work after the last gate that still ended asking). Opt out: `allow_stall` |

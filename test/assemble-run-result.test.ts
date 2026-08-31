@@ -9,6 +9,9 @@ import type { CompleteRunResult } from "../src/run/assemble-run-result.js";
 // see the Architecture type-mechanism correction.)
 function fullyExplicitFixture(): CompleteRunResult {
   return {
+    modelFallbacks: undefined,
+    modelPinHonored: undefined,
+    modelSource: undefined,
     $schema: undefined,
     generator: undefined,
     turn: undefined,

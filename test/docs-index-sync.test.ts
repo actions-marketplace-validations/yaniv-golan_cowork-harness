@@ -87,11 +87,16 @@ describe("verdict-signals docs ↔ code", () => {
   // REPLACES a `undelivered_deliverables` firing on the remote lane rather than adding new noise (the two
   // are mutually exclusive), and it is gated on the same candidate set, so a remote run that produced
   // nothing to deliver stays as quiet as it was before. Net warn volume on any given run is unchanged.
-  it('the docs\' "only eight warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 9 as of `model_fallback`. Held to the same noise test as the two above and passes for a different
+  // reason: it cannot fire on a healthy run at all. Its source is the agent's own `model_fallback` event,
+  // which the binary emits only when a turn actually falls off the requested model — so a user who never
+  // hits a retired pin or an overload never sees it, and one who does is being told the run measured a
+  // model their scenario does not name. Zero added volume on every currently-green run.
+  it('the docs\' "only nine warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(8);
-    expect(scenarioMdText).toMatch(/Only eight codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(9);
+    expect(scenarioMdText).toMatch(/Only nine codes are \*\*warn\*\*-severity/);
   });
 });
 

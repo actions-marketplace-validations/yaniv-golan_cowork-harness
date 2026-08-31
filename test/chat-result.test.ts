@@ -7,6 +7,7 @@ function minimalChatRecord(): RunRecord {
   // The test only needs a well-formed record; populate toolCounts + result to prove passthrough.
   return {
     runId: "chat",
+    modelFallbacks: [],
     result: "success",
     initTools: [],
     transcript: "hi",

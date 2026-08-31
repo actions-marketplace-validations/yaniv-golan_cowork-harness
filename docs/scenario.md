@@ -610,10 +610,16 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. Most
 are **fail**-severity — they flip the run's pass/exit code even though `result.result` itself stays
 `"success"`, so `assert result: success` alone won't catch them; check `result.verdict.signals[].severity`
-or the run's exit code instead. Only eight codes are **warn**-severity (informational, never flip
+or the run's exit code instead. Only nine codes are **warn**-severity (informational, never flip
 pass/fail):
 
 - `non_deterministic` (**warn**) — the run was LLM/external/human-decided, not reproducible.
+- `model_fallback` (**warn**) — the agent switched off the requested model mid-run, reported from the
+  SDK's own `model_fallback` event (so the trigger is the agent's word, not an inference). A
+  `model_not_found` / `model_blocked` / `permission_denied` trigger is a property of the pin — every run
+  of the scenario falls back the same way until the pinned id changes; `overloaded` / `server_error` is
+  transient. Warns rather than fails: the run happened and its assertions still mean something, but the
+  model that produced it is not the one the scenario names.
 - `prompt_asset_missing` (**warn**) — the run proceeded with a missing prompt asset (e.g.
   `COWORK_HARNESS_ALLOW_MISSING_PROMPT=1`); fidelity is degraded (the agent ran, but not against the full
   faithful prompt surface).

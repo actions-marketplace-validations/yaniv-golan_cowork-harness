@@ -568,6 +568,12 @@ Recognize these before "fixing" a non-bug:
   would claim more than the evidence supports, and staying silent would read as clean. Mutually exclusive
   with `undelivered_deliverables`, and quiet on a run that produced nothing to deliver. Not a skill defect —
   a harness coverage gap (see the *File delivery* section of fidelity-gaps).
+- **`model_fallback`** (`WARN`) — the agent switched off the requested model mid-run. Read the `trigger`:
+  `model_not_found` / `model_blocked` / `permission_denied` are properties of the **pin**, so every run of
+  this scenario falls back the same way until you change the pinned id; `overloaded` / `server_error` are
+  transient and a re-run may hold. The run's assertions still mean what they say — but they were produced
+  by a different model than the scenario names, so treat a green as evidence about the fallback model.
+
 - **`mount_delete`** (`WARN`) — a delete touched a **delete-denied mount other than `outputs`**: a `rw`
   connected folder. Production denies `unlink`/`rmdir` on *every* Cowork FUSE mount until per-mount
   approval, not just outputs — a connected folder shows the identical default — so this run diverged from

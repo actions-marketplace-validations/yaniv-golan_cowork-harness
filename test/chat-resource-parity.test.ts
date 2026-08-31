@@ -19,6 +19,7 @@ import type { RunRecord } from "../src/run/run.js";
 function minimalChatRecord(): RunRecord {
   return {
     runId: "chat",
+    modelFallbacks: [],
     result: "success",
     initTools: [],
     transcript: "hi",

@@ -181,6 +181,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 
 ── Automated scenarios ────────────────────────────────────────────────────────
   run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir (CI-ready exit code)
+      [--model <id>]   pin the model (overrides the session's 'model:'; unset warns)
       [--on-unanswered fail|first]   ('prompt' rejected — breaks determinism)
       [--decider-cmd '<helper>']   answer live questions via a spawned helper
       [--decider-dir <dir>]   answer live questions in-band; then use 'gates'/'answer' to stream/respond
@@ -188,7 +189,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       (run 'run --help' for the full flag reference)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
-  record <scenario.yaml>       run + save a control-protocol cassette
+  record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
       [--max-artifact-bytes <n>]  inline-body cap (default 65536 / $COWORK_HARNESS_MAX_ARTIFACT_BYTES)
       [--concurrency <N>]      record a dir/ batch (or --rerecord-stale) N at a time (default 1; runs are
@@ -417,6 +418,12 @@ const RUN_HELP = `cowork-harness run <scenario.yaml | dir/>
   code. Verdict-first: on FAIL the failing transcript is printed inline (no spelunking runs/…).
   ('run' takes no --dry-run: 'record <file.yaml> --dry-run' checks that a scenario LOADS without
    spending; 'lint <file.yaml>' checks the assertion invariants. Both are token-free.)
+
+Model:
+  --model <id>                     pin the model, overriding the session's 'model:' for this run
+                                   (env COWORK_HARNESS_MODEL sets a default; a --matrix 'models:' axis
+                                   wins over both). A run that resolves no model warns: omitting it is
+                                   deprecated and becomes an error in the next major.
 
 Input policy:
   --on-unanswered fail|first       policy for an unscripted question (default: fail — deterministic).
@@ -1546,7 +1553,53 @@ async function cmdRun(rawArgs: string[]) {
   // swallow a real arg) instead of the loud reject below, so muscle memory from `skill` doesn't error.
   // Note it so the no-effect is visible.
   const keepRequested = rawRest.includes("--keep");
-  const args = rawRest.filter((a) => a !== "--keep");
+  // `--model <id>` — the one-off pin, matching the `skill`/`probe-dispatch`/`chat` lanes (and defaulting
+  // from COWORK_HARNESS_MODEL the same way they do). Parsed HERE rather than in `takeCommonFlags`: those
+  // lanes take `--model` out of the leftovers themselves, so consuming it in the shared parser would
+  // strip it before their own loops ever see it. Extracted before the `--keep` filter so both survive.
+  // The EXPLICIT flag and the env DEFAULT are kept apart deliberately. `run`/`record` resolve a session
+  // FILE, and a machine-scoped env var must never silently outrank a model that file declares — that is
+  // the very defect this whole change exists to close, and collapsing the two here reintroduced it
+  // through the back door (a stray line in a repo `.env` would repoint every clone's runs). The flag is
+  // an explicit per-invocation act and does outrank the file; the env var only fills a gap.
+  let modelFlag: string | undefined;
+  const withoutModel: string[] = [];
+  for (let i = 0; i < rawRest.length; i++) {
+    const tok = rawRest[i];
+    // Accept `--model=<id>` too: `record` gets it free from the shared parser, and a form that works on
+    // one lane and is reported as an unexpected argument on the other is just a trap.
+    if (tok.startsWith("--model=")) {
+      // SPEC §CB-2: an empty/whitespace value is a hard usage error, never a silently-propagated empty
+      // model string — the same rule `flagValue()` and chat's own parser enforce.
+      const v = tok.slice("--model=".length);
+      if (v.trim() === "") fail("run", "usage", "--model requires a model id", undefined, isJsonOutput(rawArgs));
+      modelFlag = v;
+      continue;
+    }
+    if (tok === "--model") {
+      const v = rawRest[i + 1];
+      // `takeCommonFlags` has already consumed every flag it knows, so a `-`-prefixed or missing next
+      // token means the value is absent. The `.yaml` check catches the case the `-` guard CANNOT see:
+      // in `run --model --verbose x.yaml`, `--verbose` is consumed upstream, so this loop sees
+      // `["--model","x.yaml"]` and would swallow the scenario path as a model id — then report "no
+      // scenario path", blaming the one argument that was correct. No model id ends in .yaml/.yml.
+      const looksLikeScenario = v !== undefined && /\.ya?ml$/i.test(v);
+      // `v.trim() === ""` is SPEC §CB-2 (an empty model string must never propagate).
+      if (v === undefined || v.trim() === "" || v.startsWith("-") || looksLikeScenario)
+        fail(
+          "run",
+          "usage",
+          `--model requires a model id${v === undefined ? "" : ` (found \`${v}\`${looksLikeScenario ? ", which looks like the scenario path" : ""})`}`,
+          undefined,
+          isJsonOutput(rawArgs),
+        );
+      modelFlag = v;
+      i++;
+      continue;
+    }
+    withoutModel.push(tok);
+  }
+  const args = withoutModel.filter((a) => a !== "--keep");
   if (keepRequested) log("note: `run` always keeps runs (under the runs root); --keep is a no-op here.");
   // A leftover global-only flag is NOT a positional. `takeCommonFlags` has already consumed every real
   // flag VALUE, so a `--dotenv=`/`--run-dir=` token surviving to here is provably a misplaced flag rather
@@ -1666,7 +1719,9 @@ async function cmdRun(rawArgs: string[]) {
       const cellScenario = cell.axes.baseline !== undefined ? { ...scenario, baseline: cell.axes.baseline } : scenario;
       try {
         const session = applySessionOverrides(baseSession, {
-          model: cell.axes.model,
+          // The cell axis is the more specific choice; `--model` is the fallback for a matrix whose
+          // cells vary some OTHER axis and still want one pinned model across all of them.
+          model: cell.axes.model ?? modelFlag,
           skillDirSubstitution:
             cell.axes.skillDir !== undefined
               ? [baseSession.plugins.local_plugins[0], resolvedSkillDirs.get(cell.axes.skillDir)!]
@@ -1800,7 +1855,10 @@ async function cmdRun(rawArgs: string[]) {
             policy,
             externalChannel,
             o,
-            extra: deciderModel ? { llmModel: deciderModel } : undefined,
+            extra: {
+              ...(deciderModel ? { llmModel: deciderModel } : {}),
+              ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+            },
           }),
         );
         continue;
@@ -1824,7 +1882,10 @@ async function cmdRun(rawArgs: string[]) {
             policy,
             externalChannel,
             o,
-            extra: deciderModel ? { llmModel: deciderModel } : undefined,
+            extra: {
+              ...(deciderModel ? { llmModel: deciderModel } : {}),
+              ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+            },
             rethrowUnanswered: true,
           }),
         onResult: (r) => results.push(r),
