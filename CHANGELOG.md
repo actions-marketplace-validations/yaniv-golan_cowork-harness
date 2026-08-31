@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-08-31
+
 ### Changed
 
 - **`record --dry-run`'s pre-spend policy refusals now exit `1`, not `2`** — the code the real `record`
