@@ -18,7 +18,8 @@ All notable changes to this project are documented here. The format is based on
   refusal is routine — a wrapper reading `rc != 0` as "scenario broken" false-positived on every
   un-cassetted scenario. Scope: the four `preSpendVerdicts` refusals plus the assert-contradiction check.
   `--max-budget-usd` keeps its own `runtime`-category exit `2` (unchanged, and the same on the real path).
-  Batch (`record <dir/>`) exit codes are unchanged.
+  Batch (`record <dir/>`) codes change only for the all-broken case below; every other batch outcome is
+  unchanged.
 - **`record <file>` now exits `2` when the scenario cannot be loaded, not `1`** — and no longer answers a
   different code depending on whether `--max-budget-usd` was passed. The scenario was parsed twice, in two
   places with different error handling: the budget gate caught a parse failure and exited `2`, while the

@@ -687,6 +687,10 @@ otherwise report every valid scenario with the same code as a broken one. The sc
 BEFORE the credential guard, so "does this file load" never depends on holding a token.
 A `record <dir/>` target keeps the same 1-vs-2 meaning at batch scale: a directory whose files all fail
 to load exits `1` (they are broken, not absent), while a directory with no scenarios at all exits `2`.
+Where a `--max-budget-usd` cap could also refuse, the outcome follows from which check can even apply:
+**all** files broken exits `1` (nothing loaded, so there is nothing to spend on and the budget gate never
+runs), while **some** broken alongside a loadable scenario over the cap exits `2` (the budget refusal is
+about the run you were about to pay for). That split is unchanged from earlier releases.
 On a `record <dir/>` target only the **path-independent** refusals (prompt policy,
 assert contradiction, duplicate cassette target) join `broken[]` in exiting `1`; the path-DEPENDENT ones
 (host-inventory destination, cassette portability) are advisory `notes[]` that do not affect the exit
