@@ -1047,6 +1047,16 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   it — the scan is the actual gate. Writing a recording the scan DID flag needs the separate, louder
   `--allow-host-inventory-findings`. Both are distinct from `verify-cassettes`' `--allow-host-inventory
   <regex>` above (a per-finding suppressor on an already-committed cassette, not a record-time flag).
+  **The predicate, as one rule:** absent `--allow-host-inventory-fixture`, `record` refuses when the tier is
+  host-inheriting (`protocol`/`hostloop`/`cowork`→hostloop) **and** the destination is repo-visible **and**
+  nothing exists at that destination yet; the same tier-and-path combination *with* something already there
+  warns instead of refusing — a `--rerecord-stale` target always exists by definition, so making existence
+  a refusal condition would fire on every such pass. "The destination" is `--out` when given, otherwise the
+  scenario-name-slug default (`cassettes/<slug>.cassette.json`) resolved **relative to the current working
+  directory**, not to the scenario file's location (`defaultCassettePath`, `hostInventoryPreflight` in
+  `src/run/cassette.ts`). So a `--dry-run` preview run from a different cwd than the real `record` invocation
+  is a preflight on a *different destination* — same scenario, same flags, possibly the opposite verdict,
+  because "does the cassette already exist" has no answer until you fix *where* it's being looked for.
 
   **Until 2.2.0 one flag did both jobs**, so an operator who passed it to get past a precondition they
   could not check also switched off the measured scan that would have caught a real leak — the escape

@@ -380,7 +380,10 @@ emits a scenario `lint` would reject.
 `lint` (exit 0) but a **hard error** in the runtime (`Unrecognized key: "<k>"`, exit 2) — so a scenario
 that lints with warnings may still not run. To check whether a scenario actually loads, without spending:
 `cowork-harness record <file.yaml> --dry-run` (exit 2 on a schema error; a directory reports each
-`✗ broken:` file and exits 1). Corollary: **the loader** fails LOUD on an unknown key (never silently) —
+`✗ broken:` file and exits 1). **Read the exit code, not just its sign:** `record <file>` — with or without
+`--dry-run` — answers `2` for "did not load" and `1` for "loaded fine, but this record is refused" (a
+pre-spend policy refusal; `--max-budget-usd` is the one refusal that keeps exit 2). Treating any non-zero
+as "scenario broken" mis-reports every refused-but-valid scenario. Corollary: **the loader** fails LOUD on an unknown key (never silently) —
 but **`replay` does not**: a frozen top-level key it doesn't recognize (e.g. `lane:` recorded pre-1.16.0) is
 silently ignored and can flip a lane-sensitive verdict green; only frozen **assertion** keys stay
 hard-rejected there. Full split + the v11 version-regime:
@@ -415,6 +418,28 @@ takes no `--out`, so the destination is a guess — and only the path-independen
 contradiction, duplicate cassette target) gate the batch. So a directory dry-run CAN exit 0 on a scenario the
 real `record` would refuse; re-run that one file with its real flags for a binding answer. A directory also
 reports every offender and the batch cost estimate. `lint` checks the assertion invariants (both above).
+
+**Which arm to reach for.** They answer different questions, and picking the wrong one is why a consumer
+concluded the free pre-flight was unavailable:
+- **"Does my whole corpus still load?"** → the **directory** arm (`record scenarios/ --dry-run --quiet`,
+  the CI shape in `references/ci-recipe.md`). It reports every offender in one pass, and the
+  destination-policy verdict cannot red it: that arm knows no `--out`, so host-inventory and portability
+  are advisory `notes[]` at exit 0 while a file that cannot load is `✗ broken:` at exit 1. Limits worth
+  knowing: it is **non-recursive** (`readdirSync` — scenarios in subdirectories are never opened), a file
+  with no `prompt:` key reports as `· skipped:` rather than broken (so a renamed or mis-indented
+  `prompt:` reads as "not a scenario" and the batch still exits 0), exit 1 covers **refused**
+  (path-independent only — prompt policy, assert contradiction, duplicate target) as well as broken, and
+  `--quiet` suppresses the advisory notes entirely — it keeps `✗ broken:` / `✗ refused:` / `· skipped:`,
+  which is what you want in CI but means the notes are not a thing you will see there.
+- **"Would THIS record be refused?"** → the **single-file** arm **with the flags and `--out` the real
+  record will get**. The destination it evaluates is `--out` if given, else `cassettes/<slug>.cassette.json`
+  *relative to your cwd* — so previewing from the repo root a record that really runs from a subdirectory
+  asks about a path that may not even exist, and a scenario whose cassette IS committed can come back
+  refused. Point it at the real destination and the answer is binding.
+
+Neither question is answered by passing `--allow-host-inventory-fixture` to get past the refusal: that
+flag is consent for a recording you intend to make, and reaching for it as a load-check habit is how it
+stops meaning anything.
 
 **Decide WHERE the cassette lives before you record it — a cassette cannot be moved afterwards.**
 Without `--out`, `record` writes `cassettes/<scenario-name-slug>.cassette.json` (gitignored by

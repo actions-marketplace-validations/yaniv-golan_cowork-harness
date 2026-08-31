@@ -6,6 +6,77 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`record --dry-run`'s pre-spend policy refusals now exit `1`, not `2`** — the code the real `record`
+  already gives each of them, and the convention [SPEC.md §11](./SPEC.md) states for the command. A
+  scenario the **loader** rejects still exits `2` on the preview, so it can now tell "this scenario is
+  fine but I refuse to record it here" apart from "this scenario is broken". Before this, both exited
+  `2`, which made `record <file> --dry-run` unusable as a load check on any corpus where the destination
+  refusal is routine — a wrapper reading `rc != 0` as "scenario broken" false-positived on every
+  un-cassetted scenario. Scope: the four `preSpendVerdicts` refusals plus the assert-contradiction check.
+  `--max-budget-usd` keeps its own `runtime`-category exit `2` (unchanged, and the same on the real path).
+  Batch (`record <dir/>`) exit codes are unchanged.
+- **`record <file>` now exits `2` when the scenario cannot be loaded, not `1`** — and no longer answers a
+  different code depending on whether `--max-budget-usd` was passed. The scenario was parsed twice, in two
+  places with different error handling: the budget gate caught a parse failure and exited `2`, while the
+  ordinary path parsed inside the record `try` whose catch stamps `1`. Neither was a decision. It is now
+  parsed once, **before the credential guard**, so a broken scenario reports as broken whether or not you
+  hold a token — matching `run` and `replay`, and matching what `docs/scenario.md` and `docs/cassette.md`
+  have said all along. A missing file now says `scenario path not found` (exit `2`) instead of surfacing an
+  ENOENT as a parse error. Refusals still exit `1`. Related: with `--decider-dir`, a scenario that fails to
+  load now still writes the terminal `done.json`, so a `gates --follow` watcher gets its frame instead of
+  hanging — previously it hung whenever `--max-budget-usd` was also passed.
+- **`record <dir/>` where every file fails to load now exits `1`, not `2`,** and says
+  `no loadable scenarios under <dir> — all N file(s) failed to load` instead of `no scenarios discovered`.
+  Broken is not nothing: there ARE scenarios there, they do not load. The preview arm has always drawn
+  that line, so the two disagreed on exactly the corpus-wide-schema-break case where a CI step compares
+  them. An empty directory still exits `2` on both arms.
+- **A `record --dry-run --max-budget-usd` refusal no longer prints a green envelope before the error.**
+  The budget gate ran *after* the preview payload, so JSON mode emitted `ok:true` and then `ok:false` —
+  a false green for any consumer reading the first line. It now runs with the other pre-spend refusals,
+  before the payload.
+
+### Fixed
+
+- **`lint` reported a scenario CLEAN when the loader hard-rejects its enum values.** `fidelity: bogus`,
+  `assert: - result: succes` (a typo of the most-authored key there is), `answers[].decide: allowe`, a
+  present-but-empty `fidelity:` (which parses as null), and every other invalid enum value linted `✓ clean — no silent-false-green findings` and then failed at
+  load. The linter read those fields without validating them, so a bad value simply matched no
+  tier-conditional rule. A new **`enum-value-invalid`** ERROR covers all eleven enum locations in the
+  scenario schema — `fidelity`, `execution`, `lane`, `on_unanswered`, `answers[].decide`/`else`/`grant`,
+  `assert[].result`, `assert[].path_denied`'s `source`/`agent_scope`, and
+  `assert[].question_options.order` — generated from the schema rather than hand-listed, because two
+  hand-copied value sets in the linter (`VALID_ON_UNANSWERED`, `VALID_TIERS`) were exactly how the gap
+  survived; the hand-copied VALUES are gone (`VALID_ON_UNANSWERED` outright, `VALID_TIERS` now derived
+  from the generated map). **This can newly red a `lint` run** that was green: a scenario it now flags
+  could never have run. The bespoke `on-unanswered-invalid` rule is subsumed (its `agent` → `llm` rename
+  hint is kept). `execution: cloud-describe` is deliberately not flagged — it is a real schema value the
+  runtime separately reserves — and is never offered as a suggested fix for some other bad `execution:`.
+  `lint` remains the LENIENT check: it still does not reproduce the loader's reserved-value,
+  prompt-policy or regex rejections.
+
+### Documentation
+
+- **`no_delete_in_outputs` now carries the same post-run-scan caveat its sibling row already had** —
+  a green means no delete was *detected* by a bash-command scan, not that the mount enforced anything.
+  Reading the row without it, a consumer took a false positive for a documented contradiction.
+- **The host-inventory record refusal states its full predicate where the refusal is explained.** The
+  existing-cassette exemption was documented only as an aside under `--rerecord-stale`, ~130 lines from
+  the block a reader lands on. It is now stated as a rule — host-inheriting tier **and** repo-visible
+  destination **and** nothing there yet — including the part nothing said before: the destination is
+  `--out` if given, else the default path **relative to the current working directory**, so previewing
+  from a different directory than the real `record` asks about a different destination and can give the
+  opposite verdict.
+- **Pinning a gate whose labels *and* order both regenerate** is now covered in `docs/scenario.md`'s
+  stochastic-labels block: neither anchor holds, `answer:` is the remedy, and — the part that was missing
+  — `answer:` is Cowork's "Other" free-text path, so a scenario pinned that way exercises a different
+  user action than selecting an offered option.
+- **`SKILL.md` says which `record --dry-run` arm answers which question** — the directory arm for "does my
+  corpus still load" (with its limits: non-recursive, a `prompt:`-less file reports as *skipped* rather
+  than broken, and exit 1 covers refused as well as broken), the single-file arm *with the real `--out`*
+  for a binding refusal verdict.
+
 ## [3.1.0] — 2026-08-31
 
 ### Fixed
