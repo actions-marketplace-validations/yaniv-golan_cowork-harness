@@ -5094,7 +5094,7 @@ main().catch((e) => {
   const json = isJsonOutput(process.argv.slice(2));
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
-  if (e instanceof UsageError) fail(command, "usage", e.message, undefined, json);
+  if (e instanceof UsageError) fail(command, "usage", e.message, (e as UsageError).hint, json);
   // A refused legacy/mixed/pre-completion run dir (e.g. `--resume` onto one, see execute.ts) is a legible,
   // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
   // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a

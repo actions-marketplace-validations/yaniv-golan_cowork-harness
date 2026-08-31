@@ -46,6 +46,23 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A broken-file listing is one line per file, not a pretty-printed JSON dump.** `ZodError.message` —
+  `JSON.stringify(issues, null, 2)`, 13-16 lines per file — WAS the error message, so a corpus-wide
+  schema break printed ~455 lines for 35 files, and `--quiet` suppressed none of it (correctly: those
+  lines are the failure, not the preview; the bug was their size). The message is now the compact clause
+  — `Unrecognized key: "x" at assert[0]`, with **bracketed** paths an author can locate — and the full
+  issue array moved to `error.hint`, a contracted envelope field, so nothing became unreachable. Applied
+  at the source, so all four render sites benefit: both batch listings, `verify-cassettes`' `notes[]`
+  (which was embedding a 13-line blob mid-sentence inside a **schema-covered** string), and
+  `replay --assert-from`. A **YAML** syntax error is collapsed too — it is a code frame, not a sentence,
+  and one bad indent is the likeliest way a whole corpus breaks at once. The listing no longer prints the
+  file path twice per line. `compactSchemaError` is now the single formatter for all of it (it already
+  existed, for one notice path, with no tests; it has them now).
+- **A defaulted `fidelity:` warns once per scenario, not once per parse.** `record <dir> --dry-run`
+  parses each file three times, so a 35-file corpus with no `fidelity:` — the deprecation-window default
+  — emitted ~105 copies of an 812-char notice, under `--quiet`, with nothing wrong. On a healthy corpus
+  that was the larger half of the noise.
+
 - **`lint` reported a scenario CLEAN when the loader hard-rejects its enum values.** `fidelity: bogus`,
   `assert: - result: succes` (a typo of the most-authored key there is), `answers[].decide: allowe`, a
   present-but-empty `fidelity:` (which parses as null), and every other invalid enum value linted `✓ clean — no silent-false-green findings` and then failed at

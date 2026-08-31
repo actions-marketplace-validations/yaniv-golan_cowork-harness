@@ -1,5 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { BoundaryError, UsageError, LegacyRunDirError } from "../errors.js";
+import { BoundaryError, UsageError, LegacyRunDirError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
@@ -1833,6 +1833,10 @@ const isFileRelative = (p: string) => p !== "(inline)" && !isAbsolute(p) && !p.s
  *  Why anyone cares: the default models the VM-LOOP lane, and production runs HOST-LOOP (gate 1143815894
  *  is force-ON in every shipped baseline). So a scenario that omits the key is measured against the lane
  *  real users are not on — silently. Measured 2026-08-27; see docs/fidelity-gaps.md, "Path resolution". */
+/** Scenario names already warned about a defaulted `fidelity:` in THIS process — see the emission site
+ *  below for why de-duplication is needed at all (one command parses a file up to three times). */
+const FIDELITY_NOTICE_SEEN = new Set<string>();
+
 export function fidelityWasDefaulted(raw: unknown): boolean {
   return typeof raw === "object" && raw !== null && !("fidelity" in (raw as Record<string, unknown>));
 }
@@ -1863,13 +1867,27 @@ export function parseScenarioFile(path: string): Scenario {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
     // not a harness bug — rethrow as UsageError so main().catch maps it to category `usage`, not
     // `internal`. The Zod issue list stays in the message (it names the offending key/value).
-    if (e instanceof ZodError) throw new UsageError(`invalid scenario ${path}: ${e.message}`);
+    // COMPACT in the message, the full issue array in `hint`. The dump used to BE the message, which
+    // made a batch listing unreadable (one file = 13-16 lines of JSON punctuation) and, at
+    // `verify-cassettes`, embedded a multi-line blob mid-sentence inside a schema-covered `notes[]`
+    // string. Nothing is lost: `hint` is a contracted envelope field, so the issues stay machine-
+    // reachable. SPEC.md explicitly disclaims grep-stability of error prose, so the compact form is
+    // free to be the message.
+    if (e instanceof ZodError) throw new UsageError(`invalid scenario ${path}: ${compactSchemaError(e.issues)}`, e.message);
     throw e;
   }
   // `name` defaults to the filename (sans extension) — the file is the identity.
   if (!scenario.name) scenario.name = basename(path).replace(/\.ya?ml$/i, "");
   // Warn, do not fail: this is the deprecation window before `fidelity` becomes required.
-  if (fidelityWasDefaulted(rawDoc)) process.stderr.write(defaultedFidelityNotice(scenario.name) + "\n");
+  // ONCE PER SCENARIO NAME, not once per parse. `record <dir> --dry-run` parses each file THREE times
+  // (discovery, the duplicate-target scan, the preview loop), so a 35-file corpus with no `fidelity:` —
+  // the deprecation-window default, i.e. most corpora — emitted 105 copies of an 812-char notice, and
+  // `--quiet` suppresses none of it. That was larger than the broken-file dump it sat next to, and it
+  // fires when NOTHING is wrong. The set is process-lifetime: one warning per scenario per invocation.
+  if (fidelityWasDefaulted(rawDoc) && !FIDELITY_NOTICE_SEEN.has(scenario.name)) {
+    FIDELITY_NOTICE_SEEN.add(scenario.name);
+    process.stderr.write(defaultedFidelityNotice(scenario.name) + "\n");
+  }
   if (isFileRelative(scenario.session)) scenario.session = resolve(dirname(path), scenario.session);
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT

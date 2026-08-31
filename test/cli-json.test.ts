@@ -257,9 +257,15 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
     expect(r.status).toBe(2);
     expect(JSON.parse(r.stdout).error.category).toBe("usage");
-    expect(JSON.parse(r.stdout).error.message).toMatch(/unrecognized_keys/);
+    // The MESSAGE is the compact clause — a Zod dump was never a good default for a human reading a
+    // terminal, and in a batch it was ~15 lines per broken file. The machine-readable `code` moved to
+    // `hint`, which is a contracted envelope field; `category` (asserted above) is the discriminator a
+    // consumer should branch on, and SPEC.md explicitly disclaims grep-stability of message text.
+    expect(JSON.parse(r.stdout).error.message).toMatch(/Unrecognized key/);
     expect(JSON.parse(r.stdout).error.message).toMatch(/"profile"/);
     expect(JSON.parse(r.stdout).error.message).toMatch(/b\.yaml/); // the message names the offending file
+    expect(JSON.parse(r.stdout).error.message).not.toMatch(/"code":/); // no JSON scaffolding in the message
+    expect(JSON.parse(r.stdout).error.hint).toMatch(/unrecognized_keys/); // …the full issue array, still reachable
   });
 
   it("run on a non-existent scenario path → clean usage error, exit 2 (not a raw ENOENT stack)", () => {
