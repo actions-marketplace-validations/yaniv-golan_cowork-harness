@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-08-31
+
 ### Fixed
 
 - **The pre-coverage cassette note was a paragraph repeated per file.** It fires on every cassette
