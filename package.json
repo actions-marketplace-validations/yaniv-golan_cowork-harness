@@ -115,7 +115,7 @@
     "jsdom": "^30.0.1",
     "prettier": "3.9.6",
     "tsx": "^4.19.0",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   },
   "engines": {
