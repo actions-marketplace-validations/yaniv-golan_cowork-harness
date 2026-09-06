@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.5.0] — 2026-09-06
+
+**Live verification for this release** (macOS arm64, agent **2.1.260**, agent image `cowork-agent-base:2`,
+Desktop 1.46388.4):
+
+| Suite | Result |
+|---|---|
+| `boundary-check` | **6/6** — host-fs-sealed, direct-egress-denied, allowlist-enforced, allowlist-permits, loopback-not-proxied, hostloop-bash-egress |
+| `npm run test:live` | **4 files, 18 passed, 1 skipped** — the skip is `live-outputs-delete`'s silent-guard case, which reports SKIPPED when the agent issues no Bash call (documented as expected-rare, not a failure) |
+| `run examples/scenarios/` | **7/7 success** across `container`, `hostloop` and `protocol` |
+| e2e self-tests | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, semantic-evidence-files, canary-hostloop |
+
+**Two things stated rather than glossed.** (a) The first `test:live` run showed one red — a sub-agent
+WebSearch that the model simply did not perform — and the first scenario batch showed one red on
+`example-pdf-skill`. Both were **model variance**: each passed on re-run with nothing changed, which is
+the disposition the tests themselves prescribe for this class. They are recorded because a suite that
+only ever reports its green run is not evidence of anything. (b) `smoke-l2-microvm` was **not run** this
+release. It is the ninth e2e scenario and the tier CI can never cover (Apple-VZ is macOS-arm64 only); the
+most recent microvm pass remains the one recorded under 3.4.0.
+
 ### Added
 
 - **`liveVerifiedHookEvents` in the generated `assertion-keys.json` sidecar.** A new key alongside
