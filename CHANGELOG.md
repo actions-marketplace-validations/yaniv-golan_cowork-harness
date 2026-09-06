@@ -39,8 +39,10 @@ All notable changes to this project are documented here. The format is based on
   not four (the four named ones plus `create`/`update`/`delete_scheduled_task` and
   `start`/`stop_watching`), and its decision is **not** unconditional: two gate-conditioned early returns
   defer to the auto-mode permission classifier, so in a real auto-mode session 7 of the 9 raise no
-  prompt. Both branches ship in Desktop 1.22209.0 and 1.26832.0 — before the first baseline that recorded
-  this hook — so the note in `spawn.hooks` was inaccurate in all fourteen baselines carrying it.
+  prompt. The scheduled-task branch ships in Desktop 1.22209.0 — before 1.24012.9, the first baseline to
+  record this hook — so the note in `spawn.hooks` was already wrong for 5 of the 9 tools when it was
+  first written; the second branch lands three baselines later at 1.26832.0, making it wrong for all
+  nine from there on. Inaccurate in all fourteen baselines carrying it, either way.
   **Nothing about the harness changes**: auto mode is structurally unreachable here, so for every mode a
   scenario can express production still answers `ask`, and serving that hook unconditionally would remain
   faithful. Corrected in `desktop-1.46388.3` forward; the older baselines keep their wording.
@@ -69,8 +71,11 @@ All notable changes to this project are documented here. The format is based on
   unpinned sibling of `scheduledTaskToolsApprovableByAutoMode`, and one of the two gates that release
   tools from the force-ask hook) and `cuCanUseToolEnabled:2486083521`, which had moved `off` → `ON` while
   unpinned. Gates deliberately left unpinned now carry their reasoning in `cowork-sync.ts` rather than
-  being silently absent. Committed cassettes re-stamped; the prompt-asset hash is unchanged between the
-  two baselines, so no re-recording was needed.
+  being silently absent. Committed cassettes re-stamped rather than re-recorded, on a field-level diff of the two baselines:
+  the entire delta is `appVersion`, `capturedAt`, the `$comment` date, `provenance.asarFingerprint`,
+  `provenance.fcache.embeddedTimestamp` and the two new gate rows. Nothing a replay depends on —
+  `spawn.env`, `spawn.hooks`, `permissionMode`, `agentBinary.sha256`, the egress allowlist, the mount
+  layout — moved at all.
 
 ## [3.4.1] — 2026-09-05
 

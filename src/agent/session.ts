@@ -326,10 +326,12 @@ const TASK_BG_HOOK_ID = "cowork-task-bg-block";
  *  `low_value`, `container_internal` — and the pair drives **cloud/device hook forwarding**, deciding
  *  which events stay on the local machine. Mirroring it here would reject 22 valid event names.
  *
- *  ## Why this was 9 for two agent releases
+ *  ## Why this was 9 for eleven agent versions
  *
  *  Until 2026-09-06 this list held 9 names, stamped "ELF 2.1.219", assembled by grepping for event-name
- *  constants rather than by finding the validator. The consequence was live, not cosmetic: the other 24
+ *  constants rather than by finding the validator. It was written 2026-08-01 and the staged agent moved
+ *  eleven times underneath it (2.1.221 through 2.1.260, across twelve baselines) without anyone
+ *  re-deriving it — which is the case the ELF-reading test now covers. The consequence was live, not cosmetic: the other 24
  *  — `PostCompact` and `MessageDisplay` among them — were reported to users **byte-identically to a
  *  misspelling** ("not a recognized hook event … Check spelling/capitalization"), in `hook-events.ts`
  *  here and at ERROR severity in the Python linter. Re-extract from the staged ELF when the agent
@@ -406,7 +408,10 @@ export const LIVE_VERIFIED_PLUGIN_HOOK_EVENTS: readonly HookEvent[] = ["SessionS
  *
  *   - force-ask     gates NINE tools, not four — allow_cowork_file_delete / request_cowork_directory /
  *                   launch_code_session / save_skill, plus create/update/delete_scheduled_task and
- *                   start/stop_watching (`GNt`, a 9-member Set, resolved in asar 1.46388.3). None is
+ *                   start/stop_watching — a 9-member Set, resolved in asar 1.46388.4. (Deliberately not named:
+ *                   the identifier is `qNt` in 1.46388.3 and `GNt` in .4, where `GNt` is an unrelated
+ *                   string constant. Minified names are a two-build anchor; cite the ids and the tool
+ *                   names.) None is
  *                   registered by this harness, so the matcher never fires. Worth serving if/when
  *                   `save_skill` is modeled — that conclusion is UNCHANGED by the paragraph below.
  *

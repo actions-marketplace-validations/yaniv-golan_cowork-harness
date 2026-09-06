@@ -241,8 +241,11 @@ def _load_hook_events():
         d = json.loads(p.read_text(encoding="utf-8"))
         served, known = set(d["servedHookEvents"]), set(d["knownHookEvents"])
         # Tolerate a sidecar generated before liveVerifiedHookEvents existed: fall back rather than
-        # dropping to the embedded KNOWN set wholesale, which would undo the 33-name fix.
-        live = set(d.get("liveVerifiedHookEvents") or _FALLBACK_LIVE_VERIFIED_HOOK_EVENTS)
+        # dropping to the embedded KNOWN set wholesale, which would undo the 33-name fix. Membership
+        # test, NOT truthiness: an explicitly EMPTY list means the firing receipt was withdrawn, and
+        # `or` would silently restore the 3-name claim -- widening a receipt, which is the one direction
+        # this constant exists to prevent.
+        live = set(d["liveVerifiedHookEvents"]) if "liveVerifiedHookEvents" in d else set(_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS)
         if served and known:
             return served, known, live
     except Exception:
@@ -1513,11 +1516,13 @@ def _lint_hook_events(path):
     and produced no comment of any kind — the surface was discoverable only by grepping the harness's own
     compiled output, which is exactly what one consumer had to do.
 
-    Deliberately WARN, not ERROR, and deliberately worded as uncertainty: a declared-but-unserved event is
-    not a *skill* defect, and the harness cannot currently prove the event never fires. It only knows it
-    adds no handling of its own — the agent binary loads a plugin's hooks.json through its own
-    `--plugin-dir` channel, which is a separate path the harness neither serves nor blocks and which has
-    not been probed. Claiming "this will not fire" would assert more than is known; claiming nothing
+    Severity is three-way and each level means something different. A name the agent's validator ACCEPTS
+    but this harness does not serve is INFO, not a skill defect: the agent loads a plugin's hooks.json
+    through its own `--plugin-dir` channel, which the harness neither serves nor blocks. Of those, only
+    the events in LIVE_VERIFIED_HOOK_EVENTS have been observed firing here, so the confident wording is
+    scoped to them and every other accepted name says so. A name the validator REJECTS is ERROR — that
+    one genuinely never runs on any surface. Claiming "this will not fire" for an accepted event would
+    assert more than is known; claiming nothing
     leaves the consumer to reverse-engineer it. So say precisely what is known.
     """
     findings = []
@@ -1566,8 +1571,9 @@ def _lint_hook_events(path):
                 f"`{name}` {fires} — but cowork-harness "
                 f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. Two "
                 f"consequences: there is no assertion key for this event, so a scenario cannot GATE on it; "
-                f"and the harness does not reproduce the additional `{name}` hooks real Cowork installs, so "
-                f"anything driven by those is absent here.",
+                f"and if real Cowork installs a `{name}` hook of its own, the harness does not reproduce it, "
+                f"so anything driven by that is absent here. (Cowork installs hooks of its own for "
+                f"PreToolUse, PostToolUse and UserPromptSubmit only.)",
                 "The harness does not block your hook — this is about assertability, not breakage. To gate "
                 "on its effect, assert the OBSERVABLE result instead (a file it writes, a tool it blocks), "
                 "not the hook itself.",

@@ -132,7 +132,7 @@ export const PINNED_GATES: Record<string, string> = {
   // 2026-09-06, so a flip in it surfaced nothing. Both gates sit in the SAME force-ask PreToolUse hook
   // body: each guards an early `return {}` that defers the tool to the auto-mode classifier instead of
   // answering permissionDecision:"ask". 1447478638 covers the five scheduled-task/watching tools; this
-  // one covers `request_cowork_directory` and `save_skill` (`Ihn`, a 2-entry map). Observed 2026-09-05
+  // one covers `request_cowork_directory` and `save_skill` (a 2-entry tool-id map). Observed 2026-09-05
   // as force + ON, i.e. in a real auto-mode session 7 of the force-ask set's 9 tools raise no prompt.
   // PRESENT in a standard fcache, so NO DARK_GATES entry (adding one would assert it is unevaluated,
   // which the payload contradicts — the X3 precedent).
@@ -233,11 +233,16 @@ export const PINNED_GATES: Record<string, string> = {
   // spawn assigns this gate's result to that field, and the id's neighbouring literal is Computer Use's
   // org-compliance message). Moved `defaultValue`/off -> `force`/ON between 2026-08-14 and 2026-09-05
   // while unpinned, so the move surfaced nothing — pinned 2026-09-06 for that reason.
-  // NOT MODELED, and doubly out of scope for the sessions this harness runs: the predicate is
-  // `sessionType !== "radar" && sessionType !== "chat" && gate`, and the harness models chat sessions;
-  // and the browser/computer-use tool family is not served here at all (see docs/fidelity-gaps.md,
-  // "Browser tools are not served"). A flip therefore cannot change a harness verdict today. It is
-  // pinned as a sentinel, not as a modelled surface.
+  // NOT MODELED: the browser/computer-use tool family is not served here at all (see
+  // docs/fidelity-gaps.md, "Browser tools are not served"), so a flip cannot change a harness verdict
+  // today. Pinned as a sentinel, not as a modelled surface.
+  // DO NOT re-add the session-type argument that stood here until 2026-09-06. It read: "the predicate
+  // is `sessionType !== "radar" && sessionType !== "chat" && gate`, and the harness models chat
+  // sessions" — which is INVERTED. The modeled session carries NO `sessionType` at all (grep it in any
+  // baseline), so both inequalities are TRUE and the exclusion does not apply; the predicate collapses
+  // to the gate alone. Being chat-typed would EXCLUDE the gate, and the harness is not chat-typed. This
+  // is the exact trap the SPAWN_ENV note at the bottom of this file warns about by name, and it is how
+  // the auto-mode rubric gap came to be understated.
   "2486083521": "cuCanUseToolEnabled",
 };
 

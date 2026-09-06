@@ -129,8 +129,10 @@ export const PlatformBaseline = z.looseObject({
       //
       // The claim was disproved by its own subject. The force-ask entry's note read "permissionDecision:
       // 'ask' regardless of permission mode" in FOURTEEN consecutive baselines, 1.24012.9 through
-      // 1.46388.3, and was false in every one of them — the conditional early-returns shipped in Desktop
-      // 1.22209.0 and 1.26832.0, both BEFORE the first baseline that carried this field at all. Every
+      // 1.46388.3, and was false in every one of them. The scheduled-task early return shipped in
+      // Desktop 1.22209.0 — BEFORE 1.24012.9, the first baseline to carry this field, so that note was
+      // already wrong for 5 of the 9 tools on the day it was first committed. The builtin early return
+      // shipped three baselines later, at 1.26832.0, making it wrong for all 9 from there on. Every
       // sync was green throughout. Believing the tripwire existed is what let it rot; saying so plainly
       // is cheaper than building the sentinel that would make the old sentence true (a literal anchor
       // over a hand-written descriptor, which is the release-day wedge cowork-sync.ts already warns

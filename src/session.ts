@@ -221,7 +221,7 @@ export const SessionConfig = z.strictObject({
   // `{...plan.baseEnv}`), while container/microvm build a constructed allowlist. So an operator-exported
   // CLAUDE_CODE_SUBAGENT_MODEL / ENABLE_TOOL_SEARCH / CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS silently
   // affects only the env-inheriting tiers. This field is the authored, uniform replacement: it applies
-  // across ALL FOUR tiers, and the three keys are additionally SCRUBBED from the operator layer on
+  // across ALL FOUR tiers, and FIVE keys are SCRUBBED from the operator layer on
   // hostloop/protocol (the only tiers that inherit it) so an unset stray shell value can never leak
   // through. Precedence is TIER-QUALIFIED: hostloop/container/microvm layer a baseline `spawn.env`, so
   // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline-env overlay (it
@@ -251,10 +251,24 @@ export const SessionConfig = z.strictObject({
  *  separately rather than being covered by `CLAUDE_CODE_SUBAGENT_MODEL`. Added 2026-09-06 after the
  *  sub-agent model precedence was measured (see `agent_env.subagent_model` above): both flags change how
  *  a sub-agent's model resolves — `SUBAGENT_MODEL_FORCE` promotes the env override above the dispatch
- *  parameter and the agent's frontmatter, `COORDINATOR_FORCE_WORKER_INHERIT_MODEL` discards the dispatch
- *  parameter outright — and **the Cowork spawn sets neither** (absent from the baseline's 24-key
+ *  parameter and the agent's frontmatter (read ungated), while
+ *  `COORDINATOR_FORCE_WORKER_INHERIT_MODEL` discards the dispatch parameter **only when
+ *  `CLAUDE_CODE_COORDINATOR_MODE` is also set** (its read site is `if(Ts()&&<key>)`, and `Ts()` is that
+ *  mode's predicate) — and **the Cowork spawn sets neither** (absent from the baseline's 24-key
  *  `spawn.env`). So an operator who has one exported was getting different sub-agent model resolution on
- *  hostloop/protocol than on container/microvm, in the exact shape this constant exists to prevent. */
+ *  hostloop/protocol than on container/microvm, in the exact shape this constant exists to prevent.
+ *
+ *  THE MEMBERSHIP RULE, because the list stopped being self-evident when it grew past three. It used to
+ *  be exactly the keys `agentEnvOverrides` maps, i.e. derivable. It is now: **a key is scrubbed when it
+ *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
+ *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
+ *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
+ *  binary's settable-env table meet (a) alone; (b) and (c) are what select these five.
+ *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
+ *  key above and swaps the coordinator system prompt and the Task tool description. It fails (b) as
+ *  currently written — the harness models no coordinator surface — so scrubbing it would suppress a
+ *  whole mode rather than close an asymmetry. Revisit if coordinator mode is ever modeled; that is the
+ *  next key to add, not a random one. */
 export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_SUBAGENT_MODEL",
   "ENABLE_TOOL_SEARCH",

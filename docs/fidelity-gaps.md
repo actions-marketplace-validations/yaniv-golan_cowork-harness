@@ -836,9 +836,12 @@ i.e. the auto-mode permission classifier:
 
 Both gates read force-ON in the 2026-09-05 feature cache, so in a real auto-mode session **7 of the 9
 skip the forced ask**; only `allow_cowork_file_delete` and `launch_code_session` always prompt. One
-carve-out survives: a **path-less** `request_cowork_directory` keeps the ask in bridge, dispatch-child,
-scheduled, remote-origin and non-desktop-channel sessions, because a path-less call opens a native folder
-picker that nobody would see there. That is a no-invisible-dialog rule, not a permissions rule.
+carve-out survives: a **path-less** `request_cowork_directory` keeps the ask in bridge and
+dispatch-child sessions, and in any session matching a four-disjunct predicate — a `scheduledTaskId`, a
+remote dispatch parent, a current-turn channel that is not `desktop`, or a fourth condition behind a
+helper this pass did not resolve. Treat that list as non-exhaustive; the direction is safe (a match only
+*forces* an ask). The reason is that a path-less call opens a native folder picker that nobody would see
+there. That is a no-invisible-dialog rule, not a permissions rule.
 
 **None of it reaches this harness, and that is structural rather than lucky.** The shared predicate
 requires `session.permissionMode === "auto" && permissionSession.permissionMode === "auto"` — there is no

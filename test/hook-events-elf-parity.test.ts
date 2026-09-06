@@ -33,7 +33,13 @@ function stagedAgentElf(): string | undefined {
 }
 
 /** The validator array, read out of the binary. Anchored on the first four names in the binary's own
- *  order — the array is a single literal, so the anchor plus a `]`-terminated slice is the whole set.
+ *  order, then sliced to the closing `]`.
+ *
+ *  THE ANCHOR IS NOT UNIQUE — measured, not assumed. It matches three literals in 2.1.260: the validator
+ *  array, a duplicate of it, and the 11-entry cloud-forwarding array that shares the same opening four
+ *  names. We take the first by byte offset, which is the validator today. That cannot false-green (an
+ *  11-vs-33 comparison fails loudly), but a change in emission order would fail this test for the wrong
+ *  reason, so the failure message names the candidates it saw.
  *  Deliberately NOT anchored on a minified symbol: `hy` is a two-build identifier (its sibling gate
  *  accessor renamed FD -> RD between two Desktop patch builds), while the event names are the product's
  *  public surface and move only when the feature does. */
@@ -48,7 +54,10 @@ function validatorHookEvents(elf: string): string[] | undefined {
   } catch {
     return undefined; // no match: the array's shape moved — the assertion below reports that as a failure
   }
-  const first = out.split("\n").find((l) => l.length > anchor.length);
+  // Prefer the longest match rather than the first: all candidates share the anchor, and the validator
+  // array is the largest of them. Ordering-independent, so an emission-order change cannot mis-select.
+  const lines = out.split("\n").filter((l) => l.length > anchor.length);
+  const first = lines.sort((a, b) => b.length - a.length)[0];
   if (!first) return undefined;
   const names = first.match(/"([A-Za-z]+)"/g)?.map((q) => q.slice(1, -1));
   return names && names.length > 4 ? names : undefined;
@@ -65,7 +74,8 @@ describe("KNOWN_HOOK_EVENTS mirrors the agent's hooks-config validator", () => {
     expect([...(fromBinary as string[])].sort()).toEqual([...KNOWN_HOOK_EVENTS].sort());
   });
 
-  it.skipIf(!ELF)("does not accidentally mirror the 11-entry cloud-forwarding array", () => {
+  // NOT skipIf: these read the const only, so they are the one part of this file CI can enforce.
+  it("does not accidentally mirror the 11-entry cloud-forwarding array", () => {
     // `jbr` is a routing set, not a validity list; its complement is mapped across four dispositions.
     // Mirroring it would silently reject 22 valid event names, so pin the distinguishing members.
     expect(KNOWN_HOOK_EVENTS).toContain("MessageDisplay");

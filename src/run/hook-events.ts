@@ -113,8 +113,9 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
                   : "the agent accepts it as a real event and loads a plugin's own hooks itself (whether a " +
                     "harness run ever reaches this event's trigger has not been verified here)"
               }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: there is no ` +
-                `assertion key for \`${name}\`, so a scenario cannot gate on it, and the extra \`${name}\` hooks real ` +
-                `Cowork installs are not reproduced. Assert the hook's observable effect instead.\n`
+                `assertion key for \`${name}\`, so a scenario cannot gate on it, and if real Cowork installs a ` +
+                `\`${name}\` hook of its own it is not reproduced here (it installs hooks for PreToolUse, ` +
+                `PostToolUse and UserPromptSubmit only). Assert the hook's observable effect instead.\n`
             : `::warning:: [hooks] ${f} declares \`${name}\`, which is not a hook event the agent recognizes — it is ` +
                 `ignored everywhere, so this hook never runs. Check spelling/capitalization.\n`,
         );
