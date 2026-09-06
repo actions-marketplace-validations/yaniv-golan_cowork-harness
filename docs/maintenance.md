@@ -61,6 +61,13 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
   network: {...} -> {...}
 ```
 
+**Read `provenance.spawnEnvKeys` and `spawnEnvSpreadCount` in that diff first.** They are the spawn-env drift
+alarm: the recorded set of ALL-CAPS keys the 1p spawn windows construct, plus the spread count. If either moves,
+Desktop added or removed a spawn env key, or the extractor drifted — stop and classify it before writing the
+baseline. A key-set delta *names* the key, which is why it beats any count-based signal. (Worth stating because
+it is easy to miss and easy to re-invent: a 2026-09 design exercise spent four review rounds specifying a facility
+whose first half was this field, already shipped and already correct on the same release pair.)
+
 (`capturedAt` is rewritten to today on every `sync`, and `$comment` embeds that same date, so both always
 show in the diff even when nothing substantive moved — ignore them as noise.)
 
@@ -123,6 +130,23 @@ curl -fSL "$B/$V/linux-arm64/claude" -o "claude-$V"
 shasum -a 256 "claude-$V"
 COWORK_AGENT_BINARY="$PWD/claude-$V" cowork-harness run <scenario>.yaml   # scenario baseline pins $V
 ```
+
+**Three facts about the channel that will otherwise cost you a wrong diagnosis** (probed 2026-09-05):
+
+1. **`/stable` is a rollout pointer, not "latest".** It read `2.1.236` while `2.1.261` was published and
+   fetchable. Never use it to decide whether a version exists.
+2. **Not every published version is served.** `2.1.255` returns **404 on both** the stable and RC
+   channels while its immediate neighbours return 200. So **a 404 is not evidence that you queried the
+   wrong channel** — it is not evidence of anything except that this URL has no artifact. This exact
+   misdiagnosis has been made here once already, and the fix is a **positive control**: fetch a
+   neighbouring version from the same base before concluding the base is wrong. By the same token, a
+   version appearing in a changelog or a version table is *not* evidence its artifact is recoverable.
+3. **A compressed artifact is served alongside, not instead.** `<base>/<ver>/manifest.zst.json` sits
+   beside `manifest.json` for every version back to at least 2.1.231, and `linux-arm64/claude.zst` is the
+   same binary at roughly a third the bytes (66,087,089 vs 199,241,568 for darwin-arm64). **Additive, not
+   a migration** — nothing here needs to change, and the checksum path deliberately still fetches the
+   uncompressed manifest rather than take a decoder dependency for a comparison that already tolerates a
+   404. Both manifests now carry `"manifestSignatureEnforcement":"flag"`.
 
 Note: `install.sh <version>` installs the **host CLI for the running platform** into `~/.local/bin` (clobbering an existing one) — it does **not** produce the Linux ELF the container tier bind-mounts, so recovering the ELF is the direct download above.
 

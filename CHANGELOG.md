@@ -6,6 +6,129 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.5.0] — 2026-09-06
+
+**Live verification for this release** (macOS arm64, agent **2.1.260**, agent image `cowork-agent-base:2`,
+Desktop 1.46388.4):
+
+| Suite | Result |
+|---|---|
+| `boundary-check` | **6/6** — host-fs-sealed, direct-egress-denied, allowlist-enforced, allowlist-permits, loopback-not-proxied, hostloop-bash-egress |
+| `npm run test:live` | **4 files, 18 passed, 1 skipped** — the skip is `live-outputs-delete`'s silent-guard case, which reports SKIPPED when the agent issues no Bash call (documented as expected-rare, not a failure) |
+| `run examples/scenarios/` | **7/7 success** across `container`, `hostloop` and `protocol` |
+| e2e self-tests | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, semantic-evidence-files, canary-hostloop |
+
+**Two things stated rather than glossed.** (a) The first `test:live` run showed one red — a sub-agent
+WebSearch that the model simply did not perform — and the first scenario batch showed one red on
+`example-pdf-skill`. Both were **model variance**: each passed on re-run with nothing changed, which is
+the disposition the tests themselves prescribe for this class. They are recorded because a suite that
+only ever reports its green run is not evidence of anything. (b) `smoke-l2-microvm` was **not run** this
+release. It is the ninth e2e scenario and the tier CI can never cover (Apple-VZ is macOS-arm64 only); the
+most recent microvm pass remains the one recorded under 3.4.0.
+
+### Added
+
+- **`liveVerifiedHookEvents` in the generated `assertion-keys.json` sidecar.** A new key alongside
+  `servedHookEvents` and `knownHookEvents`, naming the subset of hook events a plugin's own hook has
+  actually been **observed** to fire for in a harness run (three, live-verified at `container` and
+  `hostloop`). It exists so the linter can distinguish "the agent's validator accepts this name" from "a
+  run reaches this trigger" — two claims a single list would have conflated. Additive: a consumer reading
+  only the two existing keys is unaffected, and an older `scenario.py` ignores it.
+- **`test/hook-events-elf-parity.test.ts`** — re-extracts the hook-event list from the staged agent binary
+  at test time instead of comparing two hand-maintained files. It **skips where no Desktop is staged**, CI
+  included, and says so in its own header: a green CI is not evidence for this invariant.
+- **Two rows in [`docs/invariants.md`](./docs/invariants.md)**: the hook-event invariant below, and
+  `provenance.spawnEnvKeys` + `spawnEnvSpreadCount` as the spawn-env drift alarm. The latter documents
+  machinery that has existed since Desktop 1.24012.1 but appeared **zero times** outside `src/` — which is
+  why a later design exercise set about re-inventing it. [`docs/maintenance.md`](./docs/maintenance.md)
+  now tells a maintainer to read those two values in a `sync` diff first, and why a key-set delta beats a
+  count: it names the key.
+
+### Fixed
+
+- **`lint-skill` and the mount-time hook warning reported 24 valid hook events as misspellings.**
+  `KNOWN_HOOK_EVENTS` held **9** names, assembled by grepping the agent binary for event-name constants;
+  the agent's own hooks-config validator accepts **33**. A plugin declaring `PostCompact` or
+  `MessageDisplay` — both accepted by the agent, both of which run — got "not a recognized hook event …
+  Check spelling/capitalization", at **ERROR** severity in `lint-skill` and as a `::warning::` on the run
+  path. **The message text changed on both paths**, so a CI job grepping for the old strings needs
+  updating: the ERROR now reads "is not a hook event the agent recognizes", and an accepted-but-unserved
+  event reports at INFO / `::notice::` with the confident "it WILL fire" wording reserved for the three
+  events actually observed firing here. The list is now sourced from the validator array itself, and
+  `test/hook-events-elf-parity.test.ts` re-reads it from the staged agent binary rather than from a
+  committed fixture, because a fixture-vs-const test compares two hand-maintained files and only moves
+  when someone re-extracts by hand — the step that had failed. That test **skips where no Desktop is
+  staged**, CI included, so a green CI is not evidence for this invariant.
+- **The sub-agent model precedence was documented backwards in three places.** `docs/session.md`,
+  `docs/subagents.md` and `src/session.ts` stated `env > dispatch param > frontmatter > inherit`. The
+  binary resolves **dispatch param > frontmatter > env > inherit** (verified in agent 2.1.260; promoting
+  the env override to the top is what `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` does, and the Cowork spawn sets
+  neither that flag nor `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`). So
+  `agent_env.subagent_model` does **not** outrank a sub-agent's own `model:` frontmatter, contrary to
+  what the docs promised.
+- **Two model-forcing env vars leaked asymmetrically into `hostloop` and `protocol`.**
+  `SCRUBBED_AGENT_ENV_KEYS` matches exact keys, so `CLAUDE_CODE_SUBAGENT_MODEL` never covered
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` or `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`. An
+  operator with either exported got different sub-agent model resolution on the two inheriting tiers than
+  on `container`/`microvm`, which is the asymmetry that constant exists to prevent. Both are now scrubbed.
+  **Operator-visible consequence, and the reason it is filed as a fix rather than a cleanup:** unlike the
+  three keys already on that list, these two have **no `agent_env` knob**, so exporting one in your shell
+  now has it silently deleted with nothing authored to put it back. `docs/session.md` says so. If you
+  need either, set it inside the run rather than in the environment the harness inherits. Real Cowork
+  sets neither. Companion tests drive the real `hostloop` and `protocol` env builders with each key set —
+  not a hand-built object — and pin the exact-key *mechanism*, plus the deliberate decision to leave
+  `CLAUDE_CODE_COORDINATOR_MODE` (which enables one of them, and leaks the same way) unscrubbed while no
+  coordinator surface is modelled.
+
+### Documentation
+
+- **Corrected what this repo says about Cowork's force-ask PreToolUse hook.** It gates **nine** tools,
+  not four (the four named ones plus `create`/`update`/`delete_scheduled_task` and
+  `start`/`stop_watching`), and its decision is **not** unconditional: two gate-conditioned early returns
+  defer to the auto-mode permission classifier, so in a real auto-mode session 7 of the 9 raise no
+  prompt. The scheduled-task branch ships in Desktop 1.22209.0 — before 1.24012.9, the first baseline to
+  record this hook — so the note in `spawn.hooks` was already wrong for 5 of the 9 tools when it was
+  first written; the second branch lands three baselines later at 1.26832.0, making it wrong for all
+  nine from there on. Inaccurate in all fourteen baselines carrying it, either way.
+  **Nothing about the harness changes**: auto mode is structurally unreachable here, so for every mode a
+  scenario can express production still answers `ask`, and serving that hook unconditionally would remain
+  faithful. Corrected in `desktop-1.46388.3` forward; the older baselines keep their wording.
+- **`spawn.hooks` is documented as hand-pinned documentation, not as a drift tripwire.** It cannot be
+  one — `sync` spreads `spawn` forward from the base baseline, so the field carries through untouched and
+  nothing re-derives it from the app bundle. The claim was disproved by its own subject, above.
+- **The desktop-local lane boundary is stated as a missing transport flag rather than an entrypoint
+  string.** `--sdk-url` is absent from the entire app bundle and present 41× in the agent, and the
+  `ccr-session` host resolver throws without it — so features routed through that host (including
+  `cowork_memory_context`) are *structurally* unreachable locally, not merely disabled. An entrypoint
+  test can be relaxed in one release; a flag Desktop never passes cannot be worked around agent-side.
+- **New fidelity note: the silent-turn reminder.** Whether the agent narrates between tool calls is
+  decided by a server-delivered model capability, and that narration lands in the corpus
+  `semantic_matches` grades — so an assertion resting on the presence or wording of inter-tool text rests
+  on something an account-level capability can change. Assert the observable result instead.
+- **Release-channel facts added to the recovery runbook.** `/stable` is a rollout pointer, not "latest";
+  not every published version is served (2.1.255 is 404 on both channels while its neighbours are 200),
+  so **a 404 is not evidence of a wrong channel** — use a positive control on a neighbouring version; and
+  `manifest.zst.json` is served *beside* `manifest.json`, additive rather than a migration.
+
+### Changed
+
+- **Parity sync to Desktop 1.46388.4** (agent **2.1.260**, unmoved from 1.46388.3). Baseline
+  `desktop-1.46388.4` written with zero unknown deltas; the whole app-bundle delta is three build chunks.
+  Two gates newly pinned and both recorded `force`/ON: `builtinToolsApprovableByAutoMode:4202409342` (the
+  unpinned sibling of `scheduledTaskToolsApprovableByAutoMode`, and one of the two gates that release
+  tools from the force-ask hook) and `cuCanUseToolEnabled:2486083521`, which had moved `off` → `ON` while
+  unpinned. Gates deliberately left unpinned now carry their reasoning in `cowork-sync.ts` rather than
+  being silently absent. Committed cassettes re-stamped rather than re-recorded, on a field-level diff of the two baselines:
+  the entire delta is `appVersion`, `capturedAt`, the `$comment` date, `provenance.asarFingerprint`,
+  `provenance.fcache.embeddedTimestamp` and the two new gate rows. Nothing a replay depends on —
+  `spawn.env`, `spawn.hooks`, `permissionMode`, `agentBinary.sha256`, the egress allowlist, the mount
+  layout — moved at all.
+
+### Security
+
+- **Bumped the transitive `fast-uri` 3.1.5 → 3.1.7**, clearing four Dependabot high-severity advisories.
+  Lockfile only — no direct dependency changed and no runtime behaviour is affected.
+
 ## [3.4.1] — 2026-09-05
 
 ### Documentation

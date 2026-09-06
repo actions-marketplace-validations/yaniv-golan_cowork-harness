@@ -87,9 +87,71 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("SCRUBBED_AGENT_ENV_KEYS is exactly the three inheritance-asymmetric keys", () => {
+  // The two _FORCE keys added 2026-09-06 need the SAME real-path coverage as the original three, not just
+  // membership in the list. The "exact-key" test below hand-builds an env object and calls delete itself —
+  // it proves the semantics of the list, and NOTHING about whether the spawn builders consult it for these
+  // keys. Drive the real builders, one per inheriting tier, exactly as the three cases above do.
+  it("hostloop scrubs a stray CLAUDE_CODE_SUBAGENT_MODEL_FORCE (no knob exists for it)", () => {
+    process.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE = "1";
+    try {
+      const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" });
+      expect(env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE).toBeUndefined();
+    } finally {
+      delete process.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE;
+    }
+  });
+
+  it("protocol scrubs a stray CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL", () => {
+    process.env.CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL = "1";
+    try {
+      // `baseEnv` is the source buildProtocolEnv scrubs — NOT process.env. Passing a plan without it
+      // makes the assertion vacuous: the key was never in the object, so `toBeUndefined()` holds no
+      // matter what the scrub list says. (Written that way first; caught by mutating the list and
+      // watching this test keep passing.)
+      const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
+      const env = buildProtocolEnv(plan);
+      expect(env.CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL).toBeUndefined();
+    } finally {
+      delete process.env.CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL;
+    }
+  });
+
+  // The enabling key for the second one is deliberately NOT scrubbed — see the membership rule on
+  // SCRUBBED_AGENT_ENV_KEYS. Pinned so that decision is visible as a choice rather than an omission, and
+  // so flipping it is a deliberate test edit rather than a silent widening.
+  it("CLAUDE_CODE_COORDINATOR_MODE is deliberately NOT scrubbed", () => {
+    process.env.CLAUDE_CODE_COORDINATOR_MODE = "1";
+    try {
+      const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" });
+      expect(env.CLAUDE_CODE_COORDINATOR_MODE).toBe("1");
+    } finally {
+      delete process.env.CLAUDE_CODE_COORDINATOR_MODE;
+    }
+  });
+
+  it("SCRUBBED_AGENT_ENV_KEYS is exactly the five inheritance-asymmetric keys", () => {
     expect([...SCRUBBED_AGENT_ENV_KEYS].sort()).toEqual(
-      ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "CLAUDE_CODE_SUBAGENT_MODEL", "ENABLE_TOOL_SEARCH"].sort(),
+      [
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "ENABLE_TOOL_SEARCH",
+        "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+        "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
+      ].sort(),
     );
+  });
+
+  // The two _FORCE keys were missed for as long as they existed because the scrub is EXACT-KEY: a reader
+  // scanning the list sees `CLAUDE_CODE_SUBAGENT_MODEL` and assumes the family is covered. Pin the
+  // mechanism, not just the membership — a future prefix-matching "simplification" would pass the test
+  // above while silently changing which keys survive.
+  it("scrubbing is exact-key: a same-prefix key not in the list is NOT scrubbed", () => {
+    const env: Record<string, string> = {
+      CLAUDE_CODE_SUBAGENT_MODEL: "x",
+      CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1",
+      CLAUDE_CODE_SUBAGENT_MODEL_NOT_A_REAL_KEY: "keep",
+    };
+    for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
+    expect(env).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL_NOT_A_REAL_KEY: "keep" });
   });
 });

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
 import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS, FIDELITY_TIERS } from "../src/types.js";
-import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
+import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
 const PY = process.env.PYTHON ?? "python3";
@@ -182,6 +182,15 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
   it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_KNOWN_HOOK_EVENTS equals the generated knownHookEvents", () => {
     const gen = (JSON.parse(buildAssertionKeys()).knownHookEvents as string[]).slice().sort();
     expect(pyKeySet("_FALLBACK_KNOWN_HOOK_EVENTS")).toEqual(gen);
+  });
+  it("liveVerifiedHookEvents matches LIVE_VERIFIED_PLUGIN_HOOK_EVENTS and is a subset of KNOWN_HOOK_EVENTS", () => {
+    const gen = JSON.parse(buildAssertionKeys()).liveVerifiedHookEvents as string[];
+    expect([...gen].sort()).toEqual([...LIVE_VERIFIED_PLUGIN_HOOK_EVENTS].sort());
+    expect(KNOWN_HOOK_EVENTS).toEqual(expect.arrayContaining(gen));
+  });
+  it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_LIVE_VERIFIED_HOOK_EVENTS equals the generated liveVerifiedHookEvents", () => {
+    const gen = (JSON.parse(buildAssertionKeys()).liveVerifiedHookEvents as string[]).slice().sort();
+    expect(pyKeySet("_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS")).toEqual(gen);
   });
 
   // The enum-value map backs scenario.py's `enum-value-invalid` rule — a hand-picked list of four

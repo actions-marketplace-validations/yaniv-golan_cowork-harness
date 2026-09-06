@@ -174,14 +174,20 @@ an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
 same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
 authored, uniform replacement: it applies across **all four execution tiers**
-(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and the three
-keys above are additionally **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers
-that inherit one) before any baseline/knob overlay — so a stray shell value can never leak through on some
-tiers and not others.
+(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **five**
+keys are **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit one)
+before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and not
+others. Three of them are the keys above. The other two have **no `agent_env` knob** and are scrubbed with
+no authored replacement: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, which promotes the env model override above a
+sub-agent's frontmatter and a per-dispatch `model:`, and
+`CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`, which discards the dispatch `model:` when
+`CLAUDE_CODE_COORDINATOR_MODE` is also set. Real Cowork sets neither, so exporting one in your shell would
+change sub-agent model resolution on two tiers only. If you need either, set it inside the run rather than
+in the environment the harness inherits.
 
 | Field | Type | Env key | Notes |
 |---|---|---|---|
-| `agent_env.subagent_model` | string | `CLAUDE_CODE_SUBAGENT_MODEL` | Binary precedence: env > dispatch param > frontmatter > inherit — this knob outranks a subagent's own `model:` frontmatter. |
+| `agent_env.subagent_model` | string | `CLAUDE_CODE_SUBAGENT_MODEL` | Binary precedence (verified in agent 2.1.260): dispatch param > frontmatter > **env** > inherit. This knob is the LOWEST non-inherit layer — it does NOT outrank a sub-agent's own `model:` frontmatter or a `model:` passed at dispatch. |
 | `agent_env.tool_search` | enum | `ENABLE_TOOL_SEARCH` | `"auto"` \| `"off"`. **Naming trap:** unset (key absent) is binary mode `tst` — ToolSearch is **ON** first-party by default. There is no `"standard"` value to set here; the binary's own `"standard"` mode name means **DISABLED**, not "the standard/default mode" — `tool_search: "off"` is the correct way to disable it, emitting `ENABLE_TOOL_SEARCH="off"` (the binary's actual disable spelling). |
 | `agent_env.disable_experimental_betas` | boolean | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `true` emits `"1"`; also disables ToolSearch as a side effect on the binary side. Omit/`false` emits no key. |
 
