@@ -61,6 +61,13 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
   network: {...} -> {...}
 ```
 
+**Read `provenance.spawnEnvKeys` and `spawnEnvSpreadCount` in that diff first.** They are the spawn-env drift
+alarm: the recorded set of ALL-CAPS keys the 1p spawn windows construct, plus the spread count. If either moves,
+Desktop added or removed a spawn env key, or the extractor drifted — stop and classify it before writing the
+baseline. A key-set delta *names* the key, which is why it beats any count-based signal. (Worth stating because
+it is easy to miss and easy to re-invent: a 2026-09 design exercise spent four review rounds specifying a facility
+whose first half was this field, already shipped and already correct on the same release pair.)
+
 (`capturedAt` is rewritten to today on every `sync`, and `$comment` embeds that same date, so both always
 show in the diff even when nothing substantive moved — ignore them as noise.)
 
