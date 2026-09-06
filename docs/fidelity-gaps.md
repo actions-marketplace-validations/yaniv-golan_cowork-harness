@@ -993,11 +993,14 @@ type — and the test fails the day either guard is relaxed, which is when this 
 than after.
 
 So the residual is: in a real non-chat Cowork session the rubric is now a second, host-side judgement layer
-over every tool call in auto-mode, and its observable effect is that the PreToolUse hook can answer
-`deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool this harness
-models as always-gated may therefore raise no prompt in production. A scenario can already *express* a
-denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot reproduce a gate
-that silently stops prompting.
+over every tool call in auto-mode. Its observable effect on the force-ask hook — which tools stop
+prompting, behind which gates — is described once, in
+[the force-ask subsection of the Hooks section](#the-force-ask-hook-is-conditional-in-production-and-the-condition-is-unreachable-here);
+that is the authoritative statement and this one deliberately does not restate the mechanics, because two
+independent copies of it are how the pair drifted apart in the first place. The consequence for a reader
+of *this* section: a tool the harness models as always-gated may raise no prompt in production. A scenario
+can already *express* a denial by scripting one; it cannot *decide* one the way the rubric would, and it
+cannot reproduce a gate that silently stops prompting.
 
 The rubric reaches **both loops**. Its rule-inclusion predicate is
 `{includeRules: !isChatSession && gate("3424551112"), hostLoop}` — no host-loop exclusion — and `hostLoop`
