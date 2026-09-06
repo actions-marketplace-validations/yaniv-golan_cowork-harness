@@ -59,6 +59,43 @@ spoofing would change that — the harness would have to pass a flag Desktop its
 
 ---
 
+## Auto-memory: four env-delivered keys the harness never sets
+
+**Real Cowork behaviour.** When a session has an auto-memory directory, Desktop ships it to the agent
+through the environment: `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`, `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`,
+`CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES` and — separately gated — `CLAUDE_COWORK_MEMORY_GUIDELINES`.
+The last two are **prompt text delivered through an env var**: the agent reads them into the memory
+prompt, so this is model-visible content, not configuration. When there is no memory directory, the
+same ternary sends `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` instead.
+
+**Which gate governs what** — three distinct gates, easy to conflate, and conflated twice during this
+investigation before being measured:
+
+| gate | what it actually governs |
+|---|---|
+| — (no gate) | whether the memory keys ship **at all** is the truthiness of the session's memory directory, not a gate. No directory ⇒ `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`. |
+| `123929380` `autoMemoryStandardSessions` | only the **third** branch of the directory resolver — a plain session with no `spaceId` and no `sessionType`. **A Spaces session or an `agent` session gets a memory directory with this gate OFF.** |
+| `1696890383` `memoryGuidelinesEnv` | only `CLAUDE_COWORK_MEMORY_GUIDELINES`, inside the has-a-directory branch. |
+| `2860753854` `memoryExtraGuidelines` | only the *value* of the PII block, not whether the branch runs. On, but inert by default. |
+
+**Harness behaviour.** The harness sets none of the five, and models no memory directory. For the
+session it models — no `spaceId`, no `sessionType`, and `123929380` pinned off — production would send
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, so the modeled configuration is *nearly* faithful and the memory
+keys are genuinely unreachable.
+
+**Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
+for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the
+resolver returns a directory with `123929380` off — such a session receives all four keys, including
+prompt text, and the harness models none of it. A scenario that grows a `spaceId` or a session type
+walks out of the modeled configuration without any signal.
+
+**Why it is not modeled.** Reproducing it means inventing a memory directory, an index snapshot and a
+guidelines template the harness has no source for — authoring an environment rather than reproducing
+one. The honest position is this entry plus the gate pins, which make a production flip visible as a
+`provenance.gates` diff.
+
+---
+
 ## Mid-session skill/plugin re-sync
 
 Cowork re-syncs skills and plugins from the host into the session **while the session is running** —
