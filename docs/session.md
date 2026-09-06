@@ -181,7 +181,7 @@ tiers and not others.
 
 | Field | Type | Env key | Notes |
 |---|---|---|---|
-| `agent_env.subagent_model` | string | `CLAUDE_CODE_SUBAGENT_MODEL` | Binary precedence: env > dispatch param > frontmatter > inherit — this knob outranks a subagent's own `model:` frontmatter. |
+| `agent_env.subagent_model` | string | `CLAUDE_CODE_SUBAGENT_MODEL` | Binary precedence (verified in agent 2.1.260): dispatch param > frontmatter > **env** > inherit. This knob is the LOWEST non-inherit layer — it does NOT outrank a sub-agent's own `model:` frontmatter or a `model:` passed at dispatch. |
 | `agent_env.tool_search` | enum | `ENABLE_TOOL_SEARCH` | `"auto"` \| `"off"`. **Naming trap:** unset (key absent) is binary mode `tst` — ToolSearch is **ON** first-party by default. There is no `"standard"` value to set here; the binary's own `"standard"` mode name means **DISABLED**, not "the standard/default mode" — `tool_search: "off"` is the correct way to disable it, emitting `ENABLE_TOOL_SEARCH="off"` (the binary's actual disable spelling). |
 | `agent_env.disable_experimental_betas` | boolean | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `true` emits `"1"`; also disables ToolSearch as a side effect on the binary side. Omit/`false` emits no key. |
 

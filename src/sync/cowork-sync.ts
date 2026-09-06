@@ -128,6 +128,23 @@ export const PINNED_GATES: Record<string, string> = {
   // Re-open only if the harness grows a persistent per-tool approval cache.
   "4200321681": "autoModeOverridesAlwaysAllow", // auto mode: force re-prompt (not silent-allow) for destructiveHint MCP tools
   "1447478638": "scheduledTaskToolsApprovableByAutoMode", // auto mode: scheduled-task tools auto-approvable (unless MDM workspace.autoModeEnabled=false)
+  // The SIBLING of 1447478638, one gate id apart and part of the same feature — and unpinned until
+  // 2026-09-06, so a flip in it surfaced nothing. Both gates sit in the SAME force-ask PreToolUse hook
+  // body: each guards an early `return {}` that defers the tool to the auto-mode classifier instead of
+  // answering permissionDecision:"ask". 1447478638 covers the five scheduled-task/watching tools; this
+  // one covers `request_cowork_directory` and `save_skill` (`Ihn`, a 2-entry map). Observed 2026-09-05
+  // as force + ON, i.e. in a real auto-mode session 7 of the force-ask set's 9 tools raise no prompt.
+  // PRESENT in a standard fcache, so NO DARK_GATES entry (adding one would assert it is unevaluated,
+  // which the payload contradicts — the X3 precedent).
+  // NOT MODELED, and structurally so: auto mode is unreachable here (test/auto-mode-unreachable.test.ts
+  // pins the permission_mode enum with no "auto" member and spawn.permissionMode "default"), so this
+  // gate cannot change a harness verdict. Pinned for the same reason canProposeSkills is: a production
+  // flip should be a visible diff, and the day auto mode becomes reachable this is one of the two gates
+  // that decides whether `save_skill` prompts at all.
+  // NAME CAVEAT: the call site passes the bare id and the name appears nowhere in the asar or the
+  // fcache, so the value below is the env-shaped descriptor its behaviour implies, not a verified
+  // GrowthBook name. Replace it if the real name ever surfaces.
+  "4202409342": "builtinToolsApprovableByAutoMode",
   // Skill/plugin discovery gates. These govern whether the Desktop SDK-MCP skill-discovery tools
   // (the `mcp__skills__*` / `mcp__plugins__*` servers — the CONFIRMED model surface per the on-disk
   // init.tools of 8 real sessions) render, and in what mode. None was pinned before, so 245679952
@@ -211,7 +228,42 @@ export const PINNED_GATES: Record<string, string> = {
   // pass attributed the rubric to this id purely because the rubric arrays sit near its call site.
   // Name VERIFIED: the spawn code assigns this gate's result to `session.cicCanUseToolEnabled`.
   "2051942385": "cicCanUseToolEnabled",
+  // The COMPUTER-USE sibling of cicCanUseToolEnabled, and not to be confused with it: this one feeds
+  // `session.cuCanUseToolEnabled`, the Chrome/CIC one feeds `cicCanUseToolEnabled`. Name VERIFIED (the
+  // spawn assigns this gate's result to that field, and the id's neighbouring literal is Computer Use's
+  // org-compliance message). Moved `defaultValue`/off -> `force`/ON between 2026-08-14 and 2026-09-05
+  // while unpinned, so the move surfaced nothing — pinned 2026-09-06 for that reason.
+  // NOT MODELED, and doubly out of scope for the sessions this harness runs: the predicate is
+  // `sessionType !== "radar" && sessionType !== "chat" && gate`, and the harness models chat sessions;
+  // and the browser/computer-use tool family is not served here at all (see docs/fidelity-gaps.md,
+  // "Browser tools are not served"). A flip therefore cannot change a harness verdict today. It is
+  // pinned as a sentinel, not as a modelled surface.
+  "2486083521": "cuCanUseToolEnabled",
 };
+
+/* GATES DELIBERATELY NOT PINNED — recorded so a no-decision cannot be mistaken for an oversight.
+ * (This block was written 2026-09-06, after a triage pass found three ids in `asarGateIds` that had
+ * moved or been mislabelled with no recorded reasoning either way.)
+ *
+ *   2529235968  Present in `asarGateIds` and served `{on:false, source:"defaultValue"}`. An internal
+ *               note once labelled it DARK; that was wrong — served-and-off is EVALUATED, and the two
+ *               states need opposite handling. It has NOT moved, so there is no drift to catch; the
+ *               correction is to the label, not to the pin set. Revisit if it is ever seen ON.
+ *
+ *   2039376689  Reported as moved (`defaultValue`/off -> `defaultValue`/ON) in a Desktop fcache, yet it
+ *               is **0 occurrences in the 1.46388.3 asar, the 1.46388.4 asar AND the staged agent ELF
+ *               2.1.260** (control: 2486083521 is 4 in each asar). Its consumer is unidentified — it is
+ *               referenced by no shipped artifact on this machine. Pinning an id no local binary reads
+ *               would create a sentinel over nothing; an earlier draft dismissed it as "agent-side",
+ *               which the ELF measurement does not support either. Recorded as unresolved, on purpose.
+ *
+ *   3424551112  Needs no new pin: ALREADY pinned above as `automode-permission-rubric`, so its
+ *               2026-09-05 move to force/ON surfaced as a `provenance.gates` diff exactly as intended.
+ *               Listed here only because it appears in the same "five gates moved" survey and its
+ *               absence from this block would read as an omission.
+ *
+ *   124685897   Already pinned, and its live-probe note is current: re-probed 2026-09-05 against the
+ *               1.46388.3 composition (see checkSubagentOverrideGate below). No action owed. */
 
 /**
  * Gate ids that are DARK for a standard account — absent from the fcache entirely, not merely
@@ -241,7 +293,10 @@ const DARK_GATES = new Set([
   "4200321681", // autoModeOverridesAlwaysAllow — dark at pin time (absent from a standard 1.22209.0 fcache).
   //                Observed 2026-08-05 as PRESENT + `force` + ON. Kept per the rule below.
   "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale; observed 2026-08-05 as PRESENT +
-  //                `defaultValue` + off.
+  //                `defaultValue` + off, then 2026-09-05 as PRESENT + `force` + ON. The pin round-tripped
+  //                that move on its own (desktop-1.46388.3 records {on:true, source:"force"}), which is
+  //                the machinery working; only this comment had gone stale. Entry STAYS per the rule
+  //                above — a force rule is segment-targetable, so another account may still see it absent.
   "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11, and dark (absent from a standard fcache) when
   //                pinned. Observed 2026-08-05 as SERVED (`source:"force"`, `value:false`) — still off, so
   //                nothing it arms is reachable. The entry STAYS: force rules are server-evaluated and can
@@ -558,7 +613,13 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
 
 /** Gate 124685897 ON = a server-delivered subagent-append override is active; the harness has no
  *  captured override text, so proceeding would emit the committed fallback assets as if verified.
- *  Hard-stop via unknownDeltas (a PINNED_GATES drift alone only WARNS and still writes the baseline). */
+ *  DOWNGRADED 2026-08-27 to a non-blocking NOTE — see the decision recorded at the `notes.push` call
+ *  site below; this doc comment said "Hard-stop via unknownDeltas" until 2026-09-06, contradicting the
+ *  code it describes. (A PINNED_GATES drift alone also only WARNS and still writes the baseline.)
+ *  Re-probed 2026-09-05 against the 1.46388.3 composition in a real host-loop session: all three composed
+ *  parts arrived byte-identical to the asar fallback, i.e. the gate is ON with no payload served. That
+ *  probe is one account and one session, and the gate is segment-targetable — re-probe if the sub-agent
+ *  append matters to what you are shipping. */
 export function checkSubagentOverrideGate(gates: Record<string, GateState> | null): string[] {
   if (!gates?.["124685897"]?.on) return [];
   return [

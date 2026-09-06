@@ -6,6 +6,72 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`lint-skill` and the mount-time hook warning reported 24 valid hook events as misspellings.**
+  `KNOWN_HOOK_EVENTS` held **9** names, assembled by grepping the agent binary for event-name constants;
+  the agent's own hooks-config validator accepts **33**. A plugin declaring `PostCompact` or
+  `MessageDisplay` — both accepted by the agent, both of which run — got "not a recognized hook event …
+  Check spelling/capitalization", at **ERROR** severity in `lint-skill` and as a `::warning::` on the run
+  path. The list is now sourced from the validator array itself, and
+  `test/hook-events-elf-parity.test.ts` re-reads it from the staged agent binary rather than from a
+  committed fixture, because a fixture-vs-const test compares two hand-maintained files and only moves
+  when someone re-extracts by hand — the step that had failed. That test **skips where no Desktop is
+  staged**, CI included, so a green CI is not evidence for this invariant.
+- **The sub-agent model precedence was documented backwards in three places.** `docs/session.md`,
+  `docs/subagents.md` and `src/session.ts` stated `env > dispatch param > frontmatter > inherit`. The
+  binary resolves **dispatch param > frontmatter > env > inherit** (verified in agent 2.1.260; promoting
+  the env override to the top is what `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` does, and the Cowork spawn sets
+  neither that flag nor `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`). So
+  `agent_env.subagent_model` does **not** outrank a sub-agent's own `model:` frontmatter, contrary to
+  what the docs promised.
+- **Two model-forcing env vars leaked asymmetrically into `hostloop` and `protocol`.**
+  `SCRUBBED_AGENT_ENV_KEYS` matches exact keys, so `CLAUDE_CODE_SUBAGENT_MODEL` never covered
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` or `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`. An
+  operator with either exported got different sub-agent model resolution on the two inheriting tiers than
+  on `container`/`microvm`, which is the asymmetry that constant exists to prevent. Both are now scrubbed,
+  and a companion test pins the exact-key *mechanism* so a later prefix-matching change cannot pass
+  silently.
+
+### Documentation
+
+- **Corrected what this repo says about Cowork's force-ask PreToolUse hook.** It gates **nine** tools,
+  not four (the four named ones plus `create`/`update`/`delete_scheduled_task` and
+  `start`/`stop_watching`), and its decision is **not** unconditional: two gate-conditioned early returns
+  defer to the auto-mode permission classifier, so in a real auto-mode session 7 of the 9 raise no
+  prompt. Both branches ship in Desktop 1.22209.0 and 1.26832.0 — before the first baseline that recorded
+  this hook — so the note in `spawn.hooks` was inaccurate in all fourteen baselines carrying it.
+  **Nothing about the harness changes**: auto mode is structurally unreachable here, so for every mode a
+  scenario can express production still answers `ask`, and serving that hook unconditionally would remain
+  faithful. Corrected in `desktop-1.46388.3` forward; the older baselines keep their wording.
+- **`spawn.hooks` is documented as hand-pinned documentation, not as a drift tripwire.** It cannot be
+  one — `sync` spreads `spawn` forward from the base baseline, so the field carries through untouched and
+  nothing re-derives it from the app bundle. The claim was disproved by its own subject, above.
+- **The desktop-local lane boundary is stated as a missing transport flag rather than an entrypoint
+  string.** `--sdk-url` is absent from the entire app bundle and present 41× in the agent, and the
+  `ccr-session` host resolver throws without it — so features routed through that host (including
+  `cowork_memory_context`) are *structurally* unreachable locally, not merely disabled. An entrypoint
+  test can be relaxed in one release; a flag Desktop never passes cannot be worked around agent-side.
+- **New fidelity note: the silent-turn reminder.** Whether the agent narrates between tool calls is
+  decided by a server-delivered model capability, and that narration lands in the corpus
+  `semantic_matches` grades — so an assertion resting on the presence or wording of inter-tool text rests
+  on something an account-level capability can change. Assert the observable result instead.
+- **Release-channel facts added to the recovery runbook.** `/stable` is a rollout pointer, not "latest";
+  not every published version is served (2.1.255 is 404 on both channels while its neighbours are 200),
+  so **a 404 is not evidence of a wrong channel** — use a positive control on a neighbouring version; and
+  `manifest.zst.json` is served *beside* `manifest.json`, additive rather than a migration.
+
+### Changed
+
+- **Parity sync to Desktop 1.46388.4** (agent **2.1.260**, unmoved from 1.46388.3). Baseline
+  `desktop-1.46388.4` written with zero unknown deltas; the whole app-bundle delta is three build chunks.
+  Two gates newly pinned and both recorded `force`/ON: `builtinToolsApprovableByAutoMode:4202409342` (the
+  unpinned sibling of `scheduledTaskToolsApprovableByAutoMode`, and one of the two gates that release
+  tools from the force-ask hook) and `cuCanUseToolEnabled:2486083521`, which had moved `off` → `ON` while
+  unpinned. Gates deliberately left unpinned now carry their reasoning in `cowork-sync.ts` rather than
+  being silently absent. Committed cassettes re-stamped; the prompt-asset hash is unchanged between the
+  two baselines, so no re-recording was needed.
+
 ## [3.4.1] — 2026-09-05
 
 ### Documentation

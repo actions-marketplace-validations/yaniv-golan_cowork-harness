@@ -2,7 +2,7 @@
  * Mount-time warning for a plugin that declares a hook event this harness does not serve.
  *
  * WHY THIS EXISTS. The harness installs `PreToolUse` only (see `SERVED_HOOK_EVENTS`), while real Cowork
- * installs three event types and the agent binary understands nine. Before this check, a plugin
+ * installs three event types and the agent binary accepts thirty-three. Before this check, a plugin
  * declaring `UserPromptSubmit` mounted, ran, and produced no comment of any kind — a consumer had to
  * grep the harness's own compiled output to discover the surface was unmodelled. That is the failure
  * this closes: not "the hook doesn't work", but "nothing told you the harness has no opinion about it".
@@ -17,6 +17,14 @@
  * the harness neither serves nor blocks. So this notice must NOT say "your hook won't run" — that would
  * be false and would send an author rewriting working code.
  *
+ * BUT THAT RECEIPT COVERS THREE EVENTS, NOT THIRTY-THREE. `KNOWN_HOOK_EVENTS` grew from 9 to 33 on
+ * 2026-09-06 when it was re-sourced from the agent's own validator array. "The validator accepts this
+ * name" is not "a harness run reaches this trigger": nothing has shown that a run ever raises
+ * `WorktreeCreate`, `TeammateIdle`, `TaskCreated`, `ConfigChange` or `DirectoryAdded`. So the message
+ * splits — `LIVE_VERIFIED_PLUGIN_HOOK_EVENTS` keeps the measured "WILL fire", everything else gets
+ * "is a real event … whether a run reaches its trigger has not been verified here". Widening the
+ * confident wording means running the case, not editing the sentence.
+ *
  * What is actually missing is twofold, and both are about the HARNESS, not the plugin: there is no
  * assertion key for any event but PreToolUse (so a scenario cannot gate on it), and the harness does not
  * install the additional hooks real Cowork installs for that event (so their effects are absent).
@@ -27,7 +35,7 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
-import { KNOWN_HOOK_EVENTS, SERVED_HOOK_EVENTS, type HookEvent } from "../agent/session.js";
+import { KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS, SERVED_HOOK_EVENTS, type HookEvent } from "../agent/session.js";
 
 /** Depth-limited `hooks.json` search. A plugin root holds them at the root or one level down
  *  (`skills/<name>/hooks.json`, `.claude-plugin/hooks.json`); walking deeper would wander into
@@ -79,6 +87,7 @@ export function declaredHookEvents(hooksJsonPath: string): string[] {
 export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string) => void): void {
   const served = new Set<string>(SERVED_HOOK_EVENTS);
   const known = new Set<string>(KNOWN_HOOK_EVENTS as readonly string[]);
+  const firesHere = new Set<string>(LIVE_VERIFIED_PLUGIN_HOOK_EVENTS);
   const seen = new Set<string>(); // dedupe: the same event across N mounted plugins warns once per source
   for (const root of pluginRoots) {
     for (const f of findHooksFiles(root)) {
@@ -98,12 +107,16 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
         seen.add(key);
         warn(
           known.has(name as HookEvent)
-            ? `::notice:: [hooks] ${f} declares \`${name}\` — it WILL fire (a plugin's own hooks are executed by ` +
-                `the agent), but this harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: there is no ` +
+            ? `::notice:: [hooks] ${f} declares \`${name}\` — ${
+                firesHere.has(name)
+                  ? "it WILL fire (a plugin's own hooks are executed by the agent)"
+                  : "the agent accepts it as a real event and loads a plugin's own hooks itself (whether a " +
+                    "harness run ever reaches this event's trigger has not been verified here)"
+              }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: there is no ` +
                 `assertion key for \`${name}\`, so a scenario cannot gate on it, and the extra \`${name}\` hooks real ` +
                 `Cowork installs are not reproduced. Assert the hook's observable effect instead.\n`
-            : `::warning:: [hooks] ${f} declares \`${name}\`, which is not a recognized hook event — it is ignored ` +
-                `everywhere, so this hook never runs. Check spelling/capitalization.\n`,
+            : `::warning:: [hooks] ${f} declares \`${name}\`, which is not a hook event the agent recognizes — it is ` +
+                `ignored everywhere, so this hook never runs. Check spelling/capitalization.\n`,
         );
       }
     }

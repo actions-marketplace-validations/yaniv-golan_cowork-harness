@@ -87,9 +87,29 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("SCRUBBED_AGENT_ENV_KEYS is exactly the three inheritance-asymmetric keys", () => {
+  it("SCRUBBED_AGENT_ENV_KEYS is exactly the five inheritance-asymmetric keys", () => {
     expect([...SCRUBBED_AGENT_ENV_KEYS].sort()).toEqual(
-      ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "CLAUDE_CODE_SUBAGENT_MODEL", "ENABLE_TOOL_SEARCH"].sort(),
+      [
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "ENABLE_TOOL_SEARCH",
+        "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+        "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
+      ].sort(),
     );
+  });
+
+  // The two _FORCE keys were missed for as long as they existed because the scrub is EXACT-KEY: a reader
+  // scanning the list sees `CLAUDE_CODE_SUBAGENT_MODEL` and assumes the family is covered. Pin the
+  // mechanism, not just the membership — a future prefix-matching "simplification" would pass the test
+  // above while silently changing which keys survive.
+  it("scrubbing is exact-key: a same-prefix key not in the list is NOT scrubbed", () => {
+    const env: Record<string, string> = {
+      CLAUDE_CODE_SUBAGENT_MODEL: "x",
+      CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1",
+      CLAUDE_CODE_SUBAGENT_MODEL_NOT_A_REAL_KEY: "keep",
+    };
+    for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
+    expect(env).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL_NOT_A_REAL_KEY: "keep" });
   });
 });

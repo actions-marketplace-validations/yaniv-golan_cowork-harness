@@ -115,11 +115,27 @@ export const PlatformBaseline = z.looseObject({
       subagentAppend: z.string().optional(),
       subagentAppendHostLoop: z.string().optional(),
       // The hook bundle real Cowork installs on the agent `initialize`, keyed by event name, each entry
-      // identifying ONE hook by its matcher plus a short note on what it does. Recorded as a DRIFT
-      // TRIPWIRE, not as an emulation source: the harness serves only `PreToolUse:Task` (see
-      // SERVED_HOOK_EVENTS in src/agent/session.ts for why), so this field's job is to make a future
-      // Desktop release that adds, drops, or re-matchers a hook show up as baseline drift instead of
-      // being discovered by a consumer months later — which is exactly how the gap it records was found.
+      // identifying ONE hook by its matcher plus a short note on what it does. Recorded as HAND-PINNED
+      // DOCUMENTATION, not as an emulation source: the harness serves only `PreToolUse:Task` (see
+      // SERVED_HOOK_EVENTS in src/agent/session.ts for why).
+      //
+      // DEMOTED 2026-09-06 — this comment used to call the field a DRIFT TRIPWIRE whose job was to make
+      // a Desktop release that "adds, drops, or re-matchers a hook show up as baseline drift". It cannot
+      // do that, and never could. `sync` neither derives nor validates the field's CONTENT: cli.ts
+      // spreads `spawn` forward from the base baseline, so `hooks` carries through every sync untouched,
+      // and no `check*Facts` sentinel in cowork-sync.ts covers it (the 30-odd hook references there all
+      // belong to checkPathHookFacts, a different subsystem). The zod shape below is validated on load;
+      // nothing compares it to the asar.
+      //
+      // The claim was disproved by its own subject. The force-ask entry's note read "permissionDecision:
+      // 'ask' regardless of permission mode" in FOURTEEN consecutive baselines, 1.24012.9 through
+      // 1.46388.3, and was false in every one of them — the conditional early-returns shipped in Desktop
+      // 1.22209.0 and 1.26832.0, both BEFORE the first baseline that carried this field at all. Every
+      // sync was green throughout. Believing the tripwire existed is what let it rot; saying so plainly
+      // is cheaper than building the sentinel that would make the old sentence true (a literal anchor
+      // over a hand-written descriptor, which is the release-day wedge cowork-sync.ts already warns
+      // about). Treat a note here as a dated observation, and re-verify it against the asar before
+      // relying on it.
       //
       // `matcher: null` means the hook carries no matcher (production's UserPromptSubmit hook is not
       // tool-scoped). Optional, so every baseline synced before this field existed stays valid.

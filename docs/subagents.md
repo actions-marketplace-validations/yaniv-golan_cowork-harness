@@ -474,13 +474,20 @@ Defenses:
   parent — its identity is carried as context fields surfaced to hooks as JSON input (an agent id and
   agent type), never as environment variables. A Bash subprocess a sub-agent spawns sees only a
   generic marker identifying it as agent-driven, not the agent id/type, and not `CLAUDE_PLUGIN_ROOT`.
-- **Model resolution defaults to inheriting the main-loop model.** Precedence, highest first: an
-  operator/session `CLAUDE_CODE_SUBAGENT_MODEL` env override (unless it is the `"inherit"` sentinel) →
-  the `Task` tool's own `model:` dispatch parameter → the agent's frontmatter `model:` → inherit the
-  main-loop model (the default when none of the above apply). Real Cowork only sets that env override
+- **Model resolution defaults to inheriting the main-loop model.** Precedence, highest first
+  (**binary-verified in agent 2.1.260**): the `Task` tool's own `model:` dispatch parameter → the agent's
+  frontmatter `model:` → an operator/session `CLAUDE_CODE_SUBAGENT_MODEL` env override (unless it is the
+  `"inherit"` sentinel) → inherit the main-loop model. **The env override is the LOWEST non-inherit
+  layer**: it does not beat a sub-agent's own frontmatter, and it does not beat a `model:` passed at
+  dispatch. The resolver tries them in that order, and the binary's own telemetry labels the winning
+  layer `tool` / `frontmatter` / `env` / `inherit` in the same sequence. Promoting env to the top is
+  exactly what `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` exists to do — the un-forced path returns the other
+  two unchanged — and neither that flag nor
+  `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL` is set by the Cowork spawn (both absent from the
+  baseline's `spawn.env`). Real Cowork only sets the plain override
   when a concrete, non-`"inherit"` default is configured server-side — so **by default a Task
-  sub-agent runs the same model as the main loop**, overridable per-session, per-dispatch, or per-agent
-  frontmatter. The built-in `Explore` agent inherits too, except when the main model falls outside the
+  sub-agent runs the same model as the main loop**, overridable per-dispatch, per-agent frontmatter, or
+  per-session. The built-in `Explore` agent inherits too, except when the main model falls outside the
   small/mid/large model family, where it pins to the largest; built-in teammate-style agents default to
   the largest model. The harness's `agent_env` session knob sets the override env uniformly across
   tiers.

@@ -310,25 +310,82 @@ const dialogEnvelope = successEnvelope;
 // evaluated in the agent loop → tier-uniform (container/microvm/host-loop) by construction.
 const TASK_BG_HOOK_ID = "cowork-task-bg-block";
 
-/** Every hook event name the AGENT BINARY understands (ELF 2.1.219 — each appears as a live event-name
- *  constant, e.g. `SessionStart` ×63, `UserPromptSubmit` ×49). Used to tell "a real event this harness
- *  doesn't serve" apart from "a typo", so the unserved-hook warning can say which it is. */
+/** Every hook event name the AGENT BINARY accepts in a `hooks.json`. Used to tell "a real event this
+ *  harness doesn't serve" apart from "a typo", so the unserved-hook warning can say which it is.
+ *
+ *  SOURCED FROM THE VALIDATOR, not from a grep. Binary-verified in the staged VM ELF **2.1.260**: this is
+ *  the array the agent's own hooks-config validator rejects against —
+ *  `if(!new Set(hy).has(ev)) return {invalid:{path:\`hooks.${ev}\`, reason:\`unknown hook event. Valid
+ *  events: ${hy.join(", ")}\`}}` — and the same array keys the zod record for the `hooks` settings block.
+ *  Order is the binary's own.
+ *
+ *  ## Do not mirror the OTHER array
+ *
+ *  The ELF carries a second, 11-entry array (`jbr`). It is NOT a validity list: its complement (22 more,
+ *  11 + 22 = 33 = this list) is mapped by `Gbr` across four dispositions — `runs_locally`, `later`,
+ *  `low_value`, `container_internal` — and the pair drives **cloud/device hook forwarding**, deciding
+ *  which events stay on the local machine. Mirroring it here would reject 22 valid event names.
+ *
+ *  ## Why this was 9 for two agent releases
+ *
+ *  Until 2026-09-06 this list held 9 names, stamped "ELF 2.1.219", assembled by grepping for event-name
+ *  constants rather than by finding the validator. The consequence was live, not cosmetic: the other 24
+ *  — `PostCompact` and `MessageDisplay` among them — were reported to users **byte-identically to a
+ *  misspelling** ("not a recognized hook event … Check spelling/capitalization"), in `hook-events.ts`
+ *  here and at ERROR severity in the Python linter. Re-extract from the staged ELF when the agent
+ *  version moves; `test/schema.test.ts` does that under a skipIf. */
 export const KNOWN_HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
+  "PostToolUseFailure",
+  "PostToolBatch",
+  "Notification",
   "UserPromptSubmit",
+  "UserPromptExpansion",
   "SessionStart",
   "SessionEnd",
+  "Stop",
+  "StopFailure",
+  "SubagentStart",
   "SubagentStop",
   "PreCompact",
-  "Notification",
-  "Stop",
+  "PostCompact",
+  "PreModelSwitch",
+  "PostModelSwitch",
+  "PermissionRequest",
+  "PermissionDenied",
+  "Setup",
+  "TeammateIdle",
+  "TaskCreated",
+  "TaskCompleted",
+  "Elicitation",
+  "ElicitationResult",
+  "ConfigChange",
+  "WorktreeCreate",
+  "WorktreeRemove",
+  "InstructionsLoaded",
+  "CwdChanged",
+  "FileChanged",
+  "DirectoryAdded",
+  "MessageDisplay",
 ] as const;
 export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
 
+/** The subset of `KNOWN_HOOK_EVENTS` a plugin's own hook has been OBSERVED to fire for in a harness run —
+ *  live-verified 2026-08-01 at both `container` and `hostloop` with a fixture plugin.
+ *
+ *  Kept separate from `KNOWN_HOOK_EVENTS` deliberately. "The agent's validator accepts this name" and "a
+ *  run will actually reach this trigger" are different claims, and conflating them is how a receipt for
+ *  three events would silently become a promise about 33: nothing has shown that a harness run ever
+ *  raises `WorktreeCreate`, `TeammateIdle`, `TaskCreated`, `ConfigChange` or `DirectoryAdded` at all.
+ *  Widen only by running the case. */
+export const LIVE_VERIFIED_PLUGIN_HOOK_EVENTS: readonly HookEvent[] = ["SessionStart", "UserPromptSubmit", "PostToolUse"];
+
 /** The hook events this harness actually SERVES on `initialize`.
  *
- *  SINGLE SOURCE OF TRUTH — the generated `served-hook-events.json` (gen-schema.ts) and the Python
+ *  SINGLE SOURCE OF TRUTH — the generated `assertion-keys.json` (gen-schema.ts writes it to
+ *  .claude/skills/cowork-harness/scripts/; an earlier version of this comment named a
+ *  `served-hook-events.json` that has never existed) and the Python
  *  linter's unserved-event check both derive from this. Never hand-copy it: a stale copy would silently
  *  stop warning about the very event it was added to cover.
  *
@@ -338,7 +395,7 @@ export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
  *  types and **six** hooks —
  *    PreToolUse  `Task`      → blocks run_in_background; emits subagent_invoked telemetry   [SERVED here]
  *    PreToolUse  `Skill`     → skill_invoked telemetry + per-skill additionalContext injection
- *    PreToolUse  <force-ask> → permissionDecision:"ask" regardless of permission mode
+ *    PreToolUse  <force-ask> → permissionDecision:"ask" — unconditional except in auto mode (see below)
  *    PreToolUse  `mcp__.*`   → remote-MCP deny hook
  *    PostToolUse `WebSearch` → seeds session.webFetchAllowedUrls from search results
  *    UserPromptSubmit        → expands a leading /slash command into additionalContext
@@ -347,9 +404,26 @@ export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
  *  still only the `Task` hook — because, checked one by one, NONE of the other five would change
  *  observable behaviour here today:
  *
- *   - force-ask     gates allow_cowork_file_delete / request_cowork_directory / launch_code_session /
- *                   save_skill — none registered by this harness, so the matcher never fires. Worth
- *                   serving if/when `save_skill` is modeled.
+ *   - force-ask     gates NINE tools, not four — allow_cowork_file_delete / request_cowork_directory /
+ *                   launch_code_session / save_skill, plus create/update/delete_scheduled_task and
+ *                   start/stop_watching (`GNt`, a 9-member Set, resolved in asar 1.46388.3). None is
+ *                   registered by this harness, so the matcher never fires. Worth serving if/when
+ *                   `save_skill` is modeled — that conclusion is UNCHANGED by the paragraph below.
+ *
+ *                   PRODUCTION IS CONDITIONAL, AND THIS HARNESS CANNOT REACH THE CONDITION. The hook
+ *                   makes two gate-conditioned early returns of `{}` — an empty result is not a
+ *                   decision, so the call falls through to the auto-mode classifier: the five
+ *                   scheduled-task tools behind gate 1447478638, and request_cowork_directory /
+ *                   save_skill behind gate 4202409342. Both were force-ON in the 2026-09-05 fcache, so
+ *                   in auto mode 7 of the 9 skip the forced ask. The shared predicate requires
+ *                   `session.permissionMode === "auto" && permissionSession.permissionMode === "auto"`
+ *                   — there is NO bypassPermissions disjunct — and auto mode is structurally
+ *                   unreachable here (`test/auto-mode-unreachable.test.ts` pins the permission_mode
+ *                   enum, which has no "auto" member, and spawn.permissionMode "default"). So for every
+ *                   mode a scenario can express, production returns `ask` unconditionally and serving
+ *                   this hook unconditionally would be exactly faithful. Corrected 2026-09-06: this
+ *                   comment said "regardless of permission mode" and named four tools; the conditional
+ *                   landed in Desktop 1.22209.0 / 1.26832.0, long before either claim was written.
  *   - `mcp__.*`     denies REMOTE MCP tools; the harness serves none.
  *   - UserPromptSubmit  expands a leading `/slash`; a scenario prompt is not one, so production itself
  *                   returns {} for these inputs.

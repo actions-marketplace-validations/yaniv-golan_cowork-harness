@@ -131,6 +131,23 @@ shasum -a 256 "claude-$V"
 COWORK_AGENT_BINARY="$PWD/claude-$V" cowork-harness run <scenario>.yaml   # scenario baseline pins $V
 ```
 
+**Three facts about the channel that will otherwise cost you a wrong diagnosis** (probed 2026-09-05):
+
+1. **`/stable` is a rollout pointer, not "latest".** It read `2.1.236` while `2.1.261` was published and
+   fetchable. Never use it to decide whether a version exists.
+2. **Not every published version is served.** `2.1.255` returns **404 on both** the stable and RC
+   channels while its immediate neighbours return 200. So **a 404 is not evidence that you queried the
+   wrong channel** — it is not evidence of anything except that this URL has no artifact. This exact
+   misdiagnosis has been made here once already, and the fix is a **positive control**: fetch a
+   neighbouring version from the same base before concluding the base is wrong. By the same token, a
+   version appearing in a changelog or a version table is *not* evidence its artifact is recoverable.
+3. **A compressed artifact is served alongside, not instead.** `<base>/<ver>/manifest.zst.json` sits
+   beside `manifest.json` for every version back to at least 2.1.231, and `linux-arm64/claude.zst` is the
+   same binary at roughly a third the bytes (66,087,089 vs 199,241,568 for darwin-arm64). **Additive, not
+   a migration** — nothing here needs to change, and the checksum path deliberately still fetches the
+   uncompressed manifest rather than take a decoder dependency for a comparison that already tolerates a
+   404. Both manifests now carry `"manifestSignatureEnforcement":"flag"`.
+
 Note: `install.sh <version>` installs the **host CLI for the running platform** into `~/.local/bin` (clobbering an existing one) — it does **not** produce the Linux ELF the container tier bind-mounts, so recovering the ELF is the direct download above.
 
 For the `hostloop` tier's separate **native macOS** binary (`claude-code/<ver>/claude.app/Contents/MacOS/claude`, distinct from the Linux ELF above), the equivalent override is `COWORK_HOST_AGENT_BINARY=<path>` (checked before `baseline.agentBinary.nativeStagedPath`; `resolveHostAgentBinary` in `src/baseline.ts`). Since the native binary carries no sha256 pin, a **same-major.minor PATCH** drift of the staged native binary is auto-tolerated by default now — no `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1` needed — with a loud stderr note naming the pinned and substituted versions; `doctor`'s native-binary check surfaces the same substitution as an `ok` status with a version-substitution note, sharing one classifier with the resolver. A **major/minor** drift still needs the env-gated fallback (or a hard throw without it).

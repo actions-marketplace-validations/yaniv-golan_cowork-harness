@@ -231,20 +231,36 @@ export const SessionConfig = z.strictObject({
   // `ENABLE_TOOL_SEARCH="off"`, the binary's actual disable spelling.
   agent_env: z
     .strictObject({
-      subagent_model: z.string().optional(), // -> CLAUDE_CODE_SUBAGENT_MODEL (binary precedence: env > dispatch param > frontmatter > inherit)
+      // -> CLAUDE_CODE_SUBAGENT_MODEL. Binary precedence, verified in agent 2.1.260 (resolver + its own
+      // telemetry labels agree): dispatch param > frontmatter > ENV > inherit. This knob is the LOWEST
+      // non-inherit layer and does NOT outrank a sub-agent's frontmatter — the reverse order stood in
+      // this comment and in docs/{session,subagents}.md until 2026-09-06, unmeasured. Promoting env to
+      // the top is what CLAUDE_CODE_SUBAGENT_MODEL_FORCE does; the Cowork spawn sets neither.
+      subagent_model: z.string().optional(),
       tool_search: z.enum(["auto", "off"]).optional(), // -> ENABLE_TOOL_SEARCH
       disable_experimental_betas: z.boolean().optional(), // -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1" (also disables ToolSearch)
     })
     .default({}),
 });
 
-/** The three env keys that leak asymmetrically: hostloop/protocol inherit them from the operator's shell
+/** Env keys that leak asymmetrically: hostloop/protocol inherit them from the operator's shell
  *  (`...process.env` / `{...plan.baseEnv}`); container/microvm never do (a constructed allowlist). Scrubbed
- *  from the OPERATOR layer alone (before any baseline/knob overlay) on the two inheriting tiers. */
+ *  from the OPERATOR layer alone (before any baseline/knob overlay) on the two inheriting tiers.
+ *
+ *  MATCHING IS EXACT-KEY, NOT PREFIX — which is why the two `_FORCE` entries below are listed
+ *  separately rather than being covered by `CLAUDE_CODE_SUBAGENT_MODEL`. Added 2026-09-06 after the
+ *  sub-agent model precedence was measured (see `agent_env.subagent_model` above): both flags change how
+ *  a sub-agent's model resolves — `SUBAGENT_MODEL_FORCE` promotes the env override above the dispatch
+ *  parameter and the agent's frontmatter, `COORDINATOR_FORCE_WORKER_INHERIT_MODEL` discards the dispatch
+ *  parameter outright — and **the Cowork spawn sets neither** (absent from the baseline's 24-key
+ *  `spawn.env`). So an operator who has one exported was getting different sub-agent model resolution on
+ *  hostloop/protocol than on container/microvm, in the exact shape this constant exists to prevent. */
 export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_SUBAGENT_MODEL",
   "ENABLE_TOOL_SEARCH",
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+  "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+  "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty
