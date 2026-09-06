@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`liveVerifiedHookEvents` in the generated `assertion-keys.json` sidecar.** A new key alongside
+  `servedHookEvents` and `knownHookEvents`, naming the subset of hook events a plugin's own hook has
+  actually been **observed** to fire for in a harness run (three, live-verified at `container` and
+  `hostloop`). It exists so the linter can distinguish "the agent's validator accepts this name" from "a
+  run reaches this trigger" — two claims a single list would have conflated. Additive: a consumer reading
+  only the two existing keys is unaffected, and an older `scenario.py` ignores it.
+- **`test/hook-events-elf-parity.test.ts`** — re-extracts the hook-event list from the staged agent binary
+  at test time instead of comparing two hand-maintained files. It **skips where no Desktop is staged**, CI
+  included, and says so in its own header: a green CI is not evidence for this invariant.
+- **Two rows in [`docs/invariants.md`](./docs/invariants.md)**: the hook-event invariant below, and
+  `provenance.spawnEnvKeys` + `spawnEnvSpreadCount` as the spawn-env drift alarm. The latter documents
+  machinery that has existed since Desktop 1.24012.1 but appeared **zero times** outside `src/` — which is
+  why a later design exercise set about re-inventing it. [`docs/maintenance.md`](./docs/maintenance.md)
+  now tells a maintainer to read those two values in a `sync` diff first, and why a key-set delta beats a
+  count: it names the key.
+
 ### Fixed
 
 - **`lint-skill` and the mount-time hook warning reported 24 valid hook events as misspellings.**
@@ -13,7 +31,10 @@ All notable changes to this project are documented here. The format is based on
   the agent's own hooks-config validator accepts **33**. A plugin declaring `PostCompact` or
   `MessageDisplay` — both accepted by the agent, both of which run — got "not a recognized hook event …
   Check spelling/capitalization", at **ERROR** severity in `lint-skill` and as a `::warning::` on the run
-  path. The list is now sourced from the validator array itself, and
+  path. **The message text changed on both paths**, so a CI job grepping for the old strings needs
+  updating: the ERROR now reads "is not a hook event the agent recognizes", and an accepted-but-unserved
+  event reports at INFO / `::notice::` with the confident "it WILL fire" wording reserved for the three
+  events actually observed firing here. The list is now sourced from the validator array itself, and
   `test/hook-events-elf-parity.test.ts` re-reads it from the staged agent binary rather than from a
   committed fixture, because a fixture-vs-const test compares two hand-maintained files and only moves
   when someone re-extracts by hand — the step that had failed. That test **skips where no Desktop is
@@ -29,9 +50,15 @@ All notable changes to this project are documented here. The format is based on
   `SCRUBBED_AGENT_ENV_KEYS` matches exact keys, so `CLAUDE_CODE_SUBAGENT_MODEL` never covered
   `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` or `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`. An
   operator with either exported got different sub-agent model resolution on the two inheriting tiers than
-  on `container`/`microvm`, which is the asymmetry that constant exists to prevent. Both are now scrubbed,
-  and a companion test pins the exact-key *mechanism* so a later prefix-matching change cannot pass
-  silently.
+  on `container`/`microvm`, which is the asymmetry that constant exists to prevent. Both are now scrubbed.
+  **Operator-visible consequence, and the reason it is filed as a fix rather than a cleanup:** unlike the
+  three keys already on that list, these two have **no `agent_env` knob**, so exporting one in your shell
+  now has it silently deleted with nothing authored to put it back. `docs/session.md` says so. If you
+  need either, set it inside the run rather than in the environment the harness inherits. Real Cowork
+  sets neither. Companion tests drive the real `hostloop` and `protocol` env builders with each key set —
+  not a hand-built object — and pin the exact-key *mechanism*, plus the deliberate decision to leave
+  `CLAUDE_CODE_COORDINATOR_MODE` (which enables one of them, and leaks the same way) unscrubbed while no
+  coordinator surface is modelled.
 
 ### Documentation
 
@@ -76,6 +103,11 @@ All notable changes to this project are documented here. The format is based on
   `provenance.fcache.embeddedTimestamp` and the two new gate rows. Nothing a replay depends on —
   `spawn.env`, `spawn.hooks`, `permissionMode`, `agentBinary.sha256`, the egress allowlist, the mount
   layout — moved at all.
+
+### Security
+
+- **Bumped the transitive `fast-uri` 3.1.5 → 3.1.7**, clearing four Dependabot high-severity advisories.
+  Lockfile only — no direct dependency changed and no runtime behaviour is affected.
 
 ## [3.4.1] — 2026-09-05
 
