@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`npm run check:claims` — a staleness report for this repo's "binary-verified" claims.** It lists every
+  version-stamped claim in `src/`, `scripts/` and `docs/` that is behind the currently pinned agent and
+  `app.asar` versions. First run: **42 of 49 claims behind the pin**, the oldest about 34 baselines back.
+  It **exits 0 by design and is not a gate** — a stale stamp is not a wrong claim, and hard-failing would
+  force a version bump every sync that anyone could satisfy by editing the digit without re-reading the
+  binary. Maintainers get it as step 3b of the parity-sync ritual; contributors need not run it.
+- **`test/subagent-model-precedence-elf.test.ts`** — pins the sub-agent model resolution order against the
+  agent binary itself, so the precedence corrected in 3.5.0 cannot silently drift back. It reads the
+  binary's own telemetry labels rather than a minified symbol (the gate accessor beside that code renamed
+  between two Desktop patch builds). Its second assertion is **not** gated on a staged binary: it fails if
+  `docs/session.md`, `docs/subagents.md` or `src/session.ts` reintroduces the reversed order, which is the
+  half CI can enforce and the way that claim went wrong in three places at once.
+
+**Why these two, stated plainly:** the repo carries ~49 version-stamped claims about the agent binary and,
+before 3.5.0, exactly one was re-derived from the binary by a test. Both claims spot-checked during that
+release turned out wrong — the hook-event list and the model precedence. Two for two is not a sample that
+justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
+shows the population and its age, and a human decides what to re-read.
+
 ## [3.5.0] — 2026-09-06
 
 **Live verification for this release** (macOS arm64, agent **2.1.260**, agent image `cowork-agent-base:2`,
