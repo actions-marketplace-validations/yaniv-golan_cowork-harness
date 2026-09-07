@@ -105,6 +105,23 @@ most recent microvm pass remains the one recorded under 3.4.0.
   decided by a server-delivered model capability, and that narration lands in the corpus
   `semantic_matches` grades — so an assertion resting on the presence or wording of inter-tool text rests
   on something an account-level capability can change. Assert the observable result instead.
+- **New fidelity note: auto-memory is delivered through four env keys the harness never sets.** When a
+  session has an auto-memory directory, Desktop ships it to the agent as `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`,
+  `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`, `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES` and — separately gated —
+  `CLAUDE_COWORK_MEMORY_GUIDELINES`. The last two carry **prompt text**: the agent reads them into its
+  memory prompt, so this is model-visible content rather than configuration. With no memory directory the
+  same branch sends `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` instead. `docs/fidelity-gaps.md` now also
+  tabulates the **three distinct gates** involved, which are easy to conflate: the one keyed on the memory
+  *directory* is not the one governing the guidelines env key, and neither is the one that gates only the
+  resolver's third branch — so a session can get a memory directory with that third gate off.
+- **Corrected an overstated divergence in how the agent's credential reaches it.** A comment in
+  `src/runtime/host-env.ts` said real Cowork passes only `CLAUDE_CODE_OAUTH_TOKEN`, without scoping the
+  claim. Desktop does swap that env var for a file descriptor — staging the token into a `0600` temp file,
+  opening it, and unlinking it — but that wrapper is reached from the **host-loop branch only**. At
+  `container` and `microvm`, production passes the plain token exactly as this harness does. The comment
+  now records the host-loop-only scope and why the divergence is deliberately not emulated: the env var
+  remains a first-class credential source for the agent, Desktop's own helper falls back to it on I/O
+  failure, and no boundary is crossed at host-loop that was not already open.
 - **Release-channel facts added to the recovery runbook.** `/stable` is a rollout pointer, not "latest";
   not every published version is served (2.1.255 is 404 on both channels while its neighbours are 200),
   so **a 404 is not evidence of a wrong channel** — use a positive control on a neighbouring version; and
