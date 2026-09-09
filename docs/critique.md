@@ -210,8 +210,15 @@ It does **not** record their contents — see Known limitations.
 - **Reading `egress.log` on a research-heavy critique:** a `WebSearch` does **not** produce search-host
   entries in the container `egress.log`. An egress log showing only `api.anthropic.com` (plus denied
   telemetry) is consistent with WebSearch working normally — it is *not* evidence that research was
-  blocked. What **is** container-egress-gated is `web_fetch` (the hostname allowlist); a skill that
-  fetches off-allowlist hosts via `web_fetch` is denied at `container` and host-routed at `hostloop`.
+  blocked. `web_fetch` is **not** in that log on either tier: since `a459c80` (2.4.0) the container
+  tier registers the same host-side workspace handler that `hostloop` does whenever
+  `coworkWebFetchViaApi` is on (every baseline from `desktop-1.13576.1`), so its fetches run in the
+  harness's own Node process, outside the container network namespace, and the sidecar proxy never sees
+  them. Both tiers' `web_fetch` decisions land in `RunResult.egress` as bare `{host, decision}`
+  records, with no `port` and no `reason` — that shape is how you tell them from the proxy's
+  `{host, decision, port, reason}` rows in the same array. And a *provenanced* URL (one that appeared
+  in the prompt or a prior `web_fetch` result) is gated by the provenance set alone, so the hostname
+  allowlist is not consulted for it on either tier.
 - **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
   sub-agent does not increment the main `toolCounts.WebSearch` — a `0` there with researched facts in
   the output usually means the sub-agents did the searching. Those searches ARE captured (live/record
