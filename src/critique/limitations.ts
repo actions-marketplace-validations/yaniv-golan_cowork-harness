@@ -131,6 +131,16 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     },
     docsAnchor: "not an independent attestation",
   },
+  {
+    id: "skill-invocation-subagent-unnamed",
+    summary: "a Skill call inside a non-fork sub-agent is seen but cannot be named",
+    provenance: {
+      kind: "deliberate",
+      rationale:
+        "timeline.jsonl records the parented call but carries no tool input, so the skill's NAME is unrecoverable from a graded result; naming it needs a new RunResult field (a 7-site change incl. schema + surface baseline). Measured 9 of 359 Skill calls corpus-wide, all inside a sub-agent probe fixture. The verdict is downgraded to absent rather than reported false, which is the part that matters",
+    },
+    docsAnchor: "seen but cannot be named",
+  },
 ];
 
 const CLASS_GLOSS: Record<LimitationProvenance["kind"], string> = {

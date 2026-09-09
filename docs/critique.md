@@ -157,9 +157,15 @@ adjudicable". So:
   invisible to either critique. Pairing critiques (above) tells you a finding reproduced; it does not
   surface a defect that exists only in the disagreement BETWEEN two skills. That one needs a human
   reading both, or a check outside this tool.
-- The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
-  `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
-  actually invoke it.
+- The report carries an advisory **`skillInvocationObserved`**. `true` means an observable channel
+  named the selected skill: a `Skill` tool call, or a leading `/plugin:skill` slash command in the
+  prompt that matches a *staged skill* — the binary auto-registers one per staged skill, and expanding
+  it inlines SKILL.md as a user message rather than calling the tool, so a slash-command run shows
+  `skillsInvoked: []` and is **not** a non-invocation. `false` means both channels were observable and
+  neither fired. The field is **absent** when a channel could not be observed — an older `result.json`
+  with no prompt or skill inventory, a plugin that ships both a command and a skill under one name
+  (where nothing in the run says which ran), or a `Skill` call inside a sub-agent that the record
+  cannot name. Absent is never a synonym for `false`.
 
 ### Skills that need an attached file
 
@@ -502,3 +508,7 @@ immediately and survive a reflection turn that never finishes. Prefer them, or `
   **0 dropped citations (0%)** — models quote body content, not across headings. Since a pre-armor rate
   cannot be below zero, armor costs nothing measurable here. DROPPED items are always shown, so any future
   regression would be visible rather than silent.
+- **`[deliberate]` Sub-agent skill invocation is seen but unnamed.** `skillInvocationObserved` reads a
+  `Skill` tool call and a leading staged-skill slash command. A Skill call made inside a non-fork
+  sub-agent is seen but cannot be named — the recorded timeline carries no tool input — so a run whose
+  only invocation happens there reports *absent* rather than a verdict.

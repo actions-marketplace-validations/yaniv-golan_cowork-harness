@@ -19,16 +19,22 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
-import { matchesSkillId } from "./skill-invocation.js";
+import {
+  matchesSkillId,
+  normalizeSkillSelector,
+  observedSkillInvocation,
+  slashCommandSkillInvocation,
+  hasUnattributableSkillCall,
+} from "./skill-invocation.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
-import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
+import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
@@ -1079,10 +1085,17 @@ interface ReportState {
    *  keys the MOUNTED folder (per-plugin), so pairing critiques by skillHash alone cross-pairs different
    *  skills of the same plugin — pair by (gradedSkillHash, gradedSkill). */
   gradedSkill?: string;
-  /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether the graded
-   *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
-   *  the selected skill. `undefined` = not applicable or no evidence either way. */
+  /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether an
+   *  OBSERVABLE channel named it — a `Skill` tool call, or a leading staged-skill slash command.
+   *  `false` = both channels were observable and neither fired, so the critique may be grading a run
+   *  that never invoked the selected skill. `undefined` = not applicable, or a channel could not be
+   *  observed at all (absent prompt/inventory, a same-named command shadowing the skill, or an
+   *  unnameable sub-agent `Skill` call). Absent is never a synonym for `false`. */
   skillInvocationObserved?: boolean;
+  /** The plugin ships BOTH `commands/<skill>.md` and `skills/<skill>/SKILL.md`, so the one registered
+   *  slash command is ambiguous and the run does not say which ran. Surfaced so *absent* is an
+   *  actionable outcome rather than a dead end. */
+  commandShadowsSkill?: boolean;
   /** The graded run's resolved gate answers (from its result.json's gateProvenance), lifted so a
    *  follow-up run can be made deterministic — the text report echoes them as copy-pasteable --answer
    *  lines, mirroring the `skill` lane's footer. */
@@ -1277,7 +1290,11 @@ export function buildTextReport(state: ReportState): string {
     );
   if (state.skillInvocationObserved === false)
     out.push(
-      `  NOTE: the graded run's recorded skillActivity never mentions the selected skill — this critique may be grading a run that did not actually invoke it.`,
+      `  NOTE: neither observable invocation channel (a Skill tool call, or a staged-skill slash command leading the prompt) names the selected skill — this critique may be grading a run that did not actually invoke it.`,
+    );
+  if (state.commandShadowsSkill)
+    out.push(
+      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command and the run does not record which ran, so slash-command invocation is not decidable here — rename one of the two to make it observable.`,
     );
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
@@ -1505,6 +1522,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     costUsd: state.costUsd,
     gradedSkill: state.gradedSkill,
     skillInvocationObserved: state.skillInvocationObserved,
+    commandShadowsSkill: state.commandShadowsSkill,
     gateAnswers: state.gateAnswers,
     taskResult,
     // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
@@ -1811,10 +1829,14 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // no evidence either way (absent result).
     const gradedSkillName = opts.skillSelector ?? resolvedSkill.autoSelectedSkill;
     const gradedActivity = taskRaw?.skillActivity as Array<{ skillId?: unknown }> | undefined;
-    const skillInvocationObserved =
-      gradedSkillName !== undefined && gradedActivity !== undefined
-        ? gradedActivity.some((e) => typeof e?.skillId === "string" && matchesSkillId(e.skillId, gradedSkillName))
-        : undefined;
+    // A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash
+    // command, and the run does not record which one ran (vercel@0.48.0 does exactly this). That makes
+    // the slash channel undecidable for this skill — reported absent, never true.
+    const commandShadowsSkill =
+      gradedSkillName !== undefined &&
+      existsSync(join(dirname(dirname(resolvedSkill.skillDir)), "commands", `${normalizeSkillSelector(gradedSkillName)}.md`));
+    // NOTE: the verdict itself is computed after `snapshotTurnBoundary` below — it needs the turn-1
+    // timeline slice, which does not exist until the boundary is captured.
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
     // does this in its footer; critique's report gets the same courtesy). Defensive over the raw shape.
     const gpGates = (taskRaw?.gateProvenance as { gates?: unknown } | undefined)?.gates;
@@ -1840,6 +1862,30 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
     // 2. Snapshot the turn-1/turn-2 boundary BEFORE the reflection turn touches anything.
     const boundary = snapshotTurnBoundary(outDir);
+
+    // Graded-run validity (advisory), now that the turn-1 timeline slice is available. Three channels,
+    // and the ABSENCE of a verdict is a real outcome: a run whose invocation we cannot observe must
+    // never be reported as one that did not invoke.
+    const unattributableSkillCall = (() => {
+      try {
+        return hasUnattributableSkillCall(readTurn1Slice(outDir, "timeline.jsonl", boundary));
+      } catch {
+        return false; // a degraded slice is already surfaced as turn1SliceDegraded; do not double-fail
+      }
+    })();
+    const skillInvocationObserved =
+      gradedSkillName === undefined
+        ? undefined
+        : observedSkillInvocation(
+            gradedSkillName,
+            gradedActivity,
+            slashCommandSkillInvocation(
+              typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
+              (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
+            ),
+            commandShadowsSkill,
+            unattributableSkillCall,
+          );
 
     // 3. Reflection turn: resume the SAME session.
     // The reflection turn keeps the FIXED default budget deliberately (a forwarded --timeout stretches
@@ -2037,6 +2083,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       costUsd,
       gradedSkill: gradedSkillName,
       skillInvocationObserved,
+      commandShadowsSkill: commandShadowsSkill || undefined,
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,
