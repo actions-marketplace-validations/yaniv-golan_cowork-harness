@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
+import { matchesSkillId } from "./skill-invocation.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -1805,13 +1806,14 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // envelope. A quota exhaustion and a skill defect both render as `result:"error"` otherwise.
     const gradedErrorReason = taskResult === "error" ? resultRowDiagnosis(task)?.text : undefined;
     // Graded-run validity (advisory): when a specific plugin skill was selected, check the run's own
-    // skillActivity actually mentions it — packaging can be perfectly plugin-aware and still be grading a
-    // run that never invoked the selected skill. Best-effort string scan of the recorded activity;
-    // `undefined` = not applicable (plain skill folder) or no evidence either way (absent result).
+    // skillActivity actually names it — packaging can be perfectly plugin-aware and still be grading a
+    // run that never invoked the selected skill. `undefined` = not applicable (plain skill folder) or
+    // no evidence either way (absent result).
     const gradedSkillName = opts.skillSelector ?? resolvedSkill.autoSelectedSkill;
+    const gradedActivity = taskRaw?.skillActivity as Array<{ skillId?: unknown }> | undefined;
     const skillInvocationObserved =
-      gradedSkillName !== undefined && taskRaw?.skillActivity !== undefined
-        ? JSON.stringify(taskRaw.skillActivity).includes(gradedSkillName)
+      gradedSkillName !== undefined && gradedActivity !== undefined
+        ? gradedActivity.some((e) => typeof e?.skillId === "string" && matchesSkillId(e.skillId, gradedSkillName))
         : undefined;
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
     // does this in its footer; critique's report gets the same courtesy). Defensive over the raw shape.
