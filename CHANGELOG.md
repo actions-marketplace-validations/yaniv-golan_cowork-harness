@@ -27,6 +27,30 @@ release turned out wrong — the hook-event list and the model precedence. Two f
 justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
 shows the population and its age, and a human decides what to re-read.
 
+### Fixed
+
+- **`mcp__workspace__web_fetch` could not reach any resolvable hostname** — every fetch to a non-literal-IP
+  host died with `Fetch failed: Invalid IP address: undefined`, on both the provenanced (Path A) and
+  allowlisted (Path B) paths. `pinnedRequest` overrides Node's DNS `lookup` so the address the SSRF
+  backstop vetted is the one actually dialled, but it answered with the legacy `(err, address, family)`
+  triple only. `net.Socket.connect` asks for `{all: true}` whenever `autoSelectFamily` is on — Node's
+  **default since v20**, and this package has required `>=20` since its first commit — and then reads
+  `addresses[0].address` off what it expects to be an array. It read `.address` off a string, got
+  `undefined`, and threw. The override now honours `opts.all` and hands back **every** vetted address, so
+  Happy Eyeballs keeps its candidates. Literal-IP hosts were never affected: they skip pinning entirely.
+  **Two different outage windows, because the two tiers grew this path at different times** — `hostloop`
+  has been broken since the pinning landed in `90360f5` (2026-06-21, ~2.6 months); `container` only since
+  `a459c80` (2026-08-27, released in 2.4.0) gave it a host-routed web_fetch at all, and there only when
+  `coworkWebFetchViaApi` is on, which is every baseline from `desktop-1.13576.1` onward.
+- **`test/hostloop-webfetch-pinned-lookup.test.ts`** — the regression test, and the first thing in the repo
+  to execute `pinnedRequest` rather than imitate it. Every other web_fetch test injects a `rawFetch` fake;
+  one is named "pinnedRequest-style fake" and asserts against a hand-built copy of the function's return
+  value. **No test had ever run the function** — measured, not inferred: the full suite passes 6471/6471
+  against the pre-fix source with this file removed. No e2e scenario or cassette performs a `web_fetch`
+  either, so nothing else covered it. The new cases drive the real Node http stack over a loopback server
+  and cover the `{all: true}` shape, the forced-off legacy shape, the never-re-resolve guarantee, and a
+  multi-address pin whose first entry blackholes (which fails only if the fix stops returning all of them).
+
 ## [3.5.0] — 2026-09-06
 
 **Live verification for this release** (macOS arm64, agent **2.1.260**, agent image `cowork-agent-base:2`,
