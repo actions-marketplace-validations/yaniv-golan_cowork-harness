@@ -27,6 +27,44 @@ release turned out wrong — the hook-event list and the model precedence. Two f
 justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
 shows the population and its age, and a human decides what to re-read.
 
+### Fixed
+
+- **`critique`'s `skillInvocationObserved` reported `false` over runs that fully invoked the skill, and
+  `true` over runs that invoked nothing.** Two independent defects in one advisory field.
+  - It was a substring scan — `JSON.stringify(skillActivity).includes(name)` — over a structure that
+    also contains tool names and JSON keys. Measured against a real run with **zero** invocations, a
+    selector of `fetch`, `root` or `skill` reported `true`, and `root` collided with the `(root)`
+    sentinel itself. Selector forms `resolveCritiquedSkillDir` accepts (`./x`, `x/`, `skills/../x`)
+    false-negatived, because `path.join` normalised them but the raw string reached the scan. Ids are
+    now matched structurally: the exact id, or the `<plugin>:` qualified suffix, never a substring and
+    never a parenthesised sentinel.
+  - It was blind to the channel a `/plugin:skill` prompt actually uses. The binary auto-registers a
+    slash command per staged skill, and expanding one **inlines SKILL.md as a user message** — no
+    `Skill` tool call at all, so `skillsInvoked` is legitimately `[]`. Both producers gate on a
+    top-level `Skill` call, so the field read `false` over a graded run with 109 KB of SKILL.md in its
+    context. Detection now also reads the prompt against the init frame's staged-skill inventory
+    (`context.availableSkills`) — deliberately **not** its `slash_commands` list, which mixes plugin
+    commands with skills and carries no distinguisher, so keying off it would have accepted
+    `founder-skills:feedback` and `creative-problem-solving:ideas` (both real, both plain commands) as
+    skill invocations.
+- **`skillInvocationObserved` is now tri-state: absent means "could not be observed", never "no".** It
+  is omitted when the prompt or skill inventory was not recorded, when a plugin ships both a command
+  and a skill under one name (`vercel@0.48.0` does — one registered slash entry, and the run does not
+  say which ran; that case also gets a report line naming the collision so the author can rename one),
+  and when a `Skill` call inside a non-fork sub-agent is **seen but unnameable** — `timeline.jsonl`
+  records the parented call and carries no tool input. A run the harness cannot observe is no longer
+  reported as one that did not invoke. Both compromises are documented as known limitations rather than
+  left implicit. `skillsInvoked` is deliberately unchanged: it is a documented contract meaning "via
+  the `Skill` tool" that the `skill_triggered` assertion reads.
+- **`docs/critique.md` claimed off-allowlist `web_fetch` is "denied at `container`".** It is not: since
+  `a459c80` (2.4.0) the container tier registers the same host-side workspace handler as `hostloop`
+  under `coworkWebFetchViaApi`, so neither tier's `web_fetch` reaches the sidecar proxy, and a
+  provenanced URL consults no hostname allowlist on either tier. `test/egress-entry-shape.test.ts` now
+  pins the fact the corrected advice leans on — the proxy writes `{host, decision, port, reason}` and
+  the handler's `onEgress` writes `{host, decision}` at all 7 call sites — so it cannot go stale
+  silently. Added because the stale claim was found by a consumer mis-reading a real run's
+  `egress.log`, not by any guard.
+
 ## [3.5.0] — 2026-09-06
 
 **Live verification for this release** (macOS arm64, agent **2.1.260**, agent image `cowork-agent-base:2`,
