@@ -160,6 +160,15 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 
 ## Artifacts — two mechanisms, neither modeled
 
+> **Third layer, added in Desktop 2.2553.1 and also not modeled.** Alongside the two mechanisms below,
+> the host loop now installs an `Artifact` **PreToolUse path hook** — matcher `/^Artifact[A-Za-z]*$/`, so
+> the whole family (`Artifact`, `ArtifactComments`, `ArtifactData`, `ArtifactCheck`), installed
+> **unconditionally** and ahead of the gated Read/Write/Edit/Glob/Grep matcher. It validates `file_path`,
+> `out_dir`, `root` and every `files[].path` / `files[].from` against the outputs root and blocks on any
+> resolver error. It is inert for the session this harness models — no Artifact tool is registered when the
+> frame-artifacts flag is off — which is why it is recorded rather than built. The harness's own
+> `src/hostloop/pretooluse-path-hook.ts` models no part of it.
+
 **Real Cowork behaviour:** Cowork has two mutually exclusive artifact mechanisms, and a given session
 runs exactly one of them. The legacy mechanism bind-mounts one host directory per artifact into the
 VM. The newer mechanism ("frame artifacts") instead gives the agent an `Artifact` tool in its tool

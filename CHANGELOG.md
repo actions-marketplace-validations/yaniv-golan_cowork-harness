@@ -6,7 +6,43 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-09-18
+
+### Upgrade notes
+
+- **If you run against Claude Desktop 2.2553.1 (agent 2.1.275), upgrade — `critique` and `--decider-llm`
+  are broken on 3.5.0 there.** That agent makes an auxiliary Haiku call in `-p` mode, and 3.5.0's LLM
+  transport hard-fails on the two-model envelope it produces (`critique` exits 2 with no error text).
+  3.6.0 identifies the primary model instead of counting keys. Nothing changes on older agents.
+- **`latest` now resolves to `desktop-2.2553.1`.** A cassette you recorded against `1.46388.4` with
+  `baseline: latest` reports `baseline` staleness on replay (warn by default; `--strict` fails). Re-record
+  it, or pin the scenario to `desktop-1.46388.4` if you are not ready to move.
+- **The spawned agent's env gains `CLAUDE_CODE_DESKTOP_APP_VERSION`** on baselines from 2.2553.1 on. It
+  is the value the agent uses for the `anthropic-client-version` request header; older baselines are
+  unaffected. If you snapshot the spawn env, expect the new key.
+- **Every `-p` call and every run on agent 2.1.275 now carries a ~$0.001 Haiku entry** in `modelUsage`
+  and in the run result's cost. Cost comparisons across the 2.1.260→2.1.275 bump will show it — it is
+  the agent's spend, not the harness's.
+
 ### Added
+- **Parity: baseline `desktop-2.2553.1` (agent 2.1.275)** — the first `2.x` Claude Desktop. `sync` refused
+  to write with **10 unknown deltas**; all are resolved and the baseline is clean. Two of the ten turned
+  out to be defects in this repo's own extractor rather than changes in Desktop:
+  - **The S6c Artifact-gate flag was a false alarm.** The frame-artifacts predicate is byte-identical; it
+    merely stopped being its own statement (it now shares a declaration with the Artifact host-grant
+    binding). The sentinel's value capture ran past the top-level comma and swallowed the sibling binding,
+    so an anchored whole-expression match rejected an unchanged predicate — and the message it printed
+    ("cached-arm/HIPAA/trailing-term change") was simply wrong. The value is now sliced brace/paren/quote
+    aware to the first top-level `,` or `;`. Both directions are pinned by tests: the sibling-binding shape
+    stays clean, and a real widening hidden before the comma still fires.
+  - **The path-gate tool set and path keys were refactored, not removed.** Desktop replaced two array
+    literals with one tool→path-key map plus `Object.keys` / `[...new Set(Object.values(…))]` derivations,
+    which accounted for 4 of the 10 deltas at once. Same five tools, same two keys — no contract change.
+    The extractor now accepts either form. The map is matched **exactly and in order**, because
+    `Object.keys` order reaches the sub-agent prompt through `.join(", ")` while the manifest fingerprint
+    hashes generator source — a reordered map would otherwise change what the model reads with every check
+    still green. Keys and values must resolve to the *same* map, and an ambiguous binding flags rather than
+    taking the first match: the bundle carries two more same-shaped maps that add Bash/NotebookEdit/MultiEdit.
 
 - **`npm run check:claims` — a staleness report for this repo's "binary-verified" claims.** It lists every
   version-stamped claim in `src/`, `scripts/` and `docs/` that is behind the currently pinned agent and
@@ -21,11 +57,60 @@ All notable changes to this project are documented here. The format is based on
   `docs/session.md`, `docs/subagents.md` or `src/session.ts` reintroduces the reversed order, which is the
   half CI can enforce and the way that claim went wrong in three places at once.
 
-**Why these two, stated plainly:** the repo carries ~49 version-stamped claims about the agent binary and,
+**Why these two:** the repo carries ~49 version-stamped claims about the agent binary and,
 before 3.5.0, exactly one was re-derived from the binary by a test. Both claims spot-checked during that
 release turned out wrong — the hook-event list and the model precedence. Two for two is not a sample that
 justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
 shows the population and its age, and a human decides what to re-read.
+
+### Fixed
+
+- **The LLM decider transport no longer hard-fails on agent 2.1.275's two-model envelope.** The agent that
+  ships with Desktop 2.2553.1 makes an auxiliary Haiku call in `-p` mode, so `claude -p --output-format json`
+  now reports two `modelUsage` keys where 2.1.260 reported one — measured with the same prompt and flags
+  against both native binaries. The transport asserted exactly one key, which turned **every** critique
+  evaluator pass and every `--decider-llm` gate into an instrument failure on the new agent (`critique`
+  exited 2 with no error text; found by the live lane, which had this test gated off in the previous pass).
+  The primary model is now *identified* as the key that resolves the requested `--model` (exact id, or the
+  id carrying a floating alias like `sonnet` as a dash-separated segment) rather than *assumed* from the
+  count. Zero or several keys resolving the request still fails closed — that ambiguity is the contract
+  break the check exists to catch. The whole usage map is still passed through, so the auxiliary call's
+  cost is not lost.
+- **The spawned agent now sends the client-identity headers production sends.** Desktop 2.2553.1 sets
+  `CLAUDE_CODE_DESKTOP_APP_VERSION` unconditionally on first-party sessions, and the agent reads it on the
+  `local-agent` entrypoint — which the harness pins — as the fallback source of the `anthropic-client-version`
+  header (its companion `anthropic-client-platform` is the hard-coded literal `desktop_app`) whenever
+  `ANTHROPIC_CUSTOM_HEADERS` carries none, which is the harness's case. The key is host-derived (an Electron `app.getVersion()` call), so it is allowlisted in the sync
+  **and** injected from the baseline's `appVersion` in both the container and native spawn envs — **version-gated** to baselines from 2.2553.1 on, since injecting it on an older baseline would hand the agent a key that baseline's Desktop never set (not symmetric with `CLAUDE_CODE_HOST_PLATFORM`, which every asar on record sets). Allowlisting
+  it alone would have been silent: the allowlist is consulted before the pin list and the key is not
+  required, so the harness would simply have stopped sending those headers with nothing failing.
+- **`CLAUDE_ARTIFACT_HOST_GRANT` is guarded, not merely allowlisted.** The new key is allowlisted on the
+  grounds that a default session never receives it — a claim that rests entirely on its guard. A new
+  sentinel requires it to stay gated on the *same* predicate as the Artifact tool spread, and fires if it
+  is ever constructed unconditionally or re-keyed. (The existing frame-artifacts assertion could not reach
+  it: the two spreads have different shapes.)
+- **`CLAUDE_CODE_DISABLE_CRON` gained a second disjunct** (a managed-settings scheduled-tasks switch). The
+  pinned value is unchanged at `"1"`, and it is *earned* rather than assumed — the spawn window still passes
+  `disableCron:!0`, which short-circuits. The resolver and its anchor admit the new shape; the disjunct is
+  not inert in general, only under that short-circuit.
+
+### Changed
+
+
+- `CLAUDE_CODE_MODEL_CATALOG` (new, third-party-only branch) is allowlisted, matching the standing rule for
+  third-party-only keys.
+- **`design` added to the host-inventory scan's known-built-in skill roster.** It surfaced as a finding on
+  the first fresh `container` recording after this sync, on a cassette whose scenario declares no skills.
+  It qualifies under the roster's existing three criteria: the recording was sealed (`container`, so
+  `HOME=/tmp` and no host `~/.claude`), `"design"` is a bare literal in both the staged agent ELF and the
+  host CLI, and five personal skill names from the same machine are absent from that binary. It is not new
+  to this agent — the `design-consent` / `design-revoke` slash commands were already in the previously
+  shipped cassette; what changed is that the feature now also registers in `skills[]`, an axis the scan
+  treats more strictly.
+- **All three committed cassettes in `examples/replays/` are re-recorded against `desktop-2.2553.1`**, each reporting no behavioural change versus the recording it replaced. The `protocol` fixture was recorded on the hermetic managed config dir (`ANTHROPIC_API_KEY` path) and the `container` one in a sealed container; `verify-cassettes` reports zero host-inventory findings on all three.
+- **A full live pass was run against `desktop-2.2553.1` / agent 2.1.275**, all four suites and all four tiers: `boundary-check` 6/6; e2e self-tests 9/9 including `smoke-l2-microvm` in a real VM and `smoke-multiselect-deciderdir` through the `--decider-llm` path; `npm run test:live` 19 tests, 18 passed, 1 failed, **0 skipped** (the previous pass had one skip — the hostloop `critique` case — which this pass exercised for the first time and which found the transport defect fixed above); `run examples/scenarios/` 7/7. The one live red is a pre-existing `live-matrix` case on old baselines where the model sometimes answers as text instead of calling `AskUserQuestion` — model variance, re-run and flipped, logged for hardening.
+- **`test/model-provenance.test.ts`'s pre-coverage-note test now builds its own fixture.** Every committed cassette now carries `model` coverage, so no shipped fixture emits the note the test reads. Rather than asserting the note's shape only when one happens to be present — a test that could not fail — it rewrites a real cassette's session fingerprint to the pre-`model` hash in a temp tree that preserves the relative session layout.
+
 
 ## [3.5.0] — 2026-09-06
 
