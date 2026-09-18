@@ -70,6 +70,14 @@ shows the population and its age, and a human decides what to re-read.
 
 - `CLAUDE_CODE_MODEL_CATALOG` (new, third-party-only branch) is allowlisted, matching the standing rule for
   third-party-only keys.
+- **`design` added to the host-inventory scan's known-built-in skill roster.** It surfaced as a finding on
+  the first fresh `container` recording after this sync, on a cassette whose scenario declares no skills.
+  It qualifies under the roster's existing three criteria: the recording was sealed (`container`, so
+  `HOME=/tmp` and no host `~/.claude`), `"design"` is a bare literal in both the staged agent ELF and the
+  host CLI, and five personal skill names from the same machine are absent from that binary. It is not new
+  to this agent — the `design-consent` / `design-revoke` slash commands were already in the previously
+  shipped cassette; what changed is that the feature now also registers in `skills[]`, an axis the scan
+  treats more strictly.
 - Documentation now states plainly that the three committed cassettes in `examples/replays/` are stale
   against `desktop-2.2553.1`, and that the last full live end-to-end pass was against `desktop-1.46388.4` /
   agent 2.1.260. Re-recording is owed and is a separate, explicitly-approved step: it costs a real run and
