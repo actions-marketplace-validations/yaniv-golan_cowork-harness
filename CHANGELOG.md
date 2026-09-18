@@ -78,10 +78,8 @@ shows the population and its age, and a human decides what to re-read.
   to this agent — the `design-consent` / `design-revoke` slash commands were already in the previously
   shipped cassette; what changed is that the feature now also registers in `skills[]`, an axis the scan
   treats more strictly.
-- Documentation now states plainly that the three committed cassettes in `examples/replays/` are stale
-  against `desktop-2.2553.1`, and that the last full live end-to-end pass was against `desktop-1.46388.4` /
-  agent 2.1.260. Re-recording is owed and is a separate, explicitly-approved step: it costs a real run and
-  publishes the recording environment.
+- **All three committed cassettes in `examples/replays/` are re-recorded against `desktop-2.2553.1`**, each reporting no behavioural change versus the recording it replaced. The `protocol` fixture was recorded on the hermetic managed config dir (`ANTHROPIC_API_KEY` path) and the `container` one in a sealed container; `verify-cassettes` reports zero host-inventory findings on all three. Documentation now states that the last full live end-to-end pass was against `desktop-1.46388.4` / agent 2.1.260 — re-recording a cassette does not move that.
+- **`test/model-provenance.test.ts`'s pre-coverage-note test now builds its own fixture.** Every committed cassette now carries `model` coverage, so no shipped fixture emits the note the test reads. Rather than asserting the note's shape only when one happens to be present — a test that could not fail — it rewrites a real cassette's session fingerprint to the pre-`model` hash in a temp tree that preserves the relative session layout.
 
 
 ## [3.5.0] — 2026-09-06
