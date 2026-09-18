@@ -47,6 +47,17 @@ shows the population and its age, and a human decides what to re-read.
 
 ### Fixed
 
+- **The LLM decider transport no longer hard-fails on agent 2.1.275's two-model envelope.** The agent that
+  ships with Desktop 2.2553.1 makes an auxiliary Haiku call in `-p` mode, so `claude -p --output-format json`
+  now reports two `modelUsage` keys where 2.1.260 reported one — measured with the same prompt and flags
+  against both native binaries. The transport asserted exactly one key, which turned **every** critique
+  evaluator pass and every `--decider-llm` gate into an instrument failure on the new agent (`critique`
+  exited 2 with no error text; found by the live lane, which had this test gated off in the previous pass).
+  The primary model is now *identified* as the key that resolves the requested `--model` (exact id, or the
+  id carrying a floating alias like `sonnet` as a dash-separated segment) rather than *assumed* from the
+  count. Zero or several keys resolving the request still fails closed — that ambiguity is the contract
+  break the check exists to catch. The whole usage map is still passed through, so the auxiliary call's
+  cost is not lost.
 - **The spawned agent now sends the client-identity headers production sends.** Desktop 2.2553.1 sets
   `CLAUDE_CODE_DESKTOP_APP_VERSION` unconditionally on first-party sessions, and the agent reads it on the
   `local-agent` entrypoint — which the harness pins — as the fallback source of the `anthropic-client-version`

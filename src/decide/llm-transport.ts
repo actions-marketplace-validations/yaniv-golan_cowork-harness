@@ -31,20 +31,44 @@ function tail(s: string, n = 500): string {
   return t.length > n ? "…" + t.slice(-n) : t;
 }
 
+/** True when `key` is the concrete model id that a `--model` request `requested` resolves to: the exact
+ *  id, or — for a floating alias like `"sonnet"` — the id carrying that alias as a dash-separated segment
+ *  (`claude-sonnet-5`). Segment membership, not substring: `"opus"` must not match a hypothetical
+ *  `claude-opus-lite-…` by accident. */
+function resolvesRequested(key: string, requested: string): boolean {
+  return key === requested || key.split("-").includes(requested);
+}
+
 /** Strict parse of one `claude -p --output-format json` envelope: requires a string `result` AND exactly
- *  one `modelUsage` key. Throws on either violation — a malformed/ambiguous envelope on a CLEAN exit is a
- *  genuine transport-contract break worth failing loud on, never masked or guessed past. `result` is the
- *  model's raw reply text (identical content to what `-p` without `--output-format` prints); the single
- *  `modelUsage` key is the CONCRETE model the (possibly aliased, e.g. "sonnet") `--model` request actually
- *  resolved to — this is what callers record for provenance, never the alias they requested. */
-function parseEnvelope(raw: string): CompleteResult {
+ *  one PRIMARY `modelUsage` key. Throws on either violation — a malformed/ambiguous envelope on a CLEAN
+ *  exit is a genuine transport-contract break worth failing loud on, never masked or guessed past.
+ *  `result` is the model's raw reply text (identical content to what `-p` without `--output-format`
+ *  prints); the primary `modelUsage` key is the CONCRETE model the (possibly aliased, e.g. "sonnet")
+ *  `--model` request actually resolved to — this is what callers record for provenance, never the alias
+ *  they requested.
+ *
+ *  "Exactly one key" was the contract through agent 2.1.260. Agent 2.1.275 (Desktop 2.2553.1) added an
+ *  AUXILIARY call in `-p` mode — measured: `--model sonnet` now yields
+ *  `{"claude-haiku-4-5-20251001": {897 in / 8 out}, "claude-sonnet-5": {the actual turn}}`, where 2.1.260
+ *  yields the sonnet key alone; the same prompt, the same flags, bracketed against both native binaries.
+ *  So the primary model is now IDENTIFIED rather than assumed: the key that resolves the requested model.
+ *  Ambiguity (zero or several keys resolve it) still throws — that is the contract break this parser
+ *  exists to catch, and the one case the old count check was actually guarding. The whole map is still
+ *  passed through as `usage`, so the auxiliary call's cost is not lost — it is real spend. */
+function parseEnvelope(raw: string, requestedModel: string): CompleteResult {
   const parsed = JSON.parse(raw) as { result?: string; modelUsage?: Record<string, unknown> };
   if (typeof parsed.result !== "string") throw new Error(`envelope missing "result": ${tail(raw)}`);
   const models = Object.keys(parsed.modelUsage ?? {});
-  if (models.length !== 1) throw new Error(`envelope's modelUsage has ${models.length} keys (expected exactly 1): ${tail(raw)}`);
+  if (models.length === 0) throw new Error(`envelope's modelUsage is empty (expected the resolved model): ${tail(raw)}`);
+  const primary = models.length === 1 ? models : models.filter((k) => resolvesRequested(k, requestedModel));
+  if (primary.length !== 1)
+    throw new Error(
+      `envelope's modelUsage has ${models.length} keys (${models.join(", ")}) and ${primary.length} of them resolve the requested ` +
+        `model "${requestedModel}" (expected exactly 1): ${tail(raw)}`,
+    );
   // Pass the usage VALUE through too (additive — see CompleteResult.usage): the key alone gives model
   // provenance, but discarding the value made the evaluator passes' cost unrecoverable.
-  return { text: parsed.result, model: models[0]!, usage: parsed.modelUsage as Record<string, unknown> };
+  return { text: parsed.result, model: primary[0]!, usage: parsed.modelUsage as Record<string, unknown> };
 }
 
 /** Lenient, best-effort extraction of JUST the `result` field for a FAILURE diagnosis message — unlike
@@ -147,7 +171,7 @@ function spawnOnce(bin: string, prompt: string, model: string, timeoutMs: number
       const raw = Buffer.concat(chunks).toString("utf8");
       if (code === 0) {
         try {
-          resolve(parseEnvelope(raw));
+          resolve(parseEnvelope(raw, model));
         } catch (e) {
           // NOT a TransportExit → not retried: a malformed/ambiguous envelope on a CLEAN exit is a
           // deterministic contract break (the CLI / its --output-format shape), not a transient hiccup.
