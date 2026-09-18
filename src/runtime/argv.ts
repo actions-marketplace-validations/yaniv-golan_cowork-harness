@@ -1,4 +1,4 @@
-import { recordedLayoutDivergence } from "../baseline.js";
+import { DESKTOP_APP_VERSION_MIN_VERSION, cmpVersionStrings, recordedLayoutDivergence } from "../baseline.js";
 import { warn } from "../io.js";
 import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
@@ -227,6 +227,19 @@ export function spawnEnv(
     // validates it against win32|darwin|linux (ELF `YPt()`) — derivable headlessly from `process.platform`,
     // unlike the account-identity/OTEL vars below which need live Desktop state we don't have.
     CLAUDE_CODE_HOST_PLATFORM: process.platform,
+    // Desktop 2.2553.1. Production's W2 base env sets this unconditionally on first-party
+    // (`<dep>.type==="3p"?"":app.getVersion()`), and the agent READS it: on the `claude-desktop` /
+    // `local-agent` entrypoints — `local-agent` is what the harness pins — it becomes the fallback source
+    // of the `anthropic-client-version` request header (the platform half is a hard-coded `desktop_app`) whenever
+    // ANTHROPIC_CUSTOM_HEADERS carries none, which is our case. Without this injection the harness's agent
+    // sends no client-identity headers at all, where production always sends them. It is ALLOWLISTED in
+    // the sync (app.getVersion() is a host call, not structurally resolvable), so this is the only place
+    // the value is supplied — same split as CLAUDE_CODE_HOST_PLATFORM above. VERSION-GATED, unlike that
+    // key: HOST_PLATFORM is set by every asar on record, whereas this one is new in 2.2553.1, so injecting
+    // it unconditionally would hand a run pinned to an older baseline a key that Desktop never set there.
+    ...(cmpVersionStrings(baseline.appVersion, DESKTOP_APP_VERSION_MIN_VERSION) >= 0
+      ? { CLAUDE_CODE_DESKTOP_APP_VERSION: baseline.appVersion }
+      : {}),
     ...(opts.extra ?? {}),
   };
 }
@@ -255,6 +268,19 @@ export function hostNativeSpawnEnv(
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
     CLAUDE_CONFIG_DIR: opts.configDir,
+    // Desktop 2.2553.1. Production's W2 base env sets this unconditionally on first-party
+    // (`<dep>.type==="3p"?"":app.getVersion()`), and the agent READS it: on the `claude-desktop` /
+    // `local-agent` entrypoints — `local-agent` is what the harness pins — it becomes the fallback source
+    // of the `anthropic-client-version` request header (the platform half is a hard-coded `desktop_app`) whenever
+    // ANTHROPIC_CUSTOM_HEADERS carries none, which is our case. Without this injection the harness's agent
+    // sends no client-identity headers at all, where production always sends them. It is ALLOWLISTED in
+    // the sync (app.getVersion() is a host call, not structurally resolvable), so this is the only place
+    // the value is supplied — same split as CLAUDE_CODE_HOST_PLATFORM above. VERSION-GATED, unlike that
+    // key: HOST_PLATFORM is set by every asar on record, whereas this one is new in 2.2553.1, so injecting
+    // it unconditionally would hand a run pinned to an older baseline a key that Desktop never set there.
+    ...(cmpVersionStrings(baseline.appVersion, DESKTOP_APP_VERSION_MIN_VERSION) >= 0
+      ? { CLAUDE_CODE_DESKTOP_APP_VERSION: baseline.appVersion }
+      : {}),
     // NO MAX_THINKING_TOKENS — see spawnEnv's doc comment; the flag (thinkingArgs) is the sole channel.
     // The caller (hostloop.ts) additionally STRIPS any inherited host MAX_THINKING_TOKENS from this
     // process's `...process.env` base before spawning, so a stray host value can't silently override

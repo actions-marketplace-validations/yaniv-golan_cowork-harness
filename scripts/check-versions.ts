@@ -143,7 +143,7 @@ export function checkDesignScopeNote(opts: {
 }): string[] {
   const { design, baselineVersions, agentOf, maxBaseline, maxAgentVersion } = opts;
   const errors: string[] = [];
-  const ANCHOR = "**Scope of that claim, stated plainly.**";
+  const ANCHOR = "**Scope of that claim.**";
   const scopeAt = design.indexOf(ANCHOR);
   if (scopeAt < 0) {
     errors.push(`DESIGN.md has no "${ANCHOR}" note to verify (invariant 11)`);

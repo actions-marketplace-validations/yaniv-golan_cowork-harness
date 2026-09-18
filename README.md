@@ -380,6 +380,6 @@ inputs/outputs. Human-readable terminal text is explicitly **not** part of the c
 ## Status
 
 The latest shipped baseline — what `baseline: latest` resolves to (`cowork-harness list`) — is
-**`desktop-1.46388.4`**. Release-by-release verification notes (what was re-verified against
+**`desktop-2.2553.1`**. Release-by-release verification notes (what was re-verified against
 which live agent/asar) are recorded in [CHANGELOG.md](./CHANGELOG.md); the feature catalogue
 this section would otherwise duplicate lives in the sections above.

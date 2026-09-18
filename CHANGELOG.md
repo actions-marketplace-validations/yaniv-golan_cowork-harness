@@ -7,6 +7,24 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **Parity: baseline `desktop-2.2553.1` (agent 2.1.275)** — the first `2.x` Claude Desktop. `sync` refused
+  to write with **10 unknown deltas**; all are resolved and the baseline is clean. Two of the ten turned
+  out to be defects in this repo's own extractor rather than changes in Desktop:
+  - **The S6c Artifact-gate flag was a false alarm.** The frame-artifacts predicate is byte-identical; it
+    merely stopped being its own statement (it now shares a declaration with the Artifact host-grant
+    binding). The sentinel's value capture ran past the top-level comma and swallowed the sibling binding,
+    so an anchored whole-expression match rejected an unchanged predicate — and the message it printed
+    ("cached-arm/HIPAA/trailing-term change") was simply wrong. The value is now sliced brace/paren/quote
+    aware to the first top-level `,` or `;`. Both directions are pinned by tests: the sibling-binding shape
+    stays clean, and a real widening hidden before the comma still fires.
+  - **The path-gate tool set and path keys were refactored, not removed.** Desktop replaced two array
+    literals with one tool→path-key map plus `Object.keys` / `[...new Set(Object.values(…))]` derivations,
+    which accounted for 4 of the 10 deltas at once. Same five tools, same two keys — no contract change.
+    The extractor now accepts either form. The map is matched **exactly and in order**, because
+    `Object.keys` order reaches the sub-agent prompt through `.join(", ")` while the manifest fingerprint
+    hashes generator source — a reordered map would otherwise change what the model reads with every check
+    still green. Keys and values must resolve to the *same* map, and an ambiguous binding flags rather than
+    taking the first match: the bundle carries two more same-shaped maps that add Bash/NotebookEdit/MultiEdit.
 
 - **`npm run check:claims` — a staleness report for this repo's "binary-verified" claims.** It lists every
   version-stamped claim in `src/`, `scripts/` and `docs/` that is behind the currently pinned agent and
@@ -21,11 +39,42 @@ All notable changes to this project are documented here. The format is based on
   `docs/session.md`, `docs/subagents.md` or `src/session.ts` reintroduces the reversed order, which is the
   half CI can enforce and the way that claim went wrong in three places at once.
 
-**Why these two, stated plainly:** the repo carries ~49 version-stamped claims about the agent binary and,
+**Why these two:** the repo carries ~49 version-stamped claims about the agent binary and,
 before 3.5.0, exactly one was re-derived from the binary by a test. Both claims spot-checked during that
 release turned out wrong — the hook-event list and the model precedence. Two for two is not a sample that
 justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
 shows the population and its age, and a human decides what to re-read.
+
+### Fixed
+
+- **The spawned agent now sends the client-identity headers production sends.** Desktop 2.2553.1 sets
+  `CLAUDE_CODE_DESKTOP_APP_VERSION` unconditionally on first-party sessions, and the agent reads it on the
+  `local-agent` entrypoint — which the harness pins — as the fallback source of the `anthropic-client-version`
+  header (its companion `anthropic-client-platform` is the hard-coded literal `desktop_app`) whenever
+  `ANTHROPIC_CUSTOM_HEADERS` carries none, which is the harness's case. The key is host-derived (an Electron `app.getVersion()` call), so it is allowlisted in the sync
+  **and** injected from the baseline's `appVersion` in both the container and native spawn envs — **version-gated** to baselines from 2.2553.1 on, since injecting it on an older baseline would hand the agent a key that baseline's Desktop never set (not symmetric with `CLAUDE_CODE_HOST_PLATFORM`, which every asar on record sets). Allowlisting
+  it alone would have been silent: the allowlist is consulted before the pin list and the key is not
+  required, so the harness would simply have stopped sending those headers with nothing failing.
+- **`CLAUDE_ARTIFACT_HOST_GRANT` is guarded, not merely allowlisted.** The new key is allowlisted on the
+  grounds that a default session never receives it — a claim that rests entirely on its guard. A new
+  sentinel requires it to stay gated on the *same* predicate as the Artifact tool spread, and fires if it
+  is ever constructed unconditionally or re-keyed. (The existing frame-artifacts assertion could not reach
+  it: the two spreads have different shapes.)
+- **`CLAUDE_CODE_DISABLE_CRON` gained a second disjunct** (a managed-settings scheduled-tasks switch). The
+  pinned value is unchanged at `"1"`, and it is *earned* rather than assumed — the spawn window still passes
+  `disableCron:!0`, which short-circuits. The resolver and its anchor admit the new shape; the disjunct is
+  not inert in general, only under that short-circuit.
+
+### Changed
+
+
+- `CLAUDE_CODE_MODEL_CATALOG` (new, third-party-only branch) is allowlisted, matching the standing rule for
+  third-party-only keys.
+- Documentation now states plainly that the three committed cassettes in `examples/replays/` are stale
+  against `desktop-2.2553.1`, and that the last full live end-to-end pass was against `desktop-1.46388.4` /
+  agent 2.1.260. Re-recording is owed and is a separate, explicitly-approved step: it costs a real run and
+  publishes the recording environment.
+
 
 ## [3.5.0] — 2026-09-06
 

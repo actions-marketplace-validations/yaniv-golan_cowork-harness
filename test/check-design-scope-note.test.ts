@@ -35,7 +35,7 @@ const MAX_AGENT = "2.1.229";
 const note = (opts: { count?: string; list?: string[]; moves?: string; agent?: string } = {}) => {
   const list = opts.list ?? ["1.22.0", "1.23.0", "1.24.0", "1.25.0", "1.26.0"];
   return (
-    `> **Scope of that claim, stated plainly.** \`2026-07-11 / desktop-1.20.0\` is the last baseline ` +
+    `> **Scope of that claim.** \`2026-07-11 / desktop-1.20.0\` is the last baseline ` +
     `carrying a **full live end-to-end pass**; ${opts.count ?? "five"} baselines have shipped since ` +
     `(${list.map((v) => `\`${v}\``).join(", ")}), **${opts.moves ?? "three"}** of which moved the agent ` +
     `ELF — most recently to **${opts.agent ?? MAX_AGENT}**. Those were verified the cheaper way.\n` +
@@ -74,10 +74,10 @@ describe("check:versions invariant 11 — DESIGN.md scope note", () => {
     ["the list is out of order", note({ list: ["1.23.0", "1.22.0", "1.24.0", "1.25.0", "1.26.0"] }), "stale or out of order"],
     ["a listed baseline has no baselines/desktop-*.json", note({ list: ["1.22.0", "1.99.0"] }), "no baselines/desktop-*.json"],
     ["the note is deleted entirely", "DESIGN.md with no scope note at all", "has no"],
-    ["the note is reworded past recognition", "> **Scope of that claim, stated plainly.** we checked some stuff.", "live-pass baseline"],
+    ["the note is reworded past recognition", "> **Scope of that claim.** we checked some stuff.", "live-pass baseline"],
     [
       "the note keeps its live-pass baseline but loses the enumeration",
-      "> **Scope of that claim, stated plainly.** `2026-07-11 / desktop-1.20.0` — we checked some stuff, it was fine.",
+      "> **Scope of that claim.** `2026-07-11 / desktop-1.20.0` — we checked some stuff, it was fine.",
       "must read",
     ],
   ];
@@ -93,7 +93,7 @@ describe("check:versions invariant 11 — DESIGN.md scope note", () => {
     // as unparseable. If the matcher ever widened past the newline it would find the decoy, report
     // nothing, and the real line's drift would ship unnoticed — so this asserts the failure, not a pass.
     const decoyed =
-      `> **Scope of that claim, stated plainly.** \`2026-07-11 / desktop-1.20.0\` — we checked some stuff.\n` +
+      `> **Scope of that claim.** \`2026-07-11 / desktop-1.20.0\` — we checked some stuff.\n` +
       `\`2026-07-11 / desktop-1.20.0\` is the last baseline carrying a pass; five baselines have shipped since ` +
       `(\`1.22.0\`, \`1.23.0\`, \`1.24.0\`, \`1.25.0\`, \`1.26.0\`), **three** of which moved the agent ELF — ` +
       `most recently to **${MAX_AGENT}**.\n`;
@@ -113,7 +113,7 @@ describe("check:versions invariant 11 — DESIGN.md scope note", () => {
   // ── NO-GAP form: the live pass IS the newest baseline, so there is nothing to enumerate ───────────
   describe("no-gap form (live pass == newest baseline)", () => {
     const noGap = (opts: { pass?: string; agent?: string; extra?: string } = {}) =>
-      `> **Scope of that claim, stated plainly.** \`2026-08-14 / desktop-${opts.pass ?? MAX}\` is the last ` +
+      `> **Scope of that claim.** \`2026-08-14 / desktop-${opts.pass ?? MAX}\` is the last ` +
       `baseline carrying a **full live end-to-end pass**, and it is the newest committed baseline — ` +
       `**no baselines have shipped since**. The pass ran against agent **${opts.agent ?? MAX_AGENT}** and ` +
       `covered all three tiers.${opts.extra ?? ""}\n`;

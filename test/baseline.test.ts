@@ -1009,6 +1009,17 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       "S6c Artifact gate",
     ],
     ["R3 HIPAA conjunct replaced by a literal", () => fixture1289290().replace("&&!zA.r();N&&", "&&!0;N&&"), "S6c Artifact gate"],
+    // D6 (Desktop 2.2553.1). The condition stopped being its own statement — it now shares a declaration
+    // with the Artifact host-grant binding. The old `([^;]*);` capture ran past the top-level comma and
+    // swallowed `,ie=…`, so the anchored whole-expression match rejected an UNCHANGED predicate: a false
+    // alarm indistinguishable from a real gate widening. D6b is the one that matters — it proves the
+    // comma-aware slice did not blunt the anchor, because a real widening hidden before the comma must
+    // STILL fire. (The no-flag direction is asserted separately, in its own test below.)
+    [
+      "D6b sibling binding present AND ||!0 appended → still fires through the comma-aware slice",
+      () => fixture1289290().replace("&&!zA.r();N&&", "&&!zA.r()||!0,ie=Jl(a.artifactHostGrant);N&&"),
+      "S6c Artifact gate",
+    ],
     // B17/S6e. The old check hard-coded the member name (`\.r\(\)`), so it accepted ANY single-letter
     // member — re-pointing the conjunct at a different export passed silently. These three are the
     // reason the resolution has to be two hops against a BRACE-SCANNED body rather than a window:
@@ -1114,6 +1125,67 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       .replace('Object.defineProperty(exports,"r",{', 'Object.defineProperty(exports,"hu",{');
   it("1.30096.1 build shape: the HIPAA reader renamed (A.r -> t.hu) stays CLEAN — member names rotate per build", () => {
     expect(checkSpawnContractFacts(fixture1300961())).toEqual([]);
+  });
+
+  // D6 (Desktop 2.2553.1): the condition stopped being its own statement — it shares a declaration with
+  // the Artifact host-grant binding (`let re=(…)&&!t.WI(),ie=Jl(a.artifactHostGrant);`). The predicate is
+  // BYTE-IDENTICAL; only the statement it lives in changed. The old `([^;]*);` value capture ran past the
+  // top-level comma, so the anchored whole-expression match rejected it and `sync` reported "the Artifact
+  // condition is no longer exactly the frame-artifacts expression" — a false alarm that reads exactly like
+  // a real gate widening, and cost a release cycle's worth of misdirected investigation. This is the
+  // regression test for that false positive; D6b above is the paired proof that the fix did not blunt the
+  // anchor. If this goes red, the value slice has been re-narrowed to stop at `;` again.
+  const fixture2255310 = () => fixture1289290().replace("&&!zA.r();N&&", "&&!zA.r(),ie=Jl(a.artifactHostGrant);N&&");
+  it("2.2553.1 build shape: the condition sharing a declaration with the host-grant binding stays CLEAN", () => {
+    expect(checkSpawnContractFacts(fixture2255310())).toEqual([]);
+  });
+
+  // The host-grant key's allowlist entry claims it is "absent on a default session", and that claim rests
+  // ENTIRELY on its guard. S6f asserts the guard is the SAME predicate as the Artifact tool spread.
+  it("S6f: the host-grant key made unconditional → flags (the allowlist alone would admit it)", () => {
+    const unconditional = fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},CLAUDE_ARTIFACT_HOST_GRANT:ie,',
+    );
+    expect(checkSpawnContractFacts(unconditional).join("\n")).toContain("S6f artifact host grant");
+  });
+
+  // A build that DOES carry the guarded grant spread — the shape 2.2553.1 actually ships. Must be clean,
+  // otherwise the two mutations below would be passing for the wrong reason.
+  const fixtureGrant = () =>
+    fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},',
+    );
+  it("S6f control: the real guarded host-grant spread is CLEAN", () => {
+    expect(checkSpawnContractFacts(fixtureGrant())).toEqual([]);
+  });
+
+  // The two holes an adversarial review found in the first draft of S6f, which searched only the chunk
+  // holding tools[] and branched on the FIRST match.
+  it("S6f: a SECOND unguarded construction alongside the guarded spread → flags (first-match branching was blind to this)", () => {
+    const two = fixtureGrant().replace(
+      "...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},",
+      "...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},CLAUDE_ARTIFACT_HOST_GRANT:ie,",
+    );
+    expect(checkSpawnContractFacts(two).join("\n")).toContain("S6f artifact host grant");
+  });
+
+  it("S6f: the construction moved OUT of the tools chunk and unguarded → flags (bundle-wide count, not toolsSite)", () => {
+    // W2 lives in a different chunk from tools[] in the real 2.2553.1 build, so a toolsSite-scoped search
+    // would go silent here. Drop the guarded spread and re-add the key unconditionally elsewhere.
+    const moved =
+      fixtureGrant().replace("...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},", "") +
+      ';var elsewhere={CLAUDE_ARTIFACT_HOST_GRANT:"tok"};';
+    expect(checkSpawnContractFacts(moved).join("\n")).toContain("S6f artifact host grant");
+  });
+
+  it("S6f: the host-grant key gated on a DIFFERENT predicate → flags", () => {
+    const repointed = fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},...zOTHER&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},',
+    );
+    expect(checkSpawnContractFacts(repointed).join("\n")).toContain("S6f artifact host grant");
   });
 
   // The fixtures above run in single-text mode, where resolveNamespaceRef falls back to searching the one
@@ -2813,12 +2885,82 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
   });
 
-  it("MUTATION: the gated 5-set changes → path-hook install-site spread flags", () => {
+  // D6 (Desktop 2.2553.1): the gated set and the path keys both derive from ONE tool→path-key map, so the
+  // old `["Read","Write","Edit","Glob","Grep"]` needle no longer exists and these mutate the MAP. Note the
+  // `expect(m).not.toBeNull()` in each: when the shape moves again, the needle stops applying and these
+  // fail LOUDLY rather than passing as "the guard is redundant".
+  it("MUTATION: the gated tool map loses a tool → path-hook flags", () => {
     const f = realFiles();
     if (!f) return;
-    const m = mutateDefining(f, '["Read","Write","Edit","Glob","Grep"]', '["Read","Write"]');
-    expect(m).not.toBeNull();
-    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread/.test(x))).toBe(true);
+    const m = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Read:"file_path",Write:"file_path"}',
+    );
+    expect(m, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread|path key pair/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the gated tool map is REORDERED → path-hook flags (order reaches the sub-agent prompt)", () => {
+    const f = realFiles();
+    if (!f) return;
+    // Same five tools, same two keys — ONLY the insertion order differs. This must still flag: the
+    // sub-agent manifest renders `Object.keys(map).join(", ")` straight into the prompt, so a reorder
+    // changes the text the model receives while every set-equality check and the manifest's own
+    // fingerprint (which hashes generator source) stay green. Ordered equality is the only thing that
+    // catches it, and this is the case that proves the anchor is ordered.
+    const m = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Glob:"path",Grep:"path",Read:"file_path",Write:"file_path",Edit:"file_path"}',
+    );
+    expect(m, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread|path key pair/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: an unread ['file_path','path'] DECOY cannot switch the derived path-key check off", () => {
+    const f = realFiles();
+    if (!f) return;
+    // The derived check used to be guarded by a bare presence test for the legacy literal, so ONE unrelated
+    // array anywhere in the ~515KB consuming chunk bought a clean pass while the gate's real key list was
+    // widened. Both halves are applied here: a decoy the extraction never reads, AND a real widening.
+    const widened = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Read:"file_path",Bash:"command"}',
+    );
+    expect(widened, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    const withDecoy = new Map(widened!);
+    let planted = false;
+    for (const [k, v] of withDecoy) {
+      if (/\[\.\.\.[\w$.]+,"MultiEdit"\]\.join\("\|"\)/.test(v)) {
+        withDecoy.set(k, `var __decoy=["file_path","path"];${v}`);
+        planted = true;
+        break;
+      }
+    }
+    expect(planted, "decoy was not planted in the consuming chunk").toBe(true);
+    expect(checkPathHookFacts(withDecoy).some((x) => /path key pair|gated 5-set|install site spread/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the path keys derive from a DIFFERENT map → path-hook flags the split", () => {
+    const f = realFiles();
+    if (!f) return;
+    // The tool-permission broker carries a same-SHAPED map that adds Bash/NotebookEdit/MultiEdit. Point
+    // the path-key derivation at a second map bound in the same chunk: each anchor still resolves on its
+    // own, and only the same-map requirement catches that the gate's real key list has widened.
+    const m = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"},qZZ={Read:"file_path",Bash:"command"}',
+    );
+    expect(m, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    const split = new Map(m!);
+    for (const [k, v] of split) {
+      if (v.includes("qZZ="))
+        split.set(k, v.replace(/=\[\.\.\.new Set\(Object\.values\([\w$]+\)\)\]/, "=[...new Set(Object.values(qZZ))]"));
+    }
+    expect(checkPathHookFacts(split).some((x) => /path-gate map|path key pair/.test(x))).toBe(true);
   });
 
   it("MUTATION: the shared resolver's hard-block text removed → path-hook flags (graph-wide search still binds)", () => {
