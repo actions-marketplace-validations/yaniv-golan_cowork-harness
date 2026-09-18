@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-09-18
+
+### Upgrade notes
+
+- **If you run against Claude Desktop 2.2553.1 (agent 2.1.275), upgrade — `critique` and `--decider-llm`
+  are broken on 3.5.0 there.** That agent makes an auxiliary Haiku call in `-p` mode, and 3.5.0's LLM
+  transport hard-fails on the two-model envelope it produces (`critique` exits 2 with no error text).
+  3.6.0 identifies the primary model instead of counting keys. Nothing changes on older agents.
+- **`latest` now resolves to `desktop-2.2553.1`.** A cassette you recorded against `1.46388.4` with
+  `baseline: latest` reports `baseline` staleness on replay (warn by default; `--strict` fails). Re-record
+  it, or pin the scenario to `desktop-1.46388.4` if you are not ready to move.
+- **The spawned agent's env gains `CLAUDE_CODE_DESKTOP_APP_VERSION`** on baselines from 2.2553.1 on. It
+  is the value the agent uses for the `anthropic-client-version` request header; older baselines are
+  unaffected. If you snapshot the spawn env, expect the new key.
+- **Every `-p` call and every run on agent 2.1.275 now carries a ~$0.001 Haiku entry** in `modelUsage`
+  and in the run result's cost. Cost comparisons across the 2.1.260→2.1.275 bump will show it — it is
+  the agent's spend, not the harness's.
+
 ### Added
 - **Parity: baseline `desktop-2.2553.1` (agent 2.1.275)** — the first `2.x` Claude Desktop. `sync` refused
   to write with **10 unknown deltas**; all are resolved and the baseline is clean. Two of the ten turned
@@ -90,7 +108,7 @@ shows the population and its age, and a human decides what to re-read.
   shipped cassette; what changed is that the feature now also registers in `skills[]`, an axis the scan
   treats more strictly.
 - **All three committed cassettes in `examples/replays/` are re-recorded against `desktop-2.2553.1`**, each reporting no behavioural change versus the recording it replaced. The `protocol` fixture was recorded on the hermetic managed config dir (`ANTHROPIC_API_KEY` path) and the `container` one in a sealed container; `verify-cassettes` reports zero host-inventory findings on all three.
-- **A full live pass was run against `desktop-2.2553.1` / agent 2.1.275**, all four suites and all four tiers: `boundary-check` 6/6; e2e self-tests 9/9 including `smoke-l2-microvm` in a real VM and `smoke-multiselect-deciderdir` through the `--decider-llm` path; `npm run test:live` 19 tests, 18 passed, 1 failed, **0 skipped** (the previous pass had one skip — the hostloop `critique` case — which this pass exercised for the first time and which found the transport defect fixed above); `run examples/scenarios/` 7/7 on its first run. The one live red is a pre-existing `live-matrix` case on old baselines where the model sometimes answers as text instead of calling `AskUserQuestion` — model variance, re-run and flipped, logged for hardening.
+- **A full live pass was run against `desktop-2.2553.1` / agent 2.1.275**, all four suites and all four tiers: `boundary-check` 6/6; e2e self-tests 9/9 including `smoke-l2-microvm` in a real VM and `smoke-multiselect-deciderdir` through the `--decider-llm` path; `npm run test:live` 19 tests, 18 passed, 1 failed, **0 skipped** (the previous pass had one skip — the hostloop `critique` case — which this pass exercised for the first time and which found the transport defect fixed above); `run examples/scenarios/` 7/7. The one live red is a pre-existing `live-matrix` case on old baselines where the model sometimes answers as text instead of calling `AskUserQuestion` — model variance, re-run and flipped, logged for hardening.
 - **`test/model-provenance.test.ts`'s pre-coverage-note test now builds its own fixture.** Every committed cassette now carries `model` coverage, so no shipped fixture emits the note the test reads. Rather than asserting the note's shape only when one happens to be present — a test that could not fail — it rewrites a real cassette's session fingerprint to the pre-`model` hash in a temp tree that preserves the relative session layout.
 
 
