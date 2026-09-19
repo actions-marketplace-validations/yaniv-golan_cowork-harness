@@ -111,7 +111,7 @@ ignored.
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
-| `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ its `agents/<name>.md`) instead of a missing plugin-root SKILL.md — see below |
+| `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ every `agents/**.md` it can dispatch) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop\|cowork` | container (default) or hostloop; `cowork` resolves via the baseline's loop gate to one of those two and pins BOTH turns to it. `microvm`/`protocol` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
@@ -138,7 +138,7 @@ plain skill folder has no SKILL.md to read, which downgrades every coverage find
 adjudicable". So:
 
 - **`--skill <name>`** makes the packager grade `skills/<name>/SKILL.md`, and also packages the invoked
-  skill's **`agents/<name>.md`** (sub-agent system prompts) plus bounded **`references/*.md` content** —
+  skill's **dispatchable `agents/**.md`** (sub-agent system prompts) plus bounded **`references/*.md` content** —
   for sub-agent-heavy skills that is where most operative guidance lives.
 - A multi-skill root with **no `--skill` is refused before any model spend**; a single-skill plugin
   auto-selects with a notice.
@@ -298,21 +298,23 @@ it resolved to — and a `droppedEvaluatorItems` count appears when the per-item
 malformed evaluator items (the surviving findings are then not necessarily the complete reply). An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + references +
-agents md), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
+every packaged agent md), `corpusPackaged` (every file that WAS packaged, by the same key — so a reader can
+see which sub-agent bodies the grade rests on), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
 actually breached), `corpusExcluded` (files present on the host but never delivered to the agent by
 staging — untracked, with git-mode on), and `trimRecord` (any section the overall belt-and-suspenders cap
 shaved). `cowork-harness lint-skill <skill-dir>` answers the same proximity question **without a paid
 run** — `skill-corpus-near-evidence-ceiling` (INFO) from 80%, `skill-corpus-over-evidence-ceiling` (WARN,
 so it fails `--strict`) past it. It counts the same three classes the ceiling governs: `SKILL.md`, every
 file under `references/` (**any extension** — the packager applies no extension filter, so JSON schemas
-and rule packs count), and a plugin skill's `agents/<name>.md`. It does not apply staging's git-tracked
+and rule packs count), and every `agents/**.md` a plugin skill can dispatch. It does not apply staging's git-tracked
 filter, so an untracked reference inflates the figure — it errs toward warning early, and `corpusCuts`
 stays the authority.
 On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
 
 **`scripts/` is outside the evaluator's corpus — deliberately, and with one consequence worth knowing.**
-The three classes above are the whole corpus: `SKILL.md`, `references/**`, and `agents/<name>.md`. The
+The three classes above are the whole corpus: `SKILL.md`, `references/**`, and every dispatchable
+`agents/**.md`. The
 *graded* agent, by contrast, has the skill's `scripts/` mounted and is explicitly invited to reflect on it
 (the reflection prompt asks about "SKILL.md and anything under `references/` or `scripts/`"). The two
 actors therefore see different things, which is correct — the evaluator grades authored *guidance*, not
@@ -438,7 +440,7 @@ the two cannot disagree.
   critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
   (which also runs with no sandbox) would be the work.
 - **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — SKILL.md, every `references/**`
-  file, and `agents/<skill>.md` are packaged in full, up to a **512 KiB combined corpus ceiling** covering
+  file, and every dispatchable `agents/**.md` are packaged in full, up to a **512 KiB combined corpus ceiling** covering
   all three together. The ceiling is a sanity valve, not an allocation (~2.3x the largest skill measured
   when it was sized); a breach is cut **loudly** — the named file and byte counts are reported — never
   refused, and never silent. The **transcript** is bounded separately at **128 KiB**, with a head+tail cut

@@ -1064,6 +1064,12 @@
       ".evidenceBudget.corpusExcluded[]": {
         "type": "string"
       },
+      ".evidenceBudget.corpusPackaged": {
+        "type": "array"
+      },
+      ".evidenceBudget.corpusPackaged[]": {
+        "type": "string"
+      },
       ".evidenceBudget.packageTruncated": {
         "type": "boolean",
         "required": true

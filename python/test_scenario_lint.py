@@ -1118,3 +1118,89 @@ def test_embedded_enums_equals_generated():
     # the in-code fallback must equal the generated map, else a missing file silently reintroduces drift
     generated = json.loads(KEYS_JSON.read_text(encoding="utf-8"))["enums"]
     assert scenario._EMBEDDED_ENUMS == generated
+
+
+# ── Cross-language pin: _resolve_corpus_agents ↔ resolveDispatchableAgents (TS) ──────────────────
+#
+# `critique` packaged exactly ONE `agents/<skill>.md` through 3.6.0 while mounting the whole plugin, so a
+# second skill-scoped agent ran with its authored body absent from the evaluator's evidence. Fixing the TS
+# packager without the Python corpus sizing would leave `skill-corpus-*-evidence-ceiling` under-reporting
+# for exactly the multi-agent plugins that need the warning — so both sides resolve the same set, and this
+# executes the SHARED fixture to prove it.
+#
+# The expectations in the fixture are hand-written literals. Deriving them from either implementation would
+# make this a tautology that passes while the two disagree.
+#
+# NOTE: this lane is CI-only — `npm run ci` is typecheck+build+test and never runs pytest.
+
+DISPATCHABLE_AGENTS_FIXTURE = REPO / "test/fixtures/dispatchable-agents.json"
+
+
+def _materialize(tree, root):
+    for rel, content in tree.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    return root
+
+
+def _fixture_cases():
+    data = json.loads(DISPATCHABLE_AGENTS_FIXTURE.read_text(encoding="utf-8"))
+    return data["cases"]
+
+
+def test_fixture_is_non_trivial():
+    """A fixture that lost its cases must not read as a clean pass on either side."""
+    assert len(_fixture_cases()) >= 10
+
+
+@pytest.mark.parametrize("case", _fixture_cases(), ids=lambda c: c["name"])
+def test_resolve_corpus_agents_matches_shared_fixture(case, tmp_path):
+    root = _materialize(case["tree"], tmp_path / "plugin")
+    resolved = scenario._resolve_corpus_agents(root / "skills" / case["skill"])
+    got = sorted(p.relative_to(root).as_posix() for p in resolved)
+    assert got == sorted(case["expected"])
+
+
+def test_corpus_sizing_counts_every_dispatchable_agent(tmp_path):
+    """The ceiling warning must size what the packager actually ships. Sizing one agent while the packager
+    shipped N under-reported precisely the multi-agent plugins the warning exists for."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": '# ms\nsubagent_type: "plug:ms-redteam"\n',
+            "agents/ms.md": "a" * 1000,
+            "agents/ms-redteam.md": "b" * 2000,
+        },
+        tmp_path / "plugin",
+    )
+    agents = scenario._resolve_corpus_agents(root / "skills" / "ms")
+    assert sorted(p.name for p in agents) == ["ms-redteam.md", "ms.md"]
+    assert sum(p.stat().st_size for p in agents) == 3000
+
+
+def test_nested_agents_move_subagent_type_severity_in_both_directions(tmp_path):
+    """Making agent enumeration recursive is not a one-way strictness relaxation.
+
+    Direction 1: a literal naming a NESTED agent stops being a `subagent-type-not-found-in-plugin` WARN,
+    because the agent really is dispatchable and that WARN was a false positive.
+
+    Direction 2: a plugin whose `agents/` holds ONLY subdirectories used to enumerate to the EMPTY set,
+    which sent every same-plugin literal down `_classify_subagent_type`'s falsy-`plugin_agent_types`
+    branch to `subagent-type-unknown` (INFO). It is now enumerable, so a typo'd literal surfaces as the
+    WARN it always was -- a true positive that was suppressed, and a NEW --strict failure on an unchanged
+    tree. Pinned here because the first version of this change claimed it could not happen."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": '# ms\nsubagent_type: "plug:deep"\nsubagent_type: "plug:typoed-name"\n',
+            "agents/sub/deep.md": "---\nname: deep\n---\nnested only\n",
+        },
+        tmp_path / "plugin",
+    )
+    skill_md = root / "skills/ms/SKILL.md"
+    rules = [f.rule for f in scenario._lint_subagent_types(str(skill_md), skill_md.read_text().splitlines())]
+    # the nested agent resolves cleanly -> no finding for it at all
+    assert "subagent-type-unresolvable" not in rules
+    # and the typo is now a provable one rather than an unconfirmable unknown
+    assert rules == ["subagent-type-not-found-in-plugin"]

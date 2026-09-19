@@ -6,6 +6,78 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **If your plugin's `agents/` folder contains only subdirectories, `lint-skill --strict` may newly fail**
+  with `subagent-type-not-found-in-plugin`. The typo it names is real and was previously suppressed: the
+  linter could not enumerate nested agents, so it had nothing to check the pinned `subagent_type` against
+  and downgraded the finding to INFO. Nothing about your skill changed. A plugin with any top-level
+  `agents/*.md` is unaffected.
+
+### Fixed
+
+- **`critique` packaged exactly ONE sub-agent file, so a second agent's guidance was invisible to the
+  evaluator.** The graded turn mounts the whole plugin root, so any agent the skill dispatches really runs
+  — but the evidence corpus only ever carried `agents/<skill>.md`, resolved by FILENAME. A plugin with a
+  second, skill-scoped agent (`agents/<skill>-redteam.md`) had that agent's authored body structurally
+  absent, letting a critique report a guidance gap in an agent it never received. The corpus is now the
+  union of: `agents/<skill>.md`; every in-plugin agent a pinned `subagent_type` literal in the skill's
+  `SKILL.md` or `references/**` resolves to (by DECLARED frontmatter `name:`, not filename); and every
+  agent whose declared name equals the skill name — then a transitive closure, because an agent that
+  dispatches another agent had the same gap one level down. The union is deliberate: a skill that
+  dispatches dynamically keeps exactly the evidence it had before, so no plugin's corpus shrinks.
+  Reported by a `founder-skills` consumer.
+  - A blanket `agents/**` glob was measured and rejected: on that plugin's largest skill it produces a
+    534,867 B corpus against the 524,288 B ceiling — a real cut — while diluting the graded skill with
+    five other skills' agents.
+  - **Also fixed at N=1:** an agent whose frontmatter `name:` differed from its filename resolved to
+    nothing and was silently never packaged, however few agents the plugin had.
+- **`lint-skill`'s corpus-ceiling sizing counted one agent while the packager shipped N.** It now sizes
+  the same resolved set (shared behavioural fixture, `test/fixtures/dispatchable-agents.json`, executed by
+  both the TypeScript and Python implementations). Without this, `skill-corpus-over-evidence-ceiling`
+  passed `--strict` on a corpus a critique would cut — for exactly the multi-agent plugins the warning
+  exists to protect.
+- **`analyze-skill --help` described its own directory scan wrongly.** It advertised a non-recursive
+  `agents/*.md`, and claimed a skill-dir target adds only the enclosing plugin's `agents/`; the code walks
+  `agents/**`, `references/**` and `commands/**` recursively. Stale independently of the change above.
+
+### Changed
+
+- **`lint-skill` now enumerates nested agents (`agents/sub/x.md`), not just `agents/*.md`.** Claude Code
+  discovers them and `skill-hash` already attributes them, so they were dispatchable but invisible to the
+  linter's `subagent_type` resolution. This moves severities in **both** directions:
+  - a literal naming a nested agent stops being a `subagent-type-not-found-in-plugin` **WARN** — that WARN
+    was a false positive, since the agent really is dispatchable; and
+  - **if your plugin's `agents/` directory contains only subdirectories, expect a new `--strict`
+    failure.** That set was previously empty, so every same-plugin literal fell through to
+    `subagent-type-unknown` (INFO, "can't confirm"). The plugin is now enumerable, so a genuinely typo'd
+    `<plugin>:<agent>` is reported as the WARN it always was. The finding is a true positive that was
+    being suppressed — but it is new output on an unchanged tree, and it gates `--strict`.
+
+### Added
+
+- **`evidenceBudget.corpusPackaged`** in the critique report and JSON schema — every corpus file that was
+  packaged, by the same key `corpusCuts` uses. `corpusCuts`/`corpusExcluded` name files only when
+  something goes wrong with them, so nothing previously showed which sub-agent bodies a grade rested on.
+  Optional, and deliberately absent from the schema's `required`: stored reports predating it stay valid.
+- Each packaged agent section names **why** it is in the corpus (`skill-named`, or the `file:line` of the
+  `subagent_type` literal that pulled it in). The extraction has no context awareness, so a literal a
+  reference doc merely mentions — a template placeholder, a "never dispatch this" example — pulls its
+  agent in; the provenance lets the evaluator weigh that instead of reading it as operative guidance.
+
+### Known limitations
+
+- **The plugin-root `references/` is still outside the corpus.** `critique` roots references at the skill
+  dir, so a multi-skill plugin's shared `references/` — 135,001 B on the reporting consumer's tree,
+  including the execution-model doc its `SKILL.md` points at — is mounted for the graded turn and absent
+  from the evidence. Same defect class as the one fixed above, and larger by volume. Adding the directory
+  wholesale is out (it puts that plugin's largest skill at 102% of the ceiling, and its `references/brand/`
+  holds a 33 KB font binary the text corpus has no business carrying), but a reachability rule looks
+  affordable — measured worst case 83% on the same tree. What is unsettled is the rule itself: a bare
+  `references/x.md` link in a skill's SKILL.md means that SKILL's references, not the root's, and the one
+  plugin measured disambiguates the root by writing `<plugin>/references/x.md` — an authoring convention,
+  not something the harness can rely on.
+
 ## [3.6.0] — 2026-09-18
 
 ### Upgrade notes

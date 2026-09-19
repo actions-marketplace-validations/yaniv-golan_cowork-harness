@@ -188,7 +188,7 @@
     },
     "evidenceBudget": {
       "type": "object",
-      "description": "what the evaluator was actually shown. Skill-authored content (SKILL.md + references + agents md) ships WHOLE; these fields exist so a consumer never has to read compiled source to learn the budgets — the previous per-file caps were discoverable only by inspecting dist/, and let 11 of 13 reference files go permanently ungraded with no signal",
+      "description": "what the evaluator was actually shown. Skill-authored content (SKILL.md + references + every dispatchable agent md) ships WHOLE; these fields exist so a consumer never has to read compiled source to learn the budgets — the previous per-file caps were discoverable only by inspecting dist/, and let 11 of 13 reference files go permanently ungraded with no signal",
       "properties": {
         "corpusBytes": {
           "type": "number",
@@ -196,7 +196,7 @@
         },
         "corpusCeiling": {
           "type": "number",
-          "description": "the sanity ceiling governing SKILL.md + references + agents md COMBINED"
+          "description": "the sanity ceiling governing SKILL.md + references + every dispatchable agent md COMBINED"
         },
         "corpusCuts": {
           "type": "array",
@@ -224,6 +224,13 @@
         "corpusExcluded": {
           "type": "array",
           "description": "skill files present on the HOST but excluded because staging would not deliver them (untracked, git-mode on). They were never in the agent's mount, so grading against them would manufacture false already-covered verdicts — but the author must be told, or the grade silently covers less than they believe",
+          "items": {
+            "type": "string"
+          }
+        },
+        "corpusPackaged": {
+          "type": "array",
+          "description": "every corpus file that WAS packaged, by the same key corpusCuts uses (SKILL.md, references/<path>, agents/<path>). OPTIONAL and deliberately absent from `required`: reports written before the multi-agent corpus landed omit it, and requiring it would invalidate every stored report",
           "items": {
             "type": "string"
           }

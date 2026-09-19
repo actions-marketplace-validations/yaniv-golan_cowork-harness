@@ -1,4 +1,5 @@
 import type { EvidenceSection } from "./armor.js";
+import type { ResolvedAgent } from "./resolve-agents.js";
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, type Dirent } from "node:fs";
 import { join, basename, sep } from "node:path";
 import { warn } from "../io.js";
@@ -228,7 +229,7 @@ function sec(title: string, body: string): EvidenceSection {
  *  silently dropped both symlinks and subdirectories. Cycle-guarded via a visited-realpath set: a symlinked
  *  directory loop would otherwise recurse forever. A dangling link (its `statSync` throws) is skipped, the
  *  same posture as an unreadable file. */
-function listSkillFilesRecursive(root: string): string[] {
+export function listSkillFilesRecursive(root: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   // CONTAINMENT. Following symlinks lets a link escape the skill entirely — `references/out -> /anywhere`
@@ -363,7 +364,8 @@ const ATTACHED_INPUTS_CAP = 1 * 1024;
 // (agentType/description only), which made every such claim not-adjudicable.
 export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
 
-/** SKILL-AUTHORED CONTENT IS NOT RATIONED. SKILL.md, every `references/**` file and `agents/<skill>.md`
+/** SKILL-AUTHORED CONTENT IS NOT RATIONED. SKILL.md, every `references/**` file and every dispatchable
+ *  `agents/**.md`
  *  ship WHOLE. The previous design capped SKILL.md at 64KB and shared 8KB across ALL references (filled in
  *  filename order, so the alphabetically-first file took everything) — measured across 9 real runs, 11 of 13
  *  distinct reference files had NEVER reached an evaluator, including the scoring rubric a sub-agent had
@@ -375,7 +377,7 @@ export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
  *  This ceiling is a SANITY VALVE, not an allocation: ~2.3x the largest real skill observed (~230KB), and
  *  a breach is CUT LOUDLY (named file + bytes on stderr and in the report), never silently and never by
  *  refusing the run — refusing would turn a degraded grade into no grade, and this is a discovery
- *  instrument. Governs SKILL.md + references + agents md COMBINED. */
+ *  instrument. Governs SKILL.md + references + every packaged agent md COMBINED. */
 export const SKILL_CORPUS_CEILING = 512 * 1024;
 /** Minimum bytes any single corpus file keeps when the ceiling forces a cut. Below this a slice is not
  *  worth packaging (it would be a heading and an intro), so such a file is marked omitted instead — a
@@ -440,7 +442,7 @@ export interface PackageEvidenceResult {
   turn1SliceDegraded: boolean;
   /** F31: see `SkillMdStatus`. */
   skillMdStatus: SkillMdStatus;
-  /** Total bytes of skill-authored content found (SKILL.md + references + agents md), BEFORE any ceiling
+  /** Total bytes of skill-authored content found (SKILL.md + references + every packaged agent md), BEFORE any ceiling
    *  cut. With `corpusCeiling` this makes "how close is this skill to the valve" answerable without a run. */
   corpusBytes: number;
   /** The active `SKILL_CORPUS_CEILING`, reported so a consumer never has to read the source to learn it —
@@ -455,6 +457,10 @@ export interface PackageEvidenceResult {
    *  manufacture false `already-covered` verdicts — but the author must be TOLD, or their grade silently
    *  covers less than they believe. */
   corpusExcluded: string[];
+  /** Every corpus file that WAS packaged, by the same key `corpusCuts` uses. `corpusCuts`/`corpusExcluded`
+   *  name files only when something went wrong with them, so before this a reader could not tell WHICH
+   *  sub-agent bodies a grade actually rested on — the question the multi-agent corpus makes worth asking. */
+  corpusPackaged: string[];
   /** True when the graded turn Read NO `references/` or `scripts/` file at all — neither the main agent nor
    *  any sub-agent — on a non-degraded result. Stated OBSERVATIONALLY, and consumers must render it that
    *  way: the underlying predicate matches `references/`+`scripts/` only (never `assets/`, never SKILL.md
@@ -495,15 +501,18 @@ export function packageEvidence(
   skillDir: string,
   isResume = false,
   opts: {
-    /** Path to the invoked skill's agent system-prompt markdown (a multi-skill plugin's
-     *  `agents/<skill>.md`, resolved by the caller) — packaged as its own bounded section when given.
-     *  For sub-agent-heavy skills this file IS most of the operative guidance. */
-    agentsMdPath?: string;
-    /** The plugin ROOT the agents md is tracked relative to, and its root-relative POSIX key. Both are
-     *  needed because the agents md sits outside `skillDir`: without them it cannot be checked against the
-     *  tracked set that decides what staging actually delivered. */
-    agentsMdRoot?: string;
-    agentsMdRel?: string;
+    /** EVERY sub-agent the invoked skill can dispatch (resolved by the caller — see
+     *  `resolveDispatchableAgents`), each packaged as its own bounded, separately-keyed section. For
+     *  sub-agent-heavy skills these files ARE most of the operative guidance.
+     *
+     *  This was a single `agents/<skill>.md` through 3.6.0. The graded turn mounts the whole plugin, so a
+     *  second skill-scoped agent really ran while its authored body was structurally absent from the
+     *  evidence — letting a critique report a guidance gap in an agent it never received. */
+    agents?: ResolvedAgent[];
+    /** The plugin ROOT the agent files are tracked relative to. Needed because they sit outside
+     *  `skillDir`: without it they cannot be checked against the tracked set that decides what staging
+     *  actually delivered. */
+    agentsRoot?: string;
   } = {},
 ): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
@@ -664,7 +673,7 @@ export function packageEvidence(
   const deliveredScripts = accept ? allScriptFiles.filter((rel) => accept(`scripts/${rel}`)) : allScriptFiles;
 
   // references/ CONTENT — read WHOLE. Bodies are read here; the combined corpus ceiling is applied below,
-  // across SKILL.md + references + agents md together, so no per-file rationing happens at this step.
+  // across SKILL.md + references + every packaged agent md together, so no per-file rationing here.
   // Read failures degrade per-file to a loud inline note, never sink packaging.
   // Neutralized HERE, once. Everything downstream (ceiling measurement, per-file cuts, section assembly)
   // treats these as already-clean and must bound them with `boundText`, never `bound` — see `applyCorpus`.
@@ -676,28 +685,40 @@ export function packageEvidence(
     }
   });
 
-  // agents/<skill>.md content — only when the caller resolved one (see the opts doc comment).
-  let agentsMdBody: string | undefined;
-  let agentsMdTitle: string | undefined;
-  if (opts.agentsMdPath !== undefined) {
-    agentsMdTitle = `agents markdown (${basename(opts.agentsMdPath)} — the invoked skill's sub-agent system prompt / dispatch guidance)`;
-    // Same corpus==mount rule as SKILL.md/references, but keyed off the PLUGIN ROOT: agents md lives at
-    // <root>/agents/<name>.md while `skillDir` is <root>/skills/<name>, so skillDir's tracked-set key space
-    // cannot express it and it would otherwise ship unfiltered — the one corpus class the first pass missed.
-    const agentsRel = opts.agentsMdRel;
-    const rootAccept = opts.agentsMdRoot !== undefined ? corpusAcceptFor(opts.agentsMdRoot) : null;
-    if (agentsRel !== undefined && rootAccept && !rootAccept(agentsRel)) {
-      corpusExcluded.push(agentsRel);
-      agentsMdBody = undefined;
-      agentsMdTitle = undefined;
-    } else if (!existsSync(opts.agentsMdPath)) {
-      agentsMdBody = `(no file found at ${opts.agentsMdPath})`;
-    } else {
-      try {
-        agentsMdBody = neutralizeForgedTruncationMarkers(readFileSync(opts.agentsMdPath, "utf8"));
-      } catch {
-        agentsMdBody = `(exists at ${opts.agentsMdPath} but could not be read)`;
+  // Sub-agent bodies — one section, one corpus key, one ceiling slice PER FILE. The bare `"agents"` key
+  // this replaced was unambiguous only while exactly one agent could ever be packaged; at N>1 an
+  // over-ceiling cut could not have named the file it cut, which is the whole point of "cut loudly".
+  //
+  // Same corpus==mount rule as SKILL.md/references, but keyed off the PLUGIN ROOT: agent files live at
+  // <root>/agents/**.md while `skillDir` is <root>/skills/<name>, so skillDir's tracked-set key space
+  // cannot express them and they would otherwise ship unfiltered. The check is PER FILE — one agent being
+  // untracked must not suppress the others.
+  const agentBodies: Array<{ key: string; title: string; body: string }> = [];
+  {
+    const rootAccept = opts.agentsRoot !== undefined ? corpusAcceptFor(opts.agentsRoot) : null;
+    for (const agent of opts.agents ?? []) {
+      if (rootAccept && !rootAccept(agent.rel)) {
+        corpusExcluded.push(agent.rel);
+        continue;
       }
+      let body: string;
+      if (!existsSync(agent.absPath)) body = `(no file found at ${agent.absPath})`;
+      else {
+        try {
+          body = neutralizeForgedTruncationMarkers(readFileSync(agent.absPath, "utf8"));
+        } catch {
+          body = `(exists at ${agent.absPath} but could not be read)`;
+        }
+      }
+      // `via` is load-bearing, not decoration: the `subagent_type` extraction has no context awareness, so
+      // a literal that a reference doc merely MENTIONS (a template placeholder, a "never dispatch this"
+      // example) pulls its agent in. Naming the file:line lets the evaluator weigh that itself rather than
+      // reading a mentioned agent as operative guidance.
+      agentBodies.push({
+        key: agent.rel,
+        title: `agents markdown (${basename(agent.absPath)} — sub-agent system prompt / dispatch guidance for \`${agent.name}\`; in corpus via ${agent.via})`,
+        body,
+      });
     }
   }
 
@@ -713,7 +734,7 @@ export function packageEvidence(
     ...referenceBodies
       .filter((r) => r.body !== null)
       .map((r) => ({ key: `references/${r.name}`, bytes: Buffer.byteLength(r.body!, "utf8") })),
-    ...(agentsMdBody !== undefined ? [{ key: "agents", bytes: Buffer.byteLength(agentsMdBody, "utf8") }] : []),
+    ...agentBodies.map((a) => ({ key: a.key, bytes: Buffer.byteLength(a.body, "utf8") })),
   ];
   const corpusBytes = corpusEntries.reduce((a, e) => a + e.bytes, 0);
   const corpusAllowance = new Map<string, number>();
@@ -762,7 +783,7 @@ export function packageEvidence(
     return cut;
   };
   if (skillMdStatus === "readable") skillMd = applyCorpus("SKILL.md", skillMd);
-  if (agentsMdBody !== undefined) agentsMdBody = applyCorpus("agents", agentsMdBody);
+  for (const a of agentBodies) a.body = applyCorpus(a.key, a.body);
   // Header/note overhead is NOT free: the allocator budgets file CONTENT, while the assembled section also
   // carries a `### <path>` line per file plus any omission notes. With hundreds of references that overhead
   // ran past the fixed slack and the section-level bound then chopped the tail — silently, with corpusCuts
@@ -854,7 +875,7 @@ export function packageEvidence(
     // Corpus sections: the ceiling was already applied per-file above, so these are passed through the
     // forgery-neutralizing `bound` at their own (already-satisfied) size rather than re-rationed here.
     sec(skillMdSectionTitle, boundText(skillMdSectionBody, SKILL_CORPUS_CEILING)),
-    ...(agentsMdBody !== undefined ? [sec(agentsMdTitle!, boundText(agentsMdBody, SKILL_CORPUS_CEILING))] : []),
+    ...agentBodies.map((a) => sec(a.title, boundText(a.body, SKILL_CORPUS_CEILING))),
     sec(
       "references/ available (filenames as paths relative to references/, recursive)",
       bound(referenceFiles.length ? referenceFiles.map(displayName).join("\n") : "(none)", REFERENCE_LIST_CAP),
@@ -901,6 +922,7 @@ export function packageEvidence(
     corpusCeiling: SKILL_CORPUS_CEILING,
     corpusCuts,
     corpusExcluded,
+    corpusPackaged: corpusEntries.map((e) => e.key),
     trimRecord,
     packageTruncated: truncated,
     // `undefined` when the turn-1 result was degraded (unknown) OR when the skill ships no references at

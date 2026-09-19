@@ -1762,23 +1762,115 @@ def _agent_name_from_frontmatter(md_path, yaml_mod):
     return None
 
 
+def _enumerate_plugin_agents(plugin_dir):
+    """Every agent markdown under `<plugin_dir>/agents/`, RECURSIVELY, as (declared_name, Path) pairs.
+
+    Recursive on purpose. Claude Code discovers `agents/sub/x.md` (see src/run/analyze-skill.ts:981-983)
+    and skill-hash.ts's `agentSkillName` already attributes both the flat and nested shapes, so a nested
+    agent is dispatchable, hash-attributed and analyze-scanned. The old non-recursive `glob("*.md")` made
+    it invisible to BOTH this linter's subagent_type resolution and the critique corpus.
+
+    This CAN change a severity in both directions, verified, not assumed:
+      - a literal naming a nested agent stops being a `subagent-type-not-found-in-plugin` WARN (it really
+        is dispatchable, so that WARN was a false positive); and
+      - for a plugin whose `agents/` holds ONLY subdirectories, the agent set was previously EMPTY, which
+        sent every same-plugin literal down the `plugin_agent_types` falsy branch in
+        `_classify_subagent_type` to `subagent-type-unknown` (INFO). The set is now non-empty, so a
+        genuinely typo'd literal is reported as the WARN it always was -- a true positive that used to be
+        suppressed, but a NEW `--strict` failure on an unchanged tree."""
+    agents_dir = Path(plugin_dir) / "agents"
+    if not agents_dir.is_dir():
+        return []
+    yaml = _require_yaml()
+    out = []
+    for md in sorted(agents_dir.rglob("*.md")):
+        if not md.is_file():
+            continue
+        out.append((_agent_name_from_frontmatter(md, yaml) or md.stem, md))
+    return out
+
+
 def _resolve_plugin_agents(plugin_dir):
     """Resolve in-plugin agent types: return the set of valid `<plugin>:<agent>` subagent types defined WITHIN plugin_dir.
-    Reads the plugin name from plugin.json and each agents/*.md's `name:` frontmatter (filename stem
+    Reads the plugin name from plugin.json and each agents/**.md's `name:` frontmatter (filename stem
     fallback). Returns an empty set (never crashes) when no plugin.json is found — a bare SKILL.md
     dir with no plugin manifest has nothing to resolve against."""
     plugin_name = _read_plugin_name(plugin_dir)
     if not plugin_name:
         return set()
-    agents_dir = Path(plugin_dir) / "agents"
-    if not agents_dir.is_dir():
-        return set()
-    yaml = _require_yaml()
-    types = set()
-    for md in sorted(agents_dir.glob("*.md")):
-        agent_name = _agent_name_from_frontmatter(md, yaml) or md.stem
-        types.add(f"{plugin_name}:{agent_name}")
-    return types
+    return {f"{plugin_name}:{name}" for name, _ in _enumerate_plugin_agents(plugin_dir)}
+
+
+def _literal_to_agent_name(value, plugin_name):
+    """Map a pinned `subagent_type` literal to a declared agent name WITHIN this plugin, or None.
+
+    A colon-bearing literal is namespaced (`<plugin>:<agent>`) and its prefix MUST equal this plugin's
+    name, or a cross-plugin `other:market-sizing` would match THIS plugin's `market-sizing`. A bare
+    literal matches a declared name directly. MIRRORED in src/critique/resolve-agents.ts; the two are
+    pinned by test/fixtures/dispatchable-agents.json, which both sides execute."""
+    if ":" not in value:
+        return value or None
+    if not plugin_name:
+        return None
+    prefix, _, suffix = value.partition(":")
+    return suffix if prefix == plugin_name and suffix else None
+
+
+def _resolve_corpus_agents(skill_dir):
+    """Every agent file the critique packager will put in THIS skill's evidence corpus, as a sorted list
+    of Paths. Mirrors `resolveDispatchableAgents` in src/critique/resolve-agents.ts -- union of:
+      1. `agents/<skillname>.md` by FILENAME (what the packager did through 3.6.0),
+      2. every in-plugin agent a pinned `subagent_type` literal in SKILL.md / references/** resolves to,
+      3. every agent whose DECLARED name equals the skill name,
+    then a transitive closure over the resolved agent bodies (an agent that dispatches another agent).
+
+    The union is the SAFETY property: this can never resolve to less than the single agents/<skill>.md
+    the old sizing counted, so a skill's reported corpus never shrinks under this change."""
+    skill_dir = Path(skill_dir)
+    plugin_dir = skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    if plugin_dir is None or not (plugin_dir / "agents").is_dir():
+        return []
+    all_agents = _enumerate_plugin_agents(plugin_dir)
+    if not all_agents:
+        return []
+    plugin_name = _read_plugin_name(plugin_dir)
+    skill_name = skill_dir.name
+    picked = {}
+
+    def add(path):
+        picked.setdefault(str(path), path)
+
+    for name, md in all_agents:
+        # clause 1 (filename) and clause 3 (declared name)
+        if md == plugin_dir / "agents" / f"{skill_name}.md" or name == skill_name:
+            add(md)
+
+    sources = []
+    skill_md = skill_dir / "SKILL.md"
+    if skill_md.is_file():
+        sources.append(skill_md)
+    refs = skill_dir / "references"
+    if refs.is_dir():
+        sources.extend(p for p in sorted(refs.rglob("*")) if p.is_file())
+    scanned = set()
+    while sources:
+        src = sources.pop(0)
+        if str(src) in scanned:
+            continue
+        scanned.add(str(src))
+        try:
+            text = src.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for m in _SUBAGENT_TYPE_RE.finditer(text):
+            agent_name = _literal_to_agent_name(m.group(1), plugin_name)
+            if not agent_name:
+                continue
+            for name, md in all_agents:
+                if name == agent_name and str(md) not in picked:
+                    add(md)
+                    sources.append(md)  # transitive: this agent may dispatch another
+    return [picked[k] for k in sorted(picked)]
 
 
 def cmd_resolve_agent_types(args):
@@ -1940,7 +2032,7 @@ def _lint_skill_corpus_size(md_path):
 
     Counts the SAME THREE CLASSES the ceiling governs: SKILL.md, every file under references/ (any
     extension -- the packager applies no extension filter, so JSON schemas and rule packs count), and,
-    for a skill inside a multi-skill plugin, the invoked skill's <root>/agents/<name>.md.
+    for a skill inside a multi-skill plugin, every <root>/agents/**.md the skill can dispatch.
 
     Omitting the agents md is not a rounding error: a plugin whose SKILL.md + references sit in the INFO
     band while the agents md carries the corpus past the ceiling reported INFO and PASSED --strict on
@@ -1956,13 +2048,12 @@ def _lint_skill_corpus_size(md_path):
     refs = skill_dir / "references"
     if refs.is_dir():
         files.extend(p for p in sorted(refs.rglob("*")) if p.is_file())
-    # Multi-skill plugin layout: skillDir is <root>/skills/<name> and the invoked skill's sub-agent
-    # system prompt is <root>/agents/<name>.md -- the same resolution the critique command performs.
-    # A standalone skill (no `skills/` parent) has no agents md and is unaffected.
-    if skill_dir.parent.name == "skills":
-        agents_md = skill_dir.parent.parent / "agents" / f"{skill_dir.name}.md"
-        if agents_md.is_file():
-            files.append(agents_md)
+    # Multi-skill plugin layout: skillDir is <root>/skills/<name> and the skill's dispatchable sub-agent
+    # prompts live under <root>/agents/ -- the same resolution the critique command performs, via the
+    # shared `_resolve_corpus_agents`. This counted exactly ONE file (agents/<name>.md) while the packager
+    # shipped N, which under-reported the ceiling for precisely the multi-agent plugins that need the
+    # warning most. A standalone skill (no `skills/` parent) has no agents and is unaffected.
+    files.extend(_resolve_corpus_agents(skill_dir))
     for p in files:
         try:
             total += p.stat().st_size
@@ -1977,7 +2068,7 @@ def _lint_skill_corpus_size(md_path):
                 f"skill content is {total:,} B ({pct:.0f}% of the {_EVIDENCE_CORPUS_CEILING:,} B critique "
                 f"evidence ceiling) — a critique will cut it before grading.",
                 "Split or trim the largest references/ files. This counts SKILL.md + references/** + "
-                "agents/<skill>.md, the same three classes the ceiling governs; it does not apply "
+                "agents/** (every agent the skill can dispatch), the same three classes the ceiling governs; it does not apply "
                 "staging's git-tracked filter, so an untracked reference inflates it. The critique "
                 "report's corpusCuts names exactly which files lose bytes.",
                 str(skill_dir),

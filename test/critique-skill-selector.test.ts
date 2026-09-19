@@ -27,14 +27,20 @@ describe("resolveCritiquedSkillDir", () => {
   it("a plain skill folder resolves to itself", () => {
     const dir = mkdtempSync(join(tmpdir(), "crit-skill-"));
     writeFileSync(join(dir, "SKILL.md"), "# plain");
-    expect(resolveCritiquedSkillDir(dir, undefined)).toEqual({ skillDir: dir });
+    // `agents` is [] rather than absent: a bare skill dir with no plugin manifest has no agents/ to
+    // resolve against. Asserted field-by-field, not with an exact-object match — the resolver gained an
+    // `agents` array and a whole-object toEqual would red on any future additive field.
+    const r = resolveCritiquedSkillDir(dir, undefined);
+    expect(r.skillDir).toBe(dir);
+    expect(r.agents).toEqual([]);
   });
 
   it("--skill <name> resolves skills/<name>/ and its agents/<name>.md", () => {
     const root = makePlugin(["market-sizing", "ic-sim"], { agentsFor: ["market-sizing"] });
     const r = resolveCritiquedSkillDir(root, "market-sizing");
     expect(r.skillDir).toBe(join(root, "skills", "market-sizing"));
-    expect(r.agentsMdPath).toBe(join(root, "agents", "market-sizing.md"));
+    expect(r.agents.map((a) => a.absPath)).toEqual([join(root, "agents", "market-sizing.md")]);
+    expect(r.agentsRoot).toBe(root);
   });
 
   it("--skill with a wrong name fails loud NAMING the available skills", () => {
@@ -56,14 +62,16 @@ describe("resolveCritiquedSkillDir", () => {
 
   it("no SKILL.md anywhere falls through to the packager's existing missing/degraded flow", () => {
     const dir = mkdtempSync(join(tmpdir(), "crit-empty-"));
-    expect(resolveCritiquedSkillDir(dir, undefined)).toEqual({ skillDir: dir });
+    const r = resolveCritiquedSkillDir(dir, undefined);
+    expect(r.skillDir).toBe(dir);
+    expect(r.agents).toEqual([]);
   });
 });
 
 describe("packageEvidence: agents/references content sections", () => {
   function runDirStub(): string {
     // packageEvidence degrades gracefully on an empty run dir — these tests only exercise the
-    // skill-source sections, which read from skillDir/agentsMdPath.
+    // skill-source sections, which read from skillDir and the resolved agent files.
     return mkdtempSync(join(tmpdir(), "crit-run-"));
   }
 
@@ -71,7 +79,8 @@ describe("packageEvidence: agents/references content sections", () => {
     const root = makePlugin(["ms"], { agentsFor: ["ms"] });
     const runDir = runDirStub();
     const { sections } = packageEvidence(runDir, snapshotTurnBoundary(runDir), join(root, "skills", "ms"), false, {
-      agentsMdPath: join(root, "agents", "ms.md"),
+      agents: [{ name: "ms", absPath: join(root, "agents", "ms.md"), rel: "agents/ms.md", via: "skill-named" }],
+      agentsRoot: root,
     });
     const rendered = renderSections(sections);
     expect(rendered).toContain("system prompt for ms sub-agents");
