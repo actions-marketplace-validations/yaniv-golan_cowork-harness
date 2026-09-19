@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format is based on
 - **A `critique` on a multi-skill plugin now packages more than before**: the sub-agents the skill can
   dispatch, and the plugin-root `references/` files it points at. Verdicts may shift — that is the point,
   the evaluator was previously blind to that guidance — and a plugin already near the 512 KiB corpus
-  ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists exactly what was included.
+  ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists every file whose content actually shipped into the
+  corpus (a file the ceiling zeroed is not listed; a partially cut one is, with its loss in `corpusCuts`).
 - **If your plugin's `agents/` folder contains only subdirectories, `lint-skill --strict` may newly fail**
   with `subagent-type-not-found-in-plugin`. The typo it names is real and was previously suppressed: the
   linter could not enumerate nested agents, so it had nothing to check the pinned `subagent_type` against
@@ -55,6 +56,21 @@ All notable changes to this project are documented here. The format is based on
     skill's own `references/**` keeps its deliberate no-filter rule — the asymmetry is documented.
   - `lint-skill`'s ceiling sizing counts the same set (static clauses only; the read-during-the-run clause
     cannot be mirrored statically). Verified byte-for-byte against the packager on a real 6-skill plugin.
+- **`evidenceBudget.corpusPackaged` listed files whose content never shipped.** Measured: a 300-file
+  corpus over the ceiling zeroed 45 of them and reported all 45 as packaged. Placeholders for unreadable
+  files were counted too — and consumed real ceiling allowance, against the ceiling's own "budgets file
+  content" contract — while the reference path had always skipped them. All three classes are consistent
+  now, and the field means what its name says.
+- **`evidenceBudget.corpusOmitted[].alsoUntracked`** distinguishes a plugin-root reference that is merely
+  unlinked from one staging would not deliver either — the two remedies `corpusOmitted` exists to keep
+  apart. THREE-state: absent means trackedness was not evaluated (git mode off, not a work tree, or an
+  unreadable index), never "tracked". Defaulting to `false` would have asserted a fact nothing established.
+- The corpus allocator keys on an internal tag, so a plugin named (or a plugin DIRECTORY named) `agents`
+  can no longer put a root reference and an agent file in one allowance slot. Displayed, cited and
+  reported strings are byte-identical. **No output difference was demonstrable** — an earlier review
+  attributed a measured 11,388 B ceiling overshoot to this collision, and re-measuring shows the identical
+  overshoot with a non-colliding plugin name, so that was per-file header overhead. Kept as a correctness
+  tidy, recorded as one rather than dressed up as a measured fix.
 - **Section TITLES carried unsanitized third-party bytes.** `armor.ts` documented titles as trusted
   ("never attacker bytes") — true until titles began interpolating an agent's frontmatter `name:`, a
   filename, and the `via` provenance string. A block-scalar `name:` with newlines could forge a

@@ -1071,6 +1071,9 @@
         "type": "object",
         "closed": true
       },
+      ".evidenceBudget.corpusOmitted[].alsoUntracked": {
+        "type": "boolean"
+      },
       ".evidenceBudget.corpusOmitted[].name": {
         "type": "string",
         "required": true

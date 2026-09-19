@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve, basename } from "node:path";
@@ -410,5 +410,103 @@ describe("section TITLES are sanitized — they interpolate third-party bytes", 
     expect(title).toContain("in corpus via");
     expect(title).not.toContain(marker);
     expect(armorEvidence(res.sections).text).not.toContain(marker);
+  });
+});
+
+describe("corpusPackaged reports what CONTENT actually shipped", () => {
+  function bigTree(n: number, bytes: number): { root: string; outDir: string } {
+    const files: Record<string, string> = { "plugin.json": '{"name": "plug"}', "skills/ms/SKILL.md": "# ms\n" };
+    for (let i = 0; i < n; i++) files[`skills/ms/references/r${String(i).padStart(3, "0")}.md`] = "x".repeat(bytes);
+    const root = tree(files);
+    return { root, outDir: mkdtempSync(join(tmpdir(), "cwh-big-")) };
+  }
+
+  it("a file the ceiling ZEROED is absent from corpusPackaged (it shipped no content)", () => {
+    const { root, outDir } = bigTree(300, 3 * 1024);
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const zeroed = res.corpusCuts.filter((c) => c.omitted).map((c) => c.name);
+    expect(zeroed.length).toBeGreaterThan(0); // the fixture really does breach the ceiling
+    for (const name of zeroed) expect(res.corpusPackaged).not.toContain(name);
+  });
+
+  it("REGRESSION GUARD (passes today): a PARTIALLY cut file is still listed — content did ship", () => {
+    const { root, outDir } = bigTree(300, 3 * 1024);
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const partial = res.corpusCuts.filter((c) => !c.omitted).map((c) => c.name);
+    expect(partial.length).toBeGreaterThan(0);
+    for (const name of partial) expect(res.corpusPackaged).toContain(name);
+  });
+
+  it("an unreadable agent's PLACEHOLDER is not a corpus entry (no ceiling breach needed)", () => {
+    const root = tree({
+      "plugin.json": '{"name": "plug"}',
+      "skills/ms/SKILL.md": "# ms\n",
+      "agents/ms.md": "---\nname: ms\n---\nbody\n",
+    });
+    const r = resolveCritiquedSkillDir(root, "ms");
+    expect(r.agents).toHaveLength(1);
+    rmSync(join(root, "agents", "ms.md")); // resolved, then vanishes before packaging
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-ph-"));
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    expect(res.corpusPackaged).not.toContain("agents/ms.md");
+    expect(res.corpusCuts).toEqual([]); // a placeholder is never CUT, so subtraction alone could not do this
+  });
+});
+
+describe("corpusOmitted distinguishes 'not linked' from 'not linked AND not deliverable'", () => {
+  it("flags the untracked one, and only it", () => {
+    const root = tree({ "plugin.json": '{"name": "plug"}', "skills/ms/SKILL.md": "# ms\n", "references/tracked.md": "T\n" }, { git: true });
+    writeFileSync(join(root, "references", "untracked.md"), "U\n"); // written AFTER `git add`
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-u-"));
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    const by = Object.fromEntries(res.corpusOmitted.map((o) => [o.name, o]));
+    expect(by["plug/references/tracked.md"]).toEqual({ name: "plug/references/tracked.md", reason: "not-linked", alsoUntracked: false });
+    expect(by["plug/references/untracked.md"]).toEqual({
+      name: "plug/references/untracked.md",
+      reason: "not-linked",
+      alsoUntracked: true,
+    });
+  });
+
+  it("CONTROL: outside a git work tree the flag is ABSENT, never false — we did not look", () => {
+    const root = tree({ "plugin.json": '{"name": "plug"}', "skills/ms/SKILL.md": "# ms\n", "references/a.md": "A\n" });
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-nogit-"));
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    expect(res.corpusOmitted).toEqual([{ name: "plug/references/a.md", reason: "not-linked" }]);
+    expect("alsoUntracked" in res.corpusOmitted[0]!).toBe(false);
+  });
+});
+
+describe("a plugin named `agents` shares a DISPLAY key with an agent file", () => {
+  // REGRESSION GUARD, not a failing test — and the distinction is the finding. The allocator now keys on
+  // an internal `<kind>\0<path>` tag so two files can never share one allowance slot, but I could not
+  // construct an input where the previous key-based version produced different bytes: water-filling puts
+  // both colliding files at the CORPUS_MIN_SLICE floor, so last-writer-wins is a no-op there. An earlier
+  // review attributed a measured 11,388 B ceiling overshoot to this collision; re-measuring shows the
+  // identical overshoot with a NON-colliding plugin name, so it is the documented per-file header
+  // overhead, not the collision. The tagged key is kept because one allocator slot for two bodies is
+  // wrong on its face; it is not kept on the strength of a demonstrated output difference.
+  it("keeps both files as separate corpus entries and stays within the content ceiling", () => {
+    const files: Record<string, string> = {
+      "plugin.json": '{"name": "agents"}',
+      "skills/ms/SKILL.md": '# ms\nsubagent_type: "agents:nested"\nSee `agents/references/x.md`.\n',
+      "agents/references/x.md": "---\nname: nested\n---\n" + "a".repeat(3 * 1024),
+      "references/x.md": "r".repeat(400 * 1024),
+    };
+    for (let i = 0; i < 300; i++) files[`skills/ms/references/r${String(i).padStart(3, "0")}.md`] = "x".repeat(3 * 1024);
+    const root = tree(files);
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-coll-"));
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    // Both are present under the same display key — intended, and visible to the reader.
+    expect(res.corpusPackaged.filter((k) => k === "agents/references/x.md")).toHaveLength(2);
+    // What the tag guarantees: the allocator budgeted them as two files, so allocated CONTENT (which is
+    // what the ceiling governs — section headers are accounted separately) stays within it.
+    const allocated = res.corpusCuts.reduce((a, c) => a + c.keptBytes, 0);
+    expect(allocated).toBeLessThanOrEqual(res.corpusCeiling);
   });
 });

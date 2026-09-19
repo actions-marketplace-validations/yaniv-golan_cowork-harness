@@ -65,7 +65,7 @@ const FULL_STATE = {
     corpusOmitted: [
       { name: "plug/references/other-skill.md", reason: "not-linked" as const },
       { name: "plug/references/brand/font.woff2", reason: "not-utf8" as const },
-      { name: "plug/references/dup.md", reason: "ambiguous-read" as const },
+      { name: "plug/references/dup.md", reason: "ambiguous-read" as const, alsoUntracked: true },
     ],
     trimRecord: [{ section: "Transcript (turn 1 only …)", droppedBytes: 42 }],
     packageTruncated: true,

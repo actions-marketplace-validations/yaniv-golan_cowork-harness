@@ -1198,7 +1198,7 @@ interface ReportState {
     corpusCuts: Array<{ name: string; keptBytes: number; totalBytes: number; omitted: boolean }>;
     corpusExcluded: string[];
     corpusPackaged?: string[];
-    corpusOmitted?: Array<{ name: string; reason: "not-linked" | "not-utf8" | "ambiguous-read" }>;
+    corpusOmitted?: Array<{ name: string; reason: "not-linked" | "not-utf8" | "ambiguous-read"; alsoUntracked?: boolean }>;
     trimRecord: Array<{ section: string; droppedBytes: number }>;
     packageTruncated: boolean;
   };
@@ -1349,6 +1349,14 @@ export function buildTextReport(state: ReportState): string {
       };
       for (const [reason, names] of [...byReason].sort())
         out.push(`  plugin-root references NOT graded (${explain[reason] ?? reason}): ${names.join(", ")}`);
+      // Only files we actually EVALUATED for trackedness. `alsoUntracked` is absent when the tracked set
+      // could not be read at all, and printing "also untracked" — or silently not printing it — for an
+      // unevaluated file would state a fact nothing established.
+      const alsoUntracked = eb.corpusOmitted.filter((o) => o.alsoUntracked === true).map((o) => o.name);
+      if (alsoUntracked.length)
+        out.push(
+          `  ...and staging would not deliver these anyway (untracked): ${alsoUntracked.join(", ")} — 'git add' them as well as linking them`,
+        );
     }
     if (eb.corpusExcluded.length)
       out.push(

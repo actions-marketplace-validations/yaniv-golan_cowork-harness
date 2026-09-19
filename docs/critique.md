@@ -302,10 +302,14 @@ malformed evaluator items (the surviving findings are then not necessarily the c
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
 own references + every packaged agent md + every packaged plugin-root reference), `corpusPackaged`
-(every file that WAS packaged, by the same key — so a reader can see which sub-agent bodies and shared
-references the grade rests on), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
-actually breached), `corpusOmitted` (plugin-root `references/` files present in the mount but **not**
-packaged, with why: `not-linked` — nothing in the skill's authored text or a packaged agent body points at
+(every file whose CONTENT shipped into the corpus sections, by the same key — so a reader can see which
+sub-agent bodies and shared references the grade rests on; a file the ceiling zeroed is not listed, a
+partially cut one is, with its loss in `corpusCuts`), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
+actually breached), `corpusOmitted` (plugin-root `references/` files present on the HOST under
+`<plugin>/references/` but **not** packaged — a raw walk, so an untracked file that staging would not
+deliver is listed here too, and `alsoUntracked` says so when trackedness was evaluated; that property is
+ABSENT, never `false`, when it could not be — git mode off, not a work tree, or an unreadable index —
+with why: `not-linked` — nothing in the skill's authored text or a packaged agent body points at
 it, and the graded agent's own read didn't either; `not-utf8` — it failed to decode as clean UTF-8, e.g. a
 font asset (only plugin-root references are filtered this way — the skill's **own** `references/**` still
 ships with no extension or content filter at all); or `ambiguous-read` — the graded agent read a path that
@@ -475,7 +479,8 @@ the two cannot disagree.
   reference must additionally decode as clean UTF-8 to be packaged — a binary asset such as a font is
   excluded — while the skill's **own** `references/**` still has no extension or content filter at all;
   that asymmetry is deliberate, not an oversight. Every plugin-root file the rule leaves out is reported in
-  `evidenceBudget.corpusOmitted` (`not-linked`, `not-utf8`, or `ambiguous-read`), never dropped silently.
+  `evidenceBudget.corpusOmitted` (`not-linked`, `not-utf8`, or `ambiguous-read`, plus `alsoUntracked`
+  where it could be evaluated), never dropped silently.
   The ceiling itself is a sanity valve, not an allocation (~2.3x the largest skill measured
   when it was sized); a breach is cut **loudly** — the named file and byte counts are reported — never
   refused, and never silent. The **transcript** is bounded separately at **128 KiB**, with a head+tail cut

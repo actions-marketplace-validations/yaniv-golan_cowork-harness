@@ -21,7 +21,11 @@ export type OmissionReason = "not-linked" | "not-utf8" | "ambiguous-read";
 
 export interface RootReferenceResolution {
   packaged: ResolvedReference[];
-  omitted: Array<{ name: string; reason: OmissionReason }>;
+  /** `alsoUntracked` is THREE-state and is omitted, never defaulted, when trackedness was not evaluated:
+   *  `corpusAcceptFor` returns null for git mode off, a non-work-tree, and a failed `ls-files` alike, and
+   *  in all three cases we did not look. Defaulting to `false` would assert "this file is tracked" on no
+   *  evidence — the remedy line would then say "link it" about a file `git add` also has to reach. */
+  omitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }>;
 }
 
 /** Valid UTF-8, decided by the decoder rather than by scanning the decoded string. `fatal: true` throws
@@ -194,7 +198,11 @@ export function resolveRootReferences(opts: {
   const skillMd = join(skillDir, "SKILL.md");
   const sources: Array<{ label: string; absPath: string }> = [{ label: "SKILL.md", absPath: skillMd }];
   const localRefRoot = join(skillDir, "references");
-  for (const r of listSkillFilesRecursive(localRefRoot)) sources.push({ label: `references/${r}`, absPath: join(localRefRoot, r) });
+  // ONE walk, reused below for `localRels`. Reuse the RAW result, never the `sources` array — `sources` is
+  // filtered by `acceptSource` at iteration time, and reusing the filtered list would silently narrow the
+  // clause-3 ambiguity detection.
+  const localRefRels = listSkillFilesRecursive(localRefRoot);
+  for (const r of localRefRels) sources.push({ label: `references/${r}`, absPath: join(localRefRoot, r) });
   for (const a of agents) sources.push({ label: `agent:${a.name}`, absPath: a.absPath });
   const acceptSource = (absPath: string): boolean => {
     if (!opts.accept) return true;
@@ -224,7 +232,7 @@ export function resolveRootReferences(opts: {
   // against the graded skill alone let a SIBLING's read pull the root file's content into this skill's
   // corpus, with no ambiguity flag, on evidence about a different file.
   const localRels = new Set<string>();
-  for (const r of listSkillFilesRecursive(localRefRoot)) localRels.add(`references/${r}`);
+  for (const r of localRefRels) localRels.add(`references/${r}`);
   let siblingRefDirs: string[] = [];
   try {
     siblingRefDirs = readdirSync(join(pluginRoot, "skills"), { withFileTypes: true })
@@ -247,16 +255,23 @@ export function resolveRootReferences(opts: {
 
   const packaged: ResolvedReference[] = [];
   const omitted: Array<{ name: string; reason: OmissionReason }> = [];
+  // Computed for EVERY reason, not just `not-linked`: a property present on some rows and absent on
+  // others re-creates the same "is it false or unevaluated?" ambiguity one level down.
+  const untrackedFlag = (rel: string): { alsoUntracked?: boolean } => (opts.accept ? { alsoUntracked: !opts.accept(rel) } : {});
   for (const f of all) {
     const displayKey = `${pluginName}/${f.rel}`;
     const via = linked.get(f.rel);
     if (via === undefined) {
-      omitted.push({ name: displayKey, reason: ambiguous.includes(f.rel) ? "ambiguous-read" : "not-linked" });
+      omitted.push({
+        name: displayKey,
+        reason: ambiguous.includes(f.rel) ? "ambiguous-read" : "not-linked",
+        ...untrackedFlag(f.rel),
+      });
       continue;
     }
     // Link-first, THEN utf8: an unlinked file is never read, so a large unlinked tree costs nothing.
     if (!isCleanUtf8(f.absPath)) {
-      omitted.push({ name: displayKey, reason: "not-utf8" });
+      omitted.push({ name: displayKey, reason: "not-utf8", ...untrackedFlag(f.rel) });
       continue;
     }
     packaged.push({ rel: f.rel, absPath: f.absPath, displayKey, via });
