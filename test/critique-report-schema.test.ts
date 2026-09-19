@@ -57,6 +57,16 @@ const FULL_STATE = {
     corpusCeiling: 524_288,
     corpusCuts: [{ name: "references/big.md", keptBytes: 100, totalBytes: 900, omitted: false }],
     corpusExcluded: ["references/untracked.md"],
+    // Both of these must be EMITTED here, not merely declared in the schema: the test strictens a clone of
+    // the schema and validates this fixture against it, so a field the fixture never produces leaves the
+    // schema under-declared with the test green. `corpusPackaged` shipped without a fixture entry for
+    // exactly that reason.
+    corpusPackaged: ["SKILL.md", "references/big.md", "agents/x.md", "plug/references/shared.md"],
+    corpusOmitted: [
+      { name: "plug/references/other-skill.md", reason: "not-linked" as const },
+      { name: "plug/references/brand/font.woff2", reason: "not-utf8" as const },
+      { name: "plug/references/dup.md", reason: "ambiguous-read" as const, alsoUntracked: true },
+    ],
     trimRecord: [{ section: "Transcript (turn 1 only …)", droppedBytes: 42 }],
     packageTruncated: true,
   },

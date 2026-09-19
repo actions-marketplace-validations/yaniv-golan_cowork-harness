@@ -18,8 +18,20 @@
 // readability and citation-quoting the evidence corpus needs.)
 import { randomBytes } from "node:crypto";
 
-/** One evidence section. `title` is TRUSTED (emitted by the packager, never attacker bytes); `body` is
- *  UNTRUSTED. The distinction is load-bearing — do not re-flatten these before armoring. */
+/** One evidence section. `body` is UNTRUSTED and is neutralized on the way in.
+ *
+ *  `title` USED TO BE trusted — "emitted by the packager, never attacker bytes". That stopped being true
+ *  the moment titles began interpolating third-party values: an agent's frontmatter `name:`, a file's
+ *  basename, and the `via` provenance string (which contains a filename). A block-scalar `name:` carrying
+ *  newlines could then forge a `### [E-…] SKILL.md` heading that lands OUTSIDE any `⟦EVIDENCE-nonce⟧`
+ *  fence — the one place the prompt tells the model packager text lives — and fabricate "SKILL.md says …"
+ *  claims that flip a real gap to `already-covered`. A filename could likewise ship a verbatim truncation
+ *  marker, whose forgery routes claims to `not-adjudicable`.
+ *
+ *  Titles are therefore sanitized here too: marker lookalikes redacted, and newlines/control characters
+ *  flattened so a title can never be more than the single line it is rendered as. The packager also
+ *  sanitizes at each interpolation site; this is the backstop that makes the NEXT interpolated title safe
+ *  by construction rather than by remembering. */
 export interface EvidenceSection {
   title: string;
   body: string;
@@ -48,6 +60,16 @@ export function neutralizeMarkerLookalikes(body: string): string {
     .replace(HEAD_TAG_LOOKALIKE, "[heading-tag-lookalike-redacted]");
 }
 
+/** A section title is rendered as ONE `### …` line. Any newline or control character in it can only be
+ *  an attempt to become a second line — there is no legitimate multi-line title — so they collapse to a
+ *  space, and marker lookalikes are redacted exactly as in a body. */
+export function flattenTitle(title: string): string {
+  return neutralizeMarkerLookalikes(title)
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export interface ArmoredEvidence {
   /** The assembled document interpolated into BOTH prompts — and the ONE canonical citation corpus.
    *  Built once per critique and threaded everywhere, so exactly one corpus string exists per run. */
@@ -58,7 +80,8 @@ export interface ArmoredEvidence {
 export function armorEvidence(sections: EvidenceSection[], nonce: string = newNonce()): ArmoredEvidence {
   const text = sections
     .map(
-      (s) => `### ${headTag(nonce)} ${s.title}\n${evidenceOpen(nonce)}\n${neutralizeMarkerLookalikes(s.body)}\n${evidenceClose(nonce)}\n`,
+      (s) =>
+        `### ${headTag(nonce)} ${flattenTitle(s.title)}\n${evidenceOpen(nonce)}\n${neutralizeMarkerLookalikes(s.body)}\n${evidenceClose(nonce)}\n`,
     )
     .join("\n");
   return { text, nonce };

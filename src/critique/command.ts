@@ -22,11 +22,13 @@ import { renderKnownLimitations } from "./limitations.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, extname, join } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
+import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
+import { findEnclosingPluginDir } from "../run/analyze-skill.js";
 import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
@@ -122,7 +124,8 @@ Critique's own:
   --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
   --output-format json|text critique's REPORT format (inner turns always speak json internally)
   --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
-  --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ its agents/<name>.md)
+  --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ every agents/**.md it dispatches,
+                            + the plugin-root references/ files it points at)
                             instead of a missing plugin-root SKILL.md. Selection only — the positional
                             folder is still what both turns mount, and fingerprint.skillHash is unchanged
                             (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
@@ -451,7 +454,8 @@ function parseArgs(
   };
 }
 
-/** Resolve WHICH folder the packager grades (and, for a plugin, the invoked skill's `agents/<name>.md`).
+/** Resolve WHICH folder the packager grades (and, for a plugin, every `agents/**.md` the invoked skill
+ *  can dispatch).
  *
  *  The positional `skillFolder` is what both turns MOUNT — that never changes here (the reflection turn's
  *  resume recomputes session identity from the same sources, so a selection that changed the mount would
@@ -468,7 +472,7 @@ function parseArgs(
 export function resolveCritiquedSkillDir(
   skillFolder: string,
   skillSelector: string | undefined,
-): { skillDir: string; agentsMdPath?: string; agentsMdRoot?: string; agentsMdRel?: string; autoSelectedSkill?: string } {
+): { skillDir: string; agents: ResolvedAgent[]; pluginRoot?: string; autoSelectedSkill?: string } {
   // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
   // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
   // This lives here (not in parseArgs) on purpose: parseArgs is unit-tested with fictitious paths, whereas
@@ -482,14 +486,13 @@ export function resolveCritiquedSkillDir(
     throw new Error(`skill folder not found: ${tildeify(skillFolder)}`);
   }
   if (!stat.isDirectory()) throw new Error(`not a directory: ${tildeify(skillFolder)}`);
-  const agentsMdFor = (name: string): string | undefined => {
-    const p = join(skillFolder, "agents", `${name}.md`);
-    return existsSync(p) ? p : undefined;
-  };
-  // The agents md is tracked relative to the PLUGIN ROOT, not to skillDir (it lives at
-  // <root>/agents/<name>.md while skillDir is <root>/skills/<name>), so the packager needs both to check
-  // it against the same tracked set staging used.
-  const agentsMdKeys = (name: string) => ({ agentsMdRoot: skillFolder, agentsMdRel: `agents/${name}.md` });
+  // Agent files are tracked relative to the PLUGIN ROOT, not to skillDir (they live at
+  // <root>/agents/**.md while skillDir is <root>/skills/<name>), so the packager needs the root to check
+  // each one against the same tracked set staging used.
+  const agentsFor = (pluginRoot: string, skillDir: string, name: string | undefined) => ({
+    agents: resolveDispatchableAgents(pluginRoot, skillDir, name),
+    pluginRoot,
+  });
   const listPluginSkills = (): string[] => {
     try {
       return readdirSync(join(skillFolder, "skills"), { withFileTypes: true })
@@ -509,15 +512,30 @@ export function resolveCritiquedSkillDir(
           (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
       );
     }
-    return { skillDir: candidate, agentsMdPath: agentsMdFor(skillSelector), ...agentsMdKeys(skillSelector) };
+    return { skillDir: candidate, ...agentsFor(skillFolder, candidate, skillSelector) };
   }
-  if (existsSync(join(skillFolder, "SKILL.md"))) return { skillDir: skillFolder }; // plain skill folder
+  // A plain skill folder. TWO distinct shapes hide here, and conflating them is what made
+  // `critique <plugin>/skills/<name>` — an invocation both docs/critique.md and the multi-skill hint below
+  // recommend — package ZERO agents while `scenario.py` sized them: the root was always the positional
+  // folder, and a skill dir has no `agents/` of its own.
+  //   1. the dir IS the plugin root (manifest + top-level SKILL.md; this repo's own
+  //      .claude/skills/cowork-harness/ is one) — the skill's name is the manifest name; or
+  //   2. the dir is a skill INSIDE a plugin, targeted directly rather than via `--skill`. Walk UP for the
+  //      enclosing manifest, exactly as analyze-skill does for the same shape — its `findEnclosingPluginDir`
+  //      is REUSED, not re-derived; this rule already had one copy too many across TS and Python, and that
+  //      divergence is what let the packager and the linter disagree about the same tree.
+  if (existsSync(join(skillFolder, "SKILL.md"))) {
+    const enclosing = findEnclosingPluginDir(skillFolder);
+    // `findEnclosingPluginDir` is INCLUSIVE of its start, so an equal path is shape 1, not shape 2.
+    if (enclosing !== null && enclosing !== resolve(skillFolder))
+      return { skillDir: skillFolder, ...agentsFor(enclosing, skillFolder, basename(skillFolder)) };
+    return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
+  }
   const skills = listPluginSkills();
   if (skills.length === 1)
     return {
       skillDir: join(skillFolder, "skills", skills[0]!),
-      agentsMdPath: agentsMdFor(skills[0]!),
-      ...agentsMdKeys(skills[0]!),
+      ...agentsFor(skillFolder, join(skillFolder, "skills", skills[0]!), skills[0]!),
       autoSelectedSkill: skills[0]!,
     };
   if (skills.length > 1)
@@ -525,7 +543,9 @@ export function resolveCritiquedSkillDir(
       `${tildeify(skillFolder)} is a multi-skill plugin root (no root SKILL.md; skills: ${skills.join(", ")}) — ` +
         `pass --skill <name> so critique grades the INVOKED skill's SKILL.md instead of a missing root one`,
     );
-  return { skillDir: skillFolder }; // no SKILL.md anywhere — the packager's existing missing/degraded flow reports it
+  // no SKILL.md anywhere — the packager's existing missing/degraded flow reports it. No skill to resolve
+  // dispatches FOR, so no agents either.
+  return { skillDir: skillFolder, agents: [] };
 }
 
 interface TurnOutcome {
@@ -1160,7 +1180,7 @@ interface ReportState {
    *  source; a non-`"readable"` value means presence/coverage classification was refused (see
    *  `runCritique`'s `skillMdUnreadable` option). */
   skillMdStatus?: SkillMdStatus;
-  /** Evidence-budget accounting. Skill-authored content (SKILL.md + references + agents md) ships WHOLE;
+  /** Evidence-budget accounting. Skill-authored content (SKILL.md + references + every packaged agent md) ships WHOLE;
    *  these fields exist so the consumer never has to read `dist/` to learn what the evaluator was shown —
    *  the previous per-file caps were discoverable only by inspecting compiled source, which cost a real
    *  consumer hours and let 11 of 13 reference files go permanently ungraded without a signal.
@@ -1177,6 +1197,8 @@ interface ReportState {
     corpusCeiling: number;
     corpusCuts: Array<{ name: string; keptBytes: number; totalBytes: number; omitted: boolean }>;
     corpusExcluded: string[];
+    corpusPackaged?: string[];
+    corpusOmitted?: Array<{ name: string; reason: "not-linked" | "not-utf8" | "ambiguous-read" | "unreadable"; alsoUntracked?: boolean }>;
     trimRecord: Array<{ section: string; droppedBytes: number }>;
     packageTruncated: boolean;
   };
@@ -1313,6 +1335,34 @@ export function buildTextReport(state: ReportState): string {
           ? `  corpus OMITTED ${c.name} (${c.totalBytes.toLocaleString()} B) — its share would be below the minimum useful slice; SPLIT this file`
           : `  corpus CUT ${c.name}: kept ${c.keptBytes.toLocaleString()} of ${c.totalBytes.toLocaleString()} B — the corpus as a whole exceeds the ceiling`,
       );
+    // Plugin-root references present in the mount but not packaged. A SEPARATE line from corpusExcluded:
+    // these files ARE tracked and WERE delivered, so the "git add them" remedy would be a lie. Rendering
+    // them at all is the point of the narrow selection rule — an author who expected a shared file to be
+    // graded is told it was not, and why, rather than the omission being silent.
+    if (eb.corpusOmitted?.length) {
+      const byReason = new Map<string, string[]>();
+      for (const o of eb.corpusOmitted) byReason.set(o.reason, [...(byReason.get(o.reason) ?? []), o.name]);
+      const explain: Record<string, string> = {
+        "not-linked": "this skill's SKILL.md, references/ and sub-agents never point at them",
+        "not-utf8": "not valid UTF-8 (a binary asset), so never shown to a text evaluator",
+        "ambiguous-read": "read during the run, but the access path cannot distinguish them from a same-named skill-local file",
+        unreadable: "resolved but could not be read, so the evaluator got a placeholder instead of the content",
+      };
+      for (const [reason, names] of [...byReason].sort())
+        out.push(`  plugin-root references NOT graded (${explain[reason] ?? reason}): ${names.join(", ")}`);
+      // Only files we actually EVALUATED for trackedness. `alsoUntracked` is absent when the tracked set
+      // could not be read at all, and printing "also untracked" — or silently not printing it — for an
+      // unevaluated file would state a fact nothing established.
+      // ONLY the not-linked rows. "git add them as well as linking them" is wrong advice for a `not-utf8`
+      // binary (no amount of linking packages it) and for an `ambiguous-read` file (the agent already
+      // reached it) — the flag is computed on every reason for the JSON consumer, but this sentence is not
+      // true of every reason.
+      const alsoUntracked = eb.corpusOmitted.filter((o) => o.reason === "not-linked" && o.alsoUntracked === true).map((o) => o.name);
+      if (alsoUntracked.length)
+        out.push(
+          `  ...and staging would not deliver these anyway (untracked): ${alsoUntracked.join(", ")} — 'git add' them as well as linking them`,
+        );
+    }
     if (eb.corpusExcluded.length)
       out.push(
         `  NOT graded (staging would not deliver them — untracked): ${eb.corpusExcluded.join(", ")} — 'git add' them to grade as-published`,
@@ -1437,7 +1487,7 @@ export function buildTextReport(state: ReportState): string {
   if (scriptish.length) {
     out.push(
       `  note: ${scriptish.length} of these reference \`scripts/\` — those files are OUTSIDE the evaluator's corpus by design ` +
-        `(it grades authored guidance: SKILL.md, references/**, agents/<name>.md). "not adjudicable" there means the evaluator ` +
+        `(it grades authored guidance: SKILL.md, references/**, every agents/**.md the skill dispatches, and the plugin-root references/ files it points at). "not adjudicable" there means the evaluator ` +
         `could not SEE the code, NOT that the claim is false — settle it by reading the script. If a script's contract matters ` +
         `to how the skill is USED, state it in SKILL.md or a references/ file, where the evaluator can grade it.`,
       "",
@@ -1916,19 +1966,29 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         corpusCeiling: cc,
         corpusCuts: ccuts,
         corpusExcluded: cex,
+        corpusPackaged: cpk,
+        corpusOmitted: com,
         trimRecord: tr,
         packageTruncated: pt,
         noSkillFilesRead: nofr,
         referenceAccessUnobservable: rau,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
-        agentsMdPath: resolvedSkill.agentsMdPath,
-        agentsMdRoot: resolvedSkill.agentsMdRoot,
-        agentsMdRel: resolvedSkill.agentsMdRel,
+        agents: resolvedSkill.agents,
+        pluginRoot: resolvedSkill.pluginRoot,
       });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
-      evidenceBudget = { corpusBytes: cb, corpusCeiling: cc, corpusCuts: ccuts, corpusExcluded: cex, trimRecord: tr, packageTruncated: pt };
+      evidenceBudget = {
+        corpusBytes: cb,
+        corpusCeiling: cc,
+        corpusCuts: ccuts,
+        corpusExcluded: cex,
+        corpusPackaged: cpk,
+        corpusOmitted: com,
+        trimRecord: tr,
+        packageTruncated: pt,
+      };
       noSkillFilesRead = nofr;
       referenceAccessUnobservable = rau;
       // The agent was never given these, so the evaluator must not be either — but silence would let an

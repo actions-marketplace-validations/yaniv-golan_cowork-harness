@@ -821,7 +821,7 @@ function isPluginManifestDir(dir: string): boolean {
  *  prior TS implementation. Semantic reference: `scenario.py:_find_enclosing_plugin_dir` (accepts either
  *  manifest location, walks `[start, *start.parents]`). Returns `null` once the filesystem root is
  *  reached with no manifest found (`dirname(dir) === dir`). */
-function findEnclosingPluginDir(startDir: string): string | null {
+export function findEnclosingPluginDir(startDir: string): string | null {
   let dir = resolve(startDir);
   for (;;) {
     if (isPluginManifestDir(dir)) return dir;

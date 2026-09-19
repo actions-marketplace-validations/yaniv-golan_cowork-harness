@@ -201,7 +201,9 @@ describe("resolveCritiquedSkillDir pre-flight (fail fast, before any session/spa
 
   it("a PRESENT dir with no SKILL.md still resolves to { skillDir } — the deferred degraded flow is preserved", () => {
     const dir = mkdtempSync(join(tmpdir(), "crit-empty-"));
-    expect(resolveCritiquedSkillDir(dir, undefined)).toEqual({ skillDir: dir });
+    const r = resolveCritiquedSkillDir(dir, undefined);
+    expect(r.skillDir).toBe(dir);
+    expect(r.agents).toEqual([]);
   });
 });
 

@@ -6,6 +6,167 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **A `critique` on a multi-skill plugin now packages more than before**: the sub-agents the skill can
+  dispatch, and the plugin-root `references/` files it points at. Verdicts may shift — that is the point,
+  the evaluator was previously blind to that guidance — and a plugin already near the 512 KiB corpus
+  ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists every file whose content actually shipped into the
+  corpus (a file the ceiling zeroed is not listed; a partially cut one is, with its loss in `corpusCuts`).
+- **If your plugin's `agents/` folder contains only subdirectories, `lint-skill --strict` may newly fail**
+  with `subagent-type-not-found-in-plugin`. The typo it names is real and was previously suppressed: the
+  linter could not enumerate nested agents, so it had nothing to check the pinned `subagent_type` against
+  and downgraded the finding to INFO. Nothing about your skill changed. A plugin with any top-level
+  `agents/*.md` is unaffected.
+
+### Fixed
+
+- **`critique` packaged exactly ONE sub-agent file, so a second agent's guidance was invisible to the
+  evaluator.** The graded turn mounts the whole plugin root, so any agent the skill dispatches really runs
+  — but the evidence corpus only ever carried `agents/<skill>.md`, resolved by FILENAME. A plugin with a
+  second, skill-scoped agent (`agents/<skill>-redteam.md`) had that agent's authored body structurally
+  absent, letting a critique report a guidance gap in an agent it never received. The corpus is now the
+  union of: `agents/<skill>.md`; every in-plugin agent a pinned `subagent_type` literal in the skill's
+  `SKILL.md` or `references/**` resolves to (by DECLARED frontmatter `name:`, not filename); and every
+  agent whose declared name equals the skill name — then a transitive closure, because an agent that
+  dispatches another agent had the same gap one level down. The union is deliberate: a skill that
+  dispatches dynamically keeps exactly the evidence it had before, so no plugin's corpus shrinks.
+  Reported by a `founder-skills` consumer.
+  - A blanket `agents/**` glob was measured and rejected: on that plugin's largest skill it produces a
+    534,867 B corpus against the 524,288 B ceiling — a real cut — while diluting the graded skill with
+    five other skills' agents.
+  - **Also fixed at N=1:** an agent whose frontmatter `name:` differed from its filename resolved to
+    nothing and was silently never packaged, however few agents the plugin had.
+- **A multi-skill plugin's SHARED plugin-root `references/` was outside the evaluator corpus.** The whole
+  plugin is mounted for the graded turn, so the agent could read those files while the evaluator could
+  not — on the plugin that reported this, `skills/cap-table/SKILL.md` links a 37,793 B shared
+  execution-model doc by name and the grader never saw it. The corpus now includes a plugin-root reference
+  when the graded skill points at it: from its own `SKILL.md` or `references/**`, from a sub-agent body
+  already in the corpus, or by the graded agent having read it during the run. Recognized link forms are
+  `${CLAUDE_PLUGIN_ROOT}/references/x.md`, `<plugin>/references/x.md`, and any relative path resolving
+  into that directory — a bare `references/x.md` still means the skill's OWN file.
+  - **Packaging the whole shared tree was measured and rejected.** It pushes that plugin's largest skill
+    to 107% of the ceiling and makes the allocator cut **the graded skill's own SKILL.md** by 37,295 B;
+    and because `already-covered` judges by presence with no notion of which skill authored a file,
+    another skill's shared docs would silently excuse a real gap — a true finding marked false.
+  - **What is left out is reported, not silent** — `evidenceBudget.corpusOmitted` names every unpackaged
+    plugin-root reference with a reason (`not-linked`, `not-utf8`, `ambiguous-read`), and the text report
+    renders it. That is what makes a narrow selection rule safe.
+  - Plugin-root references must be valid UTF-8; a binary asset (a font) is excluded as `not-utf8`. The
+    skill's own `references/**` keeps its deliberate no-filter rule — the asymmetry is documented.
+  - `lint-skill`'s ceiling sizing counts the same set (static clauses only; the read-during-the-run clause
+    cannot be mirrored statically). Verified byte-for-byte against the packager on a real 6-skill plugin.
+- **`evidenceBudget.corpusPackaged` listed files whose content never shipped.** Measured: a 300-file
+  corpus over the ceiling zeroed 45 of them and reported all 45 as packaged. Placeholders for unreadable
+  files were counted too — and consumed real ceiling allowance, against the ceiling's own "budgets file
+  content" contract — while the reference path had always skipped them. All three classes are consistent
+  now, and the field means what its name says.
+- **`evidenceBudget.corpusOmitted[].alsoUntracked`** distinguishes a plugin-root reference that is merely
+  unlinked from one staging would not deliver either — the two remedies `corpusOmitted` exists to keep
+  apart. THREE-state: absent means trackedness was not evaluated (git mode off, not a work tree, or an
+  unreadable index), never "tracked". Defaulting to `false` would have asserted a fact nothing established.
+- The corpus allocator and its cut ledger key on an internal tag, so a plugin named (or a plugin
+  DIRECTORY named) `agents` can no longer put a root reference and an agent file in one allowance slot,
+  nor let one file's zeroed row delete a different file's `corpusPackaged` listing. Displayed, cited and
+  reported strings are byte-identical. **The allocator half has no demonstrable output difference** — an
+  earlier review attributed a measured 11,388 B ceiling overshoot to this collision; re-measuring shows
+  the identical overshoot with a NON-colliding plugin name, so that was per-file header overhead, and I
+  could not construct an input distinguishing the two. It ships labelled as a correctness tidy. A first
+  cut of it also sorted the allocator's size tiebreak by the tag, which measurably reordered which
+  equal-sized files get zeroed — toward zeroing the skill's OWN references before the shared ones. The
+  tiebreak sorts by display key again: the tag decides identity, never priority.
+- **A resolved sub-agent whose file cannot be read is reported** (`corpusOmitted`, reason `unreadable`)
+  instead of appearing in no `evidenceBudget` field at all. It reaches the evaluator as a placeholder and
+  is not a corpus entry, so excluding it from `corpusPackaged` — correct on its own — had made it
+  invisible; trading a wrong label for silence breaks the rule that what is left out is reported.
+- **Section TITLES carried unsanitized third-party bytes.** `armor.ts` documented titles as trusted
+  ("never attacker bytes") — true until titles began interpolating an agent's frontmatter `name:`, a
+  filename, and the `via` provenance string. A block-scalar `name:` with newlines could forge a
+  `### [E-…] SKILL.md` heading that lands OUTSIDE any `⟦EVIDENCE-nonce⟧` fence, fabricating "SKILL.md
+  says …" claims that flip a real gap to `already-covered`; a filename could ship a verbatim truncation
+  marker, whose forgery routes claims to `not-adjudicable`. Titles are now sanitized at every
+  interpolation site AND flattened in `armorEvidence`, so the next interpolated title is safe by
+  construction rather than by remembering.
+- **The transitive agent closure did not run for the most likely dispatcher.** An agent reached by
+  clause 1 or 3 (the skill's own primary agent) was recorded but never scanned, so `agents/<skill>.md`
+  dispatching a second agent left that agent's body out of the corpus — the defect the closure exists to
+  close, one level down. Both the TypeScript resolver and the `scenario.py` mirror had it identically,
+  which is why the cross-language fixture agreed while both were wrong; the fixture now carries the case.
+- **A sibling skill's read could pull a plugin-root reference into this skill's corpus.** Read paths
+  collapse at the leftmost `/references/`, so `skills/other/references/shared.md` arrives indistinguishable
+  from the root file of that name. The ambiguity guard compared only against the graded skill's own
+  references; it now considers every skill's.
+- **`lint-skill` and the packager derived the plugin root differently outside `<root>/skills/<name>`.**
+  The linter used a layout rule and sized ZERO for a skill that is not under `skills/` but has a manifest
+  above it; it now walks up for the manifest first, falling back to the layout — neither rule alone
+  matches the packager.
+- **Link evidence now obeys corpus==mount.** A root reference linked only from an untracked agent body
+  was packaged on the strength of content staging never delivered.
+- A resolved link is matched by realpath identity rather than by reconstructing the walk's spelling, so a
+  case-only difference or a symlinked alias no longer resolves and then reports `not-linked` — an actively
+  wrong reason in the field the narrow selection rule depends on being truthful.
+- **`critique <plugin>/skills/<name>` packaged ZERO sub-agents** while `lint-skill` sized them for the
+  same tree — so the packager and the linter described different corpora for one plugin. Pointing
+  `critique` straight at a skill dir is an invocation `docs/critique.md` recommends alongside `--skill`,
+  but the plugin root was taken from the positional argument, and a skill dir has no `agents/` of its own.
+  It now walks UP for the enclosing plugin manifest, reusing `analyze-skill`'s `findEnclosingPluginDir`
+  rather than adding a third derivation of that rule. Pre-existing — the old code packaged no agents on
+  that branch either — and found while reviewing the change above.
+- **`lint-skill`'s corpus-ceiling sizing counted one agent while the packager shipped N.** It now sizes
+  the same resolved set (shared behavioural fixture, `test/fixtures/dispatchable-agents.json`, executed by
+  both the TypeScript and Python implementations). Without this, `skill-corpus-over-evidence-ceiling`
+  passed `--strict` on a corpus a critique would cut — for exactly the multi-agent plugins the warning
+  exists to protect.
+- **`analyze-skill --help` described its own directory scan wrongly.** It advertised a non-recursive
+  `agents/*.md`, and claimed a skill-dir target adds only the enclosing plugin's `agents/`; the code walks
+  `agents/**`, `references/**` and `commands/**` recursively. Stale independently of the change above.
+
+### Changed
+
+- **`lint-skill` now enumerates nested agents (`agents/sub/x.md`), not just `agents/*.md`.** Claude Code
+  discovers them and `skill-hash` already attributes them, so they were dispatchable but invisible to the
+  linter's `subagent_type` resolution. This moves severities in **both** directions:
+  - a literal naming a nested agent stops being a `subagent-type-not-found-in-plugin` **WARN** — that WARN
+    was a false positive, since the agent really is dispatchable; and
+  - **if your plugin's `agents/` directory contains only subdirectories, expect a new `--strict`
+    failure.** That set was previously empty, so every same-plugin literal fell through to
+    `subagent-type-unknown` (INFO, "can't confirm"). The plugin is now enumerable, so a genuinely typo'd
+    `<plugin>:<agent>` is reported as the WARN it always was. The finding is a true positive that was
+    being suppressed — but it is new output on an unchanged tree, and it gates `--strict`.
+
+### Added
+
+- **`evidenceBudget.corpusPackaged`** in the critique report and JSON schema — every corpus file whose
+  CONTENT shipped into the corpus sections, by the same key `corpusCuts` uses (a file the ceiling zeroed
+  is not listed; a partially cut one is, with its loss in `corpusCuts`). `corpusCuts`/`corpusExcluded` name files only when
+  something goes wrong with them, so nothing previously showed which sub-agent bodies a grade rested on.
+  Optional, and deliberately absent from the schema's `required`: stored reports predating it stay valid.
+- **`evidenceBudget.corpusOmitted`** in the critique report and JSON schema — every corpus file present
+  but NOT packaged, with the reason: `not-linked` (nothing in the skill's authored text, a packaged agent
+  body, or the graded agent's own read points at it), `not-utf8` (a plugin-root reference that is not
+  valid UTF-8, e.g. a font asset — the skill's **own** `references/**` has no such filter), `unreadable`
+  (a resolved sub-agent whose file could not be read, so the evaluator got a placeholder), or
+  `ambiguous-read` (the agent read a path that exists under both the skill's own `references/` and the
+  plugin root's, so which tree it read cannot be attributed). Each row may carry `alsoUntracked` —
+  THREE-state: `true`/`false` when trackedness was evaluated, and **absent**, never `false`, when it could
+  not be (git mode off, an unreadable index, a non-work-tree, or a work tree with nothing tracked).
+  Optional and absent from the schema's `required`, like `corpusPackaged`. The text report renders these
+  grouped by reason, with the untracked ones called out on their own line and their own remedy.
+- Each packaged agent section names **why** it is in the corpus (`skill-named`, or the `file:line` of the
+  `subagent_type` literal that pulled it in). The extraction has no context awareness, so a literal a
+  reference doc merely mentions — a template placeholder, a "never dispatch this" example — pulls its
+  agent in; the provenance lets the evaluator weigh that instead of reading it as operative guidance.
+
+### Internal
+
+- **`npm run gen:surface` emits prettier-formatted output.** `JSON.stringify(x, null, 2)` puts every array
+  element on its own line while the committed baseline keeps short arrays inline at the repo's 140-column
+  width, so a regen reflowed ~460 untouched lines around whatever actually changed. Nothing was broken —
+  `test/surface-contract.test.ts` compares parsed data, not text — but a 468-line diff is one nobody reads
+  closely, and that snapshot exists precisely so a surface change DOES get read closely. It resolves
+  `.prettierrc` explicitly: `format({ filepath })` infers only the parser from the extension, so without
+  that the output formats at prettier's default 80 columns and still reflows.
+
 ## [3.6.0] — 2026-09-18
 
 ### Upgrade notes
