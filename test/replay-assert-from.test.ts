@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { loadBaseline } from "../src/baseline.js";
@@ -14,7 +14,17 @@ const can = existsSync(CLI);
 const LIVE = loadBaseline("latest").appVersion;
 
 function tmp(): string {
-  return mkdtempSync(join(tmpdir(), "cc-reassert-"));
+  // NESTED one level inside the mkdtemp root on purpose. A cassette here can record a `../`-relative
+  // `session:` (see "a sessioned scenario does NOT spuriously hard-fail"), which production resolves with
+  // a single join against the cassette's own dir. Written straight into `<tmpdir>/cc-reassert-X/`, that
+  // lands on `$TMPDIR/sessions/…` — world-writable, outside this test's control, and in practice
+  // populated on developer machines. It does not change a verdict here today (session is excluded from
+  // the drift set), but the isolation should not depend on that staying true: the same shape one level
+  // up silently disarmed 17 cases in test/session-override.test.ts.
+  const root = mkdtempSync(join(tmpdir(), "cc-reassert-"));
+  const d = join(root, "nested");
+  mkdirSync(d);
+  return d;
 }
 function write(cwd: string, name: string, body: string): void {
   writeFileSync(join(cwd, name), body);

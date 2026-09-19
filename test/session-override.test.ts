@@ -57,7 +57,14 @@ function relocate(): string {
   // Assert the isolation rather than assume it: resolve the recorded path exactly as production does and
   // require it to be absent. Without this, a future relocation of the fixture (or a recorded session path
   // with a different number of `../`) reopens the hole silently — which is precisely how it hid before.
-  const resolved = resolveCassetteSessionPath(c.scenario?.session ?? "../sessions/default.yaml", d).path;
+  // No `?? "../sessions/default.yaml"` fallback: a fabricated path would check something production never
+  // resolves, so the guard would vouch for isolation it did not measure. If the fixture stops declaring a
+  // session, that is itself the thing to hear about.
+  const recorded = c.scenario?.session;
+  if (typeof recorded !== "string" || recorded.length === 0) {
+    throw new Error(`the fixture declares no scenario.session — these tests relocate a SESSIONED cassette`);
+  }
+  const resolved = resolveCassetteSessionPath(recorded, d).path;
   if (existsSync(resolved)) {
     throw new Error(
       `relocate() is not isolated: the relocated cassette's session resolves to ${resolved}, which exists. ` +
