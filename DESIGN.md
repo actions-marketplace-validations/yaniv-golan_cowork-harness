@@ -21,7 +21,7 @@ flowchart TB
     SYNC -.->|derives| BL
 
     CLI -->|"spawns + speaks stream-json"| AGENT
-    subgraph AGENT["Agent · claude -p · CLAUDE_CODE_IS_COWORK=1"]
+    subgraph AGENT["Agent · staged claude-code-vm/&lt;ver&gt;/claude · CLAUDE_CODE_IS_COWORK=1<br/>(not `claude -p` on PATH — that is L0 protocol only)"]
         direction TB
         IO["--input-format / --output-format stream-json"]
         FS["cwd = /sessions/&lt;id&gt;<br/>mnt/uploads · mnt/&lt;folder-name&gt; · plugins"]
@@ -52,6 +52,17 @@ in how a file reaches the user, which is what changes skill behaviour: see
 - Control plane: Electron renderer→main typed IPC on channels named `$eipc_message$_<per-build-UUID>_$_claude.web_$_<Class>_$_<method>`, every handler validating `event.senderFrame.url` against a trusted-origin allowlist. The session manager is `LocalAgentModeSessions` (80 methods: `start`, `sendMessage`, `setDraftSessionFolders`, `onToolPermissionRequest`, `respondToToolPermission`, `getTranscript`, `onEvent`, …), bridged to the renderer as `window.cowork`.
 
 **Why you can't script it:** the only in-context entry is the renderer, and remote debugging is closed on the shipping build — verified empirically (`--remote-debugging-port` opens no listener across clean trials) and structurally (Electron `EnableNodeCliInspectArguments` fuse OFF). Deep links don't create sessions; there's no host CLI entry (cowork mode is an in-guest env var, `CLAUDE_CODE_IS_COWORK=1` — not a `--cowork` flag; see §"Cowork mode is enabled by env" below). So we emulate the **contract**, not the app.
+
+> **This page vs. the other four.** Fidelity is documented in five places, on purpose — each answers a
+> different question:
+>
+> | Question | Page |
+> |---|---|
+> | *Which tier should I pick?* | [README → Fidelity tiers](./README.md#fidelity-tiers-pick-per-scenario--per-ci-job) — the decision table |
+> | *What does each tier enforce?* | [boundary.md](./docs/boundary.md) |
+> | *What does each tier NOT reproduce?* | [fidelity-gaps.md](./docs/fidelity-gaps.md) |
+> | *Why is it built this way?* | [DESIGN.md § 2 Parity matrix](./DESIGN.md#2-parity-matrix-per-tier) |
+> | *I only have the installed plugin* | [references/fidelity-and-answers.md](./.claude/skills/cowork-harness/references/fidelity-and-answers.md) — offline snapshot |
 
 ## 2. Parity matrix (per tier)
 
