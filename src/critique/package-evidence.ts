@@ -317,6 +317,14 @@ export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
  *  emit sections the prompt never mentions, and every test would still pass. */
 export const ROOT_REFERENCE_SECTION_PREFIX = "plugin-root references/ content";
 
+/** The section-title prefix for a packaged sub-agent body. Same contract as the constant above and for
+ *  the same reason: `trimPriority` matches it and `evaluator.ts` names it when telling the model which
+ *  sections are authored guidance. These bodies entered the corpus without the prompt ever being told,
+ *  so the evaluator graded them while still being instructed that guidance lives in "SKILL.md and
+ *  references" — a packaged section the rubric does not know about is evidence the model is told to
+ *  ignore. */
+export const AGENT_SECTION_PREFIX = "agents markdown";
+
 export const SKILL_CORPUS_CEILING = 512 * 1024;
 /** Minimum bytes any single corpus file keeps when the ceiling forces a cut. Below this a slice is not
  *  worth packaging (it would be a heading and an intro), so such a file is marked omitted instead — a
@@ -661,7 +669,7 @@ export function packageEvidence(
       // reading a mentioned agent as operative guidance.
       agentBodies.push({
         key: agent.rel,
-        title: `agents markdown (${basename(agent.absPath)} — sub-agent system prompt / dispatch guidance for \`${agent.name}\`; in corpus via ${agent.via})`,
+        title: `${AGENT_SECTION_PREFIX} (${basename(agent.absPath)} — sub-agent system prompt / dispatch guidance for \`${agent.name}\`; in corpus via ${agent.via})`,
         body,
       });
     }
@@ -962,7 +970,7 @@ export function trimToPackageCap(
  *  enough to cause a breach, and its per-file cut is already accounted for and reported. */
 function trimPriority(title: string): number {
   if (title.startsWith("references/ content") || title.startsWith(ROOT_REFERENCE_SECTION_PREFIX)) return 3;
-  if (title.startsWith("SKILL.md") || title.startsWith("agents markdown")) return 2;
+  if (title.startsWith("SKILL.md") || title.startsWith(AGENT_SECTION_PREFIX)) return 2;
   if (title.startsWith("Transcript")) return 0;
   return 1;
 }

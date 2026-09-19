@@ -59,7 +59,7 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
     });
     const r = resolveCritiquedSkillDir(root, "ms");
     expect(r.agents.map((a) => a.rel)).toEqual(["agents/ms-redteam.md", "agents/ms.md"]);
-    expect(r.agentsRoot).toBe(root);
+    expect(r.pluginRoot).toBe(root);
   });
 
   it("a plain skill folder that is ALSO a plugin root resolves agents (it returned none at all before)", () => {
@@ -75,7 +75,7 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
 
   it("a skill dir targeted DIRECTLY resolves the same agents as --skill (walks up for the plugin root)", () => {
     // `critique <plugin>/skills/<name>` is an invocation docs/critique.md:114 recommends, and it packaged
-    // ZERO agents while scenario.py sized them — `agentsRoot` was the positional folder, and a skill dir
+    // ZERO agents while scenario.py sized them — the root was the positional folder, and a skill dir
     // has no agents/ of its own. The two spellings must agree or the packager and the linter describe
     // different corpora for the same tree.
     const root = materialize({
@@ -88,7 +88,7 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
     const viaSkillDir = resolveCritiquedSkillDir(join(root, "skills", "ms"), undefined);
     expect(viaSkillDir.agents.map((a) => a.rel)).toEqual(["agents/ms-redteam.md", "agents/ms.md"]);
     expect(viaSkillDir.agents.map((a) => a.rel)).toEqual(viaSelector.agents.map((a) => a.rel));
-    expect(viaSkillDir.agentsRoot).toBe(root);
+    expect(viaSkillDir.pluginRoot).toBe(root);
   });
 
   it("a dir with no SKILL.md anywhere resolves no agents", () => {
@@ -101,7 +101,7 @@ describe("packageEvidence — one section and one corpus key per agent", () => {
   function pkg(root: string, skill: string) {
     const r = resolveCritiquedSkillDir(root, skill);
     const outDir = mkdtempSync(join(tmpdir(), "cwh-out-"));
-    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.agentsRoot });
+    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
   }
 
   it("packages BOTH agent bodies, each keyed by its own path, with provenance in the title", () => {

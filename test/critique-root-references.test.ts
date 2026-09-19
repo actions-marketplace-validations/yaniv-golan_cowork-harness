@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { resolveRootReferences } from "../src/critique/resolve-references.js";
 import { resolveCritiquedSkillDir } from "../src/critique/command.js";
 import { packageEvidence, ROOT_REFERENCE_SECTION_PREFIX } from "../src/critique/package-evidence.js";
@@ -181,10 +181,18 @@ describe("resolveRootReferences — filters and skips", () => {
 });
 
 describe("packageEvidence — rendering, keys and the tracked-set filter", () => {
-  function pkg(root: string, skill: string) {
+  function pkg(root: string, skill: string, observable = false) {
     const r = resolveCritiquedSkillDir(root, skill);
     const outDir = mkdtempSync(join(tmpdir(), "cwh-out-"));
-    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.agentsRoot });
+    if (observable) {
+      // `noSkillFilesRead` is `undefined` whenever the run recorded no observable tool stream, which is
+      // the state of a bare stub dir — so asserting the signal REQUIRES staging a turn-1 result, or the
+      // assertion passes for a reason unrelated to what it claims to test.
+      const turnDir = join(outDir, "turns", "1");
+      mkdirSync(turnDir, { recursive: true });
+      writeFileSync(join(turnDir, "result.json"), JSON.stringify({ finalMessage: "ok", referencesRead: [], referencesAccessed: [] }));
+    }
+    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
   }
 
   it("renders the body in a section and keys it by the DISPLAY key", () => {
@@ -241,9 +249,29 @@ describe("packageEvidence — rendering, keys and the tracked-set filter", () =>
       "skills/ms/SKILL.md": "# ms\nSee `plug/references/shared.md`.\n",
       "references/shared.md": "S\n",
     });
-    // No local references/ and no scripts/: before, this branch forced `undefined` ("nothing to read")
-    // even though six shared files could now be packaged.
-    expect(pkg(root, "ms").corpusPackaged).toContain("plug/references/shared.md");
+    // No local references/ and no scripts/, so the suppression branch used to force `undefined`
+    // ("nothing to read") over a corpus that now has a shared file in it. ASSERT THE SIGNAL, not just
+    // that the file was packaged — a test named for `noSkillFilesRead` that only checks `corpusPackaged`
+    // passes with the fix reverted.
+    const res = pkg(root, "ms", true);
+    expect(res.corpusPackaged).toContain("plug/references/shared.md");
+    // The run observed the tool stream and saw no reference access, and there WAS material to read —
+    // so the signal must fire rather than being suppressed as "nothing to read".
+    expect(res.noSkillFilesRead).toBe(true);
+  });
+
+  it("populates corpusOmitted through the packager, not only the resolver", () => {
+    const root = tree({
+      "plugin.json": '{"name": "plug"}',
+      "skills/ms/SKILL.md": "# ms\nSee `plug/references/linked.md`.\n",
+      "references/linked.md": "L\n",
+      "references/orphan.md": "O\n",
+    });
+    const res = pkg(root, "ms");
+    expect(res.corpusPackaged).toContain("plug/references/linked.md");
+    // The threading resolver -> PackageEvidenceResult was only ever asserted EMPTY; a populated list is
+    // what a reader actually sees, and what the narrow selection rule depends on being truthful.
+    expect(res.corpusOmitted).toEqual([{ name: "plug/references/orphan.md", reason: "not-linked" }]);
   });
 });
 
@@ -279,5 +307,64 @@ describe("trimPriority ranks a plugin-root section with the corpus, not with the
     expect(trimRecord.length).toBeGreaterThan(0);
     expect(trimRecord[0]!.section).toContain(ROOT_REFERENCE_SECTION_PREFIX);
     expect(trimRecord[0]!.section).not.toContain("Transcript");
+  });
+});
+
+describe("the text report RENDERS the omissions — the 'loud remainder' the design rests on", () => {
+  it("prints a plugin-root line per reason, distinct from the untracked corpusExcluded line", async () => {
+    const { buildTextReport } = await import("../src/critique/command.js");
+    const text = buildTextReport({
+      skillFolder: "/p",
+      prompt: "p",
+      sessionId: "s",
+      outDir: "/o",
+      fidelity: "container",
+      items: [],
+      evidenceBudget: {
+        corpusBytes: 10,
+        corpusCeiling: 524_288,
+        corpusCuts: [],
+        corpusExcluded: ["plug/references/untracked.md"],
+        corpusPackaged: ["SKILL.md"],
+        corpusOmitted: [
+          { name: "plug/references/other.md", reason: "not-linked" },
+          { name: "plug/references/font.woff2", reason: "not-utf8" },
+        ],
+        trimRecord: [],
+        packageTruncated: false,
+      },
+    } as never);
+    expect(text).toContain("plug/references/other.md");
+    expect(text).toContain("plug/references/font.woff2");
+    expect(text).toContain("never point at them"); // the not-linked explanation
+    expect(text).toContain("not valid UTF-8"); // the not-utf8 explanation
+    // and the untracked file keeps its own, different remedy — the two must never be merged
+    expect(text).toContain("'git add' them");
+  });
+});
+
+describe("resolveRootReferences — shared cross-language fixture", () => {
+  // Executed by BOTH this file and python/test_scenario_lint.py against hand-written expectations. The
+  // packager and the linter agreeing on the real tree today is not a pin; this is. Clauses 1-2 only —
+  // clause 3 is run-dependent and a static linter has no run to mirror.
+  interface Case {
+    name: string;
+    skill: string;
+    tree: Record<string, string>;
+    expected: string[];
+  }
+  const fixture = JSON.parse(readFileSync(resolve("test/fixtures/root-references.json"), "utf8")) as { cases: Case[] };
+
+  for (const c of fixture.cases) {
+    it(c.name, () => {
+      const root = tree(c.tree);
+      const r = resolveCritiquedSkillDir(root, c.skill);
+      const got = resolveRootReferences({ pluginRoot: root, skillDir: r.skillDir, agents: r.agents }).packaged.map((p) => p.rel);
+      expect(got.sort()).toEqual([...c.expected].sort());
+    });
+  }
+
+  it("the fixture is non-trivial (a fixture that lost its cases must not read as a clean pass)", () => {
+    expect(fixture.cases.length).toBeGreaterThanOrEqual(10);
   });
 });

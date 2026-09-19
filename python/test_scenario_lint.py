@@ -1321,3 +1321,33 @@ def test_same_directory_skip(tmp_path):
     )
     resolved = scenario._resolve_root_references(root, root, [])
     assert resolved == []
+
+
+# ── Cross-language pin: _resolve_corpus_root_references ↔ resolveRootReferences (TS) ────────────
+#
+# The packager and this linter agreeing on one real tree today is not a pin. This executes the SAME
+# hand-written fixture both sides run, so a rule change that moves one and not the other fails on
+# behaviour rather than on text. Clauses 1-2 only: clause 3 (a reference the graded agent READ during
+# the turn) is run-dependent and a static lint has no run to mirror.
+#
+# CI-only, like the fixture above: `npm run ci` is typecheck+build+test and never runs pytest.
+
+ROOT_REFERENCES_FIXTURE = REPO / "test/fixtures/root-references.json"
+
+
+def _root_reference_cases():
+    return json.loads(ROOT_REFERENCES_FIXTURE.read_text(encoding="utf-8"))["cases"]
+
+
+def test_root_reference_fixture_is_non_trivial():
+    assert len(_root_reference_cases()) >= 10
+
+
+@pytest.mark.parametrize("case", _root_reference_cases(), ids=lambda c: c["name"])
+def test_resolve_corpus_root_references_matches_shared_fixture(case, tmp_path):
+    root = _materialize(case["tree"], tmp_path / "plugin")
+    skill_dir = root / "skills" / case["skill"]
+    agents = scenario._resolve_corpus_agents(skill_dir)
+    resolved = scenario._resolve_corpus_root_references(skill_dir, agents)
+    got = sorted(p.relative_to(root).as_posix() for p in resolved)
+    assert got == sorted(case["expected"])

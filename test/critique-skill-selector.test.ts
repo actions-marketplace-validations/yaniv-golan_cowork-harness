@@ -40,7 +40,7 @@ describe("resolveCritiquedSkillDir", () => {
     const r = resolveCritiquedSkillDir(root, "market-sizing");
     expect(r.skillDir).toBe(join(root, "skills", "market-sizing"));
     expect(r.agents.map((a) => a.absPath)).toEqual([join(root, "agents", "market-sizing.md")]);
-    expect(r.agentsRoot).toBe(root);
+    expect(r.pluginRoot).toBe(root);
   });
 
   it("--skill with a wrong name fails loud NAMING the available skills", () => {

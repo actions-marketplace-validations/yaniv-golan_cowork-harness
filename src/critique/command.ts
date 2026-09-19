@@ -472,7 +472,7 @@ function parseArgs(
 export function resolveCritiquedSkillDir(
   skillFolder: string,
   skillSelector: string | undefined,
-): { skillDir: string; agents: ResolvedAgent[]; agentsRoot?: string; autoSelectedSkill?: string } {
+): { skillDir: string; agents: ResolvedAgent[]; pluginRoot?: string; autoSelectedSkill?: string } {
   // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
   // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
   // This lives here (not in parseArgs) on purpose: parseArgs is unit-tested with fictitious paths, whereas
@@ -491,7 +491,7 @@ export function resolveCritiquedSkillDir(
   // each one against the same tracked set staging used.
   const agentsFor = (pluginRoot: string, skillDir: string, name: string | undefined) => ({
     agents: resolveDispatchableAgents(pluginRoot, skillDir, name),
-    agentsRoot: pluginRoot,
+    pluginRoot,
   });
   const listPluginSkills = (): string[] => {
     try {
@@ -516,7 +516,7 @@ export function resolveCritiquedSkillDir(
   }
   // A plain skill folder. TWO distinct shapes hide here, and conflating them is what made
   // `critique <plugin>/skills/<name>` — an invocation both docs/critique.md and the multi-skill hint below
-  // recommend — package ZERO agents while `scenario.py` sized them: `agentsRoot` was always the positional
+  // recommend — package ZERO agents while `scenario.py` sized them: the root was always the positional
   // folder, and a skill dir has no `agents/` of its own.
   //   1. the dir IS the plugin root (manifest + top-level SKILL.md; this repo's own
   //      .claude/skills/cowork-harness/ is one) — the skill's name is the manifest name; or
@@ -1961,7 +1961,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         referenceAccessUnobservable: rau,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agents: resolvedSkill.agents,
-        pluginRoot: resolvedSkill.agentsRoot,
+        pluginRoot: resolvedSkill.pluginRoot,
       });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
