@@ -123,6 +123,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`CODE_OF_CONDUCT.md` now ships in the npm tarball** (`package.json` `files[]`). It was absent, and
+  `README.md`/`CONTRIBUTING.md` now link it, so an install would have carried two dead links.
 - **`lint-skill` now enumerates nested agents (`agents/sub/x.md`), not just `agents/*.md`.** Claude Code
   discovers them and `skill-hash` already attributes them, so they were dispatchable but invisible to the
   linter's `subagent_type` resolution. This moves severities in **both** directions:
@@ -156,6 +158,49 @@ All notable changes to this project are documented here. The format is based on
   `subagent_type` literal that pulled it in). The extraction has no context awareness, so a literal a
   reference doc merely mentions — a template placeholder, a "never dispatch this" example — pulls its
   agent in; the provenance lets the evaluator weigh that instead of reading it as operative guidance.
+
+### Documentation
+
+A documentation audit of the public surface. No behaviour changed; two entries below correct statements
+that were **wrong**, not merely terse.
+
+- **`--on-unanswered`'s documented default was wrong for a piped run.** `docs/cli.md` said the adaptive
+  default is "`prompt` on a TTY, `fail` in CI". The predicate is `isTTY && !CI`, so a **non-TTY, non-CI**
+  invocation — a driving agent shelling out with stdin piped, which is this project's core usage — gets
+  `fail`, not `prompt`. Corrected.
+- **The architecture diagrams drew the agent as `claude -p`.** `README.md` and `DESIGN.md` both labelled
+  the agent box `claude -p`, two sections below the argument for why Cowork is *not* `claude -p`. Only the
+  L0 `protocol` tier spawns `claude` from your `PATH`; `container`/`microvm` bind-mount the staged Linux
+  ELF (`claude-code-vm/<ver>/claude`) and `hostloop` spawns the staged **native macOS** binary directly on
+  the host. Both diagrams now say so.
+- **`docs/cli.md` carries the canonical "What ships" table.** Two pages pointed at a table that lived only
+  on the companion-skill install page — one of them said "the table above" with no table above it.
+- **"Commands at a glance" is readable.** Description cells ran to 1.7k characters (worst row: 1936
+  characters), which GitHub renders as an unscrollably wide table. Every description is now short; the flag
+  detail moved verbatim into **Flags worth knowing**, which is now a real heading you can link to.
+- **Contents lists** on `docs/scenario.md`, `docs/cassette.md`, `docs/subagents.md` and
+  `docs/fidelity-gaps.md` (1259–1389 lines each, none previously navigable without the right-rail outline).
+- **Each of the five fidelity pages now says what it is for** versus the other four (decide / enforce /
+  gaps / why / offline snapshot), so a reader landing mid-catalog can find the decision table.
+- **`CODE_OF_CONDUCT.md` is the full Contributor Covenant v2.1** with a named reporting address, replacing
+  a 7-line stub that adopted it by URL and pointed reports at a possibly-private profile email. It also
+  states where to report conduct concerning the sole maintainer, which neither channel can handle.
+- **`README.md` links Contributing / Conduct / Security.** None were reachable from the file npm and the
+  Action Marketplace render.
+- **Bug reports ask for `cowork-harness --version`**, and the baseline placeholder is current
+  (`desktop-2.2553.1` / agent `2.1.275`, was `desktop-1.12603.1` / `2.1.170`). Feature-request areas gained
+  the tiers and surfaces that shipped since they were written.
+- **`docs/protocol.md`'s v1 changelog warns that it is not in date order** and that its entries
+  cross-reference each other positionally, so a range edit anchored on two dates can swallow the entry
+  between them. It also points current live scope at `DESIGN.md`: the dated entries here pin the live pass
+  **as of their own date** and are never restamped.
+- Stale "README →" link text now says "CLI page →" where the target moved to `docs/cli.md`; the
+  `cli-help` guard's own names no longer claim to read the README.
+- Smaller corrections: `lint-skill`'s `python3` prerequisite, `lint`'s `*.yml` argument, `status`'s
+  `ps aux` rationale, `stats`' p50/p95 and `total=`, `critique`'s "not an independent attestation", and
+  `trace`'s per-failed-call stderr had all gone missing and are restored; a bash-block note claiming
+  `examples/scenarios/` ships only in a source checkout contradicted `package.json` `files[]`;
+  `docs/decisions/` now states that a record's context is frozen at its date.
 
 ### Internal
 
