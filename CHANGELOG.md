@@ -13,6 +13,19 @@ All notable changes to this project are documented here. The format is based on
   the evaluator was previously blind to that guidance — and a plugin already near the 512 KiB corpus
   ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists every file whose content actually shipped into the
   corpus (a file the ceiling zeroed is not listed; a partially cut one is, with its loss in `corpusCuts`).
+- **If you wrote your own corpus/ceiling pre-check, it now UNDER-reports — silently.** The corpus was
+  documented as `SKILL.md` + the skill's `references/**` + `agents/<skill>.md`, and that formula was
+  correct until this release. It is now three classes short: every agent a pinned `subagent_type` literal
+  resolves to, every agent whose declared `name:` equals the skill name, and every plugin-root
+  `references/` file the skill points at. A guard written against the old formula does not error — it
+  returns a plausible number that is too small, which is the dangerous direction: over the ceiling the
+  failure mode is silent until someone reads `corpusCuts`, so a thin-margin skill is exactly where the
+  wrong number does the most damage. **This bit the harness's own bundled `scenario.py`**, whose
+  `_corpus_bytes` counted one agent file while the packager shipped N; it is fixed here, and a consumer
+  copy of that logic needs the same fix. Mirror `resolveDispatchableAgents` rather than reaching for
+  `agents/**` — a blanket glob counts agents the skill cannot dispatch and over-reports, which is a
+  different wrong number, not a safe one. Cheapest correct options: run `lint-skill --strict`, which now
+  counts the same four classes, or read `evidenceBudget.corpusBytes` off a real report.
 - **Verdicts can shift on a SINGLE-agent plugin too, if its agent's filename and declared `name:`
   disagree.** The bullet above is about plugins with more than one agent, but the same filename-keyed
   resolution had a worse failure at N=1: an `agents/redteam.md` declaring `name: market-sizing` matched
