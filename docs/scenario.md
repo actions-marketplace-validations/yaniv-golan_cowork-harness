@@ -12,6 +12,17 @@ assert:
 
 The full schema below documents every optional field.
 
+## On this page
+
+- [Full schema](#full-schema)
+- [Lanes (`lane:`)](#lanes-lane--which-delivery-contract-the-run-is-held-to)
+- [Fidelity tiers (`fidelity:`)](#fidelity-tiers-fidelity)
+- [Scripted answers](#scripted-answers)
+- [Assertions](#assertions)
+- [Output](#output)
+- [Running](#running)
+- [The `microvm` tier](#the-microvm-tier--vm-init-prerequisites--troubleshooting)
+
 ## Full schema
 
 > **Machine-readable:** [`schema/scenario.schema.json`](../schema/scenario.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate scenarios against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/scenario.schema.json` hint.

@@ -36,6 +36,23 @@ before fingerprints existed has nothing to check and passes silently, and a `COW
 Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fidelity scenario records with
 **no Docker at all** (still needs a token; see [`examples/scenarios/protocol-smoke.yaml`](../examples/scenarios/protocol-smoke.yaml)). The walkthrough below assumes `container` fidelity, the common case.
 
+## On this page
+
+- [Mental model](#mental-model)
+- [File shape](#file-shape)
+- [Recording prerequisites](#recording-prerequisites)
+- [Answering gates during recording](#answering-gates-during-recording)
+- [Artifact scrubbing at record time](#artifact-scrubbing-at-record-time)
+- [Assertion table](#assertion-table)
+- [Full-fidelity replay](#full-fidelity-replay)
+- [Backward compatibility (old cassettes without controlOut)](#backward-compatibility-old-cassettes-without-controlout)
+- [When to re-record](#when-to-re-record)
+- [Batch recording](#batch-recording)
+- [Privacy: cassettes are committed fixtures](#privacy-cassettes-are-committed-fixtures)
+- [Committed fixture](#committed-fixture)
+- [Minimal CI snippet](#minimal-ci-snippet)
+- [Cross-references](#cross-references)
+
 ## Mental model
 
 ```
