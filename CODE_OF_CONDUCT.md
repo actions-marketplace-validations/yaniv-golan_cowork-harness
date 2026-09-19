@@ -59,17 +59,25 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement by opening a
-private report through GitHub's security advisory channel:
+reported to the maintainer at:
 
-**<https://github.com/yaniv-golan/cowork-harness/security/advisories/new>**
+**<yaniv+coworkharness@golan.name>**
 
-That channel is private, durable, and does not depend on a maintainer's profile
-email being public. All complaints will be reviewed and investigated promptly
-and fairly.
+If you would rather not send email, you can open a private report through
+GitHub instead:
+<https://github.com/yaniv-golan/cowork-harness/security/advisories/new>.
+That form is built for security vulnerabilities, so its fields will not all
+apply — fill in what makes sense and describe the incident in the body.
 
-All community leaders are obligated to respect the privacy and security of the
+All complaints will be reviewed and investigated promptly and fairly, and all
+community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
+
+**One limitation to know about:** this is a single-maintainer project, so both
+channels above reach the same person. If your report concerns that maintainer,
+neither is an independent channel — please report to
+[GitHub Support](https://support.github.com/) instead, which can act on conduct
+in a repository regardless of who owns it.
 
 ## Enforcement Guidelines
 
