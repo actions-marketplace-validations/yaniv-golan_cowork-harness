@@ -166,25 +166,43 @@ least one vector.
 
 ### v1 changelog
 
-- **2026-09-19** — **coverage-log gap, recorded not closed.** Thirteen baselines have shipped since the
-  2026-08-05 entry below with **no v1-changelog entry of their own**: `1.26832.0`, `1.28929.0`, `1.30096.1`,
-  `1.32352.0`, `1.32885.1`, `1.34493.1`, `1.37937.1`, `1.40609.0`, `1.40609.1`, `1.44121.1`, `1.46388.3`,
-  `1.46388.4`, `2.2553.1`. **This entry claims no verification of them.** It exists because the 2026-08-01
-  entry below established the rule that silence here must never be ambiguous between "nothing additive was
-  observed" and "nobody updated this file" — and for these thirteen the honest answer is the second. What
-  *is* known: each shipped with a committed baseline and a green suite, and `sync` is the gate that would
-  have reported an unknown delta; what was **not** done is the per-release protocol pass (asar subtype-set
-  comparison, or a live tier re-run) that every entry below rests on. Treat the control-protocol facts in
-  this file as verified through `desktop-1.25927.0` and *inherited, unverified*, past it. The last **live**
-  end-to-end pass remains `2026-07-11 / desktop-1.20186.0`, unchanged.
-- **2026-08-23** — **coverage correction, additive.** Three request subtypes the harness has always
-  answered were undescribed — `request_user_dialog`, `elicitation`, `side_question` — as was the
-  fail-closed `subtype:"error"` response envelope. Measured before the fix: all five representative frames
-  were **rejected** by the published schema; a consumer validating real traffic against it saw failures on
-  frames the harness handles correctly. Added as new `oneOf`/`anyOf` branches and one new top-level
-  response shape, per the additive rule above — nothing existing was narrowed, and no frame the schema
-  already accepted is affected. `SPEC.md` §12's control-protocol bullet now states that additive latitude
-  explicitly, since its silence had read as a prohibition.
+- **2026-09-19** — **coverage catch-up: thirteen baselines, `desktop-1.26832.0` through
+  `desktop-2.2553.1`.** Each was analysed against its predecessor's `app.asar` at the time its baseline
+  was written; this entry consolidates those per-release results, which had never been folded into this
+  file. **Method: asar analysis + `sync` delta classification + a full local suite pass — the cheaper
+  way described under the 2026-08-01 entry. No live tier was re-run for any of them**, so the last
+  **live** end-to-end control-protocol pass remains `2026-07-11 / desktop-1.20186.0`, unchanged.
+
+  | Baseline | Agent ELF | Control-protocol result |
+  |---|---|---|
+  | `1.26832.0` | 2.1.222 | no change; every prompt sentinel and the egress allowlist matched |
+  | `1.28929.0` | 2.1.227 | no wire-shape change; **a new `Artifact` spawn tool** is `tools[]`-only and **absent from `allowedTools`**, so like `AskUserQuestion` it is not pre-approved and **must transit `can_use_tool`** |
+  | `1.30096.1` | 2.1.229 | no change; the `canUseTool` link chain re-verified term-for-term, spawn-env surface unmoved |
+  | `1.32352.0` | 2.1.229 | counts identical across the pair — `can_use_tool` 6/6, `control_request` 27/27, `control_response` 56/56, `AskUserQuestion` 47/47, `visualize` 9/9, and one occurrence each of the `mcp__cowork__*` tools. **One additive response shape**, below |
+  | `1.32885.1` | 2.1.234 | no change |
+  | `1.34493.1` | 2.1.237 | no change |
+  | `1.37937.0` / `.1` | 2.1.246 | no change (one analysis covers both) |
+  | `1.40609.0` | 2.1.247 | no change |
+  | `1.40609.1` | 2.1.255 | no change |
+  | `1.44121.1` | 2.1.258 | no change |
+  | `1.46388.3` | 2.1.260 | no change |
+  | `1.46388.4` | 2.1.260 | no change; `.3` and `.4` stage the identical ELF |
+  | `2.2553.1` | 2.1.275 | no contract change. The host-loop **path gate** was refactored (containment algorithm only — the allowlist composition is unchanged) and gained three `Glob` rejections; `coworkSyspromptMap`, the sub-agent manifest rendering and the spawn-env pins are intact |
+
+  **The one additive finding, at `1.32352.0`:** a PreToolUse hook on the permission path may now answer
+  with an **empty result** — telemetry calls it `deferred_to_classifier` — **instead of**
+  `permissionDecision:"ask"`. The rubric text behind it is byte-identical to `1.30096.1`; what moved is
+  a server-side gate, and it applies to **VM-loop, non-chat** sessions only (never chat, never
+  host-loop). Additive under the rule above: nothing existing was narrowed. **The harness does not model
+  it**, which means a tool the harness treats as always-gated may, in a real VM-loop agent session,
+  raise no prompt at all — tracked as a fidelity gap, not a schema change.
+
+  Two notes on how to read this entry. First, `1.32352.0` is also the release whose bundler change
+  invalidated raw occurrence-counting (see 2026-08-05); the counts quoted for it are from the
+  post-fix extractor, not the naive one. Second, "no change" here means *no additive or narrowing
+  change was observed by the method stated above* — it is not the same claim as a live pass, and
+  should not be read as one.
+
 - **2026-07-03** — initial publication. Verified against staged agent 2.1.197 / baselines through
   `desktop-1.18286.0.json`.
 - **2026-07-09** — baseline set extended through `desktop-1.19367.0` (staged agent 2.1.202). The `v1`
