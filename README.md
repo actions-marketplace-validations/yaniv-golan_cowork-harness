@@ -273,7 +273,10 @@ Set the tier with `fidelity:` in a scenario, or `--fidelity` on `skill` / `chat`
                       └───────────────────────┬────────────────────────┘
                                               │  spawns + speaks stream-json
                       ┌───────────────────────▼────────────────────────┐
-                      │  Agent:  claude -p   (CLAUDE_CODE_IS_COWORK=1) │
+                      │  Agent: the STAGED Cowork binary               │
+                      │    claude-code-vm/<ver>/claude                 │
+                      │    (NOT `claude -p` from your PATH)            │
+                      │    CLAUDE_CODE_IS_COWORK=1                     │
                       │    --input-format / --output-format stream-json│
                       │    cwd = /sessions/<id>                        │
                       │    mnt/uploads · mnt/<folder-name> · plugins   │
@@ -291,6 +294,9 @@ Set the tier with `fidelity:` in a scenario, or `--fidelity` on `skill` / `chat`
 > The diagram above shows the VM-loop path (`container`/`microvm`). At `hostloop` fidelity the agent loop
 > instead runs as a native host process with no container around it, routing shell/file access through a
 > workspace SDK-MCP server into a VM sidecar — see the Spawn contract section in DESIGN.md for detail.
+> **Only the L0 `protocol` tier spawns `claude` from your `PATH`**; every sandboxed tier bind-mounts and
+> runs the staged binary from your own Claude Desktop install, which is what makes the run Cowork-shaped
+> rather than CLI-shaped — see [Why not just `claude -p`](#why-not-just-claude--p-or-the-agent-sdk).
 
 - **AgentSession** speaks the Agent SDK control protocol over stream-json, emitting a typed event
   stream. When the agent emits a decision request (a tool permission, an `AskUserQuestion`, or a
@@ -355,7 +361,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/discovery.md](./docs/discovery.md) | Where plugins/skills/MCP are found + overrides. |
 | [docs/plugin-root.md](./docs/plugin-root.md) | How `${CLAUDE_PLUGIN_ROOT}` resolves per execution mode (host-loop vs VM-loop) — for when a skill's bundled-file path doesn't resolve. |
 | [docs/maintenance.md](./docs/maintenance.md) | Parity across Desktop releases via `sync`. |
-| [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) | The binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements — **frozen historical research**, verified on `desktop-1.12603.1` and re-verified unchanged through `desktop-1.20186.0`. Volatile fields (`agentVersion`, egress allowlist, gates) live in `baselines/`, not here. |
+| [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) | The binary-grounded spawn/control contract (cwd, env, mounts, control-protocol fields) the harness implements. **Frozen historical research — the live values are `baselines/desktop-*.json` (currently `desktop-2.2553.1`);** the version in the filename is when it was written, not an expiry. Verified on `desktop-1.12603.1`; control-protocol fields re-verified unchanged through `desktop-1.20186.0`. |
 | [docs/decisions/](./docs/decisions/) | Architecture decision records — the "why" behind a cross-cutting default. |
 | [DESIGN.md](./DESIGN.md) | Architecture deep-dive + full parity matrix. |
 | [SPEC.md](./SPEC.md) | The authoritative testable contract (scenario/session schema, `RunResult`, exit codes). |
@@ -363,10 +369,18 @@ a global install has them locally too, not just on GitHub.
 | [docs/protocol.md](./docs/protocol.md) | The `schema/protocol.v1.json` control-channel wire-protocol schema — versioning policy, golden vector pack, and its descriptive-not-normative scope. |
 | [CHANGELOG.md](./CHANGELOG.md) | Release history. |
 | [python/README.md](./python/README.md) | The `cowork` pytest lane for driving the harness from Python. |
-| [examples/README.md](./examples/README.md) | The worked examples to copy — sessions, scenarios, and skills you can run end-to-end. Published too, under `$(npm root -g)/cowork-harness/`; `matrices/`, `answer-policies/` and `probes/` need a source checkout (see the "What ships" table). |
+| [examples/README.md](./examples/README.md) | The worked examples to copy — sessions, scenarios, and skills you can run end-to-end. Published too, under `$(npm root -g)/cowork-harness/`; `matrices/`, `answer-policies/` and `probes/` need a source checkout (see [What ships](./docs/cli.md#what-ships)). |
 | [SECURITY.md](./SECURITY.md) | Threat model — the sandbox is a fidelity fixture, not a security boundary. |
 | [RELEASING.md](./RELEASING.md) | The release flow — branch → PR → tag → npm publish. |
 | [llms.txt](./llms.txt) | The AI-agent index — a machine-readable map of this repo's docs for an agent bootstrapping context. |
+
+### Contributing
+
+| | |
+|---|---|
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | local gates, which CI stages block a merge, and the rule that a consumer-visible change updates the companion skill |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Contributor Covenant v2.1, with a private reporting channel |
+| [SECURITY.md](./SECURITY.md) | threat model (the sandbox is a fidelity fixture, **not** a security boundary) + private advisory reporting |
 
 ## Versioning
 

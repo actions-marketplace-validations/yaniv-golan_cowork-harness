@@ -38,21 +38,11 @@ npx skills add yaniv-golan/cowork-harness --skill cowork-harness
 
 (Working *inside* this repo, the skill auto-loads as a project skill — no install needed.)
 
-| What ships | npm global (`npm install -g "cowork-harness@^3.6.0"`) | Source checkout (`git clone` + `npm ci`) |
-|---|---|---|
-| CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
-| `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
-| Committed replay fixtures (`examples/replays/`) | ✓ | ✓ |
-| `python/` (the `cowork` pytest lane helper package) | ✓ | ✓ |
-| Runnable worked examples on disk (`examples/scenarios/`, `examples/sessions/`, `examples/skills/`, `examples/data/`) | ✓ | ✓ |
-| `examples/matrices/`, `examples/answer-policies/`, `examples/probes/` | ✗ | ✓ |
+**What the marketplace install actually pulls:** only `.claude/skills/cowork-harness/` — SKILL.md +
+`references/` + `scenario.py`/assertion keys, per `.claude-plugin/marketplace.json`'s `source`. Everything
+else (the CLI, `docs/`, the worked examples, the pytest lane) arrives when the skill's first command
+self-bootstraps `npx "cowork-harness@^3.6.0"`, which pulls the same npm package as a global install.
 
-A global install is enough for CI `lint`, reading the teaching skill, replaying the committed cassettes, and
-`run`ning the worked scenarios — pass them as `$(npm root -g)/cowork-harness/examples/scenarios/…`, since a
-global install puts nothing in your working directory. The matrix, answer-policy and probe examples are the
-ones that still need a source checkout. (The marketplace
-skill install itself only pulls `.claude/skills/cowork-harness/` — SKILL.md + `references/` + `scenario.py`/
-assertion keys, per `.claude-plugin/marketplace.json`'s `source` — not the rest of this table; the full set
-above becomes available once the skill's first command self-bootstraps `npx "cowork-harness@^3.6.0"` — see
-[above](#install) — which pulls the same npm package as the global-install row.)
+For the full package-contents table — what a global install gives you versus a source checkout — see
+[docs/cli.md → What ships](./cli.md#what-ships). It is maintained there, once.
 
