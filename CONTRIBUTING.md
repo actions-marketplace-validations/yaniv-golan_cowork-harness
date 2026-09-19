@@ -150,7 +150,7 @@ npm test              # vitest: decider, egress allowlist, launch plan, example 
 cowork-harness boundary-check   # self-verify the sandbox (needs Docker; not part of `npm run ci`)
 ```
 
-Unit tests cover the scripted-answer logic, the egress allowlist matcher, the session→launch-plan materialization (mounts + discovery settings + env-strip), and a **schema guard** that fails if any shipped baseline/session/scenario stops validating. Add a test alongside any new schema field or `Decider` rule — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+Unit tests cover the scripted-answer logic, the egress allowlist matcher, the session→launch-plan materialization (mounts + discovery settings + env-strip), and a **schema guard** that fails if any shipped baseline/session/scenario stops validating. Add a test alongside any new schema field or `Decider` rule.
 
 > Copy your starting scenarios/sessions from **`examples/`**. The **`e2e/`** directory is the harness's *own* fidelity self-tests (smoke scenarios per tier) — not a template to copy.
 
