@@ -6,15 +6,39 @@ This document explains where the harness intentionally diverges from real Claude
 
 For how the harness *enforces* the limitations it does reproduce (sealed filesystem, default-deny egress, MCP-only crossing, per tier), see [boundary.md](./boundary.md).
 
+> **This page vs. the other four.** Fidelity is documented in five places, on purpose — each answers a
+> different question:
+>
+> | Question | Page |
+> |---|---|
+> | *Which tier should I pick?* | [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) — the decision table |
+> | *What does each tier enforce?* | [boundary.md](./boundary.md) |
+> | *What does each tier NOT reproduce?* | [fidelity-gaps.md](./fidelity-gaps.md) |
+> | *Why is it built this way?* | [DESIGN.md § 2 Parity matrix](../DESIGN.md#2-parity-matrix-per-tier) |
+> | *I only have the installed plugin* | [references/fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md) — offline snapshot |
+
 ---
+
+## On this page
+
+Every `##` below is one gap (or one scoping note). Grouped, since there are 32 of them.
+
+- **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
+- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
+- **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
+- **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production replaces them with zero-tool stubs](#a-plugins-declared-mcp-servers-run-here-production-replaces-them-with-zero-tool-stubs) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases)
+- **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
+- **Identity & environment** — [Auto-memory: four env-delivered keys the harness never sets](#auto-memory-four-env-delivered-keys-the-harness-never-sets) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host)
+- **Permissions & limits** — [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
 ## Which Cowork LANE this harness models — read first, it scopes everything below
 
 Every fidelity tier reproduces Cowork's **desktop-local** lane. Cowork also runs sessions on a
 **remote** lane, server-side in a cloud container that reaches the user's machine over a device
 bridge, and **which lane a real session gets is a Cowork setting** — "Only on this computer"
-(Settings → Cowork). Measured 2026-09-05 on a current install: that setting was **off**, so an
-otherwise-default Cowork session ran remote.
+(Settings → Cowork). Observed **off** on 2026-09-05, so an otherwise-default Cowork session ran remote — re-check
+Settings → Cowork rather than trusting that date.
 
 That matters for how you read the rest of this file. Gaps documented here are gaps against the
 *local* lane. On the remote lane the environment is different in kind, not degree: the cloud
@@ -635,7 +659,7 @@ production ceiling — not a reproduction of the cap.
 
 ## Fidelity tier differences
 
-The harness `--fidelity` flag selects how closely the execution environment matches real Cowork. Each tier trades fidelity for speed. For the canonical description of each tier (what it runs, when to pick it), see [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and [boundary.md](./boundary.md); the table below is the *gaps* view — what each tier does **not** reproduce.
+The harness `--fidelity` flag selects how closely the execution environment matches real Cowork. Each tier trades fidelity for speed. For the canonical description of each tier (what it runs, when to pick it), see the decision table linked in **This page vs. the other four** at the top of this file; the table below is the *gaps* view — what each tier does **not** reproduce.
 
 | Tier | Gaps vs. real Cowork (what it does **not** reproduce) |
 |---|---|
