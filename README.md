@@ -182,6 +182,17 @@ run, under the constraints it will meet in production".
 
 ## Fidelity tiers (pick per scenario / per CI job)
 
+> **This page vs. the other four.** Fidelity is documented in five places, on purpose — each answers a
+> different question:
+>
+> | Question | Page |
+> |---|---|
+> | *Which tier should I pick?* | **this section** — the decision table |
+> | *What does each tier enforce?* | [docs/boundary.md](./docs/boundary.md) |
+> | *What does each tier NOT reproduce?* | [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) |
+> | *Why is it built this way?* | [DESIGN.md § 2 Parity matrix](./DESIGN.md#2-parity-matrix-per-tier) |
+> | *I only have the installed plugin* | [references/fidelity-and-answers.md](./.claude/skills/cowork-harness/references/fidelity-and-answers.md) — offline snapshot |
+
 ```
 L0  protocol-only     claude -p stream-json (the agent's JSON-lines I/O format) on the host. No sandbox,
                       no egress control. Fastest. Pure-logic / inner-loop assertions.

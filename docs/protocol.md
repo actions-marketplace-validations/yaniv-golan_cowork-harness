@@ -166,6 +166,15 @@ least one vector.
 
 ### v1 changelog
 
+> **Entries are NOT in date order**, and cross-reference each other positionally ("the entry below").
+> Read the whole list before editing it, and **append rather than splice** — a range edit anchored on
+> two dates can silently swallow an entry that sits between them.
+>
+> **Current live scope lives in [DESIGN.md](../DESIGN.md), not here** — its § 6 "Control protocol"
+> heading carries the live pin and its "Scope of that claim" note.
+> Each dated entry below states the live pin **as it stood on that entry's date** and is never restamped,
+> so the oldest-looking pin in this file is not a claim about today.
+
 - **2026-09-19** — **coverage-log gap, recorded not closed.** Thirteen baselines have shipped since the
   2026-08-05 entry below with **no v1-changelog entry of their own**: `1.26832.0`, `1.28929.0`, `1.30096.1`,
   `1.32352.0`, `1.32885.1`, `1.34493.1`, `1.37937.1`, `1.40609.0`, `1.40609.1`, `1.44121.1`, `1.46388.3`,

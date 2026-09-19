@@ -31,8 +31,8 @@ Examples of unacceptable behavior include:
   any kind
 - Trolling, insulting or derogatory comments, and personal or political attacks
 - Public or private harassment
-- Publishing others' private information, such as a physical or email address,
-  without their explicit permission
+- Publishing others' private information, such as a physical or e-mail
+  address, without their explicit permission
 - Other conduct which could reasonably be considered inappropriate in a
   professional setting
 
@@ -69,9 +69,10 @@ GitHub instead:
 That form is built for security vulnerabilities, so its fields will not all
 apply — fill in what makes sense and describe the incident in the body.
 
-All complaints will be reviewed and investigated promptly and fairly, and all
-community leaders are obligated to respect the privacy and security of the
-reporter of any incident.
+All complaints will be reviewed and investigated promptly and fairly.
+
+All community leaders are obligated to respect the privacy and security of
+the reporter of any incident.
 
 **One limitation to know about:** this is a single-maintainer project, so both
 channels above reach the same person. If your report concerns that maintainer,

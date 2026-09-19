@@ -13,7 +13,7 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 > |---|---|
 > | *Which tier should I pick?* | [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) — the decision table |
 > | *What does each tier enforce?* | [boundary.md](./boundary.md) |
-> | *What does each tier NOT reproduce?* | [fidelity-gaps.md](./fidelity-gaps.md) |
+> | *What does each tier NOT reproduce?* | **this page** |
 > | *Why is it built this way?* | [DESIGN.md § 2 Parity matrix](../DESIGN.md#2-parity-matrix-per-tier) |
 > | *I only have the installed plugin* | [references/fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md) — offline snapshot |
 

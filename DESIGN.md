@@ -66,7 +66,7 @@ in how a file reaches the user, which is what changes skill behaviour: see
 > | *Which tier should I pick?* | [README → Fidelity tiers](./README.md#fidelity-tiers-pick-per-scenario--per-ci-job) — the decision table |
 > | *What does each tier enforce?* | [boundary.md](./docs/boundary.md) |
 > | *What does each tier NOT reproduce?* | [fidelity-gaps.md](./docs/fidelity-gaps.md) |
-> | *Why is it built this way?* | [DESIGN.md § 2 Parity matrix](./DESIGN.md#2-parity-matrix-per-tier) |
+> | *Why is it built this way?* | **this page, § 2 below** |
 > | *I only have the installed plugin* | [references/fidelity-and-answers.md](./.claude/skills/cowork-harness/references/fidelity-and-answers.md) — offline snapshot |
 
 ## 2. Parity matrix (per tier)
