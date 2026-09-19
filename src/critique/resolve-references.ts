@@ -17,13 +17,14 @@ export interface ResolvedReference {
   via: string;
 }
 
-export type OmissionReason = "not-linked" | "not-utf8" | "ambiguous-read";
+export type OmissionReason = "not-linked" | "not-utf8" | "ambiguous-read" | "unreadable";
 
 export interface RootReferenceResolution {
   packaged: ResolvedReference[];
   /** `alsoUntracked` is THREE-state and is omitted, never defaulted, when trackedness was not evaluated:
-   *  `corpusAcceptFor` returns null for git mode off, a non-work-tree, and a failed `ls-files` alike, and
-   *  in all three cases we did not look. Defaulting to `false` would assert "this file is tracked" on no
+   *  `corpusAcceptFor` returns null for git mode off, a failed `ls-files`, a non-work-tree, AND a work tree
+   *  whose tracked set is empty — four paths. (In the last, trackedness is arguably known-untracked, but
+   *  the predicate cannot say so, so it is reported as unevaluated rather than guessed.) Defaulting to `false` would assert "this file is tracked" on no
    *  evidence — the remedy line would then say "link it" about a file `git add` also has to reach. */
   omitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }>;
 }
@@ -254,7 +255,7 @@ export function resolveRootReferences(opts: {
   }
 
   const packaged: ResolvedReference[] = [];
-  const omitted: Array<{ name: string; reason: OmissionReason }> = [];
+  const omitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }> = [];
   // Computed for EVERY reason, not just `not-linked`: a property present on some rows and absent on
   // others re-creates the same "is it false or unevaluated?" ambiguity one level down.
   const untrackedFlag = (rel: string): { alsoUntracked?: boolean } => (opts.accept ? { alsoUntracked: !opts.accept(rel) } : {});

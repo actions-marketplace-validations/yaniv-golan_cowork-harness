@@ -1080,7 +1080,7 @@
       },
       ".evidenceBudget.corpusOmitted[].reason": {
         "type": "string",
-        "enum": ["not-linked", "not-utf8", "ambiguous-read"],
+        "enum": ["not-linked", "not-utf8", "ambiguous-read", "unreadable"],
         "required": true
       },
       ".evidenceBudget.corpusPackaged": {

@@ -452,6 +452,9 @@ describe("corpusPackaged reports what CONTENT actually shipped", () => {
     const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
     expect(res.corpusPackaged).not.toContain("agents/ms.md");
     expect(res.corpusCuts).toEqual([]); // a placeholder is never CUT, so subtraction alone could not do this
+    // ...but it must not vanish from EVERY field either: trading a wrong "packaged" label for total
+    // silence would break this module's rule that what is left out is reported.
+    expect(res.corpusOmitted).toContainEqual({ name: "agents/ms.md", reason: "unreadable" });
   });
 });
 
@@ -484,6 +487,33 @@ describe("corpusOmitted distinguishes 'not linked' from 'not linked AND not deli
     const outDir = mkdtempSync(join(tmpdir(), "cwh-ru-"));
     const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
     expect(res.corpusOmitted).toEqual([{ name: "plug/references/font.bin", reason: "not-utf8", alsoUntracked: true }]);
+  });
+
+  it("the untracked remedy line covers ONLY not-linked rows — it is wrong advice for the others", async () => {
+    const { buildTextReport } = await import("../src/critique/command.js");
+    const text = buildTextReport({
+      skillFolder: "/p",
+      prompt: "p",
+      sessionId: "s",
+      outDir: "/o",
+      fidelity: "container",
+      items: [],
+      evidenceBudget: {
+        corpusBytes: 10,
+        corpusCeiling: 524_288,
+        corpusCuts: [],
+        corpusExcluded: [],
+        corpusPackaged: ["SKILL.md"],
+        corpusOmitted: [
+          { name: "plug/references/font.woff2", reason: "not-utf8", alsoUntracked: true },
+          { name: "plug/references/dup.md", reason: "ambiguous-read", alsoUntracked: true },
+        ],
+        trimRecord: [],
+        packageTruncated: false,
+      },
+    } as never);
+    // `git add` + link cannot package a binary, and an ambiguous-read file was already reached.
+    expect(text).not.toContain("staging would not deliver these anyway");
   });
 
   it("the text report prints the untracked ones on their OWN line, with their own remedy", async () => {
@@ -551,9 +581,11 @@ describe("a plugin named `agents` shares a DISPLAY key with an agent file", () =
     const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
     // Both are present under the same display key — intended, and visible to the reader.
     expect(res.corpusPackaged.filter((k) => k === "agents/references/x.md")).toHaveLength(2);
-    // What the tag guarantees: the allocator budgeted them as two files, so allocated CONTENT (which is
-    // what the ceiling governs — section headers are accounted separately) stays within it.
-    const allocated = res.corpusCuts.reduce((a, c) => a + c.keptBytes, 0);
-    expect(allocated).toBeLessThanOrEqual(res.corpusCeiling);
+    // Weak by construction, and labelled so: this sums only the CUT files, a strict subset of an
+    // allocation the allocator already bounds, so it cannot fail for any input. It is here to pin the
+    // shape, not to demonstrate the fix — the real guarantee (two allowance slots, not one) has no
+    // observable difference I could construct, which is the finding recorded above.
+    const cutContent = res.corpusCuts.reduce((a, c) => a + c.keptBytes, 0);
+    expect(cutContent).toBeLessThanOrEqual(res.corpusCeiling);
   });
 });

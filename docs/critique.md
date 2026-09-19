@@ -308,7 +308,8 @@ partially cut one is, with its loss in `corpusCuts`), `corpusCuts` (per-file —
 actually breached), `corpusOmitted` (plugin-root `references/` files present on the HOST under
 `<plugin>/references/` but **not** packaged — a raw walk, so an untracked file that staging would not
 deliver is listed here too, and `alsoUntracked` says so when trackedness was evaluated; that property is
-ABSENT, never `false`, when it could not be — git mode off, not a work tree, or an unreadable index —
+ABSENT, never `false`, when it could not be — git mode off, an unreadable index, a non-work-tree, or a
+work tree with nothing tracked —
 with why: `not-linked` — nothing in the skill's authored text or a packaged agent body points at
 it, and the graded agent's own read didn't either; `not-utf8` — it failed to decode as clean UTF-8, e.g. a
 font asset (only plugin-root references are filtered this way — the skill's **own** `references/**` still

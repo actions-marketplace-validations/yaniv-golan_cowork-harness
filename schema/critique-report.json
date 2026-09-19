@@ -237,7 +237,7 @@
         },
         "corpusOmitted": {
           "type": "array",
-          "description": "plugin-root references/ files present on the HOST under <plugin>/references/ but not packaged, with the reason. (A raw filesystem walk, so an UNTRACKED file \u2014 which staging would not deliver \u2014 is listed here too; `alsoUntracked` says so when it was evaluated.) OPTIONAL and deliberately absent from `required`: reports predating the plugin-root reference corpus omit it. A narrow selection rule is only safe if what it leaves out is visible, which is what this field is for",
+          "description": "corpus files present but NOT packaged, with the reason \u2014 plugin-root references/ files under <plugin>/references/ (a raw HOST walk), plus any resolved sub-agent whose file could not be read (`unreadable`), which would otherwise appear in no field at all. (A raw filesystem walk, so an UNTRACKED file \u2014 which staging would not deliver \u2014 is listed here too; `alsoUntracked` says so when it was evaluated.) OPTIONAL and deliberately absent from `required`: reports predating the plugin-root reference corpus omit it. A narrow selection rule is only safe if what it leaves out is visible, which is what this field is for",
           "items": {
             "type": "object",
             "required": ["name", "reason"],
@@ -249,7 +249,7 @@
               },
               "reason": {
                 "type": "string",
-                "enum": ["not-linked", "not-utf8", "ambiguous-read"]
+                "enum": ["not-linked", "not-utf8", "ambiguous-read", "unreadable"]
               },
               "alsoUntracked": {
                 "type": "boolean",

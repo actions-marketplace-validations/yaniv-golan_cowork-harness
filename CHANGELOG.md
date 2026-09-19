@@ -65,12 +65,20 @@ All notable changes to this project are documented here. The format is based on
   unlinked from one staging would not deliver either — the two remedies `corpusOmitted` exists to keep
   apart. THREE-state: absent means trackedness was not evaluated (git mode off, not a work tree, or an
   unreadable index), never "tracked". Defaulting to `false` would have asserted a fact nothing established.
-- The corpus allocator keys on an internal tag, so a plugin named (or a plugin DIRECTORY named) `agents`
-  can no longer put a root reference and an agent file in one allowance slot. Displayed, cited and
-  reported strings are byte-identical. **No output difference was demonstrable** — an earlier review
-  attributed a measured 11,388 B ceiling overshoot to this collision, and re-measuring shows the identical
-  overshoot with a non-colliding plugin name, so that was per-file header overhead. Kept as a correctness
-  tidy, recorded as one rather than dressed up as a measured fix.
+- The corpus allocator and its cut ledger key on an internal tag, so a plugin named (or a plugin
+  DIRECTORY named) `agents` can no longer put a root reference and an agent file in one allowance slot,
+  nor let one file's zeroed row delete a different file's `corpusPackaged` listing. Displayed, cited and
+  reported strings are byte-identical. **The allocator half has no demonstrable output difference** — an
+  earlier review attributed a measured 11,388 B ceiling overshoot to this collision; re-measuring shows
+  the identical overshoot with a NON-colliding plugin name, so that was per-file header overhead, and I
+  could not construct an input distinguishing the two. It ships labelled as a correctness tidy. A first
+  cut of it also sorted the allocator's size tiebreak by the tag, which measurably reordered which
+  equal-sized files get zeroed — toward zeroing the skill's OWN references before the shared ones. The
+  tiebreak sorts by display key again: the tag decides identity, never priority.
+- **A resolved sub-agent whose file cannot be read is reported** (`corpusOmitted`, reason `unreadable`)
+  instead of appearing in no `evidenceBudget` field at all. It reaches the evaluator as a placeholder and
+  is not a corpus entry, so excluding it from `corpusPackaged` — correct on its own — had made it
+  invisible; trading a wrong label for silence breaks the rule that what is left out is reported.
 - **Section TITLES carried unsanitized third-party bytes.** `armor.ts` documented titles as trusted
   ("never attacker bytes") — true until titles began interpolating an agent's frontmatter `name:`, a
   filename, and the `via` provenance string. A block-scalar `name:` with newlines could forge a
@@ -128,8 +136,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-- **`evidenceBudget.corpusPackaged`** in the critique report and JSON schema — every corpus file that was
-  packaged, by the same key `corpusCuts` uses. `corpusCuts`/`corpusExcluded` name files only when
+- **`evidenceBudget.corpusPackaged`** in the critique report and JSON schema — every corpus file whose
+  CONTENT shipped into the corpus sections, by the same key `corpusCuts` uses (a file the ceiling zeroed
+  is not listed; a partially cut one is, with its loss in `corpusCuts`). `corpusCuts`/`corpusExcluded` name files only when
   something goes wrong with them, so nothing previously showed which sub-agent bodies a grade rested on.
   Optional, and deliberately absent from the schema's `required`: stored reports predating it stay valid.
 - Each packaged agent section names **why** it is in the corpus (`skill-named`, or the `file:line` of the

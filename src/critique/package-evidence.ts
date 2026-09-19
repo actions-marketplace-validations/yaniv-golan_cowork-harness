@@ -650,6 +650,9 @@ export function packageEvidence(
   // <root>/agents/**.md while `skillDir` is <root>/skills/<name>, so skillDir's tracked-set key space
   // cannot express them and they would otherwise ship unfiltered. The check is PER FILE — one agent being
   // untracked must not suppress the others.
+  // Declared here, not beside the root-reference pass: an UNREADABLE AGENT is recorded into it below,
+  // and a corpus file that reaches the evaluator as a placeholder must not be silent in every field.
+  const corpusOmitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }> = [];
   const agentBodies: Array<{ key: string; title: string; body: string; isPlaceholder: boolean }> = [];
   {
     const rootAccept = opts.pluginRoot !== undefined ? corpusAcceptFor(opts.pluginRoot) : null;
@@ -675,6 +678,11 @@ export function packageEvidence(
       // a literal that a reference doc merely MENTIONS (a template placeholder, a "never dispatch this"
       // example) pulls its agent in. Naming the file:line lets the evaluator weigh that itself rather than
       // reading a mentioned agent as operative guidance.
+      // A resolved agent whose file cannot be read reaches the evaluator as a placeholder and is not a
+      // corpus entry — so without this row it appears in NO evidenceBudget field at all. Before the
+      // placeholder change it was at least visible in `corpusPackaged`, mislabelled; trading a wrong label
+      // for total silence breaks this module's own rule that what is left out is REPORTED.
+      if (isPlaceholder) corpusOmitted.push({ name: agent.rel, reason: "unreadable" });
       agentBodies.push({
         isPlaceholder,
         key: agent.rel,
@@ -694,7 +702,6 @@ export function packageEvidence(
   // by PRESENCE with no notion of which skill authored a file, so another skill's docs silently excuse a
   // real gap. Files left out are REPORTED (`corpusOmitted`), which is what makes the narrow rule safe.
   const rootRefBodies: Array<{ key: string; title: string; body: string; isPlaceholder: boolean }> = [];
-  const corpusOmitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }> = [];
   if (opts.pluginRoot !== undefined) {
     const rootAccept = corpusAcceptFor(opts.pluginRoot);
     const resolved = resolveRootReferences({
@@ -738,7 +745,10 @@ export function packageEvidence(
   // could not name the file it cut, which is the whole point of "cut loudly". A slice below CORPUS_MIN_SLICE
   // is marked omitted with a DISTINCT reason (split this file) rather than shipped as a useless sliver
   // (the corpus as a whole is too big) — the two tell an author to do opposite things.
-  const corpusCuts: Array<{ name: string; keptBytes: number; totalBytes: number; omitted: boolean }> = [];
+  // `tag` is internal and is what reconciliation must match on: `name` is the DISPLAY key and is NOT
+  // unique (see the collision note below), so filtering `corpusPackaged` by name would let one file's
+  // zeroed row delete a DIFFERENT file's listing — the same false-negative the filter exists to remove.
+  const corpusCuts: Array<{ tag: string; name: string; keptBytes: number; totalBytes: number; omitted: boolean }> = [];
   // TWO keys again, for a different reason than the accept/display split. `key` is the DISPLAY string —
   // what a reader, a citation and a remedy see — and it is NOT unique: a plugin named (or a plugin
   // DIRECTORY named, since `readPluginName` falls back to the basename) `agents` gives a root reference at
@@ -775,7 +785,12 @@ export function packageEvidence(
     // ~175 KB when ~518 KB was available — 343 KB of guidance discarded for nothing, on precisely the axis
     // this whole change exists to fix. Small files are protected either way (they always fit under the
     // fair share); only the large ones are affected, and only this order allocates them correctly.
-    const bySizeAsc = [...corpusEntries].sort((a, b) => a.bytes - b.bytes || a.tag.localeCompare(b.tag));
+    // Tiebreak on the DISPLAY key, deliberately, even though the allowance is looked up by tag: sorting
+    // by tag silently reorders equal-sized files (`rootref\0…` collates after `ref\0…`, and `localeCompare`
+    // ignores the NUL), which measurably flips WHICH equal-sized files get zeroed — and in the unfavourable
+    // direction, zeroing the skill's OWN references before the shared plugin-root ones. The tag disambiguates
+    // identity; it must not decide priority.
+    const bySizeAsc = [...corpusEntries].sort((a, b) => a.bytes - b.bytes || a.key.localeCompare(b.key));
     let left = bySizeAsc.length;
     for (const e of bySizeAsc) {
       const fair = Math.floor(remaining / left);
@@ -803,12 +818,12 @@ export function packageEvidence(
     const allowance = corpusAllowance.get(tag);
     if (allowance === undefined || allowance >= total) return body;
     if (allowance === 0) {
-      corpusCuts.push({ name: key, keptBytes: 0, totalBytes: total, omitted: true });
+      corpusCuts.push({ tag, name: key, keptBytes: 0, totalBytes: total, omitted: true });
       return `(omitted — its share of the ${SKILL_CORPUS_CEILING.toLocaleString()} B corpus ceiling would be below the ${CORPUS_MIN_SLICE.toLocaleString()} B minimum useful slice; SPLIT THIS FILE rather than shrinking the others)`;
     }
     const cut = boundText(body, allowance);
     truncated = true;
-    corpusCuts.push({ name: key, keptBytes: Buffer.byteLength(cut, "utf8"), totalBytes: total, omitted: false });
+    corpusCuts.push({ tag, name: key, keptBytes: Buffer.byteLength(cut, "utf8"), totalBytes: total, omitted: false });
     return cut;
   };
   if (skillMdStatus === "readable") skillMd = applyCorpus("skill\u0000SKILL.md", "SKILL.md", skillMd);
@@ -951,12 +966,13 @@ export function packageEvidence(
     skillMdStatus,
     corpusBytes,
     corpusCeiling: SKILL_CORPUS_CEILING,
-    corpusCuts,
+    // `tag` is internal reconciliation state; the reported row keeps only what a consumer needs.
+    corpusCuts: corpusCuts.map(({ name, keptBytes, totalBytes, omitted }) => ({ name, keptBytes, totalBytes, omitted })),
     corpusExcluded,
     // Entry keys MINUS anything the ceiling zeroed. A partially cut file stays listed: content did ship,
     // and `corpusCuts` already reports the byte loss, so dropping it would under-report the other way.
     // Placeholders never become entries at all (see `corpusEntries`), so they need no filtering here.
-    corpusPackaged: corpusEntries.filter((e) => !corpusCuts.some((c) => c.omitted && c.name === e.key)).map((e) => e.key),
+    corpusPackaged: corpusEntries.filter((e) => !corpusCuts.some((c) => c.omitted && c.tag === e.tag)).map((e) => e.key),
     corpusOmitted,
     trimRecord,
     packageTruncated: truncated,
