@@ -55,6 +55,32 @@ All notable changes to this project are documented here. The format is based on
     skill's own `references/**` keeps its deliberate no-filter rule — the asymmetry is documented.
   - `lint-skill`'s ceiling sizing counts the same set (static clauses only; the read-during-the-run clause
     cannot be mirrored statically). Verified byte-for-byte against the packager on a real 6-skill plugin.
+- **Section TITLES carried unsanitized third-party bytes.** `armor.ts` documented titles as trusted
+  ("never attacker bytes") — true until titles began interpolating an agent's frontmatter `name:`, a
+  filename, and the `via` provenance string. A block-scalar `name:` with newlines could forge a
+  `### [E-…] SKILL.md` heading that lands OUTSIDE any `⟦EVIDENCE-nonce⟧` fence, fabricating "SKILL.md
+  says …" claims that flip a real gap to `already-covered`; a filename could ship a verbatim truncation
+  marker, whose forgery routes claims to `not-adjudicable`. Titles are now sanitized at every
+  interpolation site AND flattened in `armorEvidence`, so the next interpolated title is safe by
+  construction rather than by remembering.
+- **The transitive agent closure did not run for the most likely dispatcher.** An agent reached by
+  clause 1 or 3 (the skill's own primary agent) was recorded but never scanned, so `agents/<skill>.md`
+  dispatching a second agent left that agent's body out of the corpus — the defect the closure exists to
+  close, one level down. Both the TypeScript resolver and the `scenario.py` mirror had it identically,
+  which is why the cross-language fixture agreed while both were wrong; the fixture now carries the case.
+- **A sibling skill's read could pull a plugin-root reference into this skill's corpus.** Read paths
+  collapse at the leftmost `/references/`, so `skills/other/references/shared.md` arrives indistinguishable
+  from the root file of that name. The ambiguity guard compared only against the graded skill's own
+  references; it now considers every skill's.
+- **`lint-skill` and the packager derived the plugin root differently outside `<root>/skills/<name>`.**
+  The linter used a layout rule and sized ZERO for a skill that is not under `skills/` but has a manifest
+  above it; it now walks up for the manifest first, falling back to the layout — neither rule alone
+  matches the packager.
+- **Link evidence now obeys corpus==mount.** A root reference linked only from an untracked agent body
+  was packaged on the strength of content staging never delivered.
+- A resolved link is matched by realpath identity rather than by reconstructing the walk's spelling, so a
+  case-only difference or a symlinked alias no longer resolves and then reports `not-linked` — an actively
+  wrong reason in the field the narrow selection rule depends on being truthful.
 - **`critique <plugin>/skills/<name>` packaged ZERO sub-agents** while `lint-skill` sized them for the
   same tree — so the packager and the linter described different corpora for one plugin. Pointing
   `critique` straight at a skill dir is an invocation `docs/critique.md` recommends alongside `--skill`,

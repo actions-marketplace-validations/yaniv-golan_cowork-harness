@@ -1,5 +1,5 @@
-import { readFileSync, realpathSync } from "node:fs";
-import { join, resolve, dirname, basename } from "node:path";
+import { readFileSync, realpathSync, readdirSync } from "node:fs";
+import { join, resolve, dirname, basename, relative } from "node:path";
 import { listSkillFilesRecursive } from "./corpus-walk.js";
 import { readPluginName, type ResolvedAgent } from "./resolve-agents.js";
 
@@ -94,6 +94,7 @@ function linksIn(
   pluginRoot: string,
   pluginName: string,
   byBasename: Map<string, string>,
+  byRealpath: Map<string, string>,
 ): Map<string, number> {
   const refsDir = (() => {
     try {
@@ -120,10 +121,13 @@ function linksIn(
         armed = true;
         continue;
       }
-      if (rp.startsWith(refsDir + "/")) {
-        const rel = `references/${rp.slice(refsDir.length + 1)}`;
-        if (!hits.has(rel)) hits.set(rel, i + 1);
-      }
+      // Match by REALPATH IDENTITY against the walk's own entries, never by reconstructing its spelling
+      // from the token. A case-only difference on a case-insensitive filesystem, or a
+      // `references/alias.md -> real.md` symlink, resolves fine here but would not reproduce the walked
+      // rel — and the file would then be reported `not-linked`, an actively wrong reason in the one
+      // report field the narrow selection rule depends on being truthful.
+      const known = byRealpath.get(rp);
+      if (known !== undefined && !hits.has(known)) hits.set(known, i + 1);
     }
     if (!armed) return;
     for (const b of bare) {
@@ -151,6 +155,11 @@ export function resolveRootReferences(opts: {
   agents: ResolvedAgent[];
   /** Turn-1 reference accesses (`read` channel is the only one used — see clause 3). */
   accesses?: Array<{ path: string; via: string[] }>;
+  /** The packager's corpus==mount predicate, keyed on PLUGIN-ROOT-relative paths. Link EVIDENCE must obey
+   *  the same rule as packaging: a root reference linked only from an untracked agent body or an
+   *  untracked skill reference was linked by content staging never delivered, so the agent never saw the
+   *  pointer. Omitted (or `null` for a non-work-tree) means accept everything, matching `corpusAcceptFor`. */
+  accept?: ((relFromPluginRoot: string) => boolean) | null;
 }): RootReferenceResolution {
   const { pluginRoot, skillDir, agents } = opts;
   // SKIP (not "dedupe") the standalone-skill shape: those files are already packaged as skill-local, and
@@ -168,6 +177,14 @@ export function resolveRootReferences(opts: {
   // display key still needs a stable prefix, so fall back to the root's own directory name.
   const pluginName = readPluginName(pluginRoot) ?? basename(pluginRoot);
   const byBasename = new Map(all.map((f) => [basename(f.rel), f.rel]));
+  const byRealpath = new Map<string, string>();
+  for (const f of all) {
+    try {
+      byRealpath.set(realpathSync(f.absPath), f.rel);
+    } catch {
+      continue;
+    }
+  }
 
   // clauses 1 + 2 — the skill's own authored text, and the sub-agent bodies already in the corpus
   const linked = new Map<string, string>(); // rel -> via
@@ -179,14 +196,21 @@ export function resolveRootReferences(opts: {
   const localRefRoot = join(skillDir, "references");
   for (const r of listSkillFilesRecursive(localRefRoot)) sources.push({ label: `references/${r}`, absPath: join(localRefRoot, r) });
   for (const a of agents) sources.push({ label: `agent:${a.name}`, absPath: a.absPath });
+  const acceptSource = (absPath: string): boolean => {
+    if (!opts.accept) return true;
+    const rel = relative(pluginRoot, absPath).split("\\").join("/");
+    return rel.startsWith("..") ? true : opts.accept(rel); // outside the root: not ours to filter
+  };
   for (const src of sources) {
+    if (!acceptSource(src.absPath)) continue;
     let text: string;
     try {
       text = readFileSync(src.absPath, "utf8");
     } catch {
       continue;
     }
-    for (const [rel, line] of linksIn(text, dirname(src.absPath), pluginRoot, pluginName, byBasename)) record(rel, `${src.label}:${line}`);
+    for (const [rel, line] of linksIn(text, dirname(src.absPath), pluginRoot, pluginName, byBasename, byRealpath))
+      record(rel, `${src.label}:${line}`);
   }
 
   // clause 3 — read during the graded turn. `skillReferenceReadPath` strips everything before the
@@ -194,7 +218,22 @@ export function resolveRootReferences(opts: {
   // Undefined `accesses` means the run recorded nothing observable; clause 3 then contributes nothing,
   // and nothing downstream may claim otherwise.
   const ambiguous: string[] = [];
-  const localRels = new Set(listSkillFilesRecursive(localRefRoot).map((r) => `references/${r}`));
+  // EVERY skill's references/, not just the graded skill's. `skillReferenceReadPath` strips at the
+  // leftmost `/references/`, so a read of `skills/OTHER/references/shared.md` also arrives as
+  // `references/shared.md` — and the whole plugin is mounted, so that read really can happen. Comparing
+  // against the graded skill alone let a SIBLING's read pull the root file's content into this skill's
+  // corpus, with no ambiguity flag, on evidence about a different file.
+  const localRels = new Set<string>();
+  for (const r of listSkillFilesRecursive(localRefRoot)) localRels.add(`references/${r}`);
+  let siblingRefDirs: string[] = [];
+  try {
+    siblingRefDirs = readdirSync(join(pluginRoot, "skills"), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => join(pluginRoot, "skills", e.name, "references"));
+  } catch {
+    siblingRefDirs = [];
+  }
+  for (const dir of siblingRefDirs) for (const r of listSkillFilesRecursive(dir)) localRels.add(`references/${r}`);
   for (const a of opts.accesses ?? []) {
     if (!a.via.includes("read")) continue; // `bash`/`grep` are weaker evidence — see evaluator.ts
     const isRoot = all.some((f) => f.rel === a.path);

@@ -135,10 +135,16 @@ export function resolveDispatchableAgents(pluginRoot: string, skillDir: string, 
   if (all.length === 0) return [];
   const pluginName = readPluginName(pluginRoot);
   const picked = new Map<string, ResolvedAgent>(); // absPath -> entry; first `via` wins
+  // Declared BEFORE `add` on purpose: every picked agent is itself a dispatch SOURCE, so `add` pushes it.
+  // Clauses 1 and 3 used to add without pushing, and clause 2 pushed only when `add` returned true — so a
+  // skill's own primary agent (the most likely dispatcher of a second agent) was never scanned, and the
+  // transitive closure this function advertises did not run for the dominant real shape.
+  const frontier: Array<{ label: string; absPath: string }> = [];
 
   const add = (entry: { name: string; absPath: string; rel: string }, via: string): boolean => {
     if (picked.has(entry.absPath)) return false;
     picked.set(entry.absPath, { ...entry, via });
+    frontier.push({ label: entry.rel, absPath: entry.absPath });
     return true;
   };
 
@@ -153,7 +159,6 @@ export function resolveDispatchableAgents(pluginRoot: string, skillDir: string, 
   // clause 2 + transitive closure. The frontier starts as the skill's own authored text and grows with
   // each resolved agent body; `scanned` keeps a cyclic dispatch from looping.
   const scanned = new Set<string>();
-  const frontier: Array<{ label: string; absPath: string }> = [];
   const skillMd = join(skillDir, "SKILL.md");
   if (existsSync(skillMd)) frontier.push({ label: "SKILL.md", absPath: skillMd });
   const refRoot = join(skillDir, "references");
@@ -172,9 +177,7 @@ export function resolveDispatchableAgents(pluginRoot: string, skillDir: string, 
     for (const { value, line } of literalsIn(text)) {
       const agentName = literalToAgentName(value, pluginName);
       if (agentName === undefined) continue; // cross-plugin or unresolvable — not this plugin's guidance
-      for (const a of all.filter((a) => a.name === agentName)) {
-        if (add(a, `${src.label}:${line}`)) frontier.push({ label: a.rel, absPath: a.absPath });
-      }
+      for (const a of all.filter((a) => a.name === agentName)) add(a, `${src.label}:${line}`);
     }
   }
 

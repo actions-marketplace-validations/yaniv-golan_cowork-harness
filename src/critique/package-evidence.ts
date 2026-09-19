@@ -2,6 +2,7 @@ import type { EvidenceSection } from "./armor.js";
 import type { ResolvedAgent } from "./resolve-agents.js";
 import { listSkillFilesRecursive } from "./corpus-walk.js";
 import { resolveRootReferences, type OmissionReason } from "./resolve-references.js";
+import { flattenTitle } from "./armor.js";
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, type Dirent } from "node:fs";
 import { join, basename, sep } from "node:path";
 import { warn } from "../io.js";
@@ -669,7 +670,9 @@ export function packageEvidence(
       // reading a mentioned agent as operative guidance.
       agentBodies.push({
         key: agent.rel,
-        title: `${AGENT_SECTION_PREFIX} (${basename(agent.absPath)} — sub-agent system prompt / dispatch guidance for \`${agent.name}\`; in corpus via ${agent.via})`,
+        title: flattenTitle(
+          `${AGENT_SECTION_PREFIX} (${neutralizeForgedTruncationMarkers(basename(agent.absPath))} — sub-agent system prompt / dispatch guidance for \`${neutralizeForgedTruncationMarkers(agent.name)}\`; in corpus via ${neutralizeForgedTruncationMarkers(agent.via)})`,
+        ),
         body,
       });
     }
@@ -691,6 +694,7 @@ export function packageEvidence(
       skillDir,
       agents: opts.agents ?? [],
       accesses: allAccesses,
+      accept: rootAccept,
     });
     corpusOmitted.push(...resolved.omitted);
     for (const ref of resolved.packaged) {
@@ -709,7 +713,9 @@ export function packageEvidence(
       }
       rootRefBodies.push({
         key: ref.displayKey,
-        title: `${ROOT_REFERENCE_SECTION_PREFIX} (${neutralizeForgedTruncationMarkers(ref.displayKey)} — shared across the plugin, in corpus via ${ref.via}; a read of it appears in referencesAccessed as \`${ref.rel}\`)`,
+        title: flattenTitle(
+          `${ROOT_REFERENCE_SECTION_PREFIX} (${neutralizeForgedTruncationMarkers(ref.displayKey)} — shared across the plugin, in corpus via ${neutralizeForgedTruncationMarkers(ref.via)}; a read of it appears in referencesAccessed as \`${neutralizeForgedTruncationMarkers(ref.rel)}\`)`,
+        ),
         body,
       });
     }

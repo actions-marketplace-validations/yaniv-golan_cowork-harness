@@ -464,7 +464,14 @@ the two cannot disagree.
   root's. Packaging the WHOLE shared tree instead was measured and rejected: on a real 6-skill plugin it
   pushed one skill's corpus to 107% of the ceiling and made the allocator cut that skill's own SKILL.md by
   37,295 B, and because the `already-covered` classification judges by presence with no notion of which
-  skill authored a file, another skill's shared docs would silently excuse a real gap. A plugin-root
+  skill authored a file, another skill's shared docs would silently excuse a real gap. A fourth link
+  form is less obvious: a token resolving to the shared `references/` **directory** arms bare-filename
+  matching **for that line only**, so ``From `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `a.md`, `b.md```
+  links both files though neither carries a path. That is the shape most real plugins use. The cost is
+  that matching is textual with no notion of intent — a filename on an arming line is packaged even if the
+  prose says *not* to read it, and a link inside a fenced code block counts like any other — so each
+  packaged section states the `file:line` it came from, the same provenance the sub-agent sections carry
+  and for the same reason. A plugin-root
   reference must additionally decode as clean UTF-8 to be packaged — a binary asset such as a font is
   excluded — while the skill's **own** `references/**` still has no extension or content filter at all;
   that asymmetry is deliberate, not an oversight. Every plugin-root file the rule leaves out is reported in

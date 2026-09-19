@@ -1827,7 +1827,19 @@ def _resolve_corpus_agents(skill_dir):
     The union is the SAFETY property: this can never resolve to less than the single agents/<skill>.md
     the old sizing counted, so a skill's reported corpus never shrinks under this change."""
     skill_dir = Path(skill_dir)
-    plugin_dir = skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    # Walk UP for the manifest, exactly as the TypeScript side does (`findEnclosingPluginDir`). The
+    # old `parent.name == "skills"` LAYOUT rule disagreed with the packager outside the
+    # `<root>/skills/<name>` shape: a skill at `<root>/foo/SKILL.md` with a manifest at `<root>` made the
+    # packager size a corpus this sized as ZERO, which is the packager-vs-linter divergence 0003e38
+    # closed in one shape and left open in another.
+    # Nearest MANIFEST first (matching the TypeScript `findEnclosingPluginDir`), falling back to the
+    # `<root>/skills/<name>` LAYOUT. Manifest-only diverged from the packager for a manifest-less plugin,
+    # where the TS side still enumerates agents because it is handed the root explicitly; layout-only
+    # diverged for a skill that is not under `skills/` but does have a manifest above it, which the
+    # packager sizes and this sized as ZERO. Neither rule alone matches; the union does.
+    plugin_dir = _find_enclosing_plugin_dir(skill_dir / "SKILL.md") or (
+        skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    )
     if plugin_dir is None or not (plugin_dir / "agents").is_dir():
         return []
     all_agents = _enumerate_plugin_agents(plugin_dir)
@@ -1836,16 +1848,24 @@ def _resolve_corpus_agents(skill_dir):
     plugin_name = _read_plugin_name(plugin_dir)
     skill_name = skill_dir.name
     picked = {}
+    sources = []  # declared before `add`: every picked agent is itself a dispatch SOURCE
 
     def add(path):
-        picked.setdefault(str(path), path)
+        """Record an agent AND queue its body as a dispatch source.
+
+        Clauses 1 and 3 used to record without queueing, so a skill's own primary agent -- the most
+        likely dispatcher of a second agent -- was never scanned and the transitive closure did not run
+        for the dominant real shape. `scanned` below still guarantees termination."""
+        if str(path) in picked:
+            return
+        picked[str(path)] = path
+        sources.append(path)
 
     for name, md in all_agents:
         # clause 1 (filename) and clause 3 (declared name)
         if md == plugin_dir / "agents" / f"{skill_name}.md" or name == skill_name:
             add(md)
 
-    sources = []
     skill_md = skill_dir / "SKILL.md"
     if skill_md.is_file():
         sources.append(skill_md)
@@ -1867,9 +1887,8 @@ def _resolve_corpus_agents(skill_dir):
             if not agent_name:
                 continue
             for name, md in all_agents:
-                if name == agent_name and str(md) not in picked:
-                    add(md)
-                    sources.append(md)  # transitive: this agent may dispatch another
+                if name == agent_name:
+                    add(md)  # queues the body too -- transitive: this agent may dispatch another
     return [picked[k] for k in sorted(picked)]
 
 
@@ -2063,7 +2082,19 @@ def _resolve_corpus_root_references(skill_dir, agents):
     (the `skills/<name>` multi-skill-plugin shape); a standalone skill (no `skills/` parent) has no
     plugin-root references pass and is unaffected."""
     skill_dir = Path(skill_dir)
-    plugin_dir = skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    # Walk UP for the manifest, exactly as the TypeScript side does (`findEnclosingPluginDir`). The
+    # old `parent.name == "skills"` LAYOUT rule disagreed with the packager outside the
+    # `<root>/skills/<name>` shape: a skill at `<root>/foo/SKILL.md` with a manifest at `<root>` made the
+    # packager size a corpus this sized as ZERO, which is the packager-vs-linter divergence 0003e38
+    # closed in one shape and left open in another.
+    # Nearest MANIFEST first (matching the TypeScript `findEnclosingPluginDir`), falling back to the
+    # `<root>/skills/<name>` LAYOUT. Manifest-only diverged from the packager for a manifest-less plugin,
+    # where the TS side still enumerates agents because it is handed the root explicitly; layout-only
+    # diverged for a skill that is not under `skills/` but does have a manifest above it, which the
+    # packager sizes and this sized as ZERO. Neither rule alone matches; the union does.
+    plugin_dir = _find_enclosing_plugin_dir(skill_dir / "SKILL.md") or (
+        skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    )
     if plugin_dir is None:
         return []
     return _resolve_root_references(skill_dir, plugin_dir, agents)

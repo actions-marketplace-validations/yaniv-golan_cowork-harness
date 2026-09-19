@@ -110,6 +110,17 @@
       "expected": ["agents/alpha.md", "agents/beta.md", "agents/ms.md"]
     },
     {
+      "name": "transitive through the SKILL-NAMED agent (clause 1), the dominant real dispatcher",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nDispatch the primary agent.\n",
+        "agents/ms.md": "primary, which dispatches subagent_type: \"plug:ms-redteam\"\n",
+        "agents/ms-redteam.md": "red team persona\n"
+      },
+      "expected": ["agents/ms-redteam.md", "agents/ms.md"]
+    },
+    {
       "name": "dispatch cycle terminates instead of looping forever",
       "skill": "ms",
       "tree": {
