@@ -294,9 +294,12 @@ Set the tier with `fidelity:` in a scenario, or `--fidelity` on `skill` / `chat`
 > The diagram above shows the VM-loop path (`container`/`microvm`). At `hostloop` fidelity the agent loop
 > instead runs as a native host process with no container around it, routing shell/file access through a
 > workspace SDK-MCP server into a VM sidecar — see the Spawn contract section in DESIGN.md for detail.
-> **Only the L0 `protocol` tier spawns `claude` from your `PATH`**; every sandboxed tier bind-mounts and
-> runs the staged binary from your own Claude Desktop install, which is what makes the run Cowork-shaped
-> rather than CLI-shaped — see [Why not just `claude -p`](#why-not-just-claude--p-or-the-agent-sdk).
+> **Only the L0 `protocol` tier spawns `claude` from your `PATH`.** Every other tier runs a binary staged
+> by your own Claude Desktop install: `container`/`microvm` bind-mount the Linux VM ELF
+> (`claude-code-vm/<ver>/claude`), while `hostloop` spawns the separate **native macOS** binary
+> (`claude-code/<ver>/claude.app/…`) directly on the host, with no container around it — two different
+> staged binaries, in two different version namespaces. That is what makes the run Cowork-shaped rather
+> than CLI-shaped. See [Why not just `claude -p`](#why-not-just-claude--p-or-the-agent-sdk).
 
 - **AgentSession** speaks the Agent SDK control protocol over stream-json, emitting a typed event
   stream. When the agent emits a decision request (a tool permission, an `AskUserQuestion`, or a
@@ -380,7 +383,6 @@ a global install has them locally too, not just on GitHub.
 |---|---|
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | local gates, which CI stages block a merge, and the rule that a consumer-visible change updates the companion skill |
 | [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Contributor Covenant v2.1, with a private reporting channel |
-| [SECURITY.md](./SECURITY.md) | threat model (the sandbox is a fidelity fixture, **not** a security boundary) + private advisory reporting |
 
 ## Versioning
 

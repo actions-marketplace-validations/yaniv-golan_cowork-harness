@@ -33,6 +33,11 @@ flowchart TB
 
 (README carries the same diagram in ASCII, since npm doesn't render Mermaid.)
 
+> The agent node above is the **VM-loop** path (`container`/`microvm`), which runs the staged Linux ELF.
+> `hostloop` runs a **different** staged binary — the native macOS `claude-code/<ver>/claude.app/…` — as a
+> host process with no container around it, and `protocol` (L0) is the only tier that uses `claude` from
+> your `PATH`. See § 6 and [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+
 ## 1. What "real Cowork" actually is (and why scripting it is closed)
 
 Cowork runs a session in one of two lanes. This section describes the **local** lane — the Desktop app driving the
