@@ -101,7 +101,7 @@ describe("packageEvidence — one section and one corpus key per agent", () => {
   function pkg(root: string, skill: string) {
     const r = resolveCritiquedSkillDir(root, skill);
     const outDir = mkdtempSync(join(tmpdir(), "cwh-out-"));
-    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, agentsRoot: r.agentsRoot });
+    return packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.agentsRoot });
   }
 
   it("packages BOTH agent bodies, each keyed by its own path, with provenance in the title", () => {

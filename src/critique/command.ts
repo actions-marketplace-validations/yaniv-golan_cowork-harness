@@ -124,7 +124,8 @@ Critique's own:
   --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
   --output-format json|text critique's REPORT format (inner turns always speak json internally)
   --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
-  --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ every agents/**.md it dispatches)
+  --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ every agents/**.md it dispatches,
+                            + the plugin-root references/ files it points at)
                             instead of a missing plugin-root SKILL.md. Selection only — the positional
                             folder is still what both turns mount, and fingerprint.skillHash is unchanged
                             (it keys the mounted folder: per-plugin, not per-skill). A multi-skill root
@@ -1197,6 +1198,7 @@ interface ReportState {
     corpusCuts: Array<{ name: string; keptBytes: number; totalBytes: number; omitted: boolean }>;
     corpusExcluded: string[];
     corpusPackaged?: string[];
+    corpusOmitted?: Array<{ name: string; reason: "not-linked" | "not-utf8" | "ambiguous-read" }>;
     trimRecord: Array<{ section: string; droppedBytes: number }>;
     packageTruncated: boolean;
   };
@@ -1333,6 +1335,21 @@ export function buildTextReport(state: ReportState): string {
           ? `  corpus OMITTED ${c.name} (${c.totalBytes.toLocaleString()} B) — its share would be below the minimum useful slice; SPLIT this file`
           : `  corpus CUT ${c.name}: kept ${c.keptBytes.toLocaleString()} of ${c.totalBytes.toLocaleString()} B — the corpus as a whole exceeds the ceiling`,
       );
+    // Plugin-root references present in the mount but not packaged. A SEPARATE line from corpusExcluded:
+    // these files ARE tracked and WERE delivered, so the "git add them" remedy would be a lie. Rendering
+    // them at all is the point of the narrow selection rule — an author who expected a shared file to be
+    // graded is told it was not, and why, rather than the omission being silent.
+    if (eb.corpusOmitted?.length) {
+      const byReason = new Map<string, string[]>();
+      for (const o of eb.corpusOmitted) byReason.set(o.reason, [...(byReason.get(o.reason) ?? []), o.name]);
+      const explain: Record<string, string> = {
+        "not-linked": "this skill's SKILL.md, references/ and sub-agents never point at them",
+        "not-utf8": "not valid UTF-8 (a binary asset), so never shown to a text evaluator",
+        "ambiguous-read": "read during the run, but the access path cannot distinguish them from a same-named skill-local file",
+      };
+      for (const [reason, names] of [...byReason].sort())
+        out.push(`  plugin-root references NOT graded (${explain[reason] ?? reason}): ${names.join(", ")}`);
+    }
     if (eb.corpusExcluded.length)
       out.push(
         `  NOT graded (staging would not deliver them — untracked): ${eb.corpusExcluded.join(", ")} — 'git add' them to grade as-published`,
@@ -1457,7 +1474,7 @@ export function buildTextReport(state: ReportState): string {
   if (scriptish.length) {
     out.push(
       `  note: ${scriptish.length} of these reference \`scripts/\` — those files are OUTSIDE the evaluator's corpus by design ` +
-        `(it grades authored guidance: SKILL.md, references/**, and every agents/**.md the skill dispatches). "not adjudicable" there means the evaluator ` +
+        `(it grades authored guidance: SKILL.md, references/**, every agents/**.md the skill dispatches, and the plugin-root references/ files it points at). "not adjudicable" there means the evaluator ` +
         `could not SEE the code, NOT that the claim is false — settle it by reading the script. If a script's contract matters ` +
         `to how the skill is USED, state it in SKILL.md or a references/ file, where the evaluator can grade it.`,
       "",
@@ -1937,13 +1954,14 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         corpusCuts: ccuts,
         corpusExcluded: cex,
         corpusPackaged: cpk,
+        corpusOmitted: com,
         trimRecord: tr,
         packageTruncated: pt,
         noSkillFilesRead: nofr,
         referenceAccessUnobservable: rau,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agents: resolvedSkill.agents,
-        agentsRoot: resolvedSkill.agentsRoot,
+        pluginRoot: resolvedSkill.agentsRoot,
       });
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
@@ -1954,6 +1972,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         corpusCuts: ccuts,
         corpusExcluded: cex,
         corpusPackaged: cpk,
+        corpusOmitted: com,
         trimRecord: tr,
         packageTruncated: pt,
       };

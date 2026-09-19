@@ -80,7 +80,7 @@ describe("packageEvidence: agents/references content sections", () => {
     const runDir = runDirStub();
     const { sections } = packageEvidence(runDir, snapshotTurnBoundary(runDir), join(root, "skills", "ms"), false, {
       agents: [{ name: "ms", absPath: join(root, "agents", "ms.md"), rel: "agents/ms.md", via: "skill-named" }],
-      agentsRoot: root,
+      pluginRoot: root,
     });
     const rendered = renderSections(sections);
     expect(rendered).toContain("system prompt for ms sub-agents");

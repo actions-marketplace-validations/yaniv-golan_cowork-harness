@@ -1204,3 +1204,120 @@ def test_nested_agents_move_subagent_type_severity_in_both_directions(tmp_path):
     assert "subagent-type-unresolvable" not in rules
     # and the typo is now a provable one rather than an unconfirmable unknown
     assert rules == ["subagent-type-not-found-in-plugin"]
+
+
+# ── Cross-language pin: _resolve_corpus_root_references ↔ resolveRootReferences (TS) ────────────────
+#
+# The critique packager now puts a multi-skill plugin's SHARED plugin-root `references/` files into the
+# evaluator corpus when the graded skill's authored text (or a dispatchable agent) points at them.
+# `_lint_skill_corpus_size` must size the same files or the ceiling warning under-reports exactly the
+# plugins this feature targets. Verified against the real founder-skills tree during development (all
+# six multi-skill plugins there matched exactly: cap-table 1, competitive-positioning 4, deck-review 1,
+# financial-model-review 6, ic-sim 1, market-sizing 1) -- that tree lives outside this repo, so these
+# tests exercise the same rules against small, self-contained fixtures instead.
+
+
+def test_root_references_arming_form(tmp_path):
+    """`From \\`${CLAUDE_PLUGIN_ROOT}/references/\\` (shared): \\`a.md\\`, \\`b.md\\`` -- the dominant real
+    shape, where only the DIRECTORY token carries a separator and the filenames are bare. The armed line
+    matches its bare basenames against the plugin root; an unmentioned root file is left out."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": (
+                "# ms\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `shared-a.md`, `shared-b.md`\n"
+            ),
+            "references/shared-a.md": "a",
+            "references/shared-b.md": "b",
+            "references/shared-c.md": "c",  # never mentioned -- must stay out
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert sorted(p.name for p in resolved) == ["shared-a.md", "shared-b.md"]
+
+
+def test_bare_references_path_does_not_match_root_basename(tmp_path):
+    """A slash-bearing token (`references/x.md`) is resolved by PATH, never by basename, even when a
+    plugin-root file happens to share that basename. It resolves relative to the file's own directory
+    (the skill's own references/, which doesn't have this file here), so it must NOT fall back to
+    matching the plugin root's `x.md` -- that fallback is bare-token-only, and this line is never armed."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\nSee references/x.md for details.\n",
+            "references/x.md": "root x",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert resolved == []
+
+
+def test_unbalanced_trailing_paren_stripped(tmp_path):
+    """`(Mitigation 2 — see plug/references/shared-a.md).` -- the trailing punctuation run `).` (an
+    UNBALANCED lone `)` plus a sentence-ending `.`) must be stripped without requiring bracket balance,
+    same as `TRAILING_PUNCT` in resolve-references.ts."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\n(Mitigation 2 — see plug/references/shared-a.md).\n",
+            "references/shared-a.md": "a",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert [p.name for p in resolved] == ["shared-a.md"]
+
+
+def test_link_found_only_in_skill_own_references(tmp_path):
+    """A root reference is counted when only the SKILL's own references/** text links it, never
+    mind SKILL.md itself -- clause 1 covers the whole `references/**` tree, not just SKILL.md."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\nnothing relevant here\n",
+            "skills/ms/references/local.md": (
+                "See `${CLAUDE_PLUGIN_ROOT}/references/shared-a.md` for shared context.\n"
+            ),
+            "references/shared-a.md": "shared",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert [p.name for p in resolved] == ["shared-a.md"]
+
+
+def test_linked_binary_excluded(tmp_path):
+    """Link-first, THEN utf8: a plugin-root file that IS linked but is not valid UTF-8 must be excluded
+    from the packaged set entirely, not merely skipped for byte counting."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `binary.bin`\n",
+            "references/binary.bin": "placeholder",
+        },
+        tmp_path / "plugin",
+    )
+    (root / "references" / "binary.bin").write_bytes(b"\xff\xfe\x00\x01broken")
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert resolved == []
+
+
+def test_same_directory_skip(tmp_path):
+    """SKIP (not "dedupe") the standalone-skill shape where the plugin root and the skill dir are the
+    same directory: those files are already packaged as skill-local, so running this pass too would
+    double-count them under two different display keys. Exercised directly against the low-level
+    `_resolve_root_references` worker so the guard is tested independent of how a caller derives
+    `plugin_dir` (the `skills/<name>` heuristic in `_resolve_corpus_root_references` never actually
+    produces `plugin_dir == skill_dir`, so this shape can't be reached through the public entry point)."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "solo"}',
+            "SKILL.md": "# solo\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `shared-a.md`\n",
+            "references/shared-a.md": "a",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_root_references(root, root, [])
+    assert resolved == []

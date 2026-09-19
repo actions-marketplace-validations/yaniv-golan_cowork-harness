@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { parse } from "yaml";
-import { listSkillFilesRecursive } from "./package-evidence.js";
+import { listSkillFilesRecursive } from "./corpus-walk.js";
 
 /** One sub-agent file the graded skill can dispatch, resolved for packaging into the evaluator corpus. */
 export interface ResolvedAgent {

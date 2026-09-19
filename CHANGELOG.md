@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **A `critique` on a multi-skill plugin now packages more than before**: the sub-agents the skill can
+  dispatch, and the plugin-root `references/` files it points at. Verdicts may shift — that is the point,
+  the evaluator was previously blind to that guidance — and a plugin already near the 512 KiB corpus
+  ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists exactly what was included.
 - **If your plugin's `agents/` folder contains only subdirectories, `lint-skill --strict` may newly fail**
   with `subagent-type-not-found-in-plugin`. The typo it names is real and was previously suppressed: the
   linter could not enumerate nested agents, so it had nothing to check the pinned `subagent_type` against
@@ -32,6 +36,25 @@ All notable changes to this project are documented here. The format is based on
     five other skills' agents.
   - **Also fixed at N=1:** an agent whose frontmatter `name:` differed from its filename resolved to
     nothing and was silently never packaged, however few agents the plugin had.
+- **A multi-skill plugin's SHARED plugin-root `references/` was outside the evaluator corpus.** The whole
+  plugin is mounted for the graded turn, so the agent could read those files while the evaluator could
+  not — on the plugin that reported this, `skills/cap-table/SKILL.md` links a 37,793 B shared
+  execution-model doc by name and the grader never saw it. The corpus now includes a plugin-root reference
+  when the graded skill points at it: from its own `SKILL.md` or `references/**`, from a sub-agent body
+  already in the corpus, or by the graded agent having read it during the run. Recognized link forms are
+  `${CLAUDE_PLUGIN_ROOT}/references/x.md`, `<plugin>/references/x.md`, and any relative path resolving
+  into that directory — a bare `references/x.md` still means the skill's OWN file.
+  - **Packaging the whole shared tree was measured and rejected.** It pushes that plugin's largest skill
+    to 107% of the ceiling and makes the allocator cut **the graded skill's own SKILL.md** by 37,295 B;
+    and because `already-covered` judges by presence with no notion of which skill authored a file,
+    another skill's shared docs would silently excuse a real gap — a true finding marked false.
+  - **What is left out is reported, not silent** — `evidenceBudget.corpusOmitted` names every unpackaged
+    plugin-root reference with a reason (`not-linked`, `not-utf8`, `ambiguous-read`), and the text report
+    renders it. That is what makes a narrow selection rule safe.
+  - Plugin-root references must be valid UTF-8; a binary asset (a font) is excluded as `not-utf8`. The
+    skill's own `references/**` keeps its deliberate no-filter rule — the asymmetry is documented.
+  - `lint-skill`'s ceiling sizing counts the same set (static clauses only; the read-during-the-run clause
+    cannot be mirrored statically). Verified byte-for-byte against the packager on a real 6-skill plugin.
 - **`critique <plugin>/skills/<name>` packaged ZERO sub-agents** while `lint-skill` sized them for the
   same tree — so the packager and the linter described different corpora for one plugin. Pointing
   `critique` straight at a skill dir is an invocation `docs/critique.md` recommends alongside `--skill`,
@@ -71,19 +94,6 @@ All notable changes to this project are documented here. The format is based on
   `subagent_type` literal that pulled it in). The extraction has no context awareness, so a literal a
   reference doc merely mentions — a template placeholder, a "never dispatch this" example — pulls its
   agent in; the provenance lets the evaluator weigh that instead of reading it as operative guidance.
-
-### Known limitations
-
-- **The plugin-root `references/` is still outside the corpus.** `critique` roots references at the skill
-  dir, so a multi-skill plugin's shared `references/` — 135,001 B on the reporting consumer's tree,
-  including the execution-model doc its `SKILL.md` points at — is mounted for the graded turn and absent
-  from the evidence. Same defect class as the one fixed above, and larger by volume. Adding the directory
-  wholesale is out (it puts that plugin's largest skill at 102% of the ceiling, and its `references/brand/`
-  holds a 33 KB font binary the text corpus has no business carrying), but a reachability rule looks
-  affordable — measured worst case 83% on the same tree. What is unsettled is the rule itself: a bare
-  `references/x.md` link in a skill's SKILL.md means that SKILL's references, not the root's, and the one
-  plugin measured disambiguates the root by writing `<plugin>/references/x.md` — an authoring convention,
-  not something the harness can rely on.
 
 ## [3.6.0] — 2026-09-18
 
