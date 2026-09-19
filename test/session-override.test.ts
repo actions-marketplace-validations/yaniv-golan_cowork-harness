@@ -39,11 +39,31 @@ const LIVE_BASELINE = loadBaseline("latest").appVersion;
  *  Measured: pinning the fixture to an older real baseline reds two cases in this file that have nothing
  *  to do with baselines. Normalising the irrelevant variable is what keeps them honest. */
 function relocate(): string {
-  const d = mkdtempSync(join(tmpdir(), "cwh-reloc-"));
+  // The cassette must land ONE LEVEL DEEPER than the mkdtemp root, in a `nested/` dir this test owns.
+  // Its recorded `../sessions/default.yaml` is resolved with a single join against the cassette's own
+  // directory (`resolveCassetteSessionPath`), so a cassette written directly into `<tmpdir>/cwh-reloc-X/`
+  // resolves to `$TMPDIR/sessions/default.yaml` — a world-writable path outside this test's control that
+  // earlier harness runs do in fact create. Where it exists the resolver SUCCEEDS, and every case here
+  // that depends on the session being unresolvable measures nothing while still looking green-ish; two of
+  // them fail outright. The extra level keeps the `../` inside the temp tree without weakening the
+  // `../`-relative shape these tests exist to exercise.
+  const root = mkdtempSync(join(tmpdir(), "cwh-reloc-"));
+  const d = join(root, "nested");
+  mkdirSync(d);
   const dest = join(d, "example-pdf-skill.cassette.json");
   const c = JSON.parse(readFileSync(FIXTURE, "utf8"));
   if (c.fingerprint?.baseline) c.fingerprint.baseline = LIVE_BASELINE;
   writeFileSync(dest, JSON.stringify(c));
+  // Assert the isolation rather than assume it: resolve the recorded path exactly as production does and
+  // require it to be absent. Without this, a future relocation of the fixture (or a recorded session path
+  // with a different number of `../`) reopens the hole silently — which is precisely how it hid before.
+  const resolved = resolveCassetteSessionPath(c.scenario?.session ?? "../sessions/default.yaml", d).path;
+  if (existsSync(resolved)) {
+    throw new Error(
+      `relocate() is not isolated: the relocated cassette's session resolves to ${resolved}, which exists. ` +
+        `These tests require it NOT to — nest the fixture deeper.`,
+    );
+  }
   return dest;
 }
 
