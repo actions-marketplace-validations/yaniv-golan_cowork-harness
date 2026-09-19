@@ -471,6 +471,53 @@ describe("corpusOmitted distinguishes 'not linked' from 'not linked AND not deli
     });
   });
 
+  it("flags it on EVERY reason, not just not-linked", () => {
+    // A property present on some rows and absent on others re-creates the same "false or unevaluated?"
+    // ambiguity one level down — which is the whole reason the flag is three-state.
+    const root = tree(
+      { "plugin.json": '{"name": "plug"}', "skills/ms/SKILL.md": "# ms\nSee `plug/references/font.bin`.\n" },
+      { git: true },
+    );
+    mkdirSync(join(root, "references"), { recursive: true });
+    writeFileSync(join(root, "references", "font.bin"), Buffer.from([0x00, 0xff, 0xfe, 0x41])); // linked, binary, untracked
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-ru-"));
+    const res = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, true, { agents: r.agents, pluginRoot: r.pluginRoot });
+    expect(res.corpusOmitted).toEqual([{ name: "plug/references/font.bin", reason: "not-utf8", alsoUntracked: true }]);
+  });
+
+  it("the text report prints the untracked ones on their OWN line, with their own remedy", async () => {
+    const { buildTextReport } = await import("../src/critique/command.js");
+    const text = buildTextReport({
+      skillFolder: "/p",
+      prompt: "p",
+      sessionId: "s",
+      outDir: "/o",
+      fidelity: "container",
+      items: [],
+      evidenceBudget: {
+        corpusBytes: 10,
+        corpusCeiling: 524_288,
+        corpusCuts: [],
+        corpusExcluded: [],
+        corpusPackaged: ["SKILL.md"],
+        corpusOmitted: [
+          { name: "plug/references/tracked.md", reason: "not-linked", alsoUntracked: false },
+          { name: "plug/references/untracked.md", reason: "not-linked", alsoUntracked: true },
+          { name: "plug/references/unknown.md", reason: "not-linked" }, // never evaluated
+        ],
+        trimRecord: [],
+        packageTruncated: false,
+      },
+    } as never);
+    // Assert on the EXTRACTED line, not with a negative regex: `untracked.md` ends with `tracked.md`,
+    // so a naive /[^\n]*tracked\.md/ matches the very line it is meant to exclude.
+    const line = text.split("\n").find((l) => l.includes("staging would not deliver these anyway"))!;
+    expect(line).toBeDefined();
+    const named = line.slice(line.indexOf("(untracked):") + "(untracked):".length).split("—")[0]!;
+    expect(named.split(",").map((x) => x.trim())).toEqual(["plug/references/untracked.md"]);
+  });
+
   it("CONTROL: outside a git work tree the flag is ABSENT, never false — we did not look", () => {
     const root = tree({ "plugin.json": '{"name": "plug"}', "skills/ms/SKILL.md": "# ms\n", "references/a.md": "A\n" });
     const r = resolveCritiquedSkillDir(root, "ms");
