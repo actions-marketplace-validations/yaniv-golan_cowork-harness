@@ -141,10 +141,31 @@ All notable changes to this project are documented here. The format is based on
   is not listed; a partially cut one is, with its loss in `corpusCuts`). `corpusCuts`/`corpusExcluded` name files only when
   something goes wrong with them, so nothing previously showed which sub-agent bodies a grade rested on.
   Optional, and deliberately absent from the schema's `required`: stored reports predating it stay valid.
+- **`evidenceBudget.corpusOmitted`** in the critique report and JSON schema — every corpus file present
+  but NOT packaged, with the reason: `not-linked` (nothing in the skill's authored text, a packaged agent
+  body, or the graded agent's own read points at it), `not-utf8` (a plugin-root reference that is not
+  valid UTF-8, e.g. a font asset — the skill's **own** `references/**` has no such filter), `unreadable`
+  (a resolved sub-agent whose file could not be read, so the evaluator got a placeholder), or
+  `ambiguous-read` (the agent read a path that exists under both the skill's own `references/` and the
+  plugin root's, so which tree it read cannot be attributed). Each row may carry `alsoUntracked` —
+  THREE-state: `true`/`false` when trackedness was evaluated, and **absent**, never `false`, when it could
+  not be (git mode off, an unreadable index, a non-work-tree, or a work tree with nothing tracked).
+  Optional and absent from the schema's `required`, like `corpusPackaged`. The text report renders these
+  grouped by reason, with the untracked ones called out on their own line and their own remedy.
 - Each packaged agent section names **why** it is in the corpus (`skill-named`, or the `file:line` of the
   `subagent_type` literal that pulled it in). The extraction has no context awareness, so a literal a
   reference doc merely mentions — a template placeholder, a "never dispatch this" example — pulls its
   agent in; the provenance lets the evaluator weigh that instead of reading it as operative guidance.
+
+### Internal
+
+- **`npm run gen:surface` emits prettier-formatted output.** `JSON.stringify(x, null, 2)` puts every array
+  element on its own line while the committed baseline keeps short arrays inline at the repo's 140-column
+  width, so a regen reflowed ~460 untouched lines around whatever actually changed. Nothing was broken —
+  `test/surface-contract.test.ts` compares parsed data, not text — but a 468-line diff is one nobody reads
+  closely, and that snapshot exists precisely so a surface change DOES get read closely. It resolves
+  `.prettierrc` explicitly: `format({ filepath })` infers only the parser from the extension, so without
+  that the output formats at prettier's default 80 columns and still reflows.
 
 ## [3.6.0] — 2026-09-18
 
