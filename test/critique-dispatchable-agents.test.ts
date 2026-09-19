@@ -73,6 +73,24 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
     expect(r.agents.map((a) => a.rel)).toEqual(["agents/helper.md"]);
   });
 
+  it("a skill dir targeted DIRECTLY resolves the same agents as --skill (walks up for the plugin root)", () => {
+    // `critique <plugin>/skills/<name>` is an invocation docs/critique.md:114 recommends, and it packaged
+    // ZERO agents while scenario.py sized them — `agentsRoot` was the positional folder, and a skill dir
+    // has no agents/ of its own. The two spellings must agree or the packager and the linter describe
+    // different corpora for the same tree.
+    const root = materialize({
+      "plugin.json": '{"name": "plug"}',
+      "skills/ms/SKILL.md": '# ms\nsubagent_type: "plug:ms-redteam"\n',
+      "agents/ms.md": "primary\n",
+      "agents/ms-redteam.md": "red team\n",
+    });
+    const viaSelector = resolveCritiquedSkillDir(root, "ms");
+    const viaSkillDir = resolveCritiquedSkillDir(join(root, "skills", "ms"), undefined);
+    expect(viaSkillDir.agents.map((a) => a.rel)).toEqual(["agents/ms-redteam.md", "agents/ms.md"]);
+    expect(viaSkillDir.agents.map((a) => a.rel)).toEqual(viaSelector.agents.map((a) => a.rel));
+    expect(viaSkillDir.agentsRoot).toBe(root);
+  });
+
   it("a dir with no SKILL.md anywhere resolves no agents", () => {
     const root = materialize({ "plugin.json": '{"name": "plug"}', "agents/stray.md": "x\n" });
     expect(resolveCritiquedSkillDir(root, undefined).agents).toEqual([]);

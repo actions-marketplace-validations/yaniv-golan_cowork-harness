@@ -22,12 +22,13 @@ import { renderKnownLimitations } from "./limitations.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, extname, join } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
+import { findEnclosingPluginDir } from "../run/analyze-skill.js";
 import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
@@ -487,9 +488,9 @@ export function resolveCritiquedSkillDir(
   // Agent files are tracked relative to the PLUGIN ROOT, not to skillDir (they live at
   // <root>/agents/**.md while skillDir is <root>/skills/<name>), so the packager needs the root to check
   // each one against the same tracked set staging used.
-  const agentsFor = (skillDir: string, name: string | undefined) => ({
-    agents: resolveDispatchableAgents(skillFolder, skillDir, name),
-    agentsRoot: skillFolder,
+  const agentsFor = (pluginRoot: string, skillDir: string, name: string | undefined) => ({
+    agents: resolveDispatchableAgents(pluginRoot, skillDir, name),
+    agentsRoot: pluginRoot,
   });
   const listPluginSkills = (): string[] => {
     try {
@@ -510,19 +511,30 @@ export function resolveCritiquedSkillDir(
           (available.length ? ` — available skills: ${available.join(", ")}` : ` — no skills/<name>/SKILL.md found at all`),
       );
     }
-    return { skillDir: candidate, ...agentsFor(candidate, skillSelector) };
+    return { skillDir: candidate, ...agentsFor(skillFolder, candidate, skillSelector) };
   }
-  // A plain skill folder — which can ALSO be a plugin root: a dir may carry both a top-level SKILL.md and
-  // a plugin manifest (see analyze-skill.ts's same note; this repo's own .claude/skills/cowork-harness/ is
-  // one). When a manifest is present the skill's own name is the manifest name, so the dispatch clauses can
-  // serve this branch too; before, it returned no agents unconditionally and a single-skill plugin laid out
-  // this way packaged zero agent bodies.
-  if (existsSync(join(skillFolder, "SKILL.md"))) return { skillDir: skillFolder, ...agentsFor(skillFolder, readPluginName(skillFolder)) };
+  // A plain skill folder. TWO distinct shapes hide here, and conflating them is what made
+  // `critique <plugin>/skills/<name>` — an invocation both docs/critique.md and the multi-skill hint below
+  // recommend — package ZERO agents while `scenario.py` sized them: `agentsRoot` was always the positional
+  // folder, and a skill dir has no `agents/` of its own.
+  //   1. the dir IS the plugin root (manifest + top-level SKILL.md; this repo's own
+  //      .claude/skills/cowork-harness/ is one) — the skill's name is the manifest name; or
+  //   2. the dir is a skill INSIDE a plugin, targeted directly rather than via `--skill`. Walk UP for the
+  //      enclosing manifest, exactly as analyze-skill does for the same shape — its `findEnclosingPluginDir`
+  //      is REUSED, not re-derived; this rule already had one copy too many across TS and Python, and that
+  //      divergence is what let the packager and the linter disagree about the same tree.
+  if (existsSync(join(skillFolder, "SKILL.md"))) {
+    const enclosing = findEnclosingPluginDir(skillFolder);
+    // `findEnclosingPluginDir` is INCLUSIVE of its start, so an equal path is shape 1, not shape 2.
+    if (enclosing !== null && enclosing !== resolve(skillFolder))
+      return { skillDir: skillFolder, ...agentsFor(enclosing, skillFolder, basename(skillFolder)) };
+    return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
+  }
   const skills = listPluginSkills();
   if (skills.length === 1)
     return {
       skillDir: join(skillFolder, "skills", skills[0]!),
-      ...agentsFor(join(skillFolder, "skills", skills[0]!), skills[0]!),
+      ...agentsFor(skillFolder, join(skillFolder, "skills", skills[0]!), skills[0]!),
       autoSelectedSkill: skills[0]!,
     };
   if (skills.length > 1)

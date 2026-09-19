@@ -32,6 +32,13 @@ All notable changes to this project are documented here. The format is based on
     five other skills' agents.
   - **Also fixed at N=1:** an agent whose frontmatter `name:` differed from its filename resolved to
     nothing and was silently never packaged, however few agents the plugin had.
+- **`critique <plugin>/skills/<name>` packaged ZERO sub-agents** while `lint-skill` sized them for the
+  same tree — so the packager and the linter described different corpora for one plugin. Pointing
+  `critique` straight at a skill dir is an invocation `docs/critique.md` recommends alongside `--skill`,
+  but the plugin root was taken from the positional argument, and a skill dir has no `agents/` of its own.
+  It now walks UP for the enclosing plugin manifest, reusing `analyze-skill`'s `findEnclosingPluginDir`
+  rather than adding a third derivation of that rule. Pre-existing — the old code packaged no agents on
+  that branch either — and found while reviewing the change above.
 - **`lint-skill`'s corpus-ceiling sizing counted one agent while the packager shipped N.** It now sizes
   the same resolved set (shared behavioural fixture, `test/fixtures/dispatchable-agents.json`, executed by
   both the TypeScript and Python implementations). Without this, `skill-corpus-over-evidence-ceiling`
