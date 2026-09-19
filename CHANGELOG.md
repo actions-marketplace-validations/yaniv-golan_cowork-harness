@@ -13,6 +13,13 @@ All notable changes to this project are documented here. The format is based on
   the evaluator was previously blind to that guidance — and a plugin already near the 512 KiB corpus
   ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists every file whose content actually shipped into the
   corpus (a file the ceiling zeroed is not listed; a partially cut one is, with its loss in `corpusCuts`).
+- **Verdicts can shift on a SINGLE-agent plugin too, if its agent's filename and declared `name:`
+  disagree.** The bullet above is about plugins with more than one agent, but the same filename-keyed
+  resolution had a worse failure at N=1: an `agents/redteam.md` declaring `name: market-sizing` matched
+  neither the filename lookup nor anything else, so the evaluator received an **empty** agent corpus and
+  graded the skill as though it had no sub-agent guidance at all. If that describes your plugin, expect a
+  larger verdict shift than a multi-agent one — you are going from nothing to something, not from one to
+  several. Check `evidenceBudget.corpusPackaged` on the first run after upgrading.
 - **If your plugin's `agents/` folder contains only subdirectories, `lint-skill --strict` may newly fail**
   with `subagent-type-not-found-in-plugin`. The typo it names is real and was previously suppressed: the
   linter could not enumerate nested agents, so it had nothing to check the pinned `subagent_type` against
