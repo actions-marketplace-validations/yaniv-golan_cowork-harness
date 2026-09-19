@@ -170,8 +170,8 @@ least one vector.
 > Read the whole list before editing it, and **append rather than splice** — a range edit anchored on
 > two dates can silently swallow an entry that sits between them.
 >
-> **Current live scope lives in [DESIGN.md](../DESIGN.md), not here** — its § 6 "Control protocol"
-> heading carries the live pin and its "Scope of that claim" note.
+> **Current live scope lives in [DESIGN.md § Control protocol](../DESIGN.md#control-protocol--verified-end-to-end-against-the-live-host-cli-macos), not here** — that
+> section's "Scope of that claim" note is the single authority for the live pin.
 > Each dated entry below states the live pin **as it stood on that entry's date** and is never restamped,
 > so the oldest-looking pin in this file is not a claim about today.
 
