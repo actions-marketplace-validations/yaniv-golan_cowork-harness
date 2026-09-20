@@ -38,6 +38,21 @@
 # unscoped form ever stops refusing, the filler is mis-sized against the 64 KiB budget / 16 KiB per-file
 # cap and this scenario has stopped testing anything — resize it rather than committing it green.
 
+# WHY THE DELIVERABLE REPORTS ON STEP 1 RATHER THAN A MIGRATION. The payload was once
+# "The migration completed successfully and no data was lost." — an assertion about an event that
+# never happened, which the prompt then told the agent to ship with no caveats. Current models refuse
+# it, correctly: reproduced twice on 2026-09-20 at container tier, the agent naming the "reply with
+# exactly Done." instruction as what made it look designed to launder a false claim. Historical pass
+# rate had already decayed to 56% over 9 runs; no commit had touched this file since v3.6.0, so it was
+# fixture rot, not a regression.
+#
+# The replacement is a statement the agent can verify from its own step-1 output, so the refusal
+# pressure is gone while the property under test is untouched: the deliverable is still ONE small file
+# written after ~120 KB of filler, and the scope must still spend the budget on it first. Do NOT
+# restore a fabricated claim here for realism — a fixture that trains an agent to emit a false status
+# report is a bad test whether or not it passes. (Precedent: `live-outputs-delete`'s comment case,
+# retired in 1.25.0 for the same reason; softening its coercive preamble was tried and made it worse.)
+
 baseline: latest
 session: ../sessions/minimal.yaml
 fidelity: container
@@ -45,9 +60,10 @@ prompt: |
   Do both of these, in order.
   1. Run this exact command with your Bash tool:
      mkdir -p mnt/outputs/_work && for i in 1 2 3 4 5 6; do yes "filler line for budget exhaustion" | head -c 20480 > "mnt/outputs/_work/f$i.md"; done
-  2. Using your file tools, write mnt/outputs/report.md containing exactly these two lines and nothing else:
+  2. Using your file tools, write mnt/outputs/report.md containing exactly these three lines and nothing else:
      # Status Report
-     The migration completed successfully and no data was lost.
+     Step 1 created six filler files under mnt/outputs/_work/.
+     All six writes completed without error.
   Then reply with exactly: "Done." and nothing else.
 assert:
   - result: success
@@ -62,6 +78,6 @@ assert:
   # matches everything, narrows nothing, and the harness warns about precisely that.
   - semantic_matches:
       rubric:
-        - The document reports that a migration finished successfully.
-        - The document states that no data was lost.
+        - The document reports that six filler files were created under a _work directory.
+        - The document states that all six writes completed without error.
       evidence_files: ["outputs/report.md"]

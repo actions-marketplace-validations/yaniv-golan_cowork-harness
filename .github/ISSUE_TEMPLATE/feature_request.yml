@@ -22,7 +22,10 @@ body:
         - Scenario / assertions
         - Boundary / sandbox fidelity
         - Parity sync
-        - Runtimes (container / microvm)
+        - Runtimes (protocol / container / microvm / hostloop / cowork)
+        - Companion skill / plugin
+        - critique (skill self-report grading)
+        - Python pytest lane
         - CI / tooling
         - Docs
     validations:

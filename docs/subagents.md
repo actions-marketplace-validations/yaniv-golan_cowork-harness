@@ -5,6 +5,22 @@ the main loop, and that model changes shape between host-loop and the VM-loop ti
 reference for what a sub-agent can reach, what tools it ends up with, and where the two loops diverge
 — read it before writing (or asserting) any skill that dispatches sub-agents.
 
+## On this page
+
+- [Canonical outputs addressing](#canonical-outputs-addressing--tier-qualified-there-is-no-single-cross-tier-literal-form)
+- [Static path-fidelity check (`analyze-skill`)](#static-path-fidelity-check-analyze-skill)
+- [Static `subagent_type` resolution (`resolve-agent-types` / `lint-skill`)](#static-subagent_type-resolution-resolve-agent-types--lint-skill)
+- [Capability / path matrix](#capability--path-matrix)
+- [What a host-loop sub-agent is TOLD about that matrix (Desktop >= 1.46388.3)](#what-a-host-loop-sub-agent-is-told-about-that-matrix-desktop--1463883)
+- [Sub-agent tool composition](#sub-agent-tool-composition)
+- [Cross-tier sub-agent deltas](#cross-tier-sub-agent-deltas)
+- [The type-less dispatch trap](#the-type-less-dispatch-trap)
+- [Sub-agent identity, model, and environment](#sub-agent-identity-model-and-environment)
+- [Lifecycle / resume / fan-out](#lifecycle--resume--fan-out)
+- [Assertion semantics](#assertion-semantics--read-before-writing-a-shell-free-policy)
+- [Observing mechanics cheaply](#observing-mechanics-cheaply)
+- [Stream observability](#stream-observability--where-the-sub-agent--path-telemetry-comes-from)
+
 ## Canonical outputs addressing — TIER-QUALIFIED (there is no single cross-tier literal form)
 
 **Host-loop (production default; `fidelity: hostloop`):**

@@ -166,6 +166,26 @@ least one vector.
 
 ### v1 changelog
 
+> **Entries are NOT in date order**, and cross-reference each other positionally ("the entry below").
+> Read the whole list before editing it, and **append rather than splice** — a range edit anchored on
+> two dates can silently swallow an entry that sits between them.
+>
+> **Current live scope lives in [DESIGN.md § Control protocol](../DESIGN.md#control-protocol--verified-end-to-end-against-the-live-host-cli-macos), not here** — that
+> section's "Scope of that claim" note is the single authority for the live pin.
+> Each dated entry below states the live pin **as it stood on that entry's date** and is never restamped,
+> so the oldest-looking pin in this file is not a claim about today.
+
+- **2026-09-19** — **coverage-log gap, recorded not closed.** Thirteen baselines have shipped since the
+  2026-08-05 entry below with **no v1-changelog entry of their own**: `1.26832.0`, `1.28929.0`, `1.30096.1`,
+  `1.32352.0`, `1.32885.1`, `1.34493.1`, `1.37937.1`, `1.40609.0`, `1.40609.1`, `1.44121.1`, `1.46388.3`,
+  `1.46388.4`, `2.2553.1`. **This entry claims no verification of them.** It exists because the 2026-08-01
+  entry below established the rule that silence here must never be ambiguous between "nothing additive was
+  observed" and "nobody updated this file" — and for these thirteen the honest answer is the second. What
+  *is* known: each shipped with a committed baseline and a green suite, and `sync` is the gate that would
+  have reported an unknown delta; what was **not** done is the per-release protocol pass (asar subtype-set
+  comparison, or a live tier re-run) that every entry below rests on. Treat the control-protocol facts in
+  this file as verified through `desktop-1.25927.0` and *inherited, unverified*, past it. The last **live**
+  end-to-end pass remains `2026-07-11 / desktop-1.20186.0`, unchanged.
 - **2026-08-23** — **coverage correction, additive.** Three request subtypes the harness has always
   answered were undescribed — `request_user_dialog`, `elicitation`, `side_question` — as was the
   fail-closed `subtype:"error"` response envelope. Measured before the fix: all five representative frames

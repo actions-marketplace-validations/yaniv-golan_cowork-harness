@@ -1064,6 +1064,31 @@
       ".evidenceBudget.corpusExcluded[]": {
         "type": "string"
       },
+      ".evidenceBudget.corpusOmitted": {
+        "type": "array"
+      },
+      ".evidenceBudget.corpusOmitted[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".evidenceBudget.corpusOmitted[].alsoUntracked": {
+        "type": "boolean"
+      },
+      ".evidenceBudget.corpusOmitted[].name": {
+        "type": "string",
+        "required": true
+      },
+      ".evidenceBudget.corpusOmitted[].reason": {
+        "type": "string",
+        "enum": ["not-linked", "not-utf8", "ambiguous-read", "unreadable"],
+        "required": true
+      },
+      ".evidenceBudget.corpusPackaged": {
+        "type": "array"
+      },
+      ".evidenceBudget.corpusPackaged[]": {
+        "type": "string"
+      },
       ".evidenceBudget.packageTruncated": {
         "type": "boolean",
         "required": true
