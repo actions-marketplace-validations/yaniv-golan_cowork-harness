@@ -22,9 +22,12 @@ finding's `evidence` excerpt must resolve verbatim against this package, or it l
 
 ## Cost across critiques — the index, not the reports
 
-A critique is FOUR model workloads but only TWO produce a run, so only two produce index rows; the
-evaluator passes produce none. Each critique therefore appends a **roll-up row** (`critiqueRole:"rollup"`)
-carrying `critiqueTotalUsd` — the whole four-workload spend. Its own `costUsd` is the **evaluator passes
+A critique is **up to FOUR** model workloads — two graded turns and two evaluator passes — but only the
+TWO graded turns produce a run, so only two produce index rows; the evaluator passes produce none. Each
+critique therefore appends a **roll-up row** (`critiqueRole:"rollup"`) carrying `critiqueTotalUsd` — the
+whole spend across whatever workloads actually ran. **Evaluator pass 2 is skipped entirely when no
+self-report was captured** (nothing to verify), so a completed critique can be three workloads and the
+roll-up covers three. Its own `costUsd` is the **evaluator passes
 only**, so `sum(costUsd)` over every row is exactly true spend with nothing double-counted or missed. The
 turn rows carry `critiqueRole:"task"` / `"reflection"`.
 
