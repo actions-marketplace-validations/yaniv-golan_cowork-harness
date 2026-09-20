@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [3.7.0] — 2026-09-20
 
+> **Live-validated.** A full live pass ran on 2026-09-20 against `desktop-2.2553.1` / agent `2.1.275`,
+> all four suites and all four tiers: `boundary-check` 6/6 · `npm run test:live` 19/19, zero skips ·
+> e2e self-tests 9/9 · `run examples/scenarios/` 7/7 on first run. Scope and caveats are in
+> [DESIGN.md](./DESIGN.md)'s "Scope of that claim" note, which is the single authority for the live pin.
+
 ### Upgrade notes
 
 - **A `critique` on a multi-skill plugin now packages more than before**: the sub-agents the skill can
