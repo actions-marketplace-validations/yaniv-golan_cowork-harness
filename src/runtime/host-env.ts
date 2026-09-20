@@ -1,11 +1,31 @@
 /**
  * The single impure boundary: runtime auth/TZ values read from the host env.
  *
- * Auth-env fidelity (SPEC §3.2): real Cowork passes ONLY `CLAUDE_CODE_OAUTH_TOKEN` — the desktop
- * blanks `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_CUSTOM_HEADERS` and deletes them
- * (`rtA`/`itA`, app.asar). So when an OAuth token is present we mirror that and DROP the API-key
- * vars (prefer the token, exactly like the desktop). Only when there is no token do we pass
- * `ANTHROPIC_API_KEY` through — the CI/headless escape hatch the harness intentionally keeps.
+ * Auth-env fidelity (SPEC §3.2, which scopes itself to container/microvm): real Cowork passes ONLY
+ * `CLAUDE_CODE_OAUTH_TOKEN` — the desktop blanks `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/
+ * `ANTHROPIC_CUSTOM_HEADERS` and deletes them (`rtA`/`itA`, app.asar). So when an OAuth token is
+ * present we mirror that and DROP the API-key vars (prefer the token, exactly like the desktop). Only
+ * when there is no token do we pass `ANTHROPIC_API_KEY` through — the CI/headless escape hatch the
+ * harness intentionally keeps.
+ *
+ * HOSTLOOP DIVERGENCE, measured 2026-09-06 (this function is imported by all three tiers, so the
+ * sentence above is not the whole story). Desktop's NATIVE spawn wrapper — non-win32 only, and reached
+ * solely from the host-loop branch — stages the token into a 0600 temp file, opens it, unlinks it, then
+ * `delete env.CLAUDE_CODE_OAUTH_TOKEN` and `env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR="3"`. So at
+ * hostloop production's agent receives the credential by FD and the harness's receives it by env var.
+ *
+ * This is a DELIVERY-MECHANISM divergence, not an auth or exposure one, and the reasons are worth
+ * recording so nobody "fixes" it into a pipe-and-descriptor emulation:
+ *   - the plain env var is still a first-class credential source in the agent (2.1.260 labels it
+ *     "from CLAUDE_CODE_OAUTH_TOKEN"; 104 occurrences vs 25 for the FD variant), so auth is unaffected;
+ *   - Desktop's own helper logs "falling back to env" and returns undefined on any I/O failure, i.e.
+ *     production itself takes the harness's path whenever staging fails;
+ *   - the agent's child-process scrubber lists `CLAUDE_CODE_OAUTH_TOKEN` FIRST, and it is the same
+ *     binary here, so every Bash-tool subprocess is scrubbed identically in both;
+ *   - at container/microvm production does NOT wrap at all — it passes the plain token into the guest,
+ *     exactly as the harness does. The divergence is hostloop-only.
+ * At hostloop the harness spawns a native process from an env that already holds the token, on the
+ * operator's own machine, so nothing crosses a boundary that was closed before.
  */
 /**
  * Env keys whose VALUES are secrets and must never be rendered into a process argv (visible via

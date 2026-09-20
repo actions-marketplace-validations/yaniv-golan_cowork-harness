@@ -40,11 +40,24 @@ export const PlatformBaseline = z.looseObject({
     // staging-identity is UNVERIFIED (byte-identity between the staged binary and the official release is
     // confirmed only for versions actually measured; Desktop could in principle repack what it stages).
     // `manifestChecksumMatch`: set ONLY on measured-local rows — whether the measured hash equalled the
-    // official manifest checksum ("unknown" if the manifest was unreachable at sync); omitted on
-    // official-manifest rows (there it would compare the manifest hash to itself → tautological).
+    // official manifest checksum published at `releaseBaseUrl` ("unknown" if that manifest was
+    // unreachable OR not served at sync time — `sync`'s own output distinguishes the two, the field does
+    // not); omitted on official-manifest rows (there it would compare the manifest hash to itself →
+    // tautological). Deliberately still two-valued on the wire: the field has no runtime consumer, and
+    // adding a third literal to a union consumers switch on is a covered-surface change (SPEC.md §12)
+    // bought for a distinction the WARNING/NOTE split already delivers to the human who reads it.
     // NO nativeSha256: the signed+notarized inner Mach-O embeds an LC_CODE_SIGNATURE and never equals any
     // manifest hash, so a manifest-derived native hash would match nothing on the hostloop path.
     sha256: z.string().optional(),
+    // `releaseBaseUrl`: the release channel Desktop staged this agent FROM, read out of the asar's SDK
+    // descriptor at sync time — `https://downloads.claude.ai/claude-code-releases`, or
+    // `…/claude-code-releases/rc/<40-hex commit>` for a release CANDIDATE. Three jobs: it names the
+    // source `manifestChecksumMatch` agreed with (without it the boolean is an unattributed claim); it
+    // makes the ELF-recovery runbook mechanical instead of a guess; and a stable<->RC flip is a real fact
+    // about how Desktop ships, surfaced as a `sync --diff` line. Recomputed every sync (it is derived
+    // from the local asar, so it needs no network and has no carry-forward branch); absent on baselines
+    // written before this field existed, all of which were stable-staged or later promoted.
+    releaseBaseUrl: z.string().optional(),
     shaProvenance: z.enum(["measured-local", "official-manifest"]).optional(),
     manifestChecksumMatch: z.union([z.boolean(), z.literal("unknown")]).optional(),
     // String sentinels: literal-occurrence counts of feature markers in the staged ELF whose runtime
@@ -102,11 +115,29 @@ export const PlatformBaseline = z.looseObject({
       subagentAppend: z.string().optional(),
       subagentAppendHostLoop: z.string().optional(),
       // The hook bundle real Cowork installs on the agent `initialize`, keyed by event name, each entry
-      // identifying ONE hook by its matcher plus a short note on what it does. Recorded as a DRIFT
-      // TRIPWIRE, not as an emulation source: the harness serves only `PreToolUse:Task` (see
-      // SERVED_HOOK_EVENTS in src/agent/session.ts for why), so this field's job is to make a future
-      // Desktop release that adds, drops, or re-matchers a hook show up as baseline drift instead of
-      // being discovered by a consumer months later — which is exactly how the gap it records was found.
+      // identifying ONE hook by its matcher plus a short note on what it does. Recorded as HAND-PINNED
+      // DOCUMENTATION, not as an emulation source: the harness serves only `PreToolUse:Task` (see
+      // SERVED_HOOK_EVENTS in src/agent/session.ts for why).
+      //
+      // DEMOTED 2026-09-06 — this comment used to call the field a DRIFT TRIPWIRE whose job was to make
+      // a Desktop release that "adds, drops, or re-matchers a hook show up as baseline drift". It cannot
+      // do that, and never could. `sync` neither derives nor validates the field's CONTENT: cli.ts
+      // spreads `spawn` forward from the base baseline, so `hooks` carries through every sync untouched,
+      // and no `check*Facts` sentinel in cowork-sync.ts covers it (the 30-odd hook references there all
+      // belong to checkPathHookFacts, a different subsystem). The zod shape below is validated on load;
+      // nothing compares it to the asar.
+      //
+      // The claim was disproved by its own subject. The force-ask entry's note read "permissionDecision:
+      // 'ask' regardless of permission mode" in FOURTEEN consecutive baselines, 1.24012.9 through
+      // 1.46388.3, and was false in every one of them. The scheduled-task early return shipped in
+      // Desktop 1.22209.0 — BEFORE 1.24012.9, the first baseline to carry this field, so that note was
+      // already wrong for 5 of the 9 tools on the day it was first committed. The builtin early return
+      // shipped three baselines later, at 1.26832.0, making it wrong for all 9 from there on. Every
+      // sync was green throughout. Believing the tripwire existed is what let it rot; saying so plainly
+      // is cheaper than building the sentinel that would make the old sentence true (a literal anchor
+      // over a hand-written descriptor, which is the release-day wedge cowork-sync.ts already warns
+      // about). Treat a note here as a dated observation, and re-verify it against the asar before
+      // relying on it.
       //
       // `matcher: null` means the hook carries no matcher (production's UserPromptSubmit hook is not
       // tool-scoped). Optional, so every baseline synced before this field existed stays valid.
@@ -816,6 +847,28 @@ export const Assertion = z.strictObject({
         .optional()
         .describe("how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)"),
       judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
+      evidence_files: z
+        .array(z.string().min(1))
+        .min(1)
+        // A REFINE, not a schema-visible constraint: `.min(1)` is satisfied by a single space, so `[" "]`
+        // loaded fine and only surfaced after a paid live run as "matched nothing". Refinements are
+        // invisible to `z.toJSONSchema`, so this rejects at load without changing the published schema.
+        .refine((globs) => globs.every((g) => g.trim().length > 0), {
+          message: "evidence_files entries must not be blank — a whitespace-only glob matches no authored path",
+        })
+        .optional()
+        .describe(
+          "scope the AUTHORED-FILE evidence this judge grades to these globs, so an unrelated file dropped at the capture " +
+            "budget can no longer refuse the verdict. NOT an existence assertion (that is `file_exists`) — it selects which " +
+            "authored files reach the judge and which omissions are treated as fatal. Paths are `<user-visible root>/<rel>` " +
+            "(e.g. `outputs/report.md`, NOT a bare `report.md`), the same key `no_unexpected_files`/`no_lost_write_back` use; " +
+            "session-root deliverables carry the synthetic `scratchpad/` prefix. Glob syntax is `*`/`?`/`**` (NOT regex), " +
+            "matched over the FULL path. Globs matching NOTHING fail evidence-unavailable rather than grading a rubric " +
+            "against zero authored evidence — the failure message lists the paths the run actually authored. When set, the " +
+            "capture also spends its size budget on these files FIRST and exempts them from the per-file cap, and an " +
+            "in-scope file that is still omitted or truncated fails evidence-unavailable (raise `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES` when a large deliverable legitimately needs more). Omitted = every authored file is " +
+            "judged and any omission refuses the verdict (the default, unchanged)",
+        ),
       include_subagent_text: z
         .boolean()
         .optional()
@@ -1460,6 +1513,33 @@ export interface RunResult {
      *  from a normal fail: an eval aggregator counts this rep as invalid (not a fail, not absent), so a
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
+    /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
+     *  than prose. There are FIVE distinct evidence-unavailable causes with five different fixes, and one
+     *  success shape; a consumer (usually an agent iterating on a skill) must be able to tell "your
+     *  `evidence_files` glob matched nothing" from "the deliverable was truncated" without regex-scraping
+     *  an English message. Same rationale as `judgeInvalid` above. `paths` carries the concrete file list
+     *  the reason is about: the run's authored paths for `scope_matched_nothing` (so the fix is IN the
+     *  failure), the offending in-scope paths for the omitted/truncated reasons, and the graded set for
+     *  `graded` — recorded on a substantive FAIL too, since the bug this guards against is a false
+     *  ABSENCE and a red is only actionable next to what the judge was actually shown.
+     *  `evidence_incomplete` is the UNSCOPED counterpart of `in_scope_omitted`: they want different fixes
+     *  (add a scope vs. fix the glob or raise the budget), so they must not share one value.
+     *  `no_pre_run_manifest` means the authored set could not be COMPUTED (no baseline to diff against),
+     *  which is distinct from every other reason: those describe evidence that exists and could not be
+     *  fully shown, this one describes evidence that was never derivable. Grading an empty authored set as
+     *  though it were complete is the vacuous green this value exists to make impossible.
+     *  Present only on the live lane where the judge ran. */
+    semanticEvidence?: {
+      reason:
+        | "graded"
+        | "scope_matched_nothing"
+        | "in_scope_omitted"
+        | "in_scope_truncated"
+        | "evidence_incomplete"
+        | "no_pre_run_manifest"
+        | "authored_evidence_truncated";
+      paths?: string[];
+    };
   }>;
   /** The overall run/asserted-lane verdict — `computeVerdict`'s (src/run/verdict.ts) `Verdict` return
    *  value, persisted VERBATIM (never a second, narrower shape) so a kept run's `result.json` answers "did

@@ -81,6 +81,12 @@ export const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)),
  */
 export const MOUNT_BARE_NAME_MIN_VERSION = "1.14271.0";
 
+/** First Desktop that constructs CLAUDE_CODE_DESKTOP_APP_VERSION in the spawn env (W2, unconditional on
+ *  first-party). Verified ABSENT from 1.46388.4, 1.46388.3, 1.44121.1, 1.40609.1 and 1.32885.1, and
+ *  present in 2.2553.1 — so injecting it on an older baseline would hand the agent a key that baseline's
+ *  Desktop never set. Not symmetric with CLAUDE_CODE_HOST_PLATFORM, which every asar on record sets. */
+export const DESKTOP_APP_VERSION_MIN_VERSION = "2.2553.1";
+
 /** True iff `found` is a same-major.minor, different-patch bump over `pinned` (both dotted version
  *  strings). The single definition of "patch-only" shared by the native-binary drift classifier and the
  *  VM-ELF parity-mount tolerance, so the two never diverge on what counts as a safe patch bump. */

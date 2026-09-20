@@ -221,7 +221,7 @@ export const SessionConfig = z.strictObject({
   // `{...plan.baseEnv}`), while container/microvm build a constructed allowlist. So an operator-exported
   // CLAUDE_CODE_SUBAGENT_MODEL / ENABLE_TOOL_SEARCH / CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS silently
   // affects only the env-inheriting tiers. This field is the authored, uniform replacement: it applies
-  // across ALL FOUR tiers, and the three keys are additionally SCRUBBED from the operator layer on
+  // across ALL FOUR tiers, and FIVE keys are SCRUBBED from the operator layer on
   // hostloop/protocol (the only tiers that inherit it) so an unset stray shell value can never leak
   // through. Precedence is TIER-QUALIFIED: hostloop/container/microvm layer a baseline `spawn.env`, so
   // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline-env overlay (it
@@ -231,20 +231,50 @@ export const SessionConfig = z.strictObject({
   // `ENABLE_TOOL_SEARCH="off"`, the binary's actual disable spelling.
   agent_env: z
     .strictObject({
-      subagent_model: z.string().optional(), // -> CLAUDE_CODE_SUBAGENT_MODEL (binary precedence: env > dispatch param > frontmatter > inherit)
+      // -> CLAUDE_CODE_SUBAGENT_MODEL. Binary precedence, verified in agent 2.1.260 (resolver + its own
+      // telemetry labels agree): dispatch param > frontmatter > ENV > inherit. This knob is the LOWEST
+      // non-inherit layer and does NOT outrank a sub-agent's frontmatter — the reverse order stood in
+      // this comment and in docs/{session,subagents}.md until 2026-09-06, unmeasured. Promoting env to
+      // the top is what CLAUDE_CODE_SUBAGENT_MODEL_FORCE does; the Cowork spawn sets neither.
+      subagent_model: z.string().optional(),
       tool_search: z.enum(["auto", "off"]).optional(), // -> ENABLE_TOOL_SEARCH
       disable_experimental_betas: z.boolean().optional(), // -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1" (also disables ToolSearch)
     })
     .default({}),
 });
 
-/** The three env keys that leak asymmetrically: hostloop/protocol inherit them from the operator's shell
+/** Env keys that leak asymmetrically: hostloop/protocol inherit them from the operator's shell
  *  (`...process.env` / `{...plan.baseEnv}`); container/microvm never do (a constructed allowlist). Scrubbed
- *  from the OPERATOR layer alone (before any baseline/knob overlay) on the two inheriting tiers. */
+ *  from the OPERATOR layer alone (before any baseline/knob overlay) on the two inheriting tiers.
+ *
+ *  MATCHING IS EXACT-KEY, NOT PREFIX — which is why the two `_FORCE` entries below are listed
+ *  separately rather than being covered by `CLAUDE_CODE_SUBAGENT_MODEL`. Added 2026-09-06 after the
+ *  sub-agent model precedence was measured (see `agent_env.subagent_model` above): both flags change how
+ *  a sub-agent's model resolves — `SUBAGENT_MODEL_FORCE` promotes the env override above the dispatch
+ *  parameter and the agent's frontmatter (read ungated), while
+ *  `COORDINATOR_FORCE_WORKER_INHERIT_MODEL` discards the dispatch parameter **only when
+ *  `CLAUDE_CODE_COORDINATOR_MODE` is also set** (its read site is `if(Ts()&&<key>)`, and `Ts()` is that
+ *  mode's predicate) — and **the Cowork spawn sets neither** (absent from the baseline's 24-key
+ *  `spawn.env`). So an operator who has one exported was getting different sub-agent model resolution on
+ *  hostloop/protocol than on container/microvm, in the exact shape this constant exists to prevent.
+ *
+ *  THE MEMBERSHIP RULE, because the list stopped being self-evident when it grew past three. It used to
+ *  be exactly the keys `agentEnvOverrides` maps, i.e. derivable. It is now: **a key is scrubbed when it
+ *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
+ *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
+ *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
+ *  binary's settable-env table meet (a) alone; (b) and (c) are what select these five.
+ *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
+ *  key above and swaps the coordinator system prompt and the Task tool description. It fails (b) as
+ *  currently written — the harness models no coordinator surface — so scrubbing it would suppress a
+ *  whole mode rather than close an asymmetry. Revisit if coordinator mode is ever modeled; that is the
+ *  next key to add, not a random one. */
 export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_SUBAGENT_MODEL",
   "ENABLE_TOOL_SEARCH",
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+  "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+  "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty
@@ -283,6 +313,14 @@ export interface Mount {
    * chat labels) keys off the KIND rather than fragile `mountPath` string prefixes like `.projects/`.
    */
   kind: "folder" | "project" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
+  /**
+   * The realpath of `hostPath`, set for `folder` mounts. Production's sub-agent folder manifest renders
+   * `resolvedFolders[i].canonical` (`gg()`), NOT the path as the user declared it, so a manifest built
+   * from `hostPath` would name a location production never names — on macOS every `/tmp`, `/var` or
+   * symlinked folder differs. Computed once here beside the naming canonicalization rather than
+   * re-derived at the render site, which would be a second copy of the same rule.
+   */
+  canonicalHostPath?: string;
   /**
    * Precomputed staging copy filter. When set, the runtime copy sites use it verbatim instead of
    * re-deriving via `gitCpFilter` — so the file count reported at plan-build equals the delivered set
@@ -333,6 +371,14 @@ export interface LaunchPlan {
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
   mounts: Mount[]; // uploads + projects + plugin roots (mountPath relative to mnt)
+  /**
+   * Folder mounts EXCLUDED from `mounts` because their source was missing and
+   * `COWORK_HARNESS_SOFT_MISSING=1` allowed the run to continue. Production's analogue is a
+   * `mount-failed` host-only folder, which it still LISTS in the sub-agent folder manifest — as
+   * unreachable — rather than dropping silently, so the manifest needs them. Empty in every ordinary
+   * run; nothing else consumes this.
+   */
+  hostOnlyFolders?: Mount[];
   pluginDirs: string[]; // mnt-relative plugin roots for --plugin-dir (incl. marketplace-resolved)
   egressAllow: string[]; // baseline allowlist + session extra (or ["*"] if unrestricted)
   agentSessionId?: string; // the agent's native --session-id (pinned for resume); set by executeScenario
@@ -724,6 +770,7 @@ export function buildLaunchPlan(
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
       kind: "folder",
+      canonicalHostPath: folderCanon[i],
     });
   }
   for (const proj of session.projects) {
@@ -987,6 +1034,8 @@ export function buildLaunchPlan(
     warn(`::warning:: [mount] ${missing.length} missing source(s) excluded (COWORK_HARNESS_SOFT_MISSING): ${list}\n`);
   }
   const presentMounts = softMissing ? mounts.filter((mt) => existsSync(mt.hostPath)) : mounts;
+  // What soft-missing DROPPED, kept for the sub-agent folder manifest (see LaunchPlan.hostOnlyFolders).
+  const hostOnlyFolders = mounts.filter((mt) => mt.kind === "folder" && !presentMounts.includes(mt));
 
   // Two sources mapping to the same destination would silently overwrite during staging. Fail
   // before staging, naming the collision, so a same-basename upload/plugin pair can't clobber.
@@ -1038,6 +1087,7 @@ export function buildLaunchPlan(
     permissionParity: session.permission_parity,
     baseEnv,
     mounts: presentMounts,
+    hostOnlyFolders,
     pluginDirs,
     egressAllow,
   };

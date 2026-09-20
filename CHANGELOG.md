@@ -6,6 +6,658 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-09-18
+
+### Upgrade notes
+
+- **If you run against Claude Desktop 2.2553.1 (agent 2.1.275), upgrade — `critique` and `--decider-llm`
+  are broken on 3.5.0 there.** That agent makes an auxiliary Haiku call in `-p` mode, and 3.5.0's LLM
+  transport hard-fails on the two-model envelope it produces (`critique` exits 2 with no error text).
+  3.6.0 identifies the primary model instead of counting keys. Nothing changes on older agents.
+- **`latest` now resolves to `desktop-2.2553.1`.** A cassette you recorded against `1.46388.4` with
+  `baseline: latest` reports `baseline` staleness on replay (warn by default; `--strict` fails). Re-record
+  it, or pin the scenario to `desktop-1.46388.4` if you are not ready to move.
+- **The spawned agent's env gains `CLAUDE_CODE_DESKTOP_APP_VERSION`** on baselines from 2.2553.1 on. It
+  is the value the agent uses for the `anthropic-client-version` request header; older baselines are
+  unaffected. If you snapshot the spawn env, expect the new key.
+- **Every `-p` call and every run on agent 2.1.275 now carries a ~$0.001 Haiku entry** in `modelUsage`
+  and in the run result's cost. Cost comparisons across the 2.1.260→2.1.275 bump will show it — it is
+  the agent's spend, not the harness's.
+
+### Added
+- **Parity: baseline `desktop-2.2553.1` (agent 2.1.275)** — the first `2.x` Claude Desktop. `sync` refused
+  to write with **10 unknown deltas**; all are resolved and the baseline is clean. Two of the ten turned
+  out to be defects in this repo's own extractor rather than changes in Desktop:
+  - **The S6c Artifact-gate flag was a false alarm.** The frame-artifacts predicate is byte-identical; it
+    merely stopped being its own statement (it now shares a declaration with the Artifact host-grant
+    binding). The sentinel's value capture ran past the top-level comma and swallowed the sibling binding,
+    so an anchored whole-expression match rejected an unchanged predicate — and the message it printed
+    ("cached-arm/HIPAA/trailing-term change") was simply wrong. The value is now sliced brace/paren/quote
+    aware to the first top-level `,` or `;`. Both directions are pinned by tests: the sibling-binding shape
+    stays clean, and a real widening hidden before the comma still fires.
+  - **The path-gate tool set and path keys were refactored, not removed.** Desktop replaced two array
+    literals with one tool→path-key map plus `Object.keys` / `[...new Set(Object.values(…))]` derivations,
+    which accounted for 4 of the 10 deltas at once. Same five tools, same two keys — no contract change.
+    The extractor now accepts either form. The map is matched **exactly and in order**, because
+    `Object.keys` order reaches the sub-agent prompt through `.join(", ")` while the manifest fingerprint
+    hashes generator source — a reordered map would otherwise change what the model reads with every check
+    still green. Keys and values must resolve to the *same* map, and an ambiguous binding flags rather than
+    taking the first match: the bundle carries two more same-shaped maps that add Bash/NotebookEdit/MultiEdit.
+
+- **`npm run check:claims` — a staleness report for this repo's "binary-verified" claims.** It lists every
+  version-stamped claim in `src/`, `scripts/` and `docs/` that is behind the currently pinned agent and
+  `app.asar` versions. First run: **42 of 49 claims behind the pin**, the oldest about 34 baselines back.
+  It **exits 0 by design and is not a gate** — a stale stamp is not a wrong claim, and hard-failing would
+  force a version bump every sync that anyone could satisfy by editing the digit without re-reading the
+  binary. Maintainers get it as step 3b of the parity-sync ritual; contributors need not run it.
+- **`test/subagent-model-precedence-elf.test.ts`** — pins the sub-agent model resolution order against the
+  agent binary itself, so the precedence corrected in 3.5.0 cannot silently drift back. It reads the
+  binary's own telemetry labels rather than a minified symbol (the gate accessor beside that code renamed
+  between two Desktop patch builds). Its second assertion is **not** gated on a staged binary: it fails if
+  `docs/session.md`, `docs/subagents.md` or `src/session.ts` reintroduces the reversed order, which is the
+  half CI can enforce and the way that claim went wrong in three places at once.
+
+**Why these two:** the repo carries ~49 version-stamped claims about the agent binary and,
+before 3.5.0, exactly one was re-derived from the binary by a test. Both claims spot-checked during that
+release turned out wrong — the hook-event list and the model precedence. Two for two is not a sample that
+justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
+shows the population and its age, and a human decides what to re-read.
+
+### Fixed
+
+- **The LLM decider transport no longer hard-fails on agent 2.1.275's two-model envelope.** The agent that
+  ships with Desktop 2.2553.1 makes an auxiliary Haiku call in `-p` mode, so `claude -p --output-format json`
+  now reports two `modelUsage` keys where 2.1.260 reported one — measured with the same prompt and flags
+  against both native binaries. The transport asserted exactly one key, which turned **every** critique
+  evaluator pass and every `--decider-llm` gate into an instrument failure on the new agent (`critique`
+  exited 2 with no error text; found by the live lane, which had this test gated off in the previous pass).
+  The primary model is now *identified* as the key that resolves the requested `--model` (exact id, or the
+  id carrying a floating alias like `sonnet` as a dash-separated segment) rather than *assumed* from the
+  count. Zero or several keys resolving the request still fails closed — that ambiguity is the contract
+  break the check exists to catch. The whole usage map is still passed through, so the auxiliary call's
+  cost is not lost.
+- **The spawned agent now sends the client-identity headers production sends.** Desktop 2.2553.1 sets
+  `CLAUDE_CODE_DESKTOP_APP_VERSION` unconditionally on first-party sessions, and the agent reads it on the
+  `local-agent` entrypoint — which the harness pins — as the fallback source of the `anthropic-client-version`
+  header (its companion `anthropic-client-platform` is the hard-coded literal `desktop_app`) whenever
+  `ANTHROPIC_CUSTOM_HEADERS` carries none, which is the harness's case. The key is host-derived (an Electron `app.getVersion()` call), so it is allowlisted in the sync
+  **and** injected from the baseline's `appVersion` in both the container and native spawn envs — **version-gated** to baselines from 2.2553.1 on, since injecting it on an older baseline would hand the agent a key that baseline's Desktop never set (not symmetric with `CLAUDE_CODE_HOST_PLATFORM`, which every asar on record sets). Allowlisting
+  it alone would have been silent: the allowlist is consulted before the pin list and the key is not
+  required, so the harness would simply have stopped sending those headers with nothing failing.
+- **`CLAUDE_ARTIFACT_HOST_GRANT` is guarded, not merely allowlisted.** The new key is allowlisted on the
+  grounds that a default session never receives it — a claim that rests entirely on its guard. A new
+  sentinel requires it to stay gated on the *same* predicate as the Artifact tool spread, and fires if it
+  is ever constructed unconditionally or re-keyed. (The existing frame-artifacts assertion could not reach
+  it: the two spreads have different shapes.)
+- **`CLAUDE_CODE_DISABLE_CRON` gained a second disjunct** (a managed-settings scheduled-tasks switch). The
+  pinned value is unchanged at `"1"`, and it is *earned* rather than assumed — the spawn window still passes
+  `disableCron:!0`, which short-circuits. The resolver and its anchor admit the new shape; the disjunct is
+  not inert in general, only under that short-circuit.
+
+### Changed
+
+
+- `CLAUDE_CODE_MODEL_CATALOG` (new, third-party-only branch) is allowlisted, matching the standing rule for
+  third-party-only keys.
+- **`design` added to the host-inventory scan's known-built-in skill roster.** It surfaced as a finding on
+  the first fresh `container` recording after this sync, on a cassette whose scenario declares no skills.
+  It qualifies under the roster's existing three criteria: the recording was sealed (`container`, so
+  `HOME=/tmp` and no host `~/.claude`), `"design"` is a bare literal in both the staged agent ELF and the
+  host CLI, and five personal skill names from the same machine are absent from that binary. It is not new
+  to this agent — the `design-consent` / `design-revoke` slash commands were already in the previously
+  shipped cassette; what changed is that the feature now also registers in `skills[]`, an axis the scan
+  treats more strictly.
+- **All three committed cassettes in `examples/replays/` are re-recorded against `desktop-2.2553.1`**, each reporting no behavioural change versus the recording it replaced. The `protocol` fixture was recorded on the hermetic managed config dir (`ANTHROPIC_API_KEY` path) and the `container` one in a sealed container; `verify-cassettes` reports zero host-inventory findings on all three.
+- **A full live pass was run against `desktop-2.2553.1` / agent 2.1.275**, all four suites and all four tiers: `boundary-check` 6/6; e2e self-tests 9/9 including `smoke-l2-microvm` in a real VM and `smoke-multiselect-deciderdir` through the `--decider-llm` path; `npm run test:live` 19 tests, 18 passed, 1 failed, **0 skipped** (the previous pass had one skip — the hostloop `critique` case — which this pass exercised for the first time and which found the transport defect fixed above); `run examples/scenarios/` 7/7. The one live red is a pre-existing `live-matrix` case on old baselines where the model sometimes answers as text instead of calling `AskUserQuestion` — model variance, re-run and flipped, logged for hardening.
+- **`test/model-provenance.test.ts`'s pre-coverage-note test now builds its own fixture.** Every committed cassette now carries `model` coverage, so no shipped fixture emits the note the test reads. Rather than asserting the note's shape only when one happens to be present — a test that could not fail — it rewrites a real cassette's session fingerprint to the pre-`model` hash in a temp tree that preserves the relative session layout.
+
+
+## [3.5.0] — 2026-09-06
+
+**Live verification for this release** (macOS arm64, agent **2.1.260**, agent image `cowork-agent-base:2`,
+Desktop 1.46388.4):
+
+| Suite | Result |
+|---|---|
+| `boundary-check` | **6/6** — host-fs-sealed, direct-egress-denied, allowlist-enforced, allowlist-permits, loopback-not-proxied, hostloop-bash-egress |
+| `npm run test:live` | **4 files, 18 passed, 1 skipped** — the skip is `live-outputs-delete`'s silent-guard case, which reports SKIPPED when the agent issues no Bash call (documented as expected-rare, not a failure) |
+| `run examples/scenarios/` | **7/7 success** across `container`, `hostloop` and `protocol` |
+| e2e self-tests | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, semantic-evidence-files, canary-hostloop |
+
+**Two things stated rather than glossed.** (a) The first `test:live` run showed one red — a sub-agent
+WebSearch that the model simply did not perform — and the first scenario batch showed one red on
+`example-pdf-skill`. Both were **model variance**: each passed on re-run with nothing changed, which is
+the disposition the tests themselves prescribe for this class. They are recorded because a suite that
+only ever reports its green run is not evidence of anything. (b) `smoke-l2-microvm` was **not run** this
+release. It is the ninth e2e scenario and the tier CI can never cover (Apple-VZ is macOS-arm64 only); the
+most recent microvm pass remains the one recorded under 3.4.0.
+
+### Added
+
+- **`liveVerifiedHookEvents` in the generated `assertion-keys.json` sidecar.** A new key alongside
+  `servedHookEvents` and `knownHookEvents`, naming the subset of hook events a plugin's own hook has
+  actually been **observed** to fire for in a harness run (three, live-verified at `container` and
+  `hostloop`). It exists so the linter can distinguish "the agent's validator accepts this name" from "a
+  run reaches this trigger" — two claims a single list would have conflated. Additive: a consumer reading
+  only the two existing keys is unaffected, and an older `scenario.py` ignores it.
+- **`test/hook-events-elf-parity.test.ts`** — re-extracts the hook-event list from the staged agent binary
+  at test time instead of comparing two hand-maintained files. It **skips where no Desktop is staged**, CI
+  included, and says so in its own header: a green CI is not evidence for this invariant.
+- **Two rows in [`docs/invariants.md`](./docs/invariants.md)**: the hook-event invariant below, and
+  `provenance.spawnEnvKeys` + `spawnEnvSpreadCount` as the spawn-env drift alarm. The latter documents
+  machinery that has existed since Desktop 1.24012.1 but appeared **zero times** outside `src/` — which is
+  why a later design exercise set about re-inventing it. [`docs/maintenance.md`](./docs/maintenance.md)
+  now tells a maintainer to read those two values in a `sync` diff first, and why a key-set delta beats a
+  count: it names the key.
+
+### Fixed
+
+- **`lint-skill` and the mount-time hook warning reported 24 valid hook events as misspellings.**
+  `KNOWN_HOOK_EVENTS` held **9** names, assembled by grepping the agent binary for event-name constants;
+  the agent's own hooks-config validator accepts **33**. A plugin declaring `PostCompact` or
+  `MessageDisplay` — both accepted by the agent, both of which run — got "not a recognized hook event …
+  Check spelling/capitalization", at **ERROR** severity in `lint-skill` and as a `::warning::` on the run
+  path. **The message text changed on both paths**, so a CI job grepping for the old strings needs
+  updating: the ERROR now reads "is not a hook event the agent recognizes", and an accepted-but-unserved
+  event reports at INFO / `::notice::` with the confident "it WILL fire" wording reserved for the three
+  events actually observed firing here. The list is now sourced from the validator array itself, and
+  `test/hook-events-elf-parity.test.ts` re-reads it from the staged agent binary rather than from a
+  committed fixture, because a fixture-vs-const test compares two hand-maintained files and only moves
+  when someone re-extracts by hand — the step that had failed. That test **skips where no Desktop is
+  staged**, CI included, so a green CI is not evidence for this invariant.
+- **The sub-agent model precedence was documented backwards in three places.** `docs/session.md`,
+  `docs/subagents.md` and `src/session.ts` stated `env > dispatch param > frontmatter > inherit`. The
+  binary resolves **dispatch param > frontmatter > env > inherit** (verified in agent 2.1.260; promoting
+  the env override to the top is what `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` does, and the Cowork spawn sets
+  neither that flag nor `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`). So
+  `agent_env.subagent_model` does **not** outrank a sub-agent's own `model:` frontmatter, contrary to
+  what the docs promised.
+- **Two model-forcing env vars leaked asymmetrically into `hostloop` and `protocol`.**
+  `SCRUBBED_AGENT_ENV_KEYS` matches exact keys, so `CLAUDE_CODE_SUBAGENT_MODEL` never covered
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` or `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`. An
+  operator with either exported got different sub-agent model resolution on the two inheriting tiers than
+  on `container`/`microvm`, which is the asymmetry that constant exists to prevent. Both are now scrubbed.
+  **Operator-visible consequence, and the reason it is filed as a fix rather than a cleanup:** unlike the
+  three keys already on that list, these two have **no `agent_env` knob**, so exporting one in your shell
+  now has it silently deleted with nothing authored to put it back. `docs/session.md` says so. If you
+  need either, set it inside the run rather than in the environment the harness inherits. Real Cowork
+  sets neither. Companion tests drive the real `hostloop` and `protocol` env builders with each key set —
+  not a hand-built object — and pin the exact-key *mechanism*, plus the deliberate decision to leave
+  `CLAUDE_CODE_COORDINATOR_MODE` (which enables one of them, and leaks the same way) unscrubbed while no
+  coordinator surface is modelled.
+
+### Documentation
+
+- **Corrected what this repo says about Cowork's force-ask PreToolUse hook.** It gates **nine** tools,
+  not four (the four named ones plus `create`/`update`/`delete_scheduled_task` and
+  `start`/`stop_watching`), and its decision is **not** unconditional: two gate-conditioned early returns
+  defer to the auto-mode permission classifier, so in a real auto-mode session 7 of the 9 raise no
+  prompt. The scheduled-task branch ships in Desktop 1.22209.0 — before 1.24012.9, the first baseline to
+  record this hook — so the note in `spawn.hooks` was already wrong for 5 of the 9 tools when it was
+  first written; the second branch lands three baselines later at 1.26832.0, making it wrong for all
+  nine from there on. Inaccurate in all fourteen baselines carrying it, either way.
+  **Nothing about the harness changes**: auto mode is structurally unreachable here, so for every mode a
+  scenario can express production still answers `ask`, and serving that hook unconditionally would remain
+  faithful. Corrected in `desktop-1.46388.3` forward; the older baselines keep their wording.
+- **`spawn.hooks` is documented as hand-pinned documentation, not as a drift tripwire.** It cannot be
+  one — `sync` spreads `spawn` forward from the base baseline, so the field carries through untouched and
+  nothing re-derives it from the app bundle. The claim was disproved by its own subject, above.
+- **The desktop-local lane boundary is stated as a missing transport flag rather than an entrypoint
+  string.** `--sdk-url` is absent from the entire app bundle and present 41× in the agent, and the
+  `ccr-session` host resolver throws without it — so features routed through that host (including
+  `cowork_memory_context`) are *structurally* unreachable locally, not merely disabled. An entrypoint
+  test can be relaxed in one release; a flag Desktop never passes cannot be worked around agent-side.
+- **New fidelity note: the silent-turn reminder.** Whether the agent narrates between tool calls is
+  decided by a server-delivered model capability, and that narration lands in the corpus
+  `semantic_matches` grades — so an assertion resting on the presence or wording of inter-tool text rests
+  on something an account-level capability can change. Assert the observable result instead.
+- **New fidelity note: auto-memory is delivered through four env keys the harness never sets.** When a
+  session has an auto-memory directory, Desktop ships it to the agent as `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`,
+  `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`, `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES` and — separately gated —
+  `CLAUDE_COWORK_MEMORY_GUIDELINES`. The last two carry **prompt text**: the agent reads them into its
+  memory prompt, so this is model-visible content rather than configuration. With no memory directory the
+  same branch sends `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` instead. `docs/fidelity-gaps.md` now also
+  tabulates the **three distinct gates** involved, which are easy to conflate: the one keyed on the memory
+  *directory* is not the one governing the guidelines env key, and neither is the one that gates only the
+  resolver's third branch — so a session can get a memory directory with that third gate off.
+- **Corrected an overstated divergence in how the agent's credential reaches it.** A comment in
+  `src/runtime/host-env.ts` said real Cowork passes only `CLAUDE_CODE_OAUTH_TOKEN`, without scoping the
+  claim. Desktop does swap that env var for a file descriptor — staging the token into a `0600` temp file,
+  opening it, and unlinking it — but that wrapper is reached from the **host-loop branch only**. At
+  `container` and `microvm`, production passes the plain token exactly as this harness does. The comment
+  now records the host-loop-only scope and why the divergence is deliberately not emulated: the env var
+  remains a first-class credential source for the agent, Desktop's own helper falls back to it on I/O
+  failure, and no boundary is crossed at host-loop that was not already open.
+- **Release-channel facts added to the recovery runbook.** `/stable` is a rollout pointer, not "latest";
+  not every published version is served (2.1.255 is 404 on both channels while its neighbours are 200),
+  so **a 404 is not evidence of a wrong channel** — use a positive control on a neighbouring version; and
+  `manifest.zst.json` is served *beside* `manifest.json`, additive rather than a migration.
+
+### Changed
+
+- **Parity sync to Desktop 1.46388.4** (agent **2.1.260**, unmoved from 1.46388.3). Baseline
+  `desktop-1.46388.4` written with zero unknown deltas; the whole app-bundle delta is three build chunks.
+  Two gates newly pinned and both recorded `force`/ON: `builtinToolsApprovableByAutoMode:4202409342` (the
+  unpinned sibling of `scheduledTaskToolsApprovableByAutoMode`, and one of the two gates that release
+  tools from the force-ask hook) and `cuCanUseToolEnabled:2486083521`, which had moved `off` → `ON` while
+  unpinned. Gates deliberately left unpinned now carry their reasoning in `cowork-sync.ts` rather than
+  being silently absent. Committed cassettes re-stamped rather than re-recorded, on a field-level diff of the two baselines:
+  the entire delta is `appVersion`, `capturedAt`, the `$comment` date, `provenance.asarFingerprint`,
+  `provenance.fcache.embeddedTimestamp` and the two new gate rows. Nothing a replay depends on —
+  `spawn.env`, `spawn.hooks`, `permissionMode`, `agentBinary.sha256`, the egress allowlist, the mount
+  layout — moved at all.
+
+### Security
+
+- **Bumped the transitive `fast-uri` 3.1.5 → 3.1.7**, clearing four Dependabot high-severity advisories.
+  Lockfile only — no direct dependency changed and no runtime behaviour is affected.
+
+## [3.4.1] — 2026-09-05
+
+### Documentation
+
+- **Which Cowork *lane* the harness models is now stated, in the places a consumer reads.** Every
+  fidelity tier reproduces the desktop-local lane; Cowork's remote lane runs server-side in a cloud
+  container with a different filesystem, shell tool, delivery mechanism and a server-authored prompt.
+  Which lane a real session gets is a Cowork setting ("Only on this computer"), and it was observed
+  **off** on a current install. README, the companion skill, `docs/fidelity-gaps.md` and
+  `docs/maintenance.md` now say so. The distinction that matters: behaviour conclusions (triggering,
+  tool sequencing, gate handling) travel between lanes; anything asserting a **path, mount or delivery
+  mechanism** is a local-lane claim only. No remote tier is planned — that container is Anthropic's, so
+  emulating it would mean authoring an environment rather than reproducing one; `lane: remote` already
+  makes the affected assertions refuse to grade instead of passing.
+
+### Changed
+
+- **The sub-agent override sentinel's note now carries a current probe.** Gate `124685897` reads ON,
+  which only enables a server-delivered replacement of the `## Cowork environment` section. Re-probed
+  against the 1.46388.3 composition in a real host-loop session: all three composed parts arrived
+  byte-identical to the shipped fallback, so the gate is on with no payload. The two non-overridable
+  parts are the control that makes it conclusive. The note also states the probe's precondition, which
+  it previously lacked.
+
+### Verification
+
+- **`microvm` exercised after the 3.4.0 tag** — `smoke-l2-microvm` passed 3/3 against the *published*
+  3.4.0 artifact (real Apple-VZ VM, separate kernel; guest egress reached allowlisted
+  `api.anthropic.com` and denied an off-list telemetry host). That completes all four tiers for the
+  1.46388.3 baseline; DESIGN.md's scope note is re-stamped accordingly. The 3.4.0 entry below is left
+  as the record of what was verified at tag time. This tier is macOS-arm64 only and CI runners are
+  Linux, so it is only ever exercised by hand.
+
+## [3.4.0] — 2026-09-05
+
+### Upgrade notes
+
+- **`promptAssetsHash` now also covers prompt text the harness GENERATES**, not only the committed
+  prompt-asset files — specifically the host-loop sub-agent folder manifest and the trailing skills
+  sentence added in this release. If you hold a cassette recorded with 3.3.0 against a baseline whose
+  `appVersion` still matches your live one, it will report `prompt-assets` staleness; re-record it. A
+  cassette on an older baseline already reports `baseline` staleness and is unaffected by this change.
+- **A host-loop sub-agent is now told which folders exist and how to address them.** If you assert on a
+  sub-agent's prose, note it now has per-session path information it did not have before.
+- **Sub-agent prompt assets are no longer the whole append.** If you maintain your own baseline,
+  `spawn.subagentAppendHostLoop` now points at the overridable SECTION only; the manifest and trailing
+  sentence are generated. Do not restore them into the asset — they would render twice.
+
+### Verification
+
+Verified **locally**, against the Desktop install this baseline was synced from — Desktop `1.46388.3`,
+agent `2.1.260`, macOS arm64, agent image `cowork-agent-base:2` — on 2026-09-05:
+
+| suite | result |
+|---|---|
+| `boundary-check` | **6/6** (host-fs-sealed, direct-egress-denied, allowlist-enforced, allowlist-permits, loopback-not-proxied, hostloop-bash-egress) |
+| `npm run test:live` | 4 files, **19 passed, 0 skipped** |
+| `run examples/scenarios/` | **7/7 success**, 39 assertions, 0 failed |
+| e2e self-tests | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, semantic-evidence-files, canary-hostloop |
+
+Tiers exercised: **`protocol`, `container`, `hostloop`**. **`microvm` was NOT exercised** (it needs a
+real VM; CI excludes it for the same reason), so `smoke-l2-microvm` did not run.
+
+`subagent-manifest-probe` is new here and is the first live coverage the sub-agent append has ever
+had. It proves the composed append is *actionable* — the sub-agent shelled against
+`/sessions/<id>/mnt/<name>/`, summed the same ledger through its file tools to the same total, and a
+bare relative write landed at the host cwd — not that the paraphrase matches Desktop's wording, which
+is what the `manifest`/`suffix` fingerprint axes are for.
+
+### Parity — Desktop 1.46388.3 (agent 2.1.260)
+
+New baseline `desktop-1.46388.3`. `sync` refused with 7 unknown deltas; all are classified and it now
+runs clean.
+
+#### Fixed — the sub-agent append sentinel could not see part of the append
+
+Desktop 1.46388.3 restructured the per-session sub-agent append into three parts: the overridable
+`## Cowork environment` section, a host-loop-only folder manifest, and one trailing sentence appended to
+**both** branches. The sentinel fingerprinted only the two ternary branch texts, so the trailing sentence
+changed the rendered append on both branches while the VM fingerprint did not move — and the pointer
+coupling guard only demands a repoint on an axis whose fingerprint moved. A counterfactual confirms it:
+Desktop 1.44121.1 with only that sentence added raises **no flags and syncs green**.
+
+Two fingerprint axes now cover the composed parts (`manifest`, `suffix`). Both become mandatory once
+either is recorded, and only the newest entry is compared, so entries predating the restructure are not
+retro-failed.
+
+Related, and separately load-bearing: the host-loop branch extractor was selecting the **wrong template**.
+It anchored on a phrase that left the branch at this release and survives in unrelated prose in the same
+module, so the drift it reported named text that is not the branch. It is now anchored on the ternary's
+structure rather than on wording. The module selector keyed on the same dead phrase and was one chunk
+move away from dropping the entire branch sentinel behind a single generic flag.
+
+#### Added — the host-loop folder manifest is modeled
+
+A host-loop sub-agent is now told the same thing production tells it: which folders exist on the user's
+computer, each with its host path and its shell path, or a different sentence when there is nothing to
+list. It is generated from the run's real mounts rather than read from a static asset — the same reason
+the main-loop shell section became a generator at Desktop 1.14271.0 — and it uses **canonical** folder
+paths, matching what production renders. Folders dropped by `COWORK_HARNESS_SOFT_MISSING=1` are listed as
+unreachable rather than silently disappearing, which is production's behaviour for a folder that fails to
+mount.
+
+The text this generator produces is mixed into `promptAssetsHash`, so editing it stales recorded cassettes
+exactly as editing a committed prompt asset does.
+
+#### Added — `CLAUDE_CODE_QUESTION_EXTENDED`
+
+A new gate-conditional key in the Cowork spawn window, pinned along with its gate. The gate reads
+served-and-off today, so the key stays out of `spawn.env` and an upstream flip will surface as a diff. It
+drives an AskUserQuestion behaviour the harness models, and Desktop and the agent shipped it in the same
+release.
+
+#### Cassettes
+
+`example-pdf-skill` was **re-recorded** at `container`: it embeds the VM sub-agent append in its
+recorded frames, and that text changed, so re-stamping would have left a committed fixture
+contradicting what the harness now sends. Tool calls moved 5 → 4 against the cassette it replaced.
+
+`example-multiselect-gate` (protocol) and `hostloop-computer-links` (hostloop) were **re-stamped**
+rather than re-recorded. No sub-agent was dispatched in either recording, protocol receives no
+sub-agent append at all by design, and neither cassette embeds the changed text — so the prompt change
+provably never entered either recording, while re-recording at those tiers would bake the recording
+machine's own MCP servers and skills into a public fixture.
+
+#### Fixed — a mutation test made ambiguous by the new build
+
+A second `=31999` literal appeared in an unrelated chunk, and the two were in different chunks at
+1.44121.1, so no chunk marker separates them durably. The S4 mutation now changes every occurrence and
+asserts the guard's **resolved value** rather than merely that it flagged, so a mutation that never
+reached the guarded site cannot read as a pass.
+
+## [3.3.0] — 2026-09-02
+
+### Verification
+
+Verified **locally**, against the Desktop install this baseline was synced from — Desktop `1.44121.1`,
+agent `2.1.258`, macOS arm64, agent image `cowork-agent-base:2` — on 2026-09-02:
+
+| suite | result |
+|---|---|
+| `boundary-check` | pass (3/3: allowlist-permits, loopback-not-proxied, hostloop-bash-egress) |
+| `npm run test:live` | 4 files, **19 passed, 0 skipped** |
+| `run examples/scenarios/` | **6/6 success** |
+| 8 of 9 e2e scenarios | **8/8 success** — askuserquestion, multiselect, multiselect-deciderdir, l1-container, l1-egress, present-files, **semantic-evidence-files**, canary-hostloop. `smoke-l2-microvm` is the ninth and was not run. |
+
+Tiers exercised: **`protocol`, `container`, `hostloop`**. **`microvm` was NOT exercised.**
+
+**The `evidence_files` scoped path was exercised live**, by `smoke-semantic-evidence-files` at container
+tier, which is new in this release and exists because the feature had no live or e2e coverage at all: it
+passes scoped (`semanticEvidence.reason "graded"`, `paths ["outputs/report.md"]`) and refuses with the
+`evidence_files` line removed (`reason "evidence_incomplete"`, naming all seven authored files), so the
+scenario is falsifiable rather than decorative. Both readings are quoted in the scenario's own header
+with their run ids. The **truncation refusal**, the **unscoped-starvation** case and the
+**`no_pre_run_manifest` refusal** remain covered by unit tests only — the last of those because arming the
+manifest for `semantic_matches` is precisely what stops a scenario reaching it; its live trigger is a
+`--resume` turn.
+
+Nothing was skipped and nothing was gated out. An earlier pass of this same suite reported 18 passed and
+1 skipped — `live-outputs-delete`'s "touches outputs without deleting" case, whose agent issued no Bash
+call, so its guard observed nothing. That case ran and passed here. It is model variance in the fixture,
+and it is recorded because the suite reports such a case as a SKIP rather than a pass, by design.
+
+**CI does not run any of this.** There is no `ANTHROPIC_API_KEY` repository secret, so `ci.yml`'s live
+scenario stage soft-skips in seconds on both the pull request and the merge commit. A green CI run for
+this release therefore covers build, unit tests, the agent-image recipe and the boundary check — **not
+live inference**. The evidence above is one machine and one account, which is not the same guarantee.
+
+### Fixed
+
+- **A `semantic_matches` assert could grade a document containing NO authored files and report it as
+  complete.** The authored set is derived by diffing the work tree against a pre-run manifest, and the
+  manifest is only captured when a scenario asserts one of `no_unexpected_files`, `input_unmodified`,
+  `no_delete_in_outputs`, `no_delete_in_mounts` or `no_lost_write_back` — or the run is a `record`.
+  `semantic_matches` was not on that list. A scenario whose asserts include `semantic_matches` but none of
+  those five, and which is not a recording, therefore never armed the baseline: the capture returned zero
+  files, and the judge was handed the final message and transcript alone — with the result stamped as
+  complete authored evidence. Found on a live run that authored 7 files under `outputs/` and whose assert
+  reported none.
+
+  **This is a FALSE GREEN, not a new regression, and it is not new in 3.3.0.** The arming predicate has
+  carried the same five keys since authored-file evidence first reached the judge in `0.29.0`, so every
+  release from `0.29.0` through `3.2.1` graded that shape against no authored evidence at all. It failed
+  silently, which is why it outlived a 404ing recipe that failed loudly.
+
+  **Re-run your affected scenarios.** If a scenario asserts `semantic_matches` without any of the five keys
+  above, a previous green graded no authored files — whatever it was measuring, it was not the run's
+  output. Re-running is the only way to learn what the verdict should have been.
+
+  Both halves are fixed: `semantic_matches` now arms the manifest, and an absent manifest is recorded in the
+  capture's health so the assert fails `evidence unavailable` with
+  `semanticEvidence.reason: "no_pre_run_manifest"` instead of grading an empty set. The distinction matters
+  — every other reason describes evidence that exists and could not be fully shown; this one describes
+  evidence that was never derivable.
+
+  **This changes the verdict of existing scenarios**, in the same way as the truncation fix above: a
+  `semantic_matches` that was passing on final-message-and-transcript evidence alone will now either grade
+  against the authored files it should always have seen, or refuse if no baseline can be captured (a
+  `--resume` turn, where the baseline belongs to the first turn — re-run live without `--resume`). A rubric
+  written against the weaker document may need revisiting, and that is the point: it was never being graded
+  against what the skill produced.
+
+- **A deliverable larger than the 16 KiB per-file capture cap was graded as a PREFIX, and could return a
+  pass on a claim its tail disproved.** With one 87 KB `outputs/report.md` at stock settings the capture
+  keeps the first 16 KiB and flags it `truncated` — but nothing was omitted, nothing was unreadable, and the
+  composed document sits far under the aggregate cap, so the assert graded it and stamped `graded`. A
+  negative rubric ("the report contains no unmitigated risk line") passed over a prefix that never included
+  the line. The only signal was a ` (truncated)` suffix on the file's heading; the evidence-health note,
+  which tells the judge not to read an absence as a negative, never mentioned truncation at all.
+
+  Truncation is now treated exactly like omission: any file the judge would grade that was kept only as a
+  prefix fails `evidence unavailable`, and the health note lists truncated paths in the same "do not infer
+  absence from the cut" register as dropped ones. **This changes the verdict of existing scenarios** — a run
+  whose deliverable exceeded 16 KiB was previously graded on its first 16 KiB and now refuses. The fix is to
+  scope the assert (`semantic_matches.evidence_files: ["outputs/report.md"]`), which exempts the file from
+  the per-file cap; raising `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` alone does **not** lift that cap, and the
+  failure message says so rather than sending you to the wrong knob.
+
+  The feature made this shape more reachable, which is why it is fixed here: a scope on one assert exempts
+  its file from the per-file cap and consumes the shared budget, so an unscoped sibling's per-file allowance
+  is `min(16 KiB, whatever is left)` and can fall to almost nothing. The multi-assert warning now says so.
+
+- **Raising the capture budget could have moved incompleteness from a loud refusal into a silent cut.**
+  Authored evidence sits near the tail of the judged document, so an overflow of the 262144-char aggregate
+  cap can eat it. Any `semantic_matches` — scoped or not — now refuses `authored_evidence_truncated` rather
+  than grading a document whose evidence was cut, and the message names the section that overflowed (a
+  document overflowing on `include_subagent_text` is not fixed by narrowing a file scope). The check
+  measures the offset at which the authored region ends, so a trim that reaches only the trailing
+  evidence-health note is an advisory warning, not a refusal.
+
+  **This changes the verdict of some existing scenarios, and you should expect it.** Affected: any live
+  `semantic_matches` whose composed judge document already exceeded 262144 chars far enough to cut into the
+  authored-file sections — in practice a run with a large deliverable, a long transcript, or
+  `include_subagent_text: true` with several substantial sub-agents. At stock settings a single large
+  deliverable does **not** reach the cap (32768 + 131072 + 65536 = 229376 chars with every section maxed),
+  so the two triggers that do not require raising the budget are **many** authored files — the per-file
+  `## Authored file: <path>` headings are counted, so several hundred small files overflow at the same total
+  — and `include_subagent_text: true`, whose per-dispatch 16 KiB is multiplied by an unbounded dispatch
+  count. Those runs were being graded against a document whose evidence had been silently truncated, and
+  could return a **pass** on a claim the judge never had the text to verify. They now fail `evidence unavailable` with
+  `semanticEvidence.reason: "authored_evidence_truncated"` and a message naming the section that overflowed.
+
+  This is a fix to a false PASS rather than a break in a covered surface — but it is **not** free: the check
+  is a property of the composed document, not of the rubric, and the harness cannot know which sections a
+  given rubric actually depended on. A rubric that was satisfiable from the agent's final message alone (the
+  first section, which is never cut) was being graded correctly and now turns red too. That is a deliberate
+  trade — a conservative refusal you can see and act on, over a silent grade you cannot — but if a newly-red
+  assert was genuinely answerable from the final message, this is why. What to do when you hit it, in order — (1) scope the judge with
+  `semantic_matches.evidence_files: ["outputs/<your deliverable>"]`, which shrinks the document to the files
+  the rubric is about and is the right answer in almost every case; (2) if the graded files themselves do not
+  fit, raise `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` so the capture keeps them whole — but note the composed
+  document is still capped at 262144 chars, so past that point only scoping helps; (3) if the overflow is
+  sub-agent text, set `include_subagent_text: false`. The failure message names which of these applies.
+
+
+- **`agentBinary.manifestChecksumMatch` was cross-checking the wrong release channel, and had been for a
+  month.** `sync` hard-coded the *stable* versioned manifest path. Desktop also stages release
+  **candidates**, served only from `…/claude-code-releases/rc/<commit>/`, so for agent `2.1.255` the
+  stable path 404s — and because the helper swallows every fetch failure to stay offline-capable, the
+  baseline recorded `"unknown"` for a build whose published checksum matches the staged ELF exactly.
+  `sync` now reads the channel out of the asar's own SDK descriptor and queries that, so
+  `baselines/desktop-1.40609.1.json` records `manifestChecksumMatch: true`.
+
+  This was not new with `2.1.255`. Of the 25 Desktop builds on record **3 are RC-staged**, and the two
+  earlier ones (`1.24012.9`/`.11`, agent `2.1.219`) recorded `true` only because that version had *also*
+  been promoted to stable — the wrong-channel query happened to resolve. Nothing in the output
+  distinguished that lucky pass from a real one, which is the defect this closes.
+
+- **`sync` now says *why* a checksum cross-check did not run.** An HTTP status from the channel is a
+  `WARNING` (it does not serve this version's manifest); a transport failure is a `NOTE` (the rig has no
+  egress, which says nothing about the release). Previously both wrote `"unknown"` silently — and a
+  sandbox-blocked fetch was once mistaken for a finding about the release because of it. The recorded
+  field stays two-valued (`boolean | "unknown"`); the distinction is in the operator-facing output.
+
+- **The documented ELF-download recipes `curl`ed a URL that 404s.** `docs/ci.md`, the companion skill's
+  `references/ci-recipe.md` and `docs/maintenance.md`'s recovery runbook all assumed the stable path
+  while pinning `V=2.1.255`, which is RC-staged — so the copy-paste CI step failed. They now take the
+  base URL from the baseline. `scripts/check-versions.ts` pins it: the invariant that kept `V=` honest
+  had no idea the URL had stopped working, and it is what propagated the broken pin into all three.
+
+  **If you copied the recipe from `3.2.1` or earlier, re-copy it.** The `curl` now reads its host from a
+  new `B=` line alongside the existing `V=` pin, because the stable path is not always where Desktop
+  staged the agent from. An older copy has no `B=` line and hard-codes the stable URL, so it keeps
+  working only for as long as the agent you pin happens to be a stable-channel build.
+
+### Added
+
+- **`agentBinary.releaseBaseUrl` in the platform baseline** — the release channel Desktop staged the
+  agent from. It names the source `manifestChecksumMatch` agreed with (without it the boolean is an
+  unattributed claim), makes the ELF-recovery runbook work for an RC-staged version, and surfaces a
+  stable↔RC flip as a `sync --diff` line. Recomputed from the local asar every sync, so it needs no
+  network; absent on baselines written earlier, all of which were stable-staged or later promoted.
+
+- **`baselines/desktop-1.40609.1.json` re-synced** against the live Desktop 1.40609.1 install to pick up
+  the corrected row. (It is no longer the newest baseline — Desktop self-updated later in the same cycle and
+  `desktop-1.44121.1` ships alongside it; see **Parity** below. Both moved, which is why this release
+  touches two baseline files.) `provenance.fcache` moved with it — that payload is server-refreshed on Desktop's
+  own schedule and drifts between syncs; it is not a change this fix caused. `spawn`, `network`, all 28
+  gate rows and every fingerprint are unchanged.
+
+- **`semantic_matches.evidence_files` — scope which authored files the judge grades.** A run that authors
+  many files could not pass a `semantic_matches` assert at all: the authored-file capture spends a fixed
+  64 KiB budget prefix-major then alphabetically, so a pipeline staging intermediates under
+  `outputs/_work/` exhausted it before reaching its own deliverable, and any omission refused the verdict —
+  over files no rubric mentioned. Naming the deliverable now (a) sends only those files to the judge,
+  (b) spends the capture budget on them **first**, (c) exempts them from the per-file cap, and (d) narrows
+  the evidence-unavailable refusal to in-scope omissions. A scenario with no `evidence_files` anywhere keeps
+  its previous grading behaviour; note that scoping ONE assert changes the shared capture for its unscoped
+  siblings (they share a single authored-file capture, and a scope exempts its files from the per-file cap),
+  which now warns.
+
+  Guards that come with it, because scoping is a new way to manufacture a vacuous green: globs matching
+  **nothing** fail evidence-unavailable (and the message lists every path the run authored — paths are
+  `<root>/<rel>`, which nothing else in the CLI surfaces); an empty list is a load-time error; an in-scope
+  file that is *truncated* rather than dropped also refuses, since a partial deliverable grades as a partial
+  document; and a scoped **pass** records the files it graded in its `evidence`.
+
+  The judged document is memoized per assert, and its cache key now includes the scope — keying it on
+  `include_subagent_text` alone was sufficient before scopes existed and is not any more.
+
+- **`RunResult.assertions[].semanticEvidence`** — the typed reason a `semantic_matches` assert refused
+  (`scope_matched_nothing` | `in_scope_omitted` | `in_scope_truncated` | `evidence_incomplete` |
+  `authored_evidence_truncated`) or what it graded (`graded`, recorded on a substantive fail too — the bug
+  this guards against is a false ABSENCE, so a red is only actionable next to what the judge was shown),
+  with the paths. Five causes with five different fixes previously shared one prose message; a consumer had
+  to regex English to tell them apart.
+
+- **`COWORK_HARNESS_AUTHORED_TOTAL_BYTES`** — raise the total authored-file evidence budget (default
+  65536) when a deliverable legitimately exceeds it. A malformed value throws rather than silently
+  defaulting: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it
+  enlarges the document sent to an external judge, so cost, latency and disclosure scale with it.
+
+### Parity
+
+- **Baseline `desktop-1.44121.1` (agent `2.1.258`).** Desktop self-updated during this release cycle, so
+  3.3.0 carries the sync as well as the fix above. Measured unchanged against `desktop-1.40609.1`:
+  `spawn` and `network` **byte-identical**, all 28 recorded gate rows identical in value, `guest`,
+  `mountLayout` and `settings` identical. The three committed example cassettes are **re-stamped, not
+  re-recorded** — `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines.
+
+- **The gate-id set moved even though every pinned gate's value held, and one removal matters.**
+  `provenance.asarGateIds` goes **291 → 328 (+43, −6)**. Among the six ids Desktop dropped is
+  **`3246569822`, the `canSaveSkill` gate** — 3 occurrences in the 1.40609.1 asar, **0** in 1.44121.1. As
+  of Desktop 1.44121.1 the skill-saving capability is no longer gate-guarded for a standard session; it
+  rests on the `skillsEnabled` conjunct alone. The baseline still carries the `canSaveSkill:3246569822`
+  row — the server still serves the flag, and that row is fcache provenance, not an asar reading — but it
+  now carries a `note` recording that the id is absent from the asar, so it cannot be mistaken for
+  evidence that a gate still guards the feature. `provenance.spawnEnvSpreadCount` also moves 32 → 33, the
+  new nested conditional spread carrying the third-party key below.
+
+- **Agent `2.1.255` → `2.1.258`.** The agent's `CLAUDE_*` env-flag export table moves **588 → 590**
+  (+3, −1): `CLAUDE_CODE_ARTIFACT_MULTI_FILE`, `CLAUDE_CODE_ARTIFACT_TOOLSET` and
+  `CLAUDE_CODE_MODEL_CATALOG_URL` arrive, `CLAUDE_CODE_PRINT_ENGINE_LOOP` goes. **None is set by the
+  Cowork spawn**, and no flag the spawn does set changed from or to zero consumers, so no harness change
+  follows from the bump.
+
+- **This is the first sync to exercise `agentBinary.releaseBaseUrl`, and it moved in both directions
+  within a day.** `1.40609.1` staged a release candidate; `1.44121.1` is back on the stable channel, so
+  the recorded base flips from `…/claude-code-releases/rc/aa8f2d98…` to `…/claude-code-releases` and
+  `manifestChecksumMatch` reads `true` from the stable manifest. The guard added with the field caught a
+  real error while doing it: the documented `B=` pin still named the RC channel, which would have shipped
+  a `curl` that 404s for anyone on the new agent.
+
+- **A new third-party spawn key, `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, is classified as out-of-scope for the
+  modeled session.** Desktop constructs it only inside the `accountType === "3p"` branch and only when a
+  gateway provider supplies a stream-idle timeout, so a first-party session never receives it and it is
+  absent from the baseline's `spawn.env` (still 24 keys). `sync` refused to write until it was
+  classified, which is the refusal working as intended.
+
+
+## [3.2.1] — 2026-09-02
+
+### Parity
+
+- **Baseline `desktop-1.40609.1` (agent `2.1.255`).** `sync` wrote on the first attempt — no unknown
+  deltas. The **`spawn` and `network` blocks are byte-identical** to `desktop-1.40609.0`, as are all 29
+  recorded gate rows, the asar's gate-id set (301, none added or removed), the VM rootfs hash, the Cowork
+  system prompt and both sub-agent appends. The three committed example cassettes were **re-stamped**, not
+  re-recorded: `promptAssetsHash` resolves to the same `491afe2862dc67ea` under both baselines, and with
+  the spawn contract, egress policy, prompt and tool surface all measured unchanged, a re-record would
+  have bought nothing.
+
+- **`agentBinary.manifestChecksumMatch` reads `"unknown"` for this baseline, and that is a limitation of
+  the check, not a finding about the binary.** Agent `2.1.255` is served from a release-candidate path
+  rather than the stable versioned one that `sync` queries, so the cross-check 404s and — by design — is
+  swallowed rather than failing the sync. The recorded `sha256` is still `measured-local`, hashed from the
+  staged ELF, and it does match the checksum the release candidate's own manifest publishes; the baseline
+  simply cannot say so through this field yet. Run-time ELF verification against the recorded hash is
+  unaffected.
+
+- **Agent `2.1.247` → `2.1.255`.** The agent's `CLAUDE_*` env-flag table moved 569 → 588 (+24, −5).
+  **None of the new flags is set by the Cowork spawn**, and no flag the spawn does set changed from or to
+  zero consumers — including `CLAUDE_PREVIEW_CLASSIFIER_FLOOR`, which remains inert agent-side (the
+  rename to `CLAUDE_CHROME_CLASSIFIER_FLOOR` recorded in 2.3.0 still stands, and Desktop still has not
+  followed it). No harness change follows from the bump.
+
+### Documentation
+
+- **`RELEASING.md`'s smoke step: `--package=` pins the fetch, but cwd decides which binary runs.**
+  Observed releasing 3.2.0 using the invocation this file prescribed: from the repo root,
+  `npx -y --package=cowork-harness@3.2.0 -- cowork-harness --version` printed **3.1.0** — a stale global on
+  PATH — while the identical command from `/tmp` printed 3.2.0. The step now takes the `--version` reading
+  from outside the repo, then `npm i -g`s the published version so the repo-root `doctor`/`replay` checks
+  run against the artifact under test.
+
+
 ## [3.2.0] — 2026-09-01
 
 ### Changed

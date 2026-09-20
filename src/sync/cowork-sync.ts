@@ -51,6 +51,11 @@ export interface SyncResult {
   // Cowork system-prompt content fingerprint (H1-H3 prompt-drift guard) — null when the consumption
   // site / constant definition couldn't be found in the asar (itself an unknownDeltas entry).
   promptFingerprint: PromptFingerprint | null;
+  /** The release channel Desktop staged the agent from, from the asar's SDK descriptor (see
+   *  extractAgentReleaseChannel). null = the descriptor did not match, in which case the official
+   *  checksum cross-check is SKIPPED rather than guessed against the stable path. Derived from the
+   *  LOCAL asar, so it is available offline — only the checksum fetch needs the network. */
+  agentReleaseBaseUrl: string | null;
   unknownDeltas: string[];
   notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
@@ -98,6 +103,16 @@ export const PINNED_GATES: Record<string, string> = {
   "1936081873": "oauthScopesEnv", // CLAUDE_CODE_OAUTH_SCOPES (value host-derived; allowlisted)
   "4153934152": "skipPrecompactLoad", // CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:"1"
   "1129419822": "enableToolSearchAuto", // ENABLE_TOOL_SEARCH:"auto" — dark (see DARK_GATES)
+  // CLAUDE_CODE_QUESTION_EXTENDED:"1" in W1 (Desktop >=1.46388.3). Served-and-OFF on a standard
+  // account (`{on:false, source:"defaultValue"}`), NOT dark — so it needs no DARK_GATES entry and the
+  // pin round-trips through the fcache on its own. Behavioural if it flips: the agent reads the key
+  // (0 -> 11 occurrences across 2.1.258 -> 2.1.260, alongside `extendedQuestions` 0 -> 5) and it drives
+  // the AskUserQuestion surface, which this harness DOES model — so a production flip must surface as a
+  // diff rather than silently changing what the modeled question protocol looks like.
+  // NAME CAVEAT: the call site passes the bare id and the flag name appears nowhere in the asar or the
+  // fcache (which keys features by id only), so this is the env key's own shape, not a verified
+  // GrowthBook name. Replace it if the real name ever surfaces.
+  "1595132361": "questionExtended",
   // Dormant drift-sentinels (Desktop 1.22209.0): tool-approval auto-mode gates. Neither is behaviorally
   // modeled — this harness has no persistent per-tool "always allow" concept to model against (no
   // updatedPermissions analog anywhere in src/decide/ or src/session.ts). Pinned so a live flip from
@@ -113,6 +128,23 @@ export const PINNED_GATES: Record<string, string> = {
   // Re-open only if the harness grows a persistent per-tool approval cache.
   "4200321681": "autoModeOverridesAlwaysAllow", // auto mode: force re-prompt (not silent-allow) for destructiveHint MCP tools
   "1447478638": "scheduledTaskToolsApprovableByAutoMode", // auto mode: scheduled-task tools auto-approvable (unless MDM workspace.autoModeEnabled=false)
+  // The SIBLING of 1447478638, one gate id apart and part of the same feature — and unpinned until
+  // 2026-09-06, so a flip in it surfaced nothing. Both gates sit in the SAME force-ask PreToolUse hook
+  // body: each guards an early `return {}` that defers the tool to the auto-mode classifier instead of
+  // answering permissionDecision:"ask". 1447478638 covers the five scheduled-task/watching tools; this
+  // one covers `request_cowork_directory` and `save_skill` (a 2-entry tool-id map). Observed 2026-09-05
+  // as force + ON, i.e. in a real auto-mode session 7 of the force-ask set's 9 tools raise no prompt.
+  // PRESENT in a standard fcache, so NO DARK_GATES entry (adding one would assert it is unevaluated,
+  // which the payload contradicts — the X3 precedent).
+  // NOT MODELED, and structurally so: auto mode is unreachable here (test/auto-mode-unreachable.test.ts
+  // pins the permission_mode enum with no "auto" member and spawn.permissionMode "default"), so this
+  // gate cannot change a harness verdict. Pinned for the same reason canProposeSkills is: a production
+  // flip should be a visible diff, and the day auto mode becomes reachable this is one of the two gates
+  // that decides whether `save_skill` prompts at all.
+  // NAME CAVEAT: the call site passes the bare id and the name appears nowhere in the asar or the
+  // fcache, so the value below is the env-shaped descriptor its behaviour implies, not a verified
+  // GrowthBook name. Replace it if the real name ever surfaces.
+  "4202409342": "builtinToolsApprovableByAutoMode",
   // Skill/plugin discovery gates. These govern whether the Desktop SDK-MCP skill-discovery tools
   // (the `mcp__skills__*` / `mcp__plugins__*` servers — the CONFIRMED model surface per the on-disk
   // init.tools of 8 real sessions) render, and in what mode. None was pinned before, so 245679952
@@ -196,7 +228,47 @@ export const PINNED_GATES: Record<string, string> = {
   // pass attributed the rubric to this id purely because the rubric arrays sit near its call site.
   // Name VERIFIED: the spawn code assigns this gate's result to `session.cicCanUseToolEnabled`.
   "2051942385": "cicCanUseToolEnabled",
+  // The COMPUTER-USE sibling of cicCanUseToolEnabled, and not to be confused with it: this one feeds
+  // `session.cuCanUseToolEnabled`, the Chrome/CIC one feeds `cicCanUseToolEnabled`. Name VERIFIED (the
+  // spawn assigns this gate's result to that field, and the id's neighbouring literal is Computer Use's
+  // org-compliance message). Moved `defaultValue`/off -> `force`/ON between 2026-08-14 and 2026-09-05
+  // while unpinned, so the move surfaced nothing — pinned 2026-09-06 for that reason.
+  // NOT MODELED: the browser/computer-use tool family is not served here at all (see
+  // docs/fidelity-gaps.md, "Browser tools are not served"), so a flip cannot change a harness verdict
+  // today. Pinned as a sentinel, not as a modelled surface.
+  // DO NOT re-add the session-type argument that stood here until 2026-09-06. It read: "the predicate
+  // is `sessionType !== "radar" && sessionType !== "chat" && gate`, and the harness models chat
+  // sessions" — which is INVERTED. The modeled session carries NO `sessionType` at all (grep it in any
+  // baseline), so both inequalities are TRUE and the exclusion does not apply; the predicate collapses
+  // to the gate alone. Being chat-typed would EXCLUDE the gate, and the harness is not chat-typed. This
+  // is the exact trap the SPAWN_ENV note at the bottom of this file warns about by name, and it is how
+  // the auto-mode rubric gap came to be understated.
+  "2486083521": "cuCanUseToolEnabled",
 };
+
+/* GATES DELIBERATELY NOT PINNED — recorded so a no-decision cannot be mistaken for an oversight.
+ * (This block was written 2026-09-06, after a triage pass found three ids in `asarGateIds` that had
+ * moved or been mislabelled with no recorded reasoning either way.)
+ *
+ *   2529235968  Present in `asarGateIds` and served `{on:false, source:"defaultValue"}`. An internal
+ *               note once labelled it DARK; that was wrong — served-and-off is EVALUATED, and the two
+ *               states need opposite handling. It has NOT moved, so there is no drift to catch; the
+ *               correction is to the label, not to the pin set. Revisit if it is ever seen ON.
+ *
+ *   2039376689  Reported as moved (`defaultValue`/off -> `defaultValue`/ON) in a Desktop fcache, yet it
+ *               is **0 occurrences in the 1.46388.3 asar, the 1.46388.4 asar AND the staged agent ELF
+ *               2.1.260** (control: 2486083521 is 4 in each asar). Its consumer is unidentified — it is
+ *               referenced by no shipped artifact on this machine. Pinning an id no local binary reads
+ *               would create a sentinel over nothing; an earlier draft dismissed it as "agent-side",
+ *               which the ELF measurement does not support either. Recorded as unresolved, on purpose.
+ *
+ *   3424551112  Needs no new pin: ALREADY pinned above as `automode-permission-rubric`, so its
+ *               2026-09-05 move to force/ON surfaced as a `provenance.gates` diff exactly as intended.
+ *               Listed here only because it appears in the same "five gates moved" survey and its
+ *               absence from this block would read as an omission.
+ *
+ *   124685897   Already pinned, and its live-probe note is current: re-probed 2026-09-05 against the
+ *               1.46388.3 composition (see checkSubagentOverrideGate below). No action owed. */
 
 /**
  * Gate ids that are DARK for a standard account — absent from the fcache entirely, not merely
@@ -226,7 +298,10 @@ const DARK_GATES = new Set([
   "4200321681", // autoModeOverridesAlwaysAllow — dark at pin time (absent from a standard 1.22209.0 fcache).
   //                Observed 2026-08-05 as PRESENT + `force` + ON. Kept per the rule below.
   "1447478638", // scheduledTaskToolsApprovableByAutoMode — same rationale; observed 2026-08-05 as PRESENT +
-  //                `defaultValue` + off.
+  //                `defaultValue` + off, then 2026-09-05 as PRESENT + `force` + ON. The pin round-tripped
+  //                that move on its own (desktop-1.46388.3 records {on:true, source:"force"}), which is
+  //                the machinery working; only this comment had gone stale. Entry STAYS per the rule
+  //                above — a force rule is segment-targetable, so another account may still see it absent.
   "4074604942", // 1p-direct-mcp — new in Desktop 1.24012.11, and dark (absent from a standard fcache) when
   //                pinned. Observed 2026-08-05 as SERVED (`source:"force"`, `value:false`) — still off, so
   //                nothing it arms is reachable. The entry STAYS: force rules are server-evaluated and can
@@ -390,6 +465,126 @@ export function extractAsarGateIds(files: Map<string, string>): string[] {
   return [...out].sort((a, b) => Number(a) - Number(b));
 }
 
+/** The agent release channel Desktop staged from, read out of the asar's SDK descriptor. */
+export interface AgentReleaseChannel {
+  /** `https://downloads.claude.ai/claude-code-releases`, or `…/claude-code-releases/rc/<40-hex commit>`. */
+  baseUrl: string;
+  /** The descriptor's own pinned SDK version. NOT necessarily the STAGED agent version — see
+   *  checkAgentReleaseChannel: Desktop pins the next SDK before it stages it, measured twice. */
+  sdkVersion: string;
+}
+
+/** Matches BOTH channel shapes and nothing else. The `/rc/<sha>` group is optional because a stable
+ *  build's base is the same URL without it — RC is not a special case bolted on, it is one more segment. */
+const RELEASE_BASE_URL_RE = /^https:\/\/downloads\.claude\.ai\/claude-code-releases(?:\/rc\/[0-9a-f]{40})?$/;
+
+/**
+ * Extract the agent release channel from the asar's SDK descriptor — the `JSON.parse(...)` blob shaped
+ * `{"version":"2.1.255","manifest":{…},"baseUrl":"…","sdkWrapperVersion":"…"}`.
+ *
+ * WHY THIS EXISTS: `fetchOfficialElfChecksum` used to hard-code the STABLE versioned path. Desktop also
+ * stages release CANDIDATES, served only from `…/claude-code-releases/rc/<commit>/`, and there is no way
+ * to discover that commit from the network — probed: `rc`, `rc/latest`, `rc/<short-sha>` and
+ * `rc/<sha>/manifest.json` all 404, and the `stable`/`latest` pointers name neither staged version. The
+ * asar is the ONLY source. Measured across all 25 backed-up asars: 22 stable, 3 RC (1.24012.9,
+ * 1.24012.11, 1.40609.1) — RC staging is routine, not a one-off.
+ *
+ * Two shape hazards this deliberately handles, both measured over that same population:
+ *
+ *  - THE DELIMITER IS NOT STABLE, AND NOT MONOTONIC. Both shapes occur and Desktop has gone BACK AND
+ *    FORTH: `JSON.parse('…')` through 1.24012.11, `` JSON.parse(`…`) `` from 1.25927.0 (the same codegen
+ *    flip that voided 22 literal anchors in this file at once) — and single-quoted AGAIN at 1.44121.1
+ *    (measured: 9 `JSON.parse('` at 1.24012.11, 0 at 1.25927.0/1.40609.1, 9 at 1.44121.1). Do NOT
+ *    re-derive this as a version cutoff; there is no "from version X onward" rule to lean on, and a
+ *    matcher accepting only the newest shape is blind to whichever half of the population it excludes.
+ *    Note the normalizing tokenizer leaves this blob alone either way: it contains embedded `"`.
+ *  - THE TOP-LEVEL `baseUrl` IS NOT THE FIRST ONE. On RC builds the nested `manifest.baseUrl` PRECEDES
+ *    it, so a `"baseUrl":"([^"]+)"` first-match reads the wrong key. They agree on both observed RC
+ *    builds, which is exactly why this is latent rather than broken — parse the JSON and read the
+ *    top-level field rather than regexing for the name.
+ *
+ * (`…/claude-ssh-releases` is a DIFFERENT descriptor in every asar, and a first-match never reaches it —
+ * measured 0 of 25. It is wrong in principle, not in observation; the two hazards above are the real ones.)
+ *
+ * Returns null on any miss — no stable-path fallback. Falling back here is precisely what turned a
+ * silent rot into a silent `"unknown"`, which is the defect this closes.
+ */
+export function extractAgentReleaseChannel(bundle: string): AgentReleaseChannel | null {
+  // Anchor on the descriptor's opening shape, then scan to the matching delimiter honouring backslash
+  // escapes, rather than a lazy `.*?` to the next quote — a JSON value containing the delimiter would
+  // truncate the blob and fail the parse for a reason that looks like a shape change.
+  const open = /JSON\.parse\((["'`])(?=\{"version":"\d+\.\d+\.\d+","manifest":\{)/g;
+  const found = new Map<string, AgentReleaseChannel>();
+  for (let m = open.exec(bundle); m !== null; m = open.exec(bundle)) {
+    const delim = m[1];
+    const start = m.index + m[0].length;
+    let i = start;
+    for (; i < bundle.length; i++) {
+      if (bundle[i] === "\\") i++;
+      else if (bundle[i] === delim) break;
+    }
+    if (i >= bundle.length) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bundle.slice(start, i));
+    } catch {
+      continue;
+    }
+    const d = parsed as { version?: unknown; baseUrl?: unknown; manifest?: { version?: unknown } };
+    // Self-consistency: the descriptor's own two version fields must agree (24/24 do). This is the
+    // check that the blob is what we think it is — NOT a check against the staged agent version, which
+    // legitimately differs and is handled in checkAgentReleaseChannel.
+    if (typeof d.version !== "string" || typeof d.baseUrl !== "string") continue;
+    if (typeof d.manifest?.version !== "string" || d.manifest.version !== d.version) continue;
+    if (!RELEASE_BASE_URL_RE.test(d.baseUrl)) continue;
+    found.set(`${d.version}|${d.baseUrl}`, { baseUrl: d.baseUrl, sdkVersion: d.version });
+  }
+  // Exactly one DISTINCT descriptor, asserted rather than assumed: `asarGateIds` twice under-reported by
+  // silently taking a subset of a population it believed was whole. Picking one of several here would
+  // pin provenance to whichever the bundle happened to order first.
+  if (found.size !== 1) return null;
+  return [...found.values()][0];
+}
+
+/**
+ * Operator-facing checks on the extracted channel. Returns NOTE-class strings ONLY — never an unknown
+ * delta, so this can never block a baseline write.
+ *
+ * WHY NOT A HARD DELTA: `manifestChecksumMatch` has no runtime consumer; it is read by a human during a
+ * parity pass. Every existing unknownDeltas member makes the baseline wrong for RUNNING the agent. And
+ * the anchor above sits on shifting ground (the delimiter has already flipped once), so a blocking
+ * literal anchor is a release-day wedge — the same argument that demoted checkSubagentOverrideGate on
+ * 2026-08-27: a guard that cannot clear itself from its own inputs is a permanent block, not a tripwire.
+ *
+ * A version disagreement is BENIGN on a stable base and load-bearing on an RC one. Measured: Desktop
+ * pins the NEXT SDK in the asar while still staging the previous one (1.20186.0 staged 2.1.202 with the
+ * descriptor reading 2.1.205; 1.20186.9 staged 2.1.205 reading 2.1.209) — 2 of the 21 asars that have a
+ * committed baseline. Both were stable, so `<base>/<stagedVersion>/manifest.json` still resolved and the
+ * recorded `manifestChecksumMatch:true` is correct. On an RC base the commit IS the version's identity,
+ * so the same disagreement means the composed URL will 404 — worth saying out loud, still not a refusal.
+ */
+export function checkAgentReleaseChannel(channel: AgentReleaseChannel | null, agentVersion: string): string[] {
+  if (!channel)
+    return [
+      "agentBinary.releaseBaseUrl: the asar's SDK release-channel descriptor did not match (shape moved, or more than one distinct descriptor). " +
+        'The official-checksum cross-check is SKIPPED and manifestChecksumMatch records "unknown" — deliberately, rather than guessing the stable path, ' +
+        'which is how an RC-staged agent silently recorded "unknown" before. Re-anchor extractAgentReleaseChannel (maintainer).',
+    ];
+  if (channel.sdkVersion === agentVersion) return [];
+  const isRc = channel.baseUrl.includes("/rc/");
+  if (!isRc)
+    return [
+      `agentBinary.releaseBaseUrl: the asar pins SDK ${channel.sdkVersion} while ${agentVersion} is staged. ` +
+        `Benign on the stable channel — Desktop pins the next SDK before staging it (measured at 1.20186.0 and 1.20186.9) — ` +
+        `and the checksum cross-check still resolves against the STAGED version.`,
+    ];
+  return [
+    `agentBinary.releaseBaseUrl: WARNING — the asar pins SDK ${channel.sdkVersion} on a RELEASE-CANDIDATE channel while ${agentVersion} is staged. ` +
+      `On an RC channel the commit is the version's identity, so ${channel.baseUrl}/${agentVersion}/manifest.json is likely to 404 ` +
+      `and manifestChecksumMatch will record "unknown". Verify by hand before trusting this baseline's provenance.`,
+  ];
+}
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
@@ -423,7 +618,13 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
 
 /** Gate 124685897 ON = a server-delivered subagent-append override is active; the harness has no
  *  captured override text, so proceeding would emit the committed fallback assets as if verified.
- *  Hard-stop via unknownDeltas (a PINNED_GATES drift alone only WARNS and still writes the baseline). */
+ *  DOWNGRADED 2026-08-27 to a non-blocking NOTE — see the decision recorded at the `notes.push` call
+ *  site below; this doc comment said "Hard-stop via unknownDeltas" until 2026-09-06, contradicting the
+ *  code it describes. (A PINNED_GATES drift alone also only WARNS and still writes the baseline.)
+ *  Re-probed 2026-09-05 against the 1.46388.3 composition in a real host-loop session: all three composed
+ *  parts arrived byte-identical to the asar fallback, i.e. the gate is ON with no payload served. That
+ *  probe is one account and one session, and the gate is segment-targetable — re-probe if the sub-agent
+ *  append matters to what you are shipping. */
 export function checkSubagentOverrideGate(gates: Record<string, GateState> | null): string[] {
   if (!gates?.["124685897"]?.on) return [];
   return [
@@ -442,8 +643,19 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "<vmCwd>/mnt/, and shell starting in <vmCwd> with non-mnt writes reaching neither the user nor the " +
       "file tools — so NO override was reaching that account and the committed paraphrase is faithful. " +
       "That is EVIDENCE, NOT PROOF: one account, one session, and a server rule can be segment-targeted. " +
+      "RE-PROBED 2026-09-05 against the 1.46388.3 composition, and it holds: a real host-loop sub-agent " +
+      "received all three composed parts byte-identical to this build's fallback text — the overridable " +
+      "section, the folder manifest, and the trailing skills sentence. The two composed parts are the " +
+      "CONTROL that makes this conclusive: they are appended AFTER resolveSection and cannot be " +
+      "server-replaced, so their being verbatim proves the sub-agent quoted faithfully rather than " +
+      "paraphrasing something that merely looked right. So the gate is ON with no payload, and the " +
+      "hardcoded fallback is what reaches the model. " +
+      "Still one account, one session, and still segment-targetable. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
-      "for its environment section verbatim, diff the four claims) rather than trusting this note.",
+      "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
+      "NOTE the probe now has a PRECONDITION: Cowork's `Only on this computer` setting (localAgentMode) is " +
+      "OFF by default, and with it off a session runs server-side with a server-authored prompt that has no " +
+      "`## Cowork environment` section at all. Turn it ON, or you will probe a lane this harness does not model.",
   ];
 }
 
@@ -527,8 +739,17 @@ export function sync(): SyncResult {
   // first-party deployment the harness models, the VM allowlist is server-delivered per session and
   // absent from the asar (checkEgressContractFacts, run inside extractFromAsar, guards that fact and
   // hard-fails if it stops holding).
-  const { fingerprint, asarGateIds, spawnEnv, spawnEnvKeys, spawnEnvSpreadCount, modelEffortConfig, promptFingerprint, notes } =
-    extractFromAsar(unknown, gates);
+  const {
+    fingerprint,
+    asarGateIds,
+    spawnEnv,
+    spawnEnvKeys,
+    spawnEnvSpreadCount,
+    modelEffortConfig,
+    promptFingerprint,
+    agentReleaseChannel,
+    notes,
+  } = extractFromAsar(unknown, gates);
 
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
@@ -553,6 +774,8 @@ export function sync(): SyncResult {
   // It blocked the write while being unable to distinguish the two states it names; a guard that can
   // never clear itself from its own inputs is a permanent block, not a tripwire.
   notes.push(...checkSubagentOverrideGate(gates));
+  // NOTE-class only, never a delta — see checkAgentReleaseChannel for why this must not block a write.
+  notes.push(...checkAgentReleaseChannel(agentReleaseChannel, agentVersion));
 
   return {
     appVersion,
@@ -569,6 +792,7 @@ export function sync(): SyncResult {
     spawnEnvSpreadCount,
     modelEffortConfig,
     promptFingerprint,
+    agentReleaseBaseUrl: agentReleaseChannel?.baseUrl ?? null,
     unknownDeltas: unknown,
     notes,
   };
@@ -1117,6 +1341,7 @@ function extractFromAsar(
   spawnEnvSpreadCount: number;
   modelEffortConfig: ModelEffortConfig | null;
   promptFingerprint: PromptFingerprint | null;
+  agentReleaseChannel: AgentReleaseChannel | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1129,6 +1354,7 @@ function extractFromAsar(
       spawnEnvSpreadCount: 0,
       modelEffortConfig: null,
       promptFingerprint: null,
+      agentReleaseChannel: null,
       notes: [],
     };
   }
@@ -1200,6 +1426,7 @@ function extractFromAsar(
       spawnEnvSpreadCount: spawn.spreadCount,
       modelEffortConfig,
       promptFingerprint,
+      agentReleaseChannel: extractAgentReleaseChannel(bundle),
       notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
     };
   } catch (e) {
@@ -1212,6 +1439,7 @@ function extractFromAsar(
       spawnEnvSpreadCount: 0,
       modelEffortConfig: null,
       promptFingerprint: null,
+      agentReleaseChannel: null,
       notes: [],
     };
   } finally {
@@ -1478,6 +1706,59 @@ export function checkSyspromptMapFacts(files: Map<string, string>): string[] {
   return flags;
 }
 
+/** The tool→path-key map that the gated tool set and the path-key list BOTH derive from since Desktop
+ *  2.2553.1. Through 1.46388.4 each was its own inline array literal in the defining chunk:
+ *
+ *    <a>=["Read","Write","Edit","Glob","Grep"]        <b>=["file_path","path"]
+ *
+ *  2.2553.1 replaced both with one map and two derivations:
+ *
+ *    pWt={Read:"file_path",…,Grep:"path"}, mWt=Object.keys(pWt), hWt=[...new Set(Object.values(pWt))]
+ *
+ *  Same five tools in the same order, same two keys — a SHAPE change, not a contract change.
+ *
+ *  Pinned as an EXACT, ORDERED literal on purpose. `Object.keys()` preserves insertion order and the
+ *  sub-agent manifest renders the resulting set straight into the prompt (`<ns>.<prop>.join(", ")`), so a
+ *  REORDERED map would change the prompt text while a set-equality check passed and the manifest
+ *  fingerprint stayed put (it hashes generator SOURCE, which still reads `.join(", ")`, not the
+ *  expansion). Ordered equality is the only thing that closes that hole.
+ *
+ *  Exactness also disambiguates. The bundle carries two more same-SHAPED maps — the tool-permission
+ *  broker's `FILE_TOOL_PATH_INPUT_KEYS` and its chunk-local twin — which add MultiEdit, NotebookEdit and
+ *  Bash. A loose `Read:"file_path"[^}]*Grep:"path"` match binds either of them. Do not relax this. */
+const PATH_GATE_MAP_LITERAL = `\\{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"\\}`;
+
+const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The single identifier bound to the path-gate map in `chunk`, or null.
+ *
+ *  Requires EXACTLY ONE binding. With two, "the keys and the values came from the same map" becomes
+ *  unprovable by identifier comparison, which is the check that stops a keys-from-A/values-from-B
+ *  split. Ambiguity resolves to null (→ the caller flags) rather than to the first match. */
+function pathGateMapId(chunk: string): string | null {
+  const all = [...chunk.matchAll(new RegExp(`(?<![\\w$])([A-Za-z_$][\\w$]*)=${PATH_GATE_MAP_LITERAL}`, "g"))];
+  return all.length === 1 ? all[0][1] : null;
+}
+
+/** How a local is bound: the pre-2.2553.1 array literal, or derived from the path-gate map. */
+type GateBinding = { form: "literal" } | { form: "derived"; map: string } | null;
+
+/** `<local>=["Read","Write","Edit","Glob","Grep"]` or `<local>=Object.keys(<path-gate map>)`. */
+function bindsGatedToolSet(chunk: string, local: string): GateBinding {
+  const e = reEsc(local);
+  if (new RegExp(`(?<![\\w$])${e}=\\["Read","Write","Edit","Glob","Grep"\\]`).test(chunk)) return { form: "literal" };
+  const m = chunk.match(new RegExp(`(?<![\\w$])${e}=Object\\.keys\\(([A-Za-z_$][\\w$]*)\\)`));
+  return m && m[1] === pathGateMapId(chunk) ? { form: "derived", map: m[1] } : null;
+}
+
+/** `<local>=["file_path","path"]` or `<local>=[...new Set(Object.values(<path-gate map>))]`. */
+function bindsPathKeys(chunk: string, local: string): GateBinding {
+  const e = reEsc(local);
+  if (new RegExp(`(?<![\\w$])${e}=\\["file_path","path"\\]`).test(chunk)) return { form: "literal" };
+  const m = chunk.match(new RegExp(`(?<![\\w$])${e}=\\[\\.\\.\\.new Set\\(Object\\.values\\(([A-Za-z_$][\\w$]*)\\)\\)\\]`));
+  return m && m[1] === pathGateMapId(chunk) ? { form: "derived", map: m[1] } : null;
+}
+
 export function checkPathHookFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
@@ -1488,7 +1769,6 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // B8 (Desktop 1.25927.0): the arrow export form `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se` puts `(`
   // after the colon, which the old `[:=][\w$]` tail rejected — the chunk DOES still export the name.
   const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS(?::\(\)=>|[:=])[\w$]/;
-  const GATED_ARRAY = /\["Read","Write","Edit","Glob","Grep"\]/;
   // The install site's shape is name-independent and is the ONE anchor that survived 1.32352.0; it is
   // declared here (not below) because the defining-chunk fallback resolves through it.
   const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
@@ -1497,12 +1777,18 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // machinery "gone". Try the readable name first (older asars + the fixtures bind it), then fall back to
   // the chunk the install site's spread actually RESOLVES to — and only accept that chunk if the spread
   // is still the gated 5-set, so a mis-resolution fails rather than silently re-pointing the sentinel.
+  // How the gated tool set turned out to be bound — needed further down, where the path keys are checked
+  // against the SAME map (see the "path key pair" anchor).
+  let toolsBinding: GateBinding = null;
   let defining = [...files.values()].find((c) => definesExport.test(c));
   if (!defining) {
     const site = [...files.values()].find((c) => installRe.test(c));
     const spreadId = site?.match(installRe)?.[1];
     const ref = site && spreadId ? resolveNamespaceRef(spreadId, site, files) : null;
-    if (ref && new RegExp(`(?<![\\w$])${esc(ref.local)}=${GATED_ARRAY.source}`).test(ref.chunk)) defining = ref.chunk;
+    // 2.2553.1: accept the derived form too — the spread now resolves to `Object.keys(<path-gate map>)`
+    // rather than to the array literal. Still a CONTENT check, so a mis-resolution fails rather than
+    // silently re-pointing the sentinel at whatever chunk the install site happened to import.
+    if (ref && bindsGatedToolSet(ref.chunk, ref.local)) defining = ref.chunk;
   }
   if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
   else {
@@ -1532,7 +1818,43 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       if (!isExportedLocal(defining, byContent[1]))
         miss(label, `the ${exportName} array is present (${byContent[1]}) but is no longer exported — it may be dead`);
     };
-    hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
+    /** `hop`, but for a set whose binding may be a literal OR a derivation of the path-gate map.
+     *  Mirrors hop's two branches exactly: bind by EXPORT NAME when it is still readable, else bind by
+     *  CONTENT and require the local to still be exported (which is what keeps a dead decoy from
+     *  passing). Returns the binding so the caller can require two exports to share one map. */
+    const hopBound = (exportName: string, binder: (c: string, l: string) => GateBinding, label: string): GateBinding => {
+      const local = exportLocalOf(defining!, exportName);
+      if (local) {
+        const b = binder(defining!, local);
+        if (!b)
+          miss(
+            label,
+            `the ${exportName} export's local (${local}) is bound to neither its array literal nor Object.keys/values of the path-gate map`,
+          );
+        return b;
+      }
+      // The export NAME is mangled (true since 1.32352.0/D5). Find the local by CONTENT, then require it
+      // to be exported — same rule hop() uses.
+      const mapId = pathGateMapId(defining!);
+      const forms = [`\\["Read","Write","Edit","Glob","Grep"\\]`, `\\["file_path","path"\\]`];
+      if (mapId) forms.push(`Object\\.keys\\(${reEsc(mapId)}\\)`, `\\[\\.\\.\\.new Set\\(Object\\.values\\(${reEsc(mapId)}\\)\\)\\]`);
+      const cand = [...defining!.matchAll(new RegExp(`(?<![\\w$])([A-Za-z_$][\\w$]*)=(?:${forms.join("|")})`, "g"))]
+        .map((m) => m[1])
+        .find((l) => binder(defining!, l));
+      if (!cand) {
+        miss(
+          label,
+          `neither the ${exportName} export nor any local bound to its literal or to the path-gate map is present in the defining chunk`,
+        );
+        return null;
+      }
+      if (!isExportedLocal(defining!, cand)) {
+        miss(label, `the ${exportName} value is present (${cand}) but is no longer exported — it may be dead`);
+        return null;
+      }
+      return binder(defining!, cand);
+    };
+    toolsBinding = hopBound("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", bindsGatedToolSet, "gated 5-set");
     // "PowerShell" joined the set at Desktop 1.24012.9 (was the 5-element list through 1.24012.1). It is a
     // REAL tool in the agent registry (its own "Executes a given PowerShell command…" description), but
     // win32-gated, so it never registers on the macOS/Linux runtimes this harness targets — hence no change
@@ -1572,7 +1894,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       if (local) ref = { chunk: defining, local };
     }
     if (!ref) miss("install site spread", `the PreToolUse matcher spread (${spreadId}) could not be resolved to a defining export`);
-    else if (!new RegExp(`(?<![\\w$])${esc(ref.local)}=\\["Read","Write","Edit","Glob","Grep"\\]`).test(ref.chunk))
+    else if (!bindsGatedToolSet(ref.chunk, ref.local))
       miss("install site spread", "the PreToolUse matcher no longer spreads the gated Read/Write/Edit/Glob/Grep set");
   }
   const inHook = (re: RegExp, label: string, why: string) => {
@@ -1599,7 +1921,53 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   inHook(/\(spooled tool results\)/, "spool deny", "the spooled-projects category text changed");
   inHook(/\(plugin, skill, or knowledge content\)/, "plugin deny", "the plugin category text changed");
   inHook(/"Path is outside allowed working directories"/, "SDK deny const", "the workingDir constant changed");
-  inHook(/\["file_path","path"\]/, "path key pair", "the file_path/path key array is gone");
+  // Path keys. Through 1.46388.4 these were an inline literal IN THE CONSUMER (`pe=["file_path","path"]`,
+  // read as `pe.map(…)`). 2.2553.1 hoisted them into the defining chunk as a derivation of the path-gate
+  // map, and the consumer now reads them across the namespace (`t.vM.map(…)`). Accept either, and in the
+  // derived case require BOTH that the export resolves to `[...new Set(Object.values(<map>))]` and that
+  // the consumer actually reads THAT export — otherwise an `Le` that quietly reverted to its own local
+  // key list would still pass on the strength of the defining chunk alone.
+  // The literal form counts ONLY when a local is bound to it AND the hook maps over that local (the real
+  // pre-2.2553.1 shape was `pe=["file_path","path"]` used as `pe.map(…)`). A bare presence test let any
+  // unrelated `["file_path","path"]` array anywhere in this ~515KB chunk switch the derived check off
+  // entirely — so a genuine widening of the gate's key list would pass behind a decoy.
+  // Real builds bind it (`var tl=["file_path","path"]` … `tl.map(…)`, verified in both 1.46388.4 and
+  // 2.2553.1); an inline `[…].map(` is accepted too so the rule is about CONSUMPTION rather than one
+  // codegen shape. What is rejected either way is a bare array the extraction never reads — which is the
+  // decoy that used to switch this whole check off.
+  const litLocal = consuming.match(/(?<![\w$])([A-Za-z_$][\w$]*)=\["file_path","path"\]/);
+  const literalBound =
+    /\["file_path","path"\]\.map\(/.test(consuming) ||
+    (!!litLocal && new RegExp(`(?<![\\w$])${esc(litLocal[1])}\\.map\\(`).test(consuming));
+  if (!literalBound) {
+    const ns = consuming.match(installRe)![1].split(".")[0];
+    // Candidate namespace properties the consumer feeds into the first-match extraction.
+    const readProps = [...consuming.matchAll(new RegExp(`(?<![\\w$])${esc(ns)}\\.([\\w$]+)\\.map\\(`, "g"))].map((m) => m[1]);
+    let bound: GateBinding = null;
+    let boundProp: string | null = null;
+    for (const prop of readProps) {
+      const ref = resolveNamespaceRef(`${ns}.${prop}`, consuming, files);
+      const b = ref ? bindsPathKeys(ref.chunk, ref.local) : null;
+      if (b) {
+        bound = b;
+        boundProp = prop;
+        break;
+      }
+    }
+    if (!bound)
+      miss(
+        "path key pair",
+        "the file_path/path key array is gone — no literal in the hook chunk, and no namespace property the hook maps over resolves to the path-gate map's values",
+      );
+    // Keys and values must come from the SAME map. Without this, a build that derived the tool set from
+    // the real map and the keys from the tool-permission broker's (which adds Bash/NotebookEdit/MultiEdit)
+    // would satisfy both anchors independently while the gate's real key list had widened.
+    else if (bound.form === "derived" && toolsBinding?.form === "derived" && bound.map !== toolsBinding.map)
+      miss(
+        "path-gate map",
+        `the gated tool set (${toolsBinding.map}) and the path keys (${ns}.${boundProp} → ${bound.map}) derive from DIFFERENT maps`,
+      );
+  }
   // First-string extraction over the path keys: `<keys>.map(k=>o[k]).find(v=>typeof v=="string")`.
   // The keys are bound to a local (real: `pe=["file_path","path"]`, used as `pe.map(…)`) rather than
   // inlined, so anchor the map/find/typeof-string SHAPE (both proven by the separate path-key anchor).
@@ -1934,12 +2302,17 @@ function readPromptFingerprintsFile(): PromptFingerprintsFile | null {
   }
 }
 
+/** One committed fingerprint entry. `hl`/`vm` are the ternary branch texts; `manifest`/`suffix` are the
+ *  two parts composed AFTER the overridable section (Desktop >=1.46388.3) — absent on older entries,
+ *  which is why only the NEWEST entry is ever compared and only its OWN axes are mandatory. */
+export type SubagentFingerprintEntry = { hl: string; vm: string; manifest?: string; suffix?: string; note?: string };
+
 /** subagentAppendVersions map from cowork-system-prompt-fingerprints.json; null = unreadable/absent
  *  (checkSubagentPromptFacts turns that into a hard-fail flag — never a silent skip). */
 function readSubagentFingerprints(): { versions: Record<string, { hl: string; vm: string }> } | null {
   try {
     const raw = readFileSync(join(BASELINES_DIR, "prompts", "cowork-system-prompt-fingerprints.json"), "utf8");
-    const parsed = JSON.parse(raw) as { subagentAppendVersions?: Record<string, { hl: string; vm: string }> };
+    const parsed = JSON.parse(raw) as { subagentAppendVersions?: Record<string, SubagentFingerprintEntry> };
     if (!parsed?.subagentAppendVersions) return null;
     return { versions: parsed.subagentAppendVersions };
   } catch {
@@ -2049,15 +2422,14 @@ export function checkPromptDrift(
  *  and the value-proof regexes can match), every other escape is preserved verbatim (keeps the
  *  fingerprint stable), and the first UNESCAPED backtick terminates the body. Operates per-module
  *  (never the concatenated bundle) so an unrelated template can't be captured. */
+function openDelimiterBefore(module: string, at: number): number {
+  for (let i = at; i >= 0; i--) if (module[i] === "`" && module[i - 1] !== "\\") return i;
+  return -1;
+}
+
 function templateBodyAt(module: string, at: number): string | null {
   if (at < 0) return null;
-  let open = -1;
-  for (let i = at; i >= 0; i--) {
-    if (module[i] === "`" && module[i - 1] !== "\\") {
-      open = i;
-      break;
-    }
-  }
+  const open = openDelimiterBefore(module, at);
   if (open < 0) return null;
   let out = "";
   for (let i = open + 1; i < module.length; i++) {
@@ -2094,15 +2466,130 @@ export function extractSubagentBranchSlices(files: Map<string, string>): { modul
   // longer identifiable by name. The two BRANCH TEXTS are the real discriminator anyway (they are the
   // thing being fingerprinted), and they are content, not identifiers, so they survive minification.
   // Requiring BOTH still pins a single module: only the generator carries the hl and vm bodies together.
-  const module = [...files.values()].find((c) => c.includes("on the user's machine") && c.includes("exist only in the sandbox"));
+  // B14 (Desktop 1.46388.3): the module and the hl slice are anchored STRUCTURALLY, not on hl prose.
+  // The old hl discriminator ("on the user's machine") LEFT the hl branch at this release, and the
+  // phrase survives in unrelated computer-use prose in the same module — so `lastIndexOf` silently
+  // fingerprinted the WRONG template (reported e22697f4dfcc784c, the computer-use section, in place of
+  // the real hl branch). It failed loud only because the hl value-proofs then missed. The vm
+  // discriminator is 1 occurrence bundle-wide on every build on record, and the ternary shape
+  // (`<hostLoopMode> ? \`hl\` : \`vm\``) is what the product actually guarantees; the wording never was.
+  const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
   const vmAt = module.indexOf("exist only in the sandbox");
-  const hlAt = module.lastIndexOf("on the user's machine", vmAt);
-  if (vmAt < 0 || hlAt < 0) return null;
-  const hl = templateBodyAt(module, hlAt);
+  if (vmAt < 0) return null;
   const vm = templateBodyAt(module, vmAt);
-  if (!hl || !vm) return null;
+  if (!vm) return null;
+  // Walk from the vm template's opening delimiter back over the ternary's `:` to the hl template's
+  // CLOSING delimiter, then slice that template. Any other shape returns null (a loud generic flag)
+  // rather than a neighbouring template.
+  const vmOpen = openDelimiterBefore(module, vmAt);
+  if (vmOpen < 0) return null;
+  let i = vmOpen - 1;
+  while (i >= 0 && /\s/.test(module[i]!)) i--;
+  if (module[i] !== ":") return null;
+  i--;
+  while (i >= 0 && /\s/.test(module[i]!)) i--;
+  if (module[i] !== "`" || module[i - 1] === "\\") return null; // hl's closing delimiter
+  const hl = templateBodyAt(module, i - 1);
+  if (!hl) return null;
   return { module, hl, vm };
+}
+
+/** Slice the body of the function whose `function <ident>(` header most closely precedes `at`,
+ *  brace-matched with a scanner that skips string, template and regex-ish literals so a `}` inside a
+ *  literal cannot terminate the body early. Returns the source from the header to the matching `}`.
+ *  Used to bound the folder-manifest generator; a plain `indexOf("}")` would cut inside its templates. */
+function enclosingFunctionSource(module: string, at: number): string | null {
+  const head = module.lastIndexOf("function ", at);
+  if (head < 0) return null;
+  const open = module.indexOf("{", module.indexOf("(", head));
+  if (open < 0 || open > at) return null;
+  let depth = 0;
+  for (let i = open; i < module.length; i++) {
+    const c = module[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c;
+      for (i++; i < module.length; i++) {
+        if (module[i] === "\\") {
+          i++;
+          continue;
+        }
+        if (module[i] === q) break;
+      }
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return module.slice(head, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Every template-literal body in `src`, in source order, decoded the same way `templateBodyAt`
+ *  decodes one (escaped backticks become literal backticks; other escapes are preserved). */
+function templateBodiesIn(src: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] !== "`" || src[i - 1] === "\\") continue;
+    let body = "";
+    let j = i + 1;
+    for (; j < src.length; j++) {
+      const c = src[j];
+      if (c === "\\") {
+        const next = src[j + 1] ?? "";
+        body += next === "`" ? "`" : c + next;
+        j++;
+        continue;
+      }
+      if (c === "`") break;
+      body += c;
+    }
+    if (j >= src.length) break; // unterminated — stop rather than invent a body
+    out.push(body);
+    i = j;
+  }
+  return out;
+}
+
+/** The two parts of the composed sub-agent append that live OUTSIDE the hl/vm ternary (Desktop
+ *  >=1.46388.3): the hl-only folder manifest and the unconditional trailing sentence. Both are
+ *  appended after `resolveSection`/the substituter, so a `spSectionPrompts` override does NOT replace
+ *  them — and neither is covered by the two branch fingerprints, which is how the trailing sentence
+ *  reached BOTH branches at 1.46388.3 with the vm fingerprint unmoved. Returns null when either shape
+ *  is absent (a loud flag), never a neighbouring construct.
+ *
+ *  `manifest` is the manifest generator's own source with its interpolations canonicalized by the
+ *  caller; `suffix` is the resolved string literal, looked up through the module's own binding rather
+ *  than by a minified name. */
+export function extractSubagentComposition(files: Map<string, string>): { module: string; manifest: string; suffix: string } | null {
+  const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
+  if (!module) return null;
+  // Manifest: anchored on a fragment that is INSIDE the thing being fingerprinted (the lesson of B14 —
+  // an anchor outside its subject can silently select the wrong text).
+  const mAt = module.indexOf("(the shell cannot reach this folder)");
+  if (mAt < 0) return null;
+  const fnSrc = enclosingFunctionSource(module, mAt);
+  if (!fnSrc) return null;
+  // Hash the manifest's TEXT, never its source. The function body is code — its identifiers rotate
+  // every build, so a source hash would report drift on every release and be ignored within two.
+  // Concatenating its template bodies in source order (interpolations canonicalized by the caller's
+  // normalizer) tracks the prose the model actually receives and nothing else.
+  const bodies = templateBodiesIn(fnSrc);
+  if (bodies.length === 0) return null;
+  const manifest = bodies.join("\u0000");
+  // Suffix: read the composition site, then resolve the trailing interpolation's identifier against
+  // this module's own `<ident>="…"` binding. Never matched by name.
+  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\([^)]*\):""\}\$\{([\w$]+)\}`/);
+  if (!comp) return null;
+  const decl = module.match(new RegExp(`\\b${comp[1]}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+  if (!decl) return null;
+  return { module, manifest, suffix: decl[1]! };
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
@@ -2119,11 +2606,20 @@ export function subagentBranchFingerprint(branchText: string): string {
 
 export function checkSubagentPromptFacts(
   files: Map<string, string>,
-  committed: { versions: Record<string, { hl: string; vm: string }> } | null,
+  committed: { versions: Record<string, SubagentFingerprintEntry> } | null,
 ): string[] {
   const flags: string[] = [];
   const bundle = [...files.values()].join(""); // literal anchors below span 3 modules (SP_SECTION_KEYS, generator, delivery) — check them against the join; branch-TEXT slicing is module-scoped
   const miss = (what: string, why: string) => flags.push(`subagent-append: ${what} anchor missing — ${why}`);
+  // Newest committed entry, resolved ONCE. Only the newest is ever compared — historical entries
+  // describe releases whose shapes have since changed and must never be retro-failed.
+  const committedNewest = (() => {
+    const versions = committed ? Object.keys(committed.versions) : [];
+    if (!committed || versions.length === 0) return null;
+    let newest = versions[0]!;
+    for (const v of versions) if (cmpVersionStrings(v, newest) > 0) newest = v;
+    return { version: newest, entry: committed.versions[newest]! };
+  })();
 
   // (1) key-pair literal (verbatim in all backed-up asars).
   if (!/subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"/.test(bundle))
@@ -2141,14 +2637,20 @@ export function checkSubagentPromptFacts(
     //   hl: working directory `${host??vmRoot}`; mounts `${vmRoot}/mnt/` — mount binding MUST equal the
     //       ?? FALLBACK binding (the vm root), never the host binding.
     //   vm: rooted at `${vmRoot}`; mounts `${vmRoot}/mnt/` — root binding MUST equal the mount binding.
-    const hlWd = slices.hl.match(/working directory `\$\{([\w$]+)\?\?([\w$]+)\}`/);
-    const hlMnt = slices.hl.match(/mounted under `?\$\{([\w$]+)\}\/mnt\//);
-    if (!hlWd) miss("hl working-directory interpolation", "expected the `${hostCwd??vmRoot}` shape");
-    if (!hlMnt) miss("hl mounts interpolation", "expected `${vmRoot}/mnt/`");
-    if (hlWd && hlMnt && hlWd[2] !== hlMnt[1])
+    // B14: at Desktop 1.46388.3 the hl branch was REPLACED. It no longer states the host working
+    // directory at all — the `${hostCwd??vmRoot}` binding moved OUT of the overridable section and into
+    // the folder manifest's relative-paths clause, which is proved at the composition site below. What
+    // the branch still asserts, and what must stay coherent, is that the shell STARTS IN the session
+    // root and that the non-visible tree is that SAME root's `/mnt/` — a host/VM swap of those two is
+    // the drift this proof exists to catch.
+    const hlStart = slices.hl.match(/starts in `\$\{([\w$]+)\}`/);
+    const hlMnt = slices.hl.match(/outside `\$\{([\w$]+)\}\/mnt\//);
+    if (!hlStart) miss("hl start-directory interpolation", "expected the `starts in ${vmRoot}` shape");
+    if (!hlMnt) miss("hl mounts interpolation", "expected `outside ${vmRoot}/mnt/`");
+    if (hlStart && hlMnt && hlStart[1] !== hlMnt[1])
       miss(
         "hl substitution values",
-        `hl mounts bind ${hlMnt[1]} but the working-directory ?? fallback (vm root) is ${hlWd[2]} — host/VM swap?`,
+        `hl starts-in binds ${hlStart[1]} but the /mnt/ clause binds ${hlMnt[1]} — the two must be the same session-root binding (host/VM swap?)`,
       );
     const vmRoot = slices.vm.match(/rooted at `?\$\{([\w$]+)\}`?/);
     const vmMnt = slices.vm.match(/mounted under `?\$\{([\w$]+)\}\/mnt\//);
@@ -2165,15 +2667,13 @@ export function checkSubagentPromptFacts(
     // not silently disable a branch). A partial committed entry is itself a hard-fail.
     const hlFp = subagentBranchFingerprint(slices.hl);
     const vmFp = subagentBranchFingerprint(slices.vm);
-    const versions = committed ? Object.keys(committed.versions) : [];
-    if (!committed || versions.length === 0) {
+    if (!committedNewest) {
       flags.push(
         "subagent-append: no committed subagentAppendVersions fingerprints — cannot verify branch-text drift (add them to baselines/prompts/cowork-system-prompt-fingerprints.json)",
       );
     } else {
-      let newest = versions[0];
-      for (const v of versions) if (cmpVersionStrings(v, newest) > 0) newest = v;
-      const want = committed.versions[newest];
+      const newest = committedNewest.version;
+      const want = committedNewest.entry;
       if (typeof want.hl !== "string" || typeof want.vm !== "string")
         flags.push(
           `subagent-append: committed entry ${newest} is missing an hl or vm fingerprint — both are mandatory (a partial entry silently disables a branch)`,
@@ -2198,14 +2698,81 @@ export function checkSubagentPromptFacts(
   // (6) delivery-call argument-list connectivity at the appendSubagentSystemPrompt: site (S16 proves
   //     only that SOME call exists).
   if (
-    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,80}hostCwd[\s\S]{0,80}spSectionPrompts/.test(
+    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,80}hostCwd[\s\S]{0,120}hostOutputsDir[\s\S]{0,120}userSelectedFolders[\s\S]{0,120}hostOnlyFolders[\s\S]{0,120}spSectionPrompts/.test(
       bundle,
     )
   )
     miss(
       "delivery argument list",
-      "the {vmProcessName, hostLoopMode, hostCwd, spSectionPrompts} argument list at the delivery site changed",
+      "the {vmProcessName, hostLoopMode, hostCwd, hostOutputsDir, userSelectedFolders, hostOnlyFolders, spSectionPrompts} argument list at the delivery site changed",
     );
+  // (6b) hostOutputsDir is hostLoopMode-GATED at the call site (`<hl>?<getOutputsDir>:void 0`). If that
+  //      gating were dropped, a VM-loop sub-agent would start receiving an outputs path it cannot reach.
+  if (!/hostOutputsDir:[\w$]+\?[\w$.]+\([^)]*\):void 0/.test(bundle))
+    miss("hostOutputsDir gating", "hostOutputsDir is no longer `hostLoopMode ? <outputsDir> : void 0` at the delivery site");
+  // (7) The composed parts that live OUTSIDE the ternary (Desktop >=1.46388.3). NOT covered by the two
+  //     branch fingerprints — which is exactly how the trailing sentence reached BOTH branches at
+  //     1.46388.3 while the vm fingerprint stayed 859aa136fc15b38f. Fingerprinting the composition is
+  //     what makes the sentinel's subject the append the model receives rather than the ternary arms.
+  const comp = extractSubagentComposition(files);
+  if (!comp) {
+    miss("composed append parts", "the folder-manifest generator and/or the trailing appended sentence could not be sliced");
+  } else {
+    // The manifest joins the path-gated builtin tool list. Assert the list itself by CONTENT — a tool
+    // added to or removed from it changes what the sub-agent is told its file tools are, and would not
+    // move the manifest's own prose fingerprint.
+    // 2.2553.1 replaced the literal with `Object.keys(<path-gate map>)` (see PATH_GATE_MAP_LITERAL).
+    // ORDER is load-bearing here and nowhere else: the manifest renders `<ns>.<prop>.join(", ")` straight
+    // into the sub-agent's prompt, and the manifest fingerprint hashes the GENERATOR SOURCE — which still
+    // reads `.join(", ")` whatever the map says. So a reordered map would change the prompt text while
+    // this sentinel, the fingerprint and any set-equality check all stayed green. The map literal is
+    // matched exactly and in order, which is what closes that.
+    if (!/\["Read","Write","Edit","Glob","Grep"\]/.test(bundle) && !new RegExp(PATH_GATE_MAP_LITERAL).test(bundle))
+      miss(
+        "manifest tool list",
+        'the ["Read","Write","Edit","Glob","Grep"] path-gated builtin tool list the manifest joins is gone or changed',
+      );
+    if (!/[\w$]+\.[\w$]+\.join\(", "\)/.test(bundle))
+      miss("manifest tool-list join", 'the manifest no longer joins a tool-name list with ", "');
+    // The manifest CALL must pass (vmRoot, hostCwd??vmRoot, …) — this is where the `${hostCwd??vmRoot}`
+    // binding that left the hl branch now lives, and a host/VM swap here would misdirect every relative
+    // path the sub-agent's file tools resolve.
+    if (!/\}\$\{[\w$]+\?[\w$]+\(([\w$]+),([\w$]+)\?\?([\w$]+),/.test(comp.module))
+      miss("manifest call bindings", "the hl-gated manifest call no longer passes (vmRoot, hostCwd??vmRoot, …)");
+    else {
+      const m = /\}\$\{[\w$]+\?[\w$]+\(([\w$]+),([\w$]+)\?\?([\w$]+),/.exec(comp.module)!;
+      if (m[1] !== m[3])
+        miss(
+          "manifest call bindings",
+          `the manifest's vmRoot argument is ${m[1]} but its hostCwd ?? fallback is ${m[3]} — the fallback must be the same vm root`,
+        );
+    }
+    const manifestFp = subagentBranchFingerprint(comp.manifest);
+    const suffixFp = subagentBranchFingerprint(comp.suffix);
+    if (committedNewest) {
+      const want = committedNewest.entry;
+      // Only the newest entry is compared, and only on the axes IT declares — historical entries
+      // predate these parts and must not be retro-failed. An entry that declares one composed axis
+      // must declare both: a half-declared entry silently disables a part.
+      const declares = want.manifest !== undefined || want.suffix !== undefined;
+      if (declares && (typeof want.manifest !== "string" || typeof want.suffix !== "string"))
+        flags.push(
+          `subagent-append: committed entry ${committedNewest.version} declares one of manifest/suffix but not both — both are mandatory once either is recorded (a partial entry silently disables a part)`,
+        );
+      if (typeof want.manifest === "string" && want.manifest !== manifestFp)
+        flags.push(
+          `subagent-append: folder-manifest text fingerprint drifted vs ${committedNewest.version} (${want.manifest} -> ${manifestFp}) — re-derive, update the hl paraphrase generator if semantics moved, then add a new version entry`,
+        );
+      if (typeof want.suffix === "string" && want.suffix !== suffixFp)
+        flags.push(
+          `subagent-append: trailing-sentence fingerprint drifted vs ${committedNewest.version} (${want.suffix} -> ${suffixFp}) — this part reaches BOTH branches; update both paraphrases, then add a new version entry`,
+        );
+      if (!declares)
+        flags.push(
+          `subagent-append: the build carries composed append parts (manifest ${manifestFp}, suffix ${suffixFp}) but the newest committed entry ${committedNewest.version} records neither — record them or a change to either ships unguarded`,
+        );
+    }
+  }
   return flags;
 }
 
@@ -2240,6 +2807,7 @@ const SPAWN_GATES: Record<string, string> = {
   "714014285": "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING:'1' (pinned gate; force-ON live)",
   "4153934152": "CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:'1' (pinned gate)",
   "451382573": "DISABLE_BRIEF_MODE_STOP_HOOK:'1' — brief (non-chat) sessions only; NOT pinned (harness models chat)",
+  "1595132361": "CLAUDE_CODE_QUESTION_EXTENDED:'1' (pinned gate; served-and-off, so WI-4 drops the value)",
 };
 
 /**
@@ -2274,6 +2842,25 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_ORGANIZATION_UUID: "account-identity block; conditional on live login state",
   CLAUDE_CODE_ACCOUNT_TAGGED_ID: "account-identity block; conditional on live login state",
   CLAUDE_CODE_WORKSPACE_HOST_PATHS: "connected-folder list; runtime-derived per session",
+  // Desktop 2.2553.1. 3p-only: constructed inside the `...<isThirdParty>&&{DISABLE_GROWTHBOOK:"1",…}`
+  // spread in W3, never on first-party. Allowlisted, never pinned — the standing rule for a 3p-only key.
+  CLAUDE_CODE_MODEL_CATALOG: "3p-only deployment branch (DISABLE_GROWTHBOOK sibling); never constructed on first-party",
+  // Desktop 2.2553.1. Doubly conditional in W1: the frame-artifacts predicate AND a server-delivered
+  // `artifactHostGrant` session field. Both are off/absent on the modeled default first-party session, so
+  // there is no value to pin. NOTE: its spread condition is asserted to be the SAME predicate as the
+  // Artifact tool spread's by S6d — without that, a future build dropping the guard would be admitted here
+  // in silence, which is the failure S6d exists to prevent.
+  CLAUDE_ARTIFACT_HOST_GRANT: "frame-artifacts gated + server-delivered grant; absent on a default first-party session (guarded by S6f)",
+  // Desktop 2.2553.1. W2 base env, UNCONDITIONAL on first-party: `<dep>.type==="3p"?"":app.getVersion()`.
+  // Allowlisted because `app.getVersion()` is an Electron host call, not a structural fact the asar window
+  // can resolve — NOT because the key is optional. It is runtime-injected from `baseline.appVersion` in
+  // BOTH spawnEnv and hostNativeSpawnEnv (src/runtime/argv.ts), exactly as CLAUDE_CODE_HOST_PLATFORM is.
+  // Allowlisting WITHOUT that injection would be a silent contract loss: resolveInto hits the allowlist
+  // before SPAWN_PIN_KEYS and the key is not in REQUIRED_SPAWN_KEYS, so nothing would fail — while the
+  // agent, which reads this key on the `local-agent` entrypoint the harness pins, would stop sending the
+  // anthropic-client-platform / anthropic-client-version headers production always sends.
+  CLAUDE_CODE_DESKTOP_APP_VERSION:
+    "host-derived (Electron app.getVersion(); '' on 3p); runtime-injected from baseline.appVersion (src/runtime/argv.ts)",
   CLAUDE_PROJECT_UUID: "project-session-conditional (absent for the modeled standard chat session)",
   CLAUDE_PROJECT_TOOL: "project-session-conditional (absent for the modeled standard chat session)",
   MCP_CONNECT_TIMEOUT_MS: "gate 434204418-conditional (off; arrives with MCP_CONNECTION_NONBLOCKING:'0')",
@@ -2296,6 +2883,19 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
     "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
+  // Doubly conditional, and TWO traps a future reader will hit in this order:
+  // (1) The managed-settings UI copy for this key names Cowork explicitly ("Raises how long Cowork, Chat
+  //     and Code sessions wait for the next model event…"). That describes which SESSION KINDS an
+  //     admin's setting reaches on a managed deployment — it does NOT put the key on the 1p path. The
+  //     construction is inside the `...accountType==='3p' && {…}` spread; a first-party session cannot
+  //     receive it however the gateway is configured.
+  // (2) This is NOT the MCP_TOOL_TIMEOUT case. That key must never be allowlisted because it ALSO has a
+  //     1p construction site, and resolveInto checks this allowlist BEFORE the pin list, so allowlisting
+  //     it would silently drop a key the 1p spawn really sets. CLAUDE_STREAM_IDLE_TIMEOUT_MS has no 1p
+  //     site — one construction site in the whole asar, in the 3p block — so the allowlist is correct
+  //     here and a pin would bake a 3p-only key into a baseline that describes the 1p spawn.
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS:
+    "3p branch AND gateway-provider streamIdleTimeoutSec-conditional (String(sec*1e3)); single site, inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK; harness models 1p",
   // Doubly conditional: the 3p branch AND `telemetry.disableNonessential`. Its two construction sites
   // sit inside the same `...accountType==='3p' && {...}` literal as DISABLE_GROWTHBOOK/DISABLE_TELEMETRY
   // below, so it is allowlisted for the identical reason rather than pinned — pinning would bake a
@@ -2330,6 +2930,13 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   "CLAUDE_CODE_TAGS",
   "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
   "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL",
+  // Gate 1595132361-conditional (Desktop >=1.46388.3). PINNED, not allowlisted: it has a 1p W1 site
+  // and no host/settings/3p conditionality there. While the gate reads off, WI-4 classifies the key and
+  // DROPS its value (apply=false), so it stays out of spawn.env; if a server rule flips the gate on,
+  // resolveGateInner writes "1" and the flip shows up as a spawn.env diff. Do NOT copy the
+  // ENABLE_TOOL_SEARCH treatment here — that key is ALLOWLISTED because its gate is genuinely dark and
+  // no value can be resolved for it; this gate is served.
+  "CLAUDE_CODE_QUESTION_EXTENDED",
   "CLAUDE_CODE_DISABLE_CRON",
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
   "CLAUDE_CODE_DISABLE_AGENTS_FLEET",
@@ -2476,7 +3083,13 @@ export function resolveSpawnValue(
   // minifier-assigned, so each one is `[\w$]+` — NOT `\w+`, which cannot match a `$`-initial name.
   // Desktop 1.32885.1 shipped `t.$s` and `\w` excludes `$`; test/sync-sentinel-identifier-classes.test.ts
   // holds this file to zero identifier atoms that reject `$`.
-  if (/^[\w$]+\.disableCron\?"1":""$/.test(e)) return { value: "1" };
+  // D6 (Desktop 2.2553.1): a second disjunct appeared — `e.disableCron||!sC()?"1":""`, where `sC()` is the
+  // managed-settings scheduled-tasks switch (`workspace?.scheduledTasksEnabled!==!1`). The pin stays "1",
+  // and it stays EARNED rather than assumed: S12 requires W1 to keep passing `disableCron:!0`, so the
+  // left disjunct short-circuits and the managed-settings state cannot reach the value. If S12 ever stops
+  // matching, this rule must be re-derived — the disjunct is NOT inert in general, only under S12.
+  // Deliberately not resolving `sC()`: it is host policy state, not a structural fact of the asar.
+  if (/^[\w$]+\.disableCron(?:\|\|![\w$]+\(\))?\?"1":""$/.test(e)) return { value: "1" };
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="staging"\?"1":""$/.test(e)) return { value: "" };
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="local"\?"1":""$/.test(e)) return { value: "" };
   if ((m = e.match(/^[\w$]+\.type==="3p"\?"[^"]*":"([^"]*)"$/))) return { value: m[1] };
@@ -2518,7 +3131,7 @@ function sliceSpawnValue(text: string, i: number): string {
     else if (c === "}" || c === ")" || c === "]") {
       if (depth === 0) break;
       depth--;
-    } else if (c === "," && depth === 0) break;
+    } else if ((c === "," || c === ";") && depth === 0) break;
   }
   return text.slice(start, i);
 }
@@ -3028,7 +3641,15 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
       // and fails CLOSED (miss) if a future build hoists it out, while still excluding same-named locals
       // in other function scopes.
       const win = toolsSite.slice(Math.max(0, at - 8000), at);
-      const def = win.match(new RegExp(`(?:\\b(?:const|let|var)\\s+|[,;({])${escC}=([^;]*);`));
+      // D6 (Desktop 2.2553.1): the condition is no longer its own statement — it shares a declaration with
+      // the Artifact host-grant binding (`let re=(…)&&!t.WI(),ie=Jl(a.artifactHostGrant);`). The old
+      // `([^;]*);` capture ran straight past the top-level comma and swallowed `,ie=…`, so the
+      // `^…$`-anchored whole-expression match below rejected a predicate that had not changed at all —
+      // a FALSE ALARM that reads exactly like a real gate widening. Slice the value brace/paren/quote-aware
+      // and stop at the first TOP-LEVEL `,` or `;` instead. The `^…$` anchors stay: they are what makes an
+      // appended `||!0` or a replaced conjunct fire, and both must keep firing.
+      const defAt = win.search(new RegExp(`(?:\\b(?:const|let|var)\\s+|[,;({])${escC}=`));
+      const def = defAt === -1 ? null : ([, sliceSpawnValue(win, win.indexOf("=", defAt) + 1)] as unknown as RegExpMatchArray);
       if (!def)
         miss(
           "S6c Artifact gate",
@@ -3135,6 +3756,44 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         "S6d frame-artifacts env key",
         "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it",
       );
+    // S6f (Desktop 2.2553.1): CLAUDE_ARTIFACT_HOST_GRANT joined the same spread run, and carries the same
+    // allowlist hazard for the same reason — it is allowlisted as "absent on a default session", and that
+    // claim rests ENTIRELY on its guard. Its spread has a different SHAPE from the frame-artifacts one
+    // (`...<cond>&&<grant>!==void 0&&{…}`), so S6d's regex does not reach it.
+    //
+    // Scoped to the WHOLE BUNDLE, and expressed as a COUNT, for two reasons a first draft of this got
+    // wrong and an adversarial review caught:
+    //  (1) `toolsSite` is only the chunk holding the tools[] literal. W2 lives in a DIFFERENT CHUNK in
+    //      this very build — CLAUDE_CODE_DESKTOP_APP_VERSION is constructed there — so a toolsSite-scoped
+    //      search goes SILENT the moment the key moves one window over, which is exactly the drift this
+    //      guard exists to catch.
+    //  (2) Branching on the first match structurally cannot see a SECOND construction added alongside the
+    //      guarded one. Requiring every construction to BE a guarded spread is what closes that.
+    // Export-table declarations (`KEY:()=>local`) are not constructions — there are 2 in this build — so
+    // they are excluded rather than inflating the count.
+    const GRANT_KEY = "CLAUDE_ARTIFACT_HOST_GRANT";
+    const grantCtors = [...bundle.matchAll(new RegExp(`${GRANT_KEY}:(?!\\(\\)=>)`, "g"))].length;
+    const grantSpreads = [...bundle.matchAll(new RegExp(`\\.\\.\\.([\\w$]+)&&[\\w$]+!==void 0&&\\{${GRANT_KEY}:`, "g"))];
+    if (grantCtors !== grantSpreads.length)
+      miss(
+        "S6f artifact host grant",
+        `${grantCtors} construction(s) of ${GRANT_KEY} in the bundle but ${grantSpreads.length} guarded ` +
+          "`...<cond>&&<grant>!==void 0&&{…}` spread(s) — at least one construction is unguarded or newly shaped, " +
+          "so the allowlist's 'absent on a default session' claim no longer holds; reclassify",
+      );
+    else if (grantSpreads.length > 0 && artifactCond === undefined)
+      miss(
+        "S6f artifact host grant",
+        `${GRANT_KEY} is constructed without the Artifact tool spread — the allowlist entry would admit it unchecked`,
+      );
+    // Identifier equality is only meaningful within the chunk `artifactCond` was captured in; a spread in
+    // another chunk necessarily has a different local name, and demanding equality there would be the S6c
+    // false-alarm class all over again. The count rule above already requires that one to be guarded.
+    else if (artifactCond !== undefined && grantSpreads.some((g) => siteOf(g[0]) === toolsSite && g[1] !== artifactCond))
+      miss(
+        "S6f artifact host grant",
+        `${GRANT_KEY} is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it`,
+      );
   }
   // S8 (widened, Desktop 1.28929.0): pin the WHOLE tools[] tail through its closing bracket, not just the
   // first spread after "ToolSearch". The old anchor stopped at `...X.sessionType===`, so anything appended
@@ -3197,7 +3856,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     miss("S11 ENTRYPOINT local-agent", "the W1 local-agent entrypoint literal is gone");
   if (!w1 || !has(/disableCron:!0/, w1) || !has(/localAgent:!0/, w1))
     miss("S12 OnA call args", "disableCron:!0 / localAgent:!0 no longer earn the DISABLE_CRON / PROVIDER_MANAGED_BY_HOST pins");
-  if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:[\w$]+\.disableCron\?"1":""/, w2))
+  if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:[\w$]+\.disableCron(?:\|\|![\w$]+\(\))?\?"1":""/, w2))
     miss("S13 DISABLE_CRON ternary", "the disableCron?'1':'' shape changed");
   // B7 (Desktop 1.25927.0): the loop binding is emitted as `let` in the new codegen (`for(let t of[…])`).
   // The binding keyword is a minifier choice, never a contract fact — admit all three. Its NAME is a

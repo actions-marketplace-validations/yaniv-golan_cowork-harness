@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^3.2.0"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^3.6.0"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^3.2.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^3.6.0"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^3.2.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^3.6.0"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -518,6 +518,17 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_JUDGE_MODEL` — the default model for `semantic_matches`' LLM judge (overridden by a
   per-assertion `judge_model`; falls back to the pinned default `claude-opus-4-8`). Pin it alongside `judge_model` for a
   reproducible before/after comparison across re-records.
+- `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` — total size budget for the authored-file evidence a `semantic_matches` judge
+  grades (default 65536). Raise it when a run's real deliverable is larger than the default — a pipeline whose
+  intermediates dwarf its output otherwise spends the budget before reaching the file the rubric is about, and the
+  verdict is refused **evidence unavailable**. Pair it with `semantic_matches.evidence_files` so the budget is spent on
+  the graded files first (they are also exempt from the per-file cap). A malformed value is a hard error, not a silent
+  default: a quietly-defaulted evidence budget resurfaces later as an unexplained refusal. Raising it enlarges the
+  document sent to an external judge — cost, latency and disclosure all scale with it. There IS an upper bound: the
+  composed document is capped at 262144 chars, and a budget large enough to push the graded evidence past that fails
+  `authored_evidence_truncated` instead. Between the two, scope the judge rather than raising further — and if the scope
+  already names a single file that still does not fit, that deliverable cannot be graded whole and the rubric needs to target a
+  smaller artifact. Note this budget does not lift the 16384-byte PER-FILE cap; only an `evidence_files` scope does.
 - `COWORK_HARNESS_EVALUATOR_MODEL` — the default `critique` grading model (overridden by the `--evaluator-model` flag;
   falls back to the pinned default `claude-opus-4-8`).
 - `COWORK_HARNESS_RUNS_DIR` (or the `--run-dir <path>` flag — a **global** flag that must precede the subcommand — `--dotenv` follows the same rule everywhere except `critique`, which also takes it per-command) — override the default run-output root `~/.cowork-harness/runs` (kept out of any working tree so sensitive skill inputs/outputs don't land in a repo). Precedence: `--run-dir` > env > default. The root is flat and machine-global (shared across projects); pinned `--session-id` runs are guarded against cross-project overwrite, and `prune` never prunes them. In CI, set it to a workspace path (e.g. `runs`) so artifact upload can collect the runs. `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` overrides the guard that blocks `--resume` onto another project's pinned session.
@@ -534,7 +545,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
   the default rather than silently sampling on the wrong cadence — see
   [docs/maintenance.md](./maintenance.md)).
 - `COWORK_HARNESS_NO_HYPERLINKS` — disable OSC-8 terminal hyperlinks in CLI output (auto-disabled outside a TTY, under CI, or with `--compact`/`--demo`).
-- **Strictness escape hatches** (the harness fails loud by default): `COWORK_HARNESS_SOFT_MISSING=1` downgrades a missing mount source from a hard error to warn-and-exclude; `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` permits writing into an existing pinned `plugins.config_dir` (otherwise refused, to avoid clobbering a real Claude config).
+- **Strictness escape hatches** (the harness fails loud by default): `COWORK_HARNESS_SOFT_MISSING=1` downgrades a missing mount source from a hard error to warn-and-exclude (an excluded *folder* is still named to a host-loop sub-agent, as one the shell cannot reach — production lists a mount-failed folder rather than dropping it, see [subagents.md](./subagents.md)); `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` permits writing into an existing pinned `plugins.config_dir` (otherwise refused, to avoid clobbering a real Claude config).
 - **Staleness boundary** (the git-tracked-files-only default and its `git add`/hard-fail rationale are explained in [Test a local skill](#test-a-local-skill-in-one-command)): a **non-repo** source dir falls back to a raw walk instead; OS-junk like `.DS_Store` is always excluded; a partial exclusion emits a `::notice:: [stage]`. `COWORK_HARNESS_GITSET=0` opts out to a raw walk for every dir (and copies untracked files too); `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the exact file set feeding the staleness hash on a mismatch (and flags OS-junk) so a drift source is one line. Declare per-plugin non-runtime paths in a `.cowork-hashignore` file (or the session `staleness.hash_ignore`). `COWORK_HARNESS_AGENT_SCOPE=skill` (opt-in) refines a scenario's `skills:` scope so a **skill-named** `agents/<name>.md` re-stales only that skill's cassettes instead of the whole fleet (generic agents stay shared; stamped into the fingerprint, so flipping it is a one-time re-record like `GITSET`).
 - **`skill` / `chat` defaults:** `COWORK_HARNESS_FIDELITY` sets the default fidelity tier for ad-hoc `skill`/`chat` runs (a `--fidelity` flag or a scenario's `fidelity:` still wins); `COWORK_HARNESS_MODEL` sets the default model on every lane that takes `--model` (`run`, `record`, `skill`, `probe-dispatch`, `chat`), where an explicit flag and a matrix `models:` axis both outrank it; `COWORK_HARNESS_OUTPUT_FORMAT` (`text`|`json`) sets the default output format. Each is overridden by the matching explicit flag. **Caveat:** `chat` only accepts `protocol`/`container`/`hostloop` — `microvm` and `cowork` are rejected (no Lima/auto-pick plumbing in the interactive REPL), so a `COWORK_HARNESS_FIDELITY` set to either is rejected loudly for `chat` even though `skill` accepts the full tier set.
 - **Secret scrubbing:** `COWORK_HARNESS_SCRUB_KEYS=<KEY1,KEY2>` adds extra env-var names whose values are redacted from logs (beyond the known auth tokens + `ANTHROPIC_CUSTOM_HEADERS`); `COWORK_HARNESS_SCRUB_VALUES=<v1,v2>` redacts literal values regardless of env. **Committed-cassette redaction:** `COWORK_HARNESS_REDACT_PATTERNS=<rx1,rx2>` / `COWORK_HARNESS_REDACT_KEYS=<k1,k2>` extend the privacy layer that scrubs recorded `controlOut` before a cassette is written for commit.

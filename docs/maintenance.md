@@ -61,6 +61,13 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
   network: {...} -> {...}
 ```
 
+**Read `provenance.spawnEnvKeys` and `spawnEnvSpreadCount` in that diff first.** They are the spawn-env drift
+alarm: the recorded set of ALL-CAPS keys the 1p spawn windows construct, plus the spread count. If either moves,
+Desktop added or removed a spawn env key, or the extractor drifted — stop and classify it before writing the
+baseline. A key-set delta *names* the key, which is why it beats any count-based signal. (Worth stating because
+it is easy to miss and easy to re-invent: a 2026-09 design exercise spent four review rounds specifying a facility
+whose first half was this field, already shipped and already correct on the same release pair.)
+
 (`capturedAt` is rewritten to today on every `sync`, and `$comment` embeds that same date, so both always
 show in the diff even when nothing substantive moved — ignore them as noise.)
 
@@ -97,7 +104,8 @@ If the agent version bumped, there is no image rebuild: the agent ELF is bind-mo
 
 `sync` records the Linux/arm64 ELF's SHA-256 in the baseline's `agentBinary`:
 
-- `sha256` + `shaProvenance: "measured-local"` — hashed from the staged binary on the syncing machine (the trustworthy point-of-truth), plus `manifestChecksumMatch` (whether it equalled Anthropic's official per-version release checksum; `"unknown"` if the manifest was unreachable). `sync` stays offline-capable — a missing manifest never fails it.
+- `sha256` + `shaProvenance: "measured-local"` — hashed from the staged binary on the syncing machine (the trustworthy point-of-truth), plus `manifestChecksumMatch` (whether it equalled Anthropic's official per-version release checksum; `"unknown"` if that manifest was unreachable **or** not served). `sync` stays offline-capable — a missing manifest never fails it, and it now says *which* of the two happened: an HTTP status is a `WARNING` (the channel does not serve this version), a transport failure is a `NOTE` (your rig has no egress, which says nothing about the release).
+- `releaseBaseUrl` — the release channel Desktop staged the agent **from**, read out of the asar at sync time. Usually `https://downloads.claude.ai/claude-code-releases`; for a **release candidate** it is `…/claude-code-releases/rc/<40-hex commit>`. Desktop stages RCs routinely (3 of the 24 builds observed so far), the stable path 404s for them, and the commit **cannot be discovered from the network** — `stable` and `latest` point at other versions, and there is no index — so the asar is the only source. This field is what makes the recovery command above work for an RC-staged version, and a stable↔RC flip shows up as a `sync --diff` line. Absent on baselines written before it existed; all of those were stable-staged or later promoted, which is what the command's fallback relies on.
 - `sha256` + `shaProvenance: "official-manifest"` — for a version **not** staged on this machine (e.g. a back-filled older baseline), copied from Anthropic's release manifest. Staging-identity is **unverified**: it's the official release hash, not confirmed byte-identical to what Cowork stages for that version (byte-identity is confirmed only for versions actually measured).
 
 There is deliberately **no `nativeSha256`**: the signed+notarized native `.app` inner Mach-O embeds an `LC_CODE_SIGNATURE` and never equals any manifest hash.
@@ -111,12 +119,34 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.247   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
-curl -fSL "https://downloads.claude.ai/claude-code-releases/$V/linux-arm64/claude" -o "claude-$V"
+V=2.1.275   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+# The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
+# from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
+# `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
+# written before `releaseBaseUrl` existed was stable-staged or later promoted, hence the fallback:
+B=$(jq -r '.agentBinary.releaseBaseUrl // "https://downloads.claude.ai/claude-code-releases"' baselines/desktop-<latest>.json)
+curl -fSL "$B/$V/linux-arm64/claude" -o "claude-$V"
 # verify against the committed baseline sha256 (== manifest platforms["linux-arm64"].checksum):
 shasum -a 256 "claude-$V"
 COWORK_AGENT_BINARY="$PWD/claude-$V" cowork-harness run <scenario>.yaml   # scenario baseline pins $V
 ```
+
+**Three facts about the channel that will otherwise cost you a wrong diagnosis** (probed 2026-09-05):
+
+1. **`/stable` is a rollout pointer, not "latest".** It read `2.1.236` while `2.1.261` was published and
+   fetchable. Never use it to decide whether a version exists.
+2. **Not every published version is served.** `2.1.255` returns **404 on both** the stable and RC
+   channels while its immediate neighbours return 200. So **a 404 is not evidence that you queried the
+   wrong channel** — it is not evidence of anything except that this URL has no artifact. This exact
+   misdiagnosis has been made here once already, and the fix is a **positive control**: fetch a
+   neighbouring version from the same base before concluding the base is wrong. By the same token, a
+   version appearing in a changelog or a version table is *not* evidence its artifact is recoverable.
+3. **A compressed artifact is served alongside, not instead.** `<base>/<ver>/manifest.zst.json` sits
+   beside `manifest.json` for every version back to at least 2.1.231, and `linux-arm64/claude.zst` is the
+   same binary at roughly a third the bytes (66,087,089 vs 199,241,568 for darwin-arm64). **Additive, not
+   a migration** — nothing here needs to change, and the checksum path deliberately still fetches the
+   uncompressed manifest rather than take a decoder dependency for a comparison that already tolerates a
+   404. Both manifests now carry `"manifestSignatureEnforcement":"flag"`.
 
 Note: `install.sh <version>` installs the **host CLI for the running platform** into `~/.local/bin` (clobbering an existing one) — it does **not** produce the Linux ELF the container tier bind-mounts, so recovering the ELF is the direct download above.
 
@@ -196,24 +226,46 @@ committed baseline and say why in that baseline's `$comment`.
    miss, since a deployment-gated placeholder can leave the *rendered* prompt byte-identical while the
    prompt *source* still changed.
 
-   **Includes the two-branch sub-agent append sentinel.** `checkSubagentPromptFacts` pins the
-   `subagent_env_hl`/`subagent_env_vm` key pair, the `hostLoopMode` branch ternary, a normalized
-   two-branch content fingerprint (`subagentAppendVersions` in
-   `baselines/prompts/cowork-system-prompt-fingerprints.json`), the substitution-map keys **and values**
-   (a host/VM cwd swap fails), the `resolveSection` gate shape, and the delivery-call argument list. On a
-   *legitimate* sub-agent append text change the fingerprint drifts and `sync` refuses to write. To
-   re-derive the two `sha16`s, after `npm run build` extract the new asar and feed the **per-file map**
-   (not the joined bundle) through the exported helpers:
+   **Includes the sub-agent append sentinel — FOUR axes since Desktop 1.46388.3, not two.**
+   `checkSubagentPromptFacts` pins the `subagent_env_hl`/`subagent_env_vm` key pair, the `hostLoopMode`
+   branch ternary, the substitution-map keys **and values** (a host/VM cwd swap fails), the
+   `resolveSection` gate shape, the delivery-call argument list (now including `hostOutputsDir` /
+   `userSelectedFolders` / `hostOnlyFolders`, and that `hostOutputsDir` stays `hostLoopMode`-gated), the
+   path-gated builtin tool list the manifest joins, the manifest's own call bindings — and a normalized
+   content fingerprint on FOUR axes (`subagentAppendVersions` in
+   `baselines/prompts/cowork-system-prompt-fingerprints.json`).
+
+   Why four: 1.46388.3 split the append into the overridable `## Cowork environment` section, a
+   host-loop-only folder manifest, and a trailing sentence appended to **both** branches. The old
+   two-branch fingerprint covered only the ternary arms, so that trailing sentence changed the rendered
+   append on both branches while the `vm` fingerprint sat still — reproduced by counterfactual, it would
+   have synced green. `manifest` and `suffix` make the sentinel's subject the append the model receives.
+   Only the NEWEST entry is compared, and only on the axes it declares, so historical entries are not
+   retro-failed; once either composed axis is recorded, both are mandatory.
+
+   On a *legitimate* append text change the fingerprint drifts and `sync` refuses to write. To re-derive
+   all four `sha16`s, after `npm run build` extract the new asar and feed the **per-file map** (not the
+   joined bundle) through the exported helpers:
 
    ```bash
    TMP=$(mktemp -d) && npx --yes @electron/asar extract <path-to>/app.asar "$TMP" \
-   && node -e "import('./dist/sync/cowork-sync.js').then(m => { const f = m.readMainBundleFiles('$TMP'); const s = m.extractSubagentBranchSlices(f); console.log({ hl: m.subagentBranchFingerprint(s.hl), vm: m.subagentBranchFingerprint(s.vm) }); })" \
+   && node -e "import('./dist/sync/cowork-sync.js').then(m => { const f = m.readMainBundleFiles('$TMP'); const s = m.extractSubagentBranchSlices(f); const c = m.extractSubagentComposition(f); console.log({ hl: m.subagentBranchFingerprint(s.hl), vm: m.subagentBranchFingerprint(s.vm), manifest: m.subagentBranchFingerprint(c.manifest), suffix: m.subagentBranchFingerprint(c.suffix) }); })" \
    && rm -rf "$TMP"
    ```
 
-   Update the paraphrase asset(s) if the branch *semantics* moved, append a new `subagentAppendVersions`
-   entry (BOTH `hl` and `vm` are mandatory — a partial entry is itself a hard-fail), then re-run
-   `cowork-harness sync`.
+   Note these are computed over `normalizeBundleQuotes`-NORMALIZED text (which `readMainBundleFiles`
+   applies), as the branch fingerprints always have been — a raw read of the asar gives different values.
+
+   Update the paraphrase if the *semantics* moved, append a new `subagentAppendVersions` entry (`hl` and
+   `vm` always mandatory; `manifest` and `suffix` mandatory together once either is recorded — a partial
+   entry is itself a hard-fail), then re-run `cowork-harness sync`.
+
+   > **PRECONDITION for any live probe of real Cowork.** Cowork's "Only on this computer" setting
+   > (Settings → Cowork) selects the lane. With it **off** — observed to be the default state on a
+   > current install — a session runs server-side under a server-authored prompt with no
+   > `## Cowork environment` section at all, and you will be diffing a lane this harness does not
+   > model. Turn it on and start a FRESH session before probing. This cost one wasted probe on
+   > 2026-09-05.
 
    > **Then REPOINT the baseline at the new asset** — `spawn.subagentAppendHostLoop` (and/or
    > `spawn.subagentAppend`) in the freshly written `baselines/desktop-<new>.json`. These pointers are
@@ -221,6 +273,13 @@ committed baseline and say why in that baseline's `$comment`.
    > fingerprint entry clears the sentinel whether or not you repoint. Skip this and a host-loop
    > sub-agent silently receives the previous release's paraphrase, with `sync` green. This is the step
    > that was missed on 1.32885.1 and caught by eye.
+   >
+   > **Since 1.46388.3 that asset is only the SECTION.** The folder manifest and the trailing sentence
+   > are GENERATED in `src/prompt/subagent-manifest.ts`, because the manifest is built from live mount
+   > state and no static file can be faithful to it — the same reason the main-loop shell section became
+   > a generator at 1.14271.0. Do **not** "restore" them into the asset: they would render twice. Edit
+   > the generator instead, and note its text is mixed into `promptAssetsHash`, so an edit there stales
+   > recorded cassettes exactly as an asset edit does.
 
    **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
    `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named

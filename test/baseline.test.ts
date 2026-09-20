@@ -48,7 +48,12 @@ import {
   type GateState,
   type PromptFingerprint,
 } from "../src/sync/cowork-sync.js";
-import { extractSubagentBranchSlices, subagentBranchFingerprint, checkSubagentPromptFacts } from "../src/sync/cowork-sync.js";
+import {
+  extractSubagentBranchSlices,
+  extractSubagentComposition,
+  subagentBranchFingerprint,
+  checkSubagentPromptFacts,
+} from "../src/sync/cowork-sync.js";
 import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityWasDefaulted, defaultedFidelityNotice } from "../src/run/execute.js";
@@ -692,6 +697,41 @@ describe("committed baselines carry agent-binary provenance", () => {
     expect(typeof ab.manifestChecksumMatch).toBe("boolean");
     expect(ab.manifestChecksumMatch).toBe(true);
   });
+  // The regression pin for the RC-channel fix. Desktop 1.40609.1 stages agent 2.1.255, a release
+  // CANDIDATE served only from `…/claude-code-releases/rc/<commit>/`. The stable-only checksum fetch
+  // 404'd and recorded `manifestChecksumMatch:"unknown"` for a build whose published checksum matches the
+  // staged ELF exactly. Both fields below come from a real `sync` against the live install — a hand-edit
+  // would make this test assert nothing about the extractor.
+  it("desktop-1.40609.1 (RC-staged) records the RC channel and a TRUE manifest match", () => {
+    const ab = loadBaseline("desktop-1.40609.1").agentBinary;
+    expect(ab.shaProvenance).toBe("measured-local");
+    expect(ab.manifestChecksumMatch).toBe(true);
+    expect(ab.releaseBaseUrl).toMatch(/^https:\/\/downloads\.claude\.ai\/claude-code-releases\/rc\/[0-9a-f]{40}$/);
+  });
+  // Every baseline written before the field existed was stable-staged or later promoted, so the
+  // recovery runbook's stable-path fallback is safe for them. Pinned so that stops being an assumption:
+  // a NEW baseline that omits the field while being RC-staged would leave its ELF unrecoverable.
+  it("a pre-fix baseline has no releaseBaseUrl, and its version is still served from the stable path", () => {
+    const ab = loadBaseline("desktop-1.40609.0").agentBinary;
+    expect(ab.releaseBaseUrl).toBeUndefined();
+    // The name promised two things and asserted one. The second half is the load-bearing half: the
+    // runbook's stable-path fallback for pre-field baselines is only safe if those versions really are
+    // on the stable channel. Asserted from the recorded provenance rather than the network, so the test
+    // stays hermetic: a `measured-local` sha that the official manifest AGREED with (`true`) is exactly
+    // the evidence that the stable manifest served this version at sync time.
+    expect(ab.shaProvenance).toBe("measured-local");
+    expect(ab.manifestChecksumMatch).toBe(true);
+  });
+
+  // The newest baseline must always carry the field, in one of its two legal shapes. This is the pin
+  // that makes check-versions' fail-closed 8b meaningful: without it, an extractor that silently starts
+  // returning null would ship a baseline with no channel and nothing would notice until a consumer's
+  // `curl` 404'd.
+  it("the newest baseline always records a release channel, stable or rc/<40-hex>", () => {
+    expect(loadBaseline("latest").agentBinary.releaseBaseUrl).toMatch(
+      /^https:\/\/downloads\.claude\.ai\/claude-code-releases(\/rc\/[0-9a-f]{40})?$/,
+    );
+  });
   it("an absent-version baseline carries an official-manifest sha256 (staging-identity unverified, no match field)", () => {
     const ab = loadBaseline("desktop-1.13576.1").agentBinary;
     expect(ab.sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -969,6 +1009,17 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       "S6c Artifact gate",
     ],
     ["R3 HIPAA conjunct replaced by a literal", () => fixture1289290().replace("&&!zA.r();N&&", "&&!0;N&&"), "S6c Artifact gate"],
+    // D6 (Desktop 2.2553.1). The condition stopped being its own statement — it now shares a declaration
+    // with the Artifact host-grant binding. The old `([^;]*);` capture ran past the top-level comma and
+    // swallowed `,ie=…`, so the anchored whole-expression match rejected an UNCHANGED predicate: a false
+    // alarm indistinguishable from a real gate widening. D6b is the one that matters — it proves the
+    // comma-aware slice did not blunt the anchor, because a real widening hidden before the comma must
+    // STILL fire. (The no-flag direction is asserted separately, in its own test below.)
+    [
+      "D6b sibling binding present AND ||!0 appended → still fires through the comma-aware slice",
+      () => fixture1289290().replace("&&!zA.r();N&&", "&&!zA.r()||!0,ie=Jl(a.artifactHostGrant);N&&"),
+      "S6c Artifact gate",
+    ],
     // B17/S6e. The old check hard-coded the member name (`\.r\(\)`), so it accepted ANY single-letter
     // member — re-pointing the conjunct at a different export passed silently. These three are the
     // reason the resolution has to be two hops against a BRACE-SCANNED body rather than a window:
@@ -1074,6 +1125,67 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       .replace('Object.defineProperty(exports,"r",{', 'Object.defineProperty(exports,"hu",{');
   it("1.30096.1 build shape: the HIPAA reader renamed (A.r -> t.hu) stays CLEAN — member names rotate per build", () => {
     expect(checkSpawnContractFacts(fixture1300961())).toEqual([]);
+  });
+
+  // D6 (Desktop 2.2553.1): the condition stopped being its own statement — it shares a declaration with
+  // the Artifact host-grant binding (`let re=(…)&&!t.WI(),ie=Jl(a.artifactHostGrant);`). The predicate is
+  // BYTE-IDENTICAL; only the statement it lives in changed. The old `([^;]*);` value capture ran past the
+  // top-level comma, so the anchored whole-expression match rejected it and `sync` reported "the Artifact
+  // condition is no longer exactly the frame-artifacts expression" — a false alarm that reads exactly like
+  // a real gate widening, and cost a release cycle's worth of misdirected investigation. This is the
+  // regression test for that false positive; D6b above is the paired proof that the fix did not blunt the
+  // anchor. If this goes red, the value slice has been re-narrowed to stop at `;` again.
+  const fixture2255310 = () => fixture1289290().replace("&&!zA.r();N&&", "&&!zA.r(),ie=Jl(a.artifactHostGrant);N&&");
+  it("2.2553.1 build shape: the condition sharing a declaration with the host-grant binding stays CLEAN", () => {
+    expect(checkSpawnContractFacts(fixture2255310())).toEqual([]);
+  });
+
+  // The host-grant key's allowlist entry claims it is "absent on a default session", and that claim rests
+  // ENTIRELY on its guard. S6f asserts the guard is the SAME predicate as the Artifact tool spread.
+  it("S6f: the host-grant key made unconditional → flags (the allowlist alone would admit it)", () => {
+    const unconditional = fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},CLAUDE_ARTIFACT_HOST_GRANT:ie,',
+    );
+    expect(checkSpawnContractFacts(unconditional).join("\n")).toContain("S6f artifact host grant");
+  });
+
+  // A build that DOES carry the guarded grant spread — the shape 2.2553.1 actually ships. Must be clean,
+  // otherwise the two mutations below would be passing for the wrong reason.
+  const fixtureGrant = () =>
+    fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},',
+    );
+  it("S6f control: the real guarded host-grant spread is CLEAN", () => {
+    expect(checkSpawnContractFacts(fixtureGrant())).toEqual([]);
+  });
+
+  // The two holes an adversarial review found in the first draft of S6f, which searched only the chunk
+  // holding tools[] and branched on the FIRST match.
+  it("S6f: a SECOND unguarded construction alongside the guarded spread → flags (first-match branching was blind to this)", () => {
+    const two = fixtureGrant().replace(
+      "...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},",
+      "...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},CLAUDE_ARTIFACT_HOST_GRANT:ie,",
+    );
+    expect(checkSpawnContractFacts(two).join("\n")).toContain("S6f artifact host grant");
+  });
+
+  it("S6f: the construction moved OUT of the tools chunk and unguarded → flags (bundle-wide count, not toolsSite)", () => {
+    // W2 lives in a different chunk from tools[] in the real 2.2553.1 build, so a toolsSite-scoped search
+    // would go silent here. Drop the guarded spread and re-add the key unconditionally elsewhere.
+    const moved =
+      fixtureGrant().replace("...zde&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},", "") +
+      ';var elsewhere={CLAUDE_ARTIFACT_HOST_GRANT:"tok"};';
+    expect(checkSpawnContractFacts(moved).join("\n")).toContain("S6f artifact host grant");
+  });
+
+  it("S6f: the host-grant key gated on a DIFFERENT predicate → flags", () => {
+    const repointed = fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},...zOTHER&&ie!==void 0&&{CLAUDE_ARTIFACT_HOST_GRANT:ie},',
+    );
+    expect(checkSpawnContractFacts(repointed).join("\n")).toContain("S6f artifact host grant");
   });
 
   // The fixtures above run in single-text mode, where resolveNamespaceRef falls back to searching the one
@@ -2000,21 +2112,36 @@ describe("checkSubagentOverrideGate (gate 124685897 — subagent-append server o
  *  is self-consistent, while the real-asar fingerprints live only in the baselines JSON. The inner
  *  markdown backticks are escaped (\`) to reproduce real minified template syntax, so the branch
  *  slicer decodes them instead of terminating the slice at the first inner backtick. */
-function subagentBundle(overrides: Partial<Record<"keys" | "ternary" | "hl" | "vm" | "gate" | "map" | "delivery", string>> = {}): string {
+function subagentBundle(
+  overrides: Partial<
+    Record<"keys" | "ternary" | "hl" | "vm" | "gate" | "map" | "delivery" | "manifest" | "suffix" | "tools" | "call", string>
+  > = {},
+): string {
   const keys = overrides.keys ?? `subagentEnvHostLoop:"subagent_env_hl",subagentEnvVm:"subagent_env_vm"`;
   const hl =
     overrides.hl ??
-    "## Cowork environment\\n\\nSynthetic hl body: a subagent on the user's machine; file tools act on the real filesystem (working directory \\`${t??i}\\`); shell goes through \\`mcp__${n.WORKSPACE_MCP_SERVER}__${n.WORKSPACE_BASH}\\` with attached folders mounted under \\`${i}/mnt/\\`.";
+    "## Cowork environment\\n\\nSynthetic hl body: the shell tool, \\`mcp__${n.WORKSPACE_MCP_SERVER}__${n.WORKSPACE_BASH}\\`, runs on Linux and starts in \\`${i}\\`. Files it writes outside \\`${i}/mnt/\\` (including \\`/tmp\\`) are not visible to the user or to the file tools.";
   const vm =
     overrides.vm ??
     "## Cowork environment\\n\\nSynthetic vm body: a subagent whose shell runs in a Linux sandbox rooted at \\`${i}\\`; files written there exist only in the sandbox; attached folders are mounted under \\`${i}/mnt/\\`.";
   const ternary = overrides.ternary ?? "?Q.subagentEnvHostLoop:Q.subagentEnvVm";
   const gate = overrides.gate ?? `function krt(e,o,r){if(!$t("124685897"))return r;...}`;
   const map = overrides.map ?? "{vmCwd:i,hostCwd:t??i,workspaceBash:w}";
+  const tools = overrides.tools ?? `["Read","Write","Edit","Glob","Grep"]`;
+  // The hl-only folder manifest (Desktop >=1.46388.3). Only the fragments the sentinel keys on are
+  // verbatim — "(the shell cannot reach this folder)" (the slice anchor, deliberately INSIDE its own
+  // subject) and the `", "` tool-list join. The rest is paraphrased, and the committed golden below
+  // derives from THIS text, so the suite stays self-consistent while the real manifest text lives only
+  // in the baselines JSON.
+  const manifest =
+    overrides.manifest ??
+    'function mani(e,n,r,i,a){const o=nm(i,!0),s=new Set(rc(i,a));const c=[...r?[`- \\`${r}\\` (synthetic outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
+  const suffix = overrides.suffix ?? `var SUF="\\n\\nSynthetic trailing sentence appended to BOTH branches.";`;
+  const call = overrides.call ?? '${h?mani(i,t??i,od,usf,hof):""}';
   const delivery =
     overrides.delivery ??
-    "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,spSectionPrompts:P})";
-  return `const SP={${keys}};${gate};function zo({vmProcessName:v,hostLoopMode:h,hostCwd:t,spSectionPrompts:P}){const i=\`/sessions/\${v}\`;const s=h?\`${hl}\`:\`${vm}\`;const a=h${ternary};const l=krt(P,a,s);return"\\n\\n"+sub(l,${map},a)}const buildSubagentEnvironmentPrompt=zo;const opts={${delivery}};`;
+    "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,hostOutputsDir:f?R.getOutputsDir(y):void 0,userSelectedFolders:A.userSelectedFolders,hostOnlyFolders:N.mk(R.getActiveSession(y)?.resolvedFolders),spSectionPrompts:P})";
+  return `const SP={${keys}};${gate};const TOOLS=${tools};${manifest};${suffix};function zo({vmProcessName:v,hostLoopMode:h,hostCwd:t,hostOutputsDir:od,userSelectedFolders:usf,hostOnlyFolders:hof,spSectionPrompts:P}){const i=\`/sessions/\${v}\`;const s=h?\`${hl}\`:\`${vm}\`;const a=h${ternary};const l=krt(P,a,s);return\`\\n\\n\${sub(l,${map},a)}${call}\${SUF}\`}const buildSubagentEnvironmentPrompt=zo;const opts={${delivery}};`;
 }
 // The sentinel takes a per-MODULE file map (readMainBundleFiles' output). One synthetic "generator
 // module" is enough for these fixtures; a real bundle has three modules — the join covers the literal
@@ -2023,20 +2150,35 @@ const genFiles = (o?: Parameters<typeof subagentBundle>[0]) => new Map([["index.
 
 describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
   const clean = extractSubagentBranchSlices(genFiles())!;
-  const committed = { versions: { "1.20186.1": { hl: subagentBranchFingerprint(clean.hl), vm: subagentBranchFingerprint(clean.vm) } } };
+  const cleanComp = extractSubagentComposition(genFiles())!;
+  const committed = {
+    versions: {
+      "1.20186.1": {
+        hl: subagentBranchFingerprint(clean.hl),
+        vm: subagentBranchFingerprint(clean.vm),
+        manifest: subagentBranchFingerprint(cleanComp.manifest),
+        suffix: subagentBranchFingerprint(cleanComp.suffix),
+      },
+    },
+  };
 
   it("clean bundle → no flags", () => {
     expect(checkSubagentPromptFacts(genFiles(), committed)).toEqual([]);
   });
   it("body-text edit → fingerprint mismatch flags (head phrases alone would miss it)", () => {
-    const files = new Map([["index.chunk-gen.js", subagentBundle().replace("attached folders mounted", "attached folders placed")]]);
+    // The mutation must APPLY: a `.replace` naming a phrase the fixture no longer contains is a
+    // no-op, and the test then reads as "the guard is redundant" while proving nothing.
+    const base = subagentBundle();
+    const mutated = base.replace("are not visible to the user", "are invisible to the user");
+    expect(mutated, "mutation did not apply — the fixture no longer contains the phrase").not.toBe(base);
+    const files = new Map([["index.chunk-gen.js", mutated]]);
     expect(checkSubagentPromptFacts(files, committed).some((f) => /fingerprint/.test(f))).toBe(true);
   });
   it("host/VM cwd SWAP in the hl branch → substitution-VALUE proof flags", () => {
     // keeps the discriminator fragment AND both interpolation shapes (so slicing + the value proof
     // run) but rebinds the mount to the HOST cwd instead of the vm session root — a genuine swap.
     const swapped = genFiles({
-      hl: "## Cowork environment\\n\\nSynthetic hl body: a subagent on the user's machine (working directory \\`${t??i}\\`) with attached folders mounted under \\`${t}/mnt/\\`.",
+      hl: "## Cowork environment\\n\\nSynthetic hl body: the shell tool, \\`mcp__${n.WORKSPACE_MCP_SERVER}__${n.WORKSPACE_BASH}\\`, runs on Linux and starts in \\`${i}\\`. Files it writes outside \\`${t}/mnt/\\` are not visible to the user.",
     });
     expect(checkSubagentPromptFacts(swapped, null).some((f) => /substitution|hl substitution/.test(f))).toBe(true);
   });
@@ -2091,11 +2233,112 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
     expect(checkSubagentPromptFacts(decoy, committed).some((f) => /generator branch texts/.test(f))).toBe(true);
   });
   it("PARTIAL committed entry (hl only) → hard-fail (a missing vm fingerprint must not silently pass)", () => {
-    const partial = { versions: { "1.20186.1": { hl: committed.versions["1.20186.1"].hl } as { hl: string; vm: string } } };
+    const partial = {
+      versions: { "1.20186.1": { hl: committed.versions["1.20186.1"].hl } as unknown as (typeof committed.versions)["1.20186.1"] },
+    };
     expect(checkSubagentPromptFacts(genFiles(), partial).some((f) => /missing an hl or vm fingerprint/.test(f))).toBe(true);
   });
   it("no committed fingerprints → hard-fail flag (never a silent skip)", () => {
     expect(checkSubagentPromptFacts(genFiles(), null).some((f) => /fingerprint/.test(f))).toBe(true);
+  });
+
+  // --- B14 / Desktop 1.46388.3: the composed parts and the structural hl anchor ---
+
+  it("B14 REGRESSION: a decoy template carrying the RETIRED hl phrase is not selected as the hl branch", () => {
+    // The live 1.46388.3 defect: the hl discriminator ("on the user's machine") left the hl branch and
+    // survived in unrelated prose in the same module, so lastIndexOf fingerprinted THAT. The structural
+    // slice must be immune. Placed before the ternary, exactly where the real computer-use prose sits.
+    const decoyed = new Map([
+      [
+        "index.chunk-gen.js",
+        subagentBundle().replace(
+          "function zo({",
+          "const DECOY=`## Computer use\\n\\nFiles you create in the sandbox do NOT exist on the user's machine.`;function zo({",
+        ),
+      ],
+    ]);
+    const sliced = extractSubagentBranchSlices(decoyed)!;
+    expect(sliced.hl, "the decoy was selected as the hl branch — B14 has regressed").toBe(clean.hl);
+    expect(checkSubagentPromptFacts(decoyed, committed)).toEqual([]);
+  });
+
+  it("manifest slice anchor gone → flags the composed-append-parts anchor specifically", () => {
+    const files = genFiles({ manifest: 'function mani(e,n,r,i,a){return""}' });
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /composed append parts/.test(f))).toBe(true);
+  });
+
+  it("manifest TEXT edited → folder-manifest fingerprint drift flags", () => {
+    const base = subagentBundle();
+    const mutated = base.replace("synthetic list variant", "synthetic list variant (edited)");
+    expect(mutated, "mutation did not apply").not.toBe(base);
+    const flags = checkSubagentPromptFacts(new Map([["index.chunk-gen.js", mutated]]), committed);
+    expect(flags.some((f) => /folder-manifest text fingerprint drifted/.test(f))).toBe(true);
+  });
+
+  it("F3: the trailing sentence edited → suffix fingerprint drift flags (the branch fingerprints cannot see it)", () => {
+    const base = subagentBundle();
+    const mutated = base.replace("Synthetic trailing sentence", "Synthetic trailing sentence, reworded");
+    expect(mutated, "mutation did not apply").not.toBe(base);
+    const flags = checkSubagentPromptFacts(new Map([["index.chunk-gen.js", mutated]]), committed);
+    expect(flags.some((f) => /trailing-sentence fingerprint drifted/.test(f))).toBe(true);
+    // The whole point of the axis: NEITHER branch fingerprint moves for this edit.
+    const sliced = extractSubagentBranchSlices(new Map([["index.chunk-gen.js", mutated]]))!;
+    expect(subagentBranchFingerprint(sliced.hl)).toBe(committed.versions["1.20186.1"].hl);
+    expect(subagentBranchFingerprint(sliced.vm)).toBe(committed.versions["1.20186.1"].vm);
+  });
+
+  it("path-gated builtin tool list changed → flags the manifest tool list specifically", () => {
+    const files = genFiles({ tools: `["Read","Write","Edit","Glob","Grep","NotebookEdit"]` });
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /manifest tool list/.test(f))).toBe(true);
+  });
+
+  it("manifest call host/VM SWAP → flags the manifest call bindings specifically", () => {
+    // vmRoot arg `i` but the hostCwd fallback bound to a DIFFERENT root — every relative path the
+    // sub-agent's file tools resolve would be misdirected.
+    const files = genFiles({ call: '${h?mani(i,t??j,od,usf,hof):""}' });
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /manifest call bindings/.test(f))).toBe(true);
+  });
+
+  it("hostOutputsDir no longer hostLoopMode-gated → flags that anchor specifically", () => {
+    const files = genFiles({
+      delivery:
+        "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,hostOutputsDir:R.getOutputsDir(y),userSelectedFolders:A.userSelectedFolders,hostOnlyFolders:N.mk(R.getActiveSession(y)?.resolvedFolders),spSectionPrompts:P})",
+    });
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /hostOutputsDir gating/.test(f))).toBe(true);
+  });
+
+  it("delivery call missing hostOnlyFolders → flags the delivery argument list", () => {
+    const files = genFiles({
+      delivery:
+        "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,hostOutputsDir:f?R.getOutputsDir(y):void 0,userSelectedFolders:A.userSelectedFolders,spSectionPrompts:P})",
+    });
+    expect(checkSubagentPromptFacts(files, committed).some((f) => /delivery argument list/.test(f))).toBe(true);
+  });
+
+  it("entry declaring manifest but NOT suffix → hard-fail (a half-declared entry disables a part)", () => {
+    const half = {
+      versions: {
+        "1.20186.1": { hl: committed.versions["1.20186.1"].hl, vm: committed.versions["1.20186.1"].vm, manifest: "deadbeefdeadbeef" },
+      },
+    } as unknown as typeof committed;
+    expect(checkSubagentPromptFacts(genFiles(), half).some((f) => /declares one of manifest\/suffix but not both/.test(f))).toBe(true);
+  });
+
+  it("build HAS composed parts but the newest entry records neither → flags rather than passing silently", () => {
+    const legacy = {
+      versions: { "1.20186.1": { hl: committed.versions["1.20186.1"].hl, vm: committed.versions["1.20186.1"].vm } },
+    } as unknown as typeof committed;
+    expect(checkSubagentPromptFacts(genFiles(), legacy).some((f) => /records neither/.test(f))).toBe(true);
+  });
+
+  it("only the NEWEST entry is compared — a historical entry without the composed axes never retro-fails", () => {
+    const withHistory = {
+      versions: {
+        "1.20186.1": { hl: "aaaaaaaaaaaaaaaa", vm: "bbbbbbbbbbbbbbbb" },
+        "1.46388.3": committed.versions["1.20186.1"],
+      },
+    } as unknown as typeof committed;
+    expect(checkSubagentPromptFacts(genFiles(), withHistory)).toEqual([]);
   });
 });
 
@@ -2575,8 +2818,9 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
   // "not found" (a different failure the callers already assert on). All three current needles were
   // counted in both builds and are unique; this keeps the next co-location loud rather than mysterious.
   const mutateDefining = (f: Map<string, string>, needle: string, replacement: string): Map<string, string> | null => {
+    const scoped = f;
     let total = 0;
-    for (const v of f.values()) total += v.split(needle).length - 1;
+    for (const v of scoped.values()) total += v.split(needle).length - 1;
     if (total > 1) {
       throw new Error(
         `mutateDefining: needle occurs ${total}x across the bundle — it would mutate only the first and may miss the guarded site. ` +
@@ -2584,13 +2828,31 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
       );
     }
     const out = new Map(f);
-    for (const [k, v] of f) {
+    for (const [k, v] of scoped) {
       if (v.includes(needle)) {
         out.set(k, v.replace(needle, replacement));
         return out;
       }
     }
     return null;
+  };
+
+  // Mutate EVERY occurrence of a needle that is legitimately non-unique. Desktop 1.46388.3 landed a
+  // second bare `=31999` in an unrelated chunk (they were in different chunks at 1.44121.1, so no chunk
+  // marker distinguishes them durably). Picking one site would be guessing which one the guard resolves
+  // through; mutating all of them removes the guess, and the caller then asserts on the guard's RESOLVED
+  // VALUE rather than merely on "it flagged" — so a mutation that never reached the guarded site cannot
+  // read as a pass.
+  const mutateEvery = (f: Map<string, string>, needle: string, replacement: string): { files: Map<string, string>; count: number } => {
+    const out = new Map(f);
+    let count = 0;
+    for (const [k, v] of f) {
+      const n = v.split(needle).length - 1;
+      if (n === 0) continue;
+      count += n;
+      out.set(k, v.split(needle).join(replacement));
+    }
+    return { files: out, count };
   };
 
   it("MUTATION: the Task-tools array changes in its defining chunk → S7 flags", () => {
@@ -2604,9 +2866,12 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
   it("MUTATION: maxThinkingTokens const changes in its defining chunk → S4 flags", () => {
     const f = realFiles();
     if (!f) return;
-    const m = mutateDefining(f, "=31999", "=12345");
-    expect(m).not.toBeNull();
-    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S4 maxThinkingTokens/.test(x))).toBe(true);
+    const { files: m, count } = mutateEvery(f, "=31999", "=12345");
+    expect(count, "mutation did not apply — the const literal has changed shape").toBeGreaterThan(0);
+    const flags = checkSpawnContractFacts(joined(m), m);
+    // Assert the RESOLVED VALUE, not just that something flagged: this is what proves S4 read a mutated
+    // site. A mutation that landed only on a decoy would leave the resolution at 31999 and flag nothing.
+    expect(flags.some((x) => /S4 maxThinkingTokens.*resolved to 12345/.test(x))).toBe(true);
   });
 
   it("MUTATION: the empty-ANTHROPIC_* delete helper removed → S14a flags (the let-widening did not blunt it)", () => {
@@ -2620,12 +2885,82 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
   });
 
-  it("MUTATION: the gated 5-set changes → path-hook install-site spread flags", () => {
+  // D6 (Desktop 2.2553.1): the gated set and the path keys both derive from ONE tool→path-key map, so the
+  // old `["Read","Write","Edit","Glob","Grep"]` needle no longer exists and these mutate the MAP. Note the
+  // `expect(m).not.toBeNull()` in each: when the shape moves again, the needle stops applying and these
+  // fail LOUDLY rather than passing as "the guard is redundant".
+  it("MUTATION: the gated tool map loses a tool → path-hook flags", () => {
     const f = realFiles();
     if (!f) return;
-    const m = mutateDefining(f, '["Read","Write","Edit","Glob","Grep"]', '["Read","Write"]');
-    expect(m).not.toBeNull();
-    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread/.test(x))).toBe(true);
+    const m = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Read:"file_path",Write:"file_path"}',
+    );
+    expect(m, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread|path key pair/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the gated tool map is REORDERED → path-hook flags (order reaches the sub-agent prompt)", () => {
+    const f = realFiles();
+    if (!f) return;
+    // Same five tools, same two keys — ONLY the insertion order differs. This must still flag: the
+    // sub-agent manifest renders `Object.keys(map).join(", ")` straight into the prompt, so a reorder
+    // changes the text the model receives while every set-equality check and the manifest's own
+    // fingerprint (which hashes generator source) stay green. Ordered equality is the only thing that
+    // catches it, and this is the case that proves the anchor is ordered.
+    const m = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Glob:"path",Grep:"path",Read:"file_path",Write:"file_path",Edit:"file_path"}',
+    );
+    expect(m, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    expect(checkPathHookFacts(m!).some((x) => /gated 5-set|install site spread|path key pair/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: an unread ['file_path','path'] DECOY cannot switch the derived path-key check off", () => {
+    const f = realFiles();
+    if (!f) return;
+    // The derived check used to be guarded by a bare presence test for the legacy literal, so ONE unrelated
+    // array anywhere in the ~515KB consuming chunk bought a clean pass while the gate's real key list was
+    // widened. Both halves are applied here: a decoy the extraction never reads, AND a real widening.
+    const widened = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Read:"file_path",Bash:"command"}',
+    );
+    expect(widened, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    const withDecoy = new Map(widened!);
+    let planted = false;
+    for (const [k, v] of withDecoy) {
+      if (/\[\.\.\.[\w$.]+,"MultiEdit"\]\.join\("\|"\)/.test(v)) {
+        withDecoy.set(k, `var __decoy=["file_path","path"];${v}`);
+        planted = true;
+        break;
+      }
+    }
+    expect(planted, "decoy was not planted in the consuming chunk").toBe(true);
+    expect(checkPathHookFacts(withDecoy).some((x) => /path key pair|gated 5-set|install site spread/.test(x))).toBe(true);
+  });
+
+  it("MUTATION: the path keys derive from a DIFFERENT map → path-hook flags the split", () => {
+    const f = realFiles();
+    if (!f) return;
+    // The tool-permission broker carries a same-SHAPED map that adds Bash/NotebookEdit/MultiEdit. Point
+    // the path-key derivation at a second map bound in the same chunk: each anchor still resolves on its
+    // own, and only the same-map requirement catches that the gate's real key list has widened.
+    const m = mutateDefining(
+      f,
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"}',
+      '{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"},qZZ={Read:"file_path",Bash:"command"}',
+    );
+    expect(m, "mutation did not apply — the path-gate map has changed shape").not.toBeNull();
+    const split = new Map(m!);
+    for (const [k, v] of split) {
+      if (v.includes("qZZ="))
+        split.set(k, v.replace(/=\[\.\.\.new Set\(Object\.values\([\w$]+\)\)\]/, "=[...new Set(Object.values(qZZ))]"));
+    }
+    expect(checkPathHookFacts(split).some((x) => /path-gate map|path key pair/.test(x))).toBe(true);
   });
 
   it("MUTATION: the shared resolver's hard-block text removed → path-hook flags (graph-wide search still binds)", () => {

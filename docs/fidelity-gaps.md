@@ -8,6 +8,94 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ---
 
+## Which Cowork LANE this harness models — read first, it scopes everything below
+
+Every fidelity tier reproduces Cowork's **desktop-local** lane. Cowork also runs sessions on a
+**remote** lane, server-side in a cloud container that reaches the user's machine over a device
+bridge, and **which lane a real session gets is a Cowork setting** — "Only on this computer"
+(Settings → Cowork). Measured 2026-09-05 on a current install: that setting was **off**, so an
+otherwise-default Cowork session ran remote.
+
+That matters for how you read the rest of this file. Gaps documented here are gaps against the
+*local* lane. On the remote lane the environment is different in kind, not degree: the cloud
+container's cwd is `/home/claude` with no `mnt/` tree, delivery is `SendUserFile` rather than
+`present_files`, and the session reaches the user's disk through the `device_*` tools into a local
+VM (see "File delivery" and the device-tool section below). Its environment prompt is **authored by
+the server**, not by Desktop — the heading and markers a remote sub-agent reports are 0 occurrences
+in both the app bundle and the agent binary.
+
+**The harness cannot execute the remote lane and does not pretend to.** That container is
+Anthropic's; standing up a local imitation would be authoring an environment rather than reproducing
+one, with no production to verify it against. What exists instead is `lane: remote` on a scenario,
+which makes the affected assertions **refuse to grade** rather than pass — `file_absent` reports
+evidence-unavailable, delivery is reported unobservable.
+
+**Practical consequence.** Behaviour-shaped conclusions travel between lanes: whether a skill
+triggers, how it sequences tools, which questions it asks, whether it honours a permission gate.
+Environment-shaped conclusions do not: any assertion about a path, a mount, or a delivery mechanism
+is a claim about the local lane only. And if you are probing real Cowork to compare against this
+harness, **turn "Only on this computer" on first** — with it off you are measuring a lane this tool
+does not model, which has already cost one wasted probe.
+
+### The boundary is a missing flag, not an entrypoint string
+
+It is tempting to describe remote-only features as "gated on the entrypoint" — the Cowork spawn sets
+`CLAUDE_CODE_ENTRYPOINT: "local-agent"`, and several remote features do test it. That framing is weaker
+than the truth, and it rots: an entrypoint test can be relaxed in a single release.
+
+The durable statement is a **transport flag Desktop never passes**. `--sdk-url` appears **41 times in
+the agent binary and zero times in the entire `app.asar`** (measured against 1.46388.3 and 1.46388.4).
+The agent's host resolver throws without it — `case "ccr-session": …` reaches a `status: "absent"` branch
+that raises *"ccr-session host requires --sdk-url"*, with a second branch for a URL the allowlist
+rejects. So **no Desktop-spawned session can resolve the `ccr-session` host at all**, and every feature
+routed through it is *structurally unreachable* in the desktop-local lane rather than merely disabled.
+
+Two riders observed on that host, both with the same 26-in-the-agent / 0-in-the-asar shape:
+`cowork_memory_context` (fetched as `GET /memory_context` with `If-None-Match` and injected as an
+attachment) and the `/worker/skill-manifest` fetch. Neither can occur here, and no amount of entrypoint
+spoofing would change that — the harness would have to pass a flag Desktop itself does not know.
+
+`sdk-url` has **0 occurrences in this repo**, which is correct: there is nothing to model.
+
+---
+
+## Auto-memory: four env-delivered keys the harness never sets
+
+**Real Cowork behaviour.** When a session has an auto-memory directory, Desktop ships it to the agent
+through the environment: `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`, `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`,
+`CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES` and — separately gated — `CLAUDE_COWORK_MEMORY_GUIDELINES`.
+The last two are **prompt text delivered through an env var**: the agent reads them into the memory
+prompt, so this is model-visible content, not configuration. When there is no memory directory, the
+same ternary sends `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` instead.
+
+**Which gate governs what** — three distinct gates, easy to conflate, and conflated twice during this
+investigation before being measured:
+
+| gate | what it actually governs |
+|---|---|
+| — (no gate) | whether the memory keys ship **at all** is the truthiness of the session's memory directory, not a gate. No directory ⇒ `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`. |
+| `123929380` `autoMemoryStandardSessions` | only the **third** branch of the directory resolver — a plain session with no `spaceId` and no `sessionType`. **A Spaces session or an `agent` session gets a memory directory with this gate OFF.** |
+| `1696890383` `memoryGuidelinesEnv` | only `CLAUDE_COWORK_MEMORY_GUIDELINES`, inside the has-a-directory branch. |
+| `2860753854` `memoryExtraGuidelines` | only the *value* of the PII block, not whether the branch runs. On, but inert by default. |
+
+**Harness behaviour.** The harness sets none of the five, and models no memory directory. For the
+session it models — no `spaceId`, no `sessionType`, and `123929380` pinned off — production would send
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, so the modeled configuration is *nearly* faithful and the memory
+keys are genuinely unreachable.
+
+**Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
+for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the
+resolver returns a directory with `123929380` off — such a session receives all four keys, including
+prompt text, and the harness models none of it. A scenario that grows a `spaceId` or a session type
+walks out of the modeled configuration without any signal.
+
+**Why it is not modeled.** Reproducing it means inventing a memory directory, an index snapshot and a
+guidelines template the harness has no source for — authoring an environment rather than reproducing
+one. The honest position is this entry plus the gate pins, which make a production flip visible as a
+`provenance.gates` diff.
+
+---
+
 ## Mid-session skill/plugin re-sync
 
 Cowork re-syncs skills and plugins from the host into the session **while the session is running** —
@@ -71,6 +159,15 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 ---
 
 ## Artifacts — two mechanisms, neither modeled
+
+> **Third layer, added in Desktop 2.2553.1 and also not modeled.** Alongside the two mechanisms below,
+> the host loop now installs an `Artifact` **PreToolUse path hook** — matcher `/^Artifact[A-Za-z]*$/`, so
+> the whole family (`Artifact`, `ArtifactComments`, `ArtifactData`, `ArtifactCheck`), installed
+> **unconditionally** and ahead of the gated Read/Write/Edit/Glob/Grep matcher. It validates `file_path`,
+> `out_dir`, `root` and every `files[].path` / `files[].from` against the outputs root and blocks on any
+> resolver error. It is inert for the session this harness models — no Artifact tool is registered when the
+> frame-artifacts flag is off — which is why it is recorded rather than built. The harness's own
+> `src/hostloop/pretooluse-path-hook.ts` models no part of it.
 
 **Real Cowork behaviour:** Cowork has two mutually exclusive artifact mechanisms, and a given session
 runs exactly one of them. The legacy mechanism bind-mounts one host directory per artifact into the
@@ -358,6 +455,33 @@ reported as staleness rather than passing silently — the fingerprint covers th
 
 ---
 
+## The silent-turn reminder is served by capability, and it lands in the graded corpus
+
+**Real behaviour.** The agent can inject a short reminder into a stretch of assistant turns that produce
+no user-visible text — turns spent entirely on tool calls. Whether it fires at all is decided by a
+**server-delivered model capability** (`silent_turn_reminder`, alongside `turn_updates`), resolved before
+any turn counting. That is why the machinery can be present in the binary and never fire: the capability
+is not in the binary's gift. Three env overrides exist (`CLAUDE_CODE_SILENT_TURN_REMINDER` and its
+`_TEXT` / `_TURNS` siblings, declared `triBool` / `str` / `int{min:1}`); probed on CLI 2.1.261 the
+feature does fire in headless `-p` mode, a custom `_TEXT` reaches the persisted transcript, and the
+hardcoded cap of three per stretch is real.
+
+**Why it is a fidelity note and not a curiosity.** `semantic_matches` grades a corpus that includes the
+transcript, and the transcript is built from top-level `assistant_text` events — so **inter-tool
+narration is inside what the judge reads**. A production session whose account is served the capability
+carries text a harness run does not, and vice versa. Nothing in the harness sets or models any of the
+three env keys, and none is in the baseline's `spawn.env`.
+
+**Practical consequence.** If an assertion's outcome turns on the presence, absence or wording of the
+model's narration between tool calls, it is resting on something an account-level capability can change
+under it. Assert the observable result instead — a file, a tool call, a delivered artifact.
+
+**Not reproduced here, deliberately.** The reminder's default text is shipped prose and this repo does
+not bundle Anthropic's prompt text (see the paraphrase rule behind `baselines/prompts/`). A sha256
+fingerprint of the exact string exists and can be committed **if a consumer for it is ever built** — a
+pinned field with no runtime consumer is the trap `asarGateIds` already sprang here once, so it stays
+uncommitted until something reads it.
+
 ## Browser↔webview↔human-interaction boundary (interactive artifacts)
 
 **Real Cowork behaviour:** Desktop can render a self-contained HTML/React artifact in an embedded
@@ -554,16 +678,18 @@ byte-for-byte file parity, consumed via `COWORK_AGENT_IMAGE`.
 
 ## Protocol-tier sub-agents get no Cowork environment append
 
-**Real Cowork behaviour:** every session delivers a per-loop sub-agent environment append
-(`subagent_env_hl` on host-loop, `subagent_env_vm` in the VM loop) via the `initialize`
-control_request; the agent applies it to Task-dispatched children (fork/`useExactTools` dispatches are
-excluded agent-side).
+**Real Cowork behaviour:** every session delivers a per-loop sub-agent environment append via the
+`initialize` control_request; the agent applies it to Task-dispatched children (fork/`useExactTools`
+dispatches are excluded agent-side). Since Desktop 1.46388.3 that append is composed of three parts:
+the overridable section (`subagent_env_hl` on host-loop, `subagent_env_vm` in the VM loop), a
+host-loop-only folder manifest built from live mount state, and a trailing sentence on both branches.
 
 **Harness behaviour:** hostloop delivers the hl branch, container/microvm the vm branch; the
 **protocol** tier deliberately sends none. Protocol runs the CLI over a private `work/` cwd with no VM
 mounts — neither branch's environment description is factually true there, so sending either would
 teach the model false claims about its filesystem. Consequence: protocol sub-agents get no Cowork
-environment framing. This is a decided divergence, not an oversight; use hostloop (the production
+environment framing — and since 1.46388.3 that means no folder manifest and no trailing skills sentence
+either, since the harness composes all three parts together or not at all. This is a decided divergence, not an oversight; use hostloop (the production
 default loop) or container for sub-agent environment fidelity.
 
 ---
@@ -717,7 +843,7 @@ event types and six hooks**:
 |---|---|---|---|
 | `PreToolUse` | `Task` | blocks `run_in_background`; emits `subagent_invoked` | **yes** |
 | `PreToolUse` | `Skill` | emits `skill_invoked`; injects per-skill `additionalContext` | no |
-| `PreToolUse` | force-ask set | `permissionDecision:"ask"` in *every* permission mode | no |
+| `PreToolUse` | force-ask set (9 tools) | `permissionDecision:"ask"` — unconditional except in auto mode, which this harness cannot reach ([below](#the-force-ask-hook-is-conditional-in-production-and-the-condition-is-unreachable-here)) | no |
 | `PreToolUse` | `mcp__.*` | remote-MCP deny → `decision:"block"` | no |
 | `PostToolUse` | `WebSearch` | seeds `webFetchAllowedUrls` — a WebSearch **widens** the web_fetch allowlist | no |
 | `UserPromptSubmit` | *(none)* | expands a leading `/slash` into `additionalContext` | no |
@@ -725,8 +851,11 @@ event types and six hooks**:
 **Harness behaviour:** `initialize` installs the `PreToolUse:Task` hook only
 (`COWORK_PRETOOLUSE_HOOKS`). The *mechanism* accepts any event (`HookBundle` is keyed by event name),
 but the served set is deliberately narrow — see `SERVED_HOOK_EVENTS` in `src/agent/session.ts`. The full
-production bundle is recorded in `spawn.hooks` of each baseline as a drift tripwire, so a Desktop release
-that adds or drops one surfaces as sync drift rather than as a consumer bug report.
+production bundle is recorded in `spawn.hooks` of each baseline **as documentation, not as a tripwire**.
+A Desktop release that adds, drops or re-matchers a hook does **not** surface as sync drift: `sync`
+neither reads nor writes the field — `src/cli.ts` spreads `spawn` forward from the base baseline, so
+`hooks` carries through every sync untouched, and nothing re-derives it from the asar. Treat a note there
+as a dated observation and re-verify it against the asar before relying on it.
 
 ### Why the others aren't modeled — none would change behaviour here today
 
@@ -734,11 +863,44 @@ Checked one by one, rather than assumed:
 
 | Hook | Why not serving it costs nothing today |
 |---|---|
-| `PreToolUse` force-ask | gates `allow_cowork_file_delete` / `request_cowork_directory` / `launch_code_session` / `save_skill` — **none registered by this harness**, so the matcher never fires. Becomes worth serving if `save_skill` is modeled. |
+| `PreToolUse` force-ask | gates **nine** tools — `allow_cowork_file_delete` / `request_cowork_directory` / `launch_code_session` / `save_skill`, plus `create`/`update`/`delete_scheduled_task` and `start`/`stop_watching` — **none registered by this harness**, so the matcher never fires. Becomes worth serving if `save_skill` is modeled. |
 | `PreToolUse:mcp__.*` | denies *remote* MCP tools; the harness serves none, so nothing to deny. |
 | `UserPromptSubmit` | layers `additionalContext` **on top of** an expansion the agent binary performs on its own, so the body injection here is identical to production — only Desktop's extra context is missing. See the note below on slash commands in `prompt:`. |
 | `PreToolUse:Skill` | the one genuine blocker: its `additionalContext` is sourced from Desktop's plugin/skill registry, which the harness does not have. Inventing that text would put words in the model's context production never sends — worse than sending none, because it silently changes what the skill under test reacts to. |
 | `PostToolUse:WebSearch` | **already covered by a different path** — see below. |
+
+#### The force-ask hook is conditional in production, and the condition is unreachable here
+
+Binary-verified in `app.asar` 1.46388.3 (and unchanged in 1.46388.4, where the gate accessor is renamed).
+The hook does not return `ask` unconditionally. Before doing so it makes **two gate-conditioned early
+returns of `{}`** — an empty result is not a decision, so the call falls through to the normal pipeline,
+i.e. the auto-mode permission classifier:
+
+- the five scheduled-task/watching tools, behind gate `1447478638` (which additionally requires that
+  neither session carry a `scheduledTaskId` — automation may not auto-approve its own automation);
+- `request_cowork_directory` and `save_skill`, behind gate `4202409342`.
+
+Both gates read force-ON in the 2026-09-05 feature cache, so in a real auto-mode session **7 of the 9
+skip the forced ask**; only `allow_cowork_file_delete` and `launch_code_session` always prompt. One
+carve-out survives: a **path-less** `request_cowork_directory` keeps the ask in bridge and
+dispatch-child sessions, and in any session matching a four-disjunct predicate — a `scheduledTaskId`, a
+remote dispatch parent, a current-turn channel that is not `desktop`, or a fourth condition behind a
+helper this pass did not resolve. Treat that list as non-exhaustive; the direction is safe (a match only
+*forces* an ask). The reason is that a path-less call opens a native folder picker that nobody would see
+there. That is a no-invisible-dialog rule, not a permissions rule.
+
+**None of it reaches this harness, and that is structural rather than lucky.** The shared predicate
+requires `session.permissionMode === "auto" && permissionSession.permissionMode === "auto"` — there is no
+`bypassPermissions` disjunct — and auto mode cannot be requested here: the session schema's
+`permission_mode` enum has no `"auto"` member, and the baseline's `spawn.permissionMode` is sentinel-pinned
+to `"default"`. Both guards are pinned by `test/auto-mode-unreachable.test.ts`. So for **every** mode a
+scenario can express, production returns `ask` unconditionally, and serving this hook unconditionally
+would be exactly faithful — the recommendation in the table above is unchanged by any of this.
+
+**Why it is worth stating even though it changes nothing here.** The two branches ship in Desktop
+1.22209.0 and 1.26832.0 respectively, so every baseline this repo carries records a hook that is already
+conditional. Nothing checks that field (see above), so its notes are only as current as the last person
+who read the asar. A gap that under-states itself is worse than one that is merely open.
 
 **`PostToolUse:WebSearch` — the effect IS modeled.** In production this hook seeds the per-session
 `webFetchAllowedUrls` set from search results, so a later `web_fetch` of a result URL is permitted. The
@@ -880,11 +1042,14 @@ type — and the test fails the day either guard is relaxed, which is when this 
 than after.
 
 So the residual is: in a real non-chat Cowork session the rubric is now a second, host-side judgement layer
-over every tool call in auto-mode, and its observable effect is that the PreToolUse hook can answer
-`deferred_to_classifier` — an empty result — **instead of** `permissionDecision: "ask"`. A tool this harness
-models as always-gated may therefore raise no prompt in production. A scenario can already *express* a
-denial by scripting one; it cannot *decide* one the way the rubric would, and it cannot reproduce a gate
-that silently stops prompting.
+over every tool call in auto-mode. Its observable effect on the force-ask hook — which tools stop
+prompting, behind which gates — is described once, in
+[the force-ask subsection of the Hooks section](#the-force-ask-hook-is-conditional-in-production-and-the-condition-is-unreachable-here);
+that is the authoritative statement and this one deliberately does not restate the mechanics, because two
+independent copies of it are how the pair drifted apart in the first place. The consequence for a reader
+of *this* section: a tool the harness models as always-gated may raise no prompt in production. A scenario
+can already *express* a denial by scripting one; it cannot *decide* one the way the rubric would, and it
+cannot reproduce a gate that silently stops prompting.
 
 The rubric reaches **both loops**. Its rule-inclusion predicate is
 `{includeRules: !isChatSession && gate("3424551112"), hostLoop}` — no host-loop exclusion — and `hostLoop`
@@ -971,8 +1136,11 @@ the harness, so the aim is to let a scenario choose which branch to exercise.
 
 **Real Cowork behaviour:** a cowork session on a standard account declares
 `mcp__cowork__save_skill` on the same `cowork` SDK-MCP server that carries `present_files` —
-gated on `canSaveSkill` (`3246569822`, on/force for a standard account) combined with the
-session's `skillsEnabled`. Three properties matter more than the tool's existence:
+gated on the session's `skillsEnabled`. **Through Desktop 1.40609.1 this was combined with a
+`canSaveSkill` GrowthBook gate (`3246569822`, on/force for a standard account); Desktop 1.44121.1
+REMOVED that gate** — the id has 3 occurrences in the 1.40609.1 asar and 0 in 1.44121.1, so for a
+standard session `skillsEnabled` is now the whole condition. Three properties matter more than the
+tool's existence:
 
 - **It uploads; it does not write files.** The tool `POST`s a zipped skill to
   `/api/organizations/{org}/skills/upload-skill`, so a saved skill lands in the user's
@@ -980,9 +1148,12 @@ session's `skillsEnabled`. Three properties matter more than the tool's existenc
   the third-party (`custom-3p`) deployment, which a first-party account does not reach. With
   `overwrite: true` Cowork resolves the existing user-created skill of that name and replaces
   its `SKILL.md`, keeping the skill's other files.
-- **It is force-asked.** `save_skill` is one of four tools in Cowork's force-ask set (with
-  `request_cowork_directory`, `allow_cowork_file_delete`, `launch_code_session`): a PreToolUse
-  hook returns `ask` for it *in every permission mode*, including `bypassPermissions`.
+- **It is force-asked.** `save_skill` is one of **nine** tools in Cowork's force-ask set — the three
+  other named ones (`request_cowork_directory`, `allow_cowork_file_delete`, `launch_code_session`) plus
+  the five scheduled-task/watching tools. A PreToolUse hook returns `ask` for it in every permission
+  mode a scenario can express, `bypassPermissions` included. **In auto mode it does not**: `save_skill`
+  is one of the two tools gate `4202409342` releases to the auto-mode classifier. Auto mode is
+  unreachable here, so the statement above holds for this harness — see the Hooks section.
 - **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files` (see *File delivery* below
   for the `present_files`/`SendUserFile` lane split), it does not occupy
   `system/init.tools`; it materialises only when the model looks for it.
@@ -1007,9 +1178,13 @@ tool is declared at no tier — but both raise the cost of the gap. A skill whos
 for next time" cannot be exercised here at all, and that ending sits behind more production machinery
 than the tool declaration alone suggests.
 
-**Harness behaviour:** neither tool is declared, at any tier. Both gates are pinned in the synced
-baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) as drift sentinels, so
-a production flip surfaces as a `sync` diff — but the gates are recorded, not enacted.
+**Harness behaviour:** neither tool is declared, at any tier. Both gate rows are still pinned in the
+synced baseline (`provenance.gates.canSaveSkill`, `provenance.gates.canProposeSkills`) and both are
+recorded, not enacted. **`canSaveSkill` is not a live drift sentinel.** Its gate id is absent from the
+Desktop 1.44121.1 asar, so the row records what the server sends and nothing more: a flip of it does not
+reach Desktop's behaviour, and the baseline row carries a `note` saying exactly that. `canProposeSkills`
+remains a live sentinel. Either way the harness's position is the same — the tool is undeclared at every
+tier, and the gap is the tool, not the gate.
 
 ### Why it isn't modeled
 

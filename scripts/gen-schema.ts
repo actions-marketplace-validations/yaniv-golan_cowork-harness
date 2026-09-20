@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ScenarioObject, Assertion, VERDICT_MODIFIER_KEYS } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
-import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS } from "../src/agent/session.js";
+import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS } from "../src/agent/session.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const SCHEMA_DIR = join(REPO_ROOT, "schema");
@@ -96,6 +96,11 @@ export function buildAssertionKeys(): string {
         // src/agent/session.ts for why the served set is narrower than production's install.
         servedHookEvents: [...SERVED_HOOK_EVENTS].sort(),
         knownHookEvents: [...KNOWN_HOOK_EVENTS].sort(),
+        // The subset of knownHookEvents a plugin hook has actually been OBSERVED to fire for here.
+        // Separate from knownHookEvents on purpose: "the agent's validator accepts this name" and "a run
+        // reaches this trigger" are different claims, and the linter's wording depends on which one it
+        // can make. See LIVE_VERIFIED_PLUGIN_HOOK_EVENTS in src/agent/session.ts.
+        liveVerifiedHookEvents: [...LIVE_VERIFIED_PLUGIN_HOOK_EVENTS].sort(),
         // Every enum-valued scenario field, top-level AND nested (answers[]/assert[] item keys), keyed
         // by a stable dotted field id. See collectEnums/buildEnumMap above. scenario.py's
         // `enum-value-invalid` rule keeps an embedded fallback parity-tested against this.

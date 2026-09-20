@@ -71,7 +71,7 @@ export const VM_LOOP_TOOL_ALIASES: Record<string, string> = { WebFetch: "mcp__wo
  *      leaking them only here (and on protocol) is exactly the asymmetry `agent_env` closes. Scrubbing
  *      AFTER the baseline overlay would also erase a value the baseline legitimately sets; scrubbing
  *      the operator layer first keeps that value intact.
- *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any of the three keys).
+ *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any scrubbed key).
  *   3. the authored `agentEnv` knob, applied last so it always wins.
  */
 export function buildHostLoopNativeEnv(

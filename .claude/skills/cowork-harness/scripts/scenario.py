@@ -215,26 +215,49 @@ ASSERT_KEYS = _load_assert_keys()
 # reason the key lists are: a hand-copied served-set silently stops warning about the event it was later
 # extended to cover — the exact drift this check exists to prevent.
 _FALLBACK_SERVED_HOOK_EVENTS = {"PreToolUse"}
+# Re-sourced 2026-09-06 from the agent's OWN hooks-config validator array (ELF 2.1.260), not from a grep
+# for event-name constants. The previous 9-name set reported the other 24 -- PostCompact and
+# MessageDisplay among them -- identically to a misspelling, at ERROR severity below.
 _FALLBACK_KNOWN_HOOK_EVENTS = {
-    "PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart",
-    "SessionEnd", "SubagentStop", "PreCompact", "Notification", "Stop",
+    "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
+    "Notification", "UserPromptSubmit", "UserPromptExpansion", "SessionStart",
+    "SessionEnd", "Stop", "StopFailure", "SubagentStart", "SubagentStop",
+    "PreCompact", "PostCompact", "PreModelSwitch", "PostModelSwitch",
+    "PermissionRequest", "PermissionDenied", "Setup", "TeammateIdle",
+    "TaskCreated", "TaskCompleted", "Elicitation", "ElicitationResult",
+    "ConfigChange", "WorktreeCreate", "WorktreeRemove", "InstructionsLoaded",
+    "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
 }
+# The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
+# hostloop). Kept apart from the known set because the message wording depends on which claim we can
+# make: accepted-by-the-validator is not reached-by-a-run.
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse"}
 
 
 def _load_hook_events():
-    """(served, known) hook-event sets, from the generated assertion-keys.json sidecar."""
+    """(served, known, live-verified) hook-event sets, from the generated assertion-keys.json sidecar."""
     p = Path(__file__).resolve().parent / "assertion-keys.json"
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
         served, known = set(d["servedHookEvents"]), set(d["knownHookEvents"])
+        # Tolerate a sidecar generated before liveVerifiedHookEvents existed: fall back rather than
+        # dropping to the embedded KNOWN set wholesale, which would undo the 33-name fix. Membership
+        # test, NOT truthiness: an explicitly EMPTY list means the firing receipt was withdrawn, and
+        # `or` would silently restore the 3-name claim -- widening a receipt, which is the one direction
+        # this constant exists to prevent.
+        live = set(d["liveVerifiedHookEvents"]) if "liveVerifiedHookEvents" in d else set(_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS)
         if served and known:
-            return served, known
+            return served, known, live
     except Exception:
         pass
-    return set(_FALLBACK_SERVED_HOOK_EVENTS), set(_FALLBACK_KNOWN_HOOK_EVENTS)
+    return (
+        set(_FALLBACK_SERVED_HOOK_EVENTS),
+        set(_FALLBACK_KNOWN_HOOK_EVENTS),
+        set(_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS),
+    )
 
 
-SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS = _load_hook_events()
+SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_HOOK_EVENTS = _load_hook_events()
 
 # Self-check: every valid assertion key must be classified, else the replay-class lint logic mishandles it.
 # Surfaced loudly at load AND as a lint ERROR in cmd_lint (so --strict / exit codes flow). Never sys.exit here.
@@ -1489,15 +1512,17 @@ def _lint_hook_events(path):
     """Flag hook events a plugin DECLARES that this harness does not SERVE.
 
     Why this exists: the harness installs `PreToolUse` only, while real Cowork installs three event types
-    and the agent binary understands nine. A plugin declaring `UserPromptSubmit` therefore mounted, ran,
+    and the agent binary accepts thirty-three. A plugin declaring `UserPromptSubmit` therefore mounted, ran,
     and produced no comment of any kind — the surface was discoverable only by grepping the harness's own
     compiled output, which is exactly what one consumer had to do.
 
-    Deliberately WARN, not ERROR, and deliberately worded as uncertainty: a declared-but-unserved event is
-    not a *skill* defect, and the harness cannot currently prove the event never fires. It only knows it
-    adds no handling of its own — the agent binary loads a plugin's hooks.json through its own
-    `--plugin-dir` channel, which is a separate path the harness neither serves nor blocks and which has
-    not been probed. Claiming "this will not fire" would assert more than is known; claiming nothing
+    Severity is three-way and each level means something different. A name the agent's validator ACCEPTS
+    but this harness does not serve is INFO, not a skill defect: the agent loads a plugin's hooks.json
+    through its own `--plugin-dir` channel, which the harness neither serves nor blocks. Of those, only
+    the events in LIVE_VERIFIED_HOOK_EVENTS have been observed firing here, so the confident wording is
+    scoped to them and every other accepted name says so. A name the validator REJECTS is ERROR — that
+    one genuinely never runs on any surface. Claiming "this will not fire" for an accepted event would
+    assert more than is known; claiming nothing
     leaves the consumer to reverse-engineer it. So say precisely what is known.
     """
     findings = []
@@ -1533,17 +1558,25 @@ def _lint_hook_events(path):
             continue
         line_no = next((i for i, ln in enumerate(lines, 1) if f'"{name}"' in ln), 1)
         if name in KNOWN_HOOK_EVENTS:
+            fires = (
+                "fires here — a plugin's own `hooks/hooks.json` is loaded and executed by the agent "
+                "binary (live-verified at both `container` and `hostloop`)"
+                if name in LIVE_VERIFIED_HOOK_EVENTS
+                else "is a hook event the agent accepts, and it loads a plugin's own `hooks/hooks.json` "
+                     "itself — though whether a harness run ever reaches this event's trigger has not "
+                     "been verified here"
+            )
             findings.append(Finding(
                 "INFO", "hook-event-not-served",
-                f"`{name}` fires here — a plugin's own `hooks/hooks.json` is loaded and executed by the "
-                f"agent binary (live-verified at both `container` and `hostloop`) — but cowork-harness "
+                f"`{name}` {fires} — but cowork-harness "
                 f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. Two "
                 f"consequences: there is no assertion key for this event, so a scenario cannot GATE on it; "
-                f"and the harness does not reproduce the additional `{name}` hooks real Cowork installs, so "
-                f"anything driven by those is absent here.",
-                "Your hook still runs — this is about assertability, not breakage. To gate on its effect, "
-                "assert the OBSERVABLE result instead (a file it writes, a tool it blocks), not the hook "
-                "itself.",
+                f"and if real Cowork installs a `{name}` hook of its own, the harness does not reproduce it, "
+                f"so anything driven by that is absent here. (Cowork installs hooks of its own for "
+                f"PreToolUse, PostToolUse and UserPromptSubmit only.)",
+                "The harness does not block your hook — this is about assertability, not breakage. To gate "
+                "on its effect, assert the OBSERVABLE result instead (a file it writes, a tool it blocks), "
+                "not the hook itself.",
                 path, line_no,
             ))
         elif name.lower() in {e.lower() for e in KNOWN_HOOK_EVENTS}:
@@ -1558,8 +1591,8 @@ def _lint_hook_events(path):
         else:
             findings.append(Finding(
                 "ERROR", "hook-event-unknown",
-                f"`{name}` is not a recognized hook event — an unrecognized event name is ignored, so this "
-                f"hook would never run on any surface.",
+                f"`{name}` is not a hook event the agent recognizes — an unrecognized event name is "
+                f"ignored, so this hook would never run on any surface.",
                 f"Check spelling and capitalization. Valid events: {', '.join(sorted(KNOWN_HOOK_EVENTS))}.",
                 path, line_no,
             ))
