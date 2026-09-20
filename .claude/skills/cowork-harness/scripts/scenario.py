@@ -1762,23 +1762,342 @@ def _agent_name_from_frontmatter(md_path, yaml_mod):
     return None
 
 
+def _enumerate_plugin_agents(plugin_dir):
+    """Every agent markdown under `<plugin_dir>/agents/`, RECURSIVELY, as (declared_name, Path) pairs.
+
+    Recursive on purpose. Claude Code discovers `agents/sub/x.md` (see src/run/analyze-skill.ts:981-983)
+    and skill-hash.ts's `agentSkillName` already attributes both the flat and nested shapes, so a nested
+    agent is dispatchable, hash-attributed and analyze-scanned. The old non-recursive `glob("*.md")` made
+    it invisible to BOTH this linter's subagent_type resolution and the critique corpus.
+
+    This CAN change a severity in both directions, verified, not assumed:
+      - a literal naming a nested agent stops being a `subagent-type-not-found-in-plugin` WARN (it really
+        is dispatchable, so that WARN was a false positive); and
+      - for a plugin whose `agents/` holds ONLY subdirectories, the agent set was previously EMPTY, which
+        sent every same-plugin literal down the `plugin_agent_types` falsy branch in
+        `_classify_subagent_type` to `subagent-type-unknown` (INFO). The set is now non-empty, so a
+        genuinely typo'd literal is reported as the WARN it always was -- a true positive that used to be
+        suppressed, but a NEW `--strict` failure on an unchanged tree."""
+    agents_dir = Path(plugin_dir) / "agents"
+    if not agents_dir.is_dir():
+        return []
+    yaml = _require_yaml()
+    out = []
+    for md in sorted(agents_dir.rglob("*.md")):
+        if not md.is_file():
+            continue
+        out.append((_agent_name_from_frontmatter(md, yaml) or md.stem, md))
+    return out
+
+
 def _resolve_plugin_agents(plugin_dir):
     """Resolve in-plugin agent types: return the set of valid `<plugin>:<agent>` subagent types defined WITHIN plugin_dir.
-    Reads the plugin name from plugin.json and each agents/*.md's `name:` frontmatter (filename stem
+    Reads the plugin name from plugin.json and each agents/**.md's `name:` frontmatter (filename stem
     fallback). Returns an empty set (never crashes) when no plugin.json is found — a bare SKILL.md
     dir with no plugin manifest has nothing to resolve against."""
     plugin_name = _read_plugin_name(plugin_dir)
     if not plugin_name:
         return set()
-    agents_dir = Path(plugin_dir) / "agents"
-    if not agents_dir.is_dir():
-        return set()
-    yaml = _require_yaml()
-    types = set()
-    for md in sorted(agents_dir.glob("*.md")):
-        agent_name = _agent_name_from_frontmatter(md, yaml) or md.stem
-        types.add(f"{plugin_name}:{agent_name}")
-    return types
+    return {f"{plugin_name}:{name}" for name, _ in _enumerate_plugin_agents(plugin_dir)}
+
+
+def _literal_to_agent_name(value, plugin_name):
+    """Map a pinned `subagent_type` literal to a declared agent name WITHIN this plugin, or None.
+
+    A colon-bearing literal is namespaced (`<plugin>:<agent>`) and its prefix MUST equal this plugin's
+    name, or a cross-plugin `other:market-sizing` would match THIS plugin's `market-sizing`. A bare
+    literal matches a declared name directly. MIRRORED in src/critique/resolve-agents.ts; the two are
+    pinned by test/fixtures/dispatchable-agents.json, which both sides execute."""
+    if ":" not in value:
+        return value or None
+    if not plugin_name:
+        return None
+    prefix, _, suffix = value.partition(":")
+    return suffix if prefix == plugin_name and suffix else None
+
+
+def _resolve_corpus_agents(skill_dir):
+    """Every agent file the critique packager will put in THIS skill's evidence corpus, as a sorted list
+    of Paths. Mirrors `resolveDispatchableAgents` in src/critique/resolve-agents.ts -- union of:
+      1. `agents/<skillname>.md` by FILENAME (what the packager did through 3.6.0),
+      2. every in-plugin agent a pinned `subagent_type` literal in SKILL.md / references/** resolves to,
+      3. every agent whose DECLARED name equals the skill name,
+    then a transitive closure over the resolved agent bodies (an agent that dispatches another agent).
+
+    The union is the SAFETY property: this can never resolve to less than the single agents/<skill>.md
+    the old sizing counted, so a skill's reported corpus never shrinks under this change."""
+    skill_dir = Path(skill_dir)
+    # Walk UP for the manifest, exactly as the TypeScript side does (`findEnclosingPluginDir`). The
+    # old `parent.name == "skills"` LAYOUT rule disagreed with the packager outside the
+    # `<root>/skills/<name>` shape: a skill at `<root>/foo/SKILL.md` with a manifest at `<root>` made the
+    # packager size a corpus this sized as ZERO, which is the packager-vs-linter divergence 0003e38
+    # closed in one shape and left open in another.
+    # Nearest MANIFEST first (matching the TypeScript `findEnclosingPluginDir`), falling back to the
+    # `<root>/skills/<name>` LAYOUT. Manifest-only diverged from the packager for a manifest-less plugin,
+    # where the TS side still enumerates agents because it is handed the root explicitly; layout-only
+    # diverged for a skill that is not under `skills/` but does have a manifest above it, which the
+    # packager sizes and this sized as ZERO. Neither rule alone matches; the union does.
+    plugin_dir = _find_enclosing_plugin_dir(skill_dir / "SKILL.md") or (
+        skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    )
+    if plugin_dir is None or not (plugin_dir / "agents").is_dir():
+        return []
+    all_agents = _enumerate_plugin_agents(plugin_dir)
+    if not all_agents:
+        return []
+    plugin_name = _read_plugin_name(plugin_dir)
+    skill_name = skill_dir.name
+    picked = {}
+    sources = []  # declared before `add`: every picked agent is itself a dispatch SOURCE
+
+    def add(path):
+        """Record an agent AND queue its body as a dispatch source.
+
+        Clauses 1 and 3 used to record without queueing, so a skill's own primary agent -- the most
+        likely dispatcher of a second agent -- was never scanned and the transitive closure did not run
+        for the dominant real shape. `scanned` below still guarantees termination."""
+        if str(path) in picked:
+            return
+        picked[str(path)] = path
+        sources.append(path)
+
+    for name, md in all_agents:
+        # clause 1 (filename) and clause 3 (declared name)
+        if md == plugin_dir / "agents" / f"{skill_name}.md" or name == skill_name:
+            add(md)
+
+    skill_md = skill_dir / "SKILL.md"
+    if skill_md.is_file():
+        sources.append(skill_md)
+    refs = skill_dir / "references"
+    if refs.is_dir():
+        sources.extend(p for p in sorted(refs.rglob("*")) if p.is_file())
+    scanned = set()
+    while sources:
+        src = sources.pop(0)
+        if str(src) in scanned:
+            continue
+        scanned.add(str(src))
+        try:
+            text = src.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for m in _SUBAGENT_TYPE_RE.finditer(text):
+            agent_name = _literal_to_agent_name(m.group(1), plugin_name)
+            if not agent_name:
+                continue
+            for name, md in all_agents:
+                if name == agent_name:
+                    add(md)  # queues the body too -- transitive: this agent may dispatch another
+    return [picked[k] for k in sorted(picked)]
+
+
+# --------------------------------------------------------------------------- #
+# plugin-root references/ resolution, for corpus sizing only
+#
+# Mirrors `resolveRootReferences` in src/critique/resolve-references.ts (clauses 1 + 2 only -- see the
+# docstring on `_resolve_corpus_root_references` below for why clause 3 cannot be mirrored here). The TS
+# packager now puts a multi-skill plugin's SHARED plugin-root `references/` files into the evaluator
+# corpus when the graded skill's own text (or a sub-agent it can dispatch) points at them, so
+# `_lint_skill_corpus_size` must size the same files or the ceiling warning under-reports exactly the
+# plugins this feature targets.
+# --------------------------------------------------------------------------- #
+
+# Trailing punctuation a prose or markdown token picks up, stripped as a RUN and WITHOUT requiring
+# balance -- byte-identical rule to TRAILING_PUNCT in resolve-references.ts.
+_TRAILING_PUNCT_RE = re.compile(r"""[)\]}>.,;:!?'"]+$""")
+_LEADING_QUOTE_RE = re.compile(r"""^["'<([]+""")
+_HASH_QUERY_RE = re.compile(r"[#?].*$")
+_BACKTICK_SPAN_RE = re.compile(r"`([^`]+)`")
+_MD_LINK_TARGET_RE = re.compile(r"\]\(([^)\s]+)")
+_HREF_TARGET_RE = re.compile(r"""href=["']([^"']+)["']""")
+
+
+def _line_tokens(line):
+    """Candidate tokens on one line: backticked spans, markdown/href link targets, and bare whitespace-
+    delimited runs. Only those containing `/` are resolved as paths (`pathish`); the bare ones matter only
+    for the ARMED basename pass. Mirrors `lineTokens()` in resolve-references.ts."""
+    pathish = []
+    bare = []
+    raw = (
+        _BACKTICK_SPAN_RE.findall(line)
+        + _MD_LINK_TARGET_RE.findall(line)
+        + _HREF_TARGET_RE.findall(line)
+        + line.split()
+    )
+    for t0 in raw:
+        t = _HASH_QUERY_RE.sub("", t0)
+        t = _LEADING_QUOTE_RE.sub("", t)
+        t = _TRAILING_PUNCT_RE.sub("", t)
+        t = t.replace("\\", "/")
+        if not t:
+            continue
+        if "/" in t:
+            pathish.append(t)
+        else:
+            bare.append(t)
+    return pathish, bare
+
+
+def _token_to_abs(token, plugin_root, plugin_name, file_dir):
+    """Resolve one path-ish token to an absolute (not yet realpath'd) host path. `${CLAUDE_PLUGIN_ROOT}`
+    and a leading `<pluginName>/` both mean the plugin root; everything else is relative to the
+    directory of the file the token was found in. Mirrors `tokenToAbs()`."""
+    if "${CLAUDE_PLUGIN_ROOT}" in token:
+        return os.path.normpath(token.replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
+    if plugin_name and token.startswith(plugin_name + "/"):
+        return os.path.normpath(os.path.join(plugin_root, token[len(plugin_name) + 1 :]))
+    if os.path.isabs(token):
+        return os.path.normpath(token)
+    return os.path.normpath(os.path.join(file_dir, token))
+
+
+def _realpath_strict(path):
+    """Mirrors node's `realpathSync`: resolves symlinks and raises if any path component doesn't exist
+    (unlike `os.path.realpath`, which resolves lexically even against a nonexistent path)."""
+    return str(Path(path).resolve(strict=True))
+
+
+def _links_in(text, file_dir, plugin_root, plugin_name, by_basename):
+    """Every plugin-root reference `text` (from a file at `file_dir`) points at, mapped to the 1-based
+    line it was pointed at from. Mirrors `linksIn()` -- including the ARMING rule: a token resolving to
+    the plugin-root `references/` DIRECTORY ITSELF arms bare-basename matching for THAT LINE ONLY; it
+    never recurses and never carries to the next line."""
+    try:
+        refs_dir = _realpath_strict(os.path.join(plugin_root, "references"))
+    except OSError:
+        return {}
+    hits = {}
+    for i, line in enumerate(text.splitlines()):
+        pathish, bare = _line_tokens(line)
+        armed = False
+        for t in pathish:
+            abs_path = _token_to_abs(t, plugin_root, plugin_name, file_dir)
+            try:
+                rp = _realpath_strict(abs_path)
+            except OSError:
+                continue  # most prose tokens are not paths at all
+            if rp == refs_dir:
+                armed = True
+                continue
+            if rp.startswith(refs_dir + os.sep):
+                rel = "references/" + rp[len(refs_dir) + 1 :].replace(os.sep, "/")
+                if rel not in hits:
+                    hits[rel] = i + 1
+        if not armed:
+            continue
+        for b in bare:
+            rel = by_basename.get(b)
+            if rel is not None and rel not in hits:
+                hits[rel] = i + 1
+    return hits
+
+
+def _is_clean_utf8(path):
+    """Valid UTF-8, decided by the decoder rather than by scanning the decoded string -- mirrors
+    `isCleanUtf8()` (a `TextDecoder("utf-8", { fatal: true })` decode). `bytes.decode("utf-8")` is
+    strict by default, so a decode failure (not a scan of the result) is what disqualifies a file."""
+    try:
+        path.read_bytes().decode("utf-8")
+        return True
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _resolve_root_references(skill_dir, plugin_dir, agents):
+    """Low-level worker, taking an explicit `plugin_dir` so the same-directory guard below is directly
+    unit-testable regardless of how a caller derives `plugin_dir`. Mirrors `resolveRootReferences()`,
+    clauses 1 + 2 only:
+      1. the skill's own authored text (SKILL.md + its own `references/**`), and
+      2. every sub-agent body already in the corpus (`agents`, from `_resolve_corpus_agents`).
+
+    Clause 3 in the TS packager (files the graded AGENT actually read during a live run) is
+    run-dependent -- it needs a recorded turn's access log -- and CANNOT be mirrored by a static lint
+    pass with no run to inspect, so it is deliberately NOT reproduced here. This makes this function's
+    count a floor, never an exact match, relative to what a real critique run would package; that is the
+    same "warn early, the packager's report is the authority" posture the rest of this linter already
+    has for the ceiling.
+
+    Two further known, deliberate divergences (not fixed here -- out of scope for this change):
+      - byte counting: the packager measures UTF-8-DECODED string length while `_lint_skill_corpus_size`
+        (like its pre-existing SKILL.md/references/agents counting) sums `stat().st_size` -- raw bytes
+        on disk. These agree for pure single-byte UTF-8 text and diverge slightly otherwise.
+      - cleanliness filtering: this module's existing `references/` walks (`rglob("*")`, used here and
+        for the skill's own references/** in `_lint_skill_corpus_size`) have no git-tracked-set or
+        symlink-containment filter, unlike `listSkillFilesRecursive` in corpus-walk.ts. This function
+        reuses that same untared posture for consistency with the rest of this linter, not because it is
+        provably safe against a hostile references/ tree."""
+    skill_dir = Path(skill_dir)
+    plugin_dir = Path(plugin_dir)
+    # SKIP (not "dedupe") the standalone-skill shape: those files are already packaged as skill-local,
+    # and running this pass too would double-count them under two different display keys.
+    try:
+        same = skill_dir.resolve(strict=True) == plugin_dir.resolve(strict=True)
+    except OSError:
+        same = skill_dir.resolve() == plugin_dir.resolve()
+    if same:
+        return []
+    refs_root = plugin_dir / "references"
+    if not refs_root.is_dir():
+        return []
+    all_files = sorted(p for p in refs_root.rglob("*") if p.is_file())
+    if not all_files:
+        return []
+    plugin_name = _read_plugin_name(plugin_dir) or plugin_dir.name
+    # Later (sorted) entries win on a real basename collision -- matches the TS `Map` construction,
+    # where each duplicate key overwrites the previous.
+    by_basename = {}
+    for p in all_files:
+        rel = "references/" + p.relative_to(refs_root).as_posix()
+        by_basename[p.name] = rel
+
+    linked = set()
+    sources = [skill_dir / "SKILL.md"]
+    local_refs = skill_dir / "references"
+    if local_refs.is_dir():
+        sources.extend(p for p in sorted(local_refs.rglob("*")) if p.is_file())
+    sources.extend(Path(a) for a in agents)
+    for src in sources:
+        try:
+            text = src.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for rel in _links_in(text, str(src.parent), str(plugin_dir), plugin_name, by_basename):
+            linked.add(rel)
+
+    packaged = []
+    for p in all_files:
+        rel = "references/" + p.relative_to(refs_root).as_posix()
+        if rel not in linked:
+            continue
+        if not _is_clean_utf8(p):
+            continue
+        packaged.append(p)
+    return packaged
+
+
+def _resolve_corpus_root_references(skill_dir, agents):
+    """Every plugin-root `references/` file the critique packager will put in THIS skill's evidence
+    corpus, as a sorted list of Paths. Derives `plugin_dir` the same way `_resolve_corpus_agents` does
+    (the `skills/<name>` multi-skill-plugin shape); a standalone skill (no `skills/` parent) has no
+    plugin-root references pass and is unaffected."""
+    skill_dir = Path(skill_dir)
+    # Walk UP for the manifest, exactly as the TypeScript side does (`findEnclosingPluginDir`). The
+    # old `parent.name == "skills"` LAYOUT rule disagreed with the packager outside the
+    # `<root>/skills/<name>` shape: a skill at `<root>/foo/SKILL.md` with a manifest at `<root>` made the
+    # packager size a corpus this sized as ZERO, which is the packager-vs-linter divergence 0003e38
+    # closed in one shape and left open in another.
+    # Nearest MANIFEST first (matching the TypeScript `findEnclosingPluginDir`), falling back to the
+    # `<root>/skills/<name>` LAYOUT. Manifest-only diverged from the packager for a manifest-less plugin,
+    # where the TS side still enumerates agents because it is handed the root explicitly; layout-only
+    # diverged for a skill that is not under `skills/` but does have a manifest above it, which the
+    # packager sizes and this sized as ZERO. Neither rule alone matches; the union does.
+    plugin_dir = _find_enclosing_plugin_dir(skill_dir / "SKILL.md") or (
+        skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+    )
+    if plugin_dir is None:
+        return []
+    return _resolve_root_references(skill_dir, plugin_dir, agents)
 
 
 def cmd_resolve_agent_types(args):
@@ -1938,9 +2257,12 @@ _EVIDENCE_CORPUS_NOTICE_RATIO = 0.8
 def _lint_skill_corpus_size(md_path):
     """Total skill-authored bytes against the critique evidence ceiling.
 
-    Counts the SAME THREE CLASSES the ceiling governs: SKILL.md, every file under references/ (any
-    extension -- the packager applies no extension filter, so JSON schemas and rule packs count), and,
-    for a skill inside a multi-skill plugin, the invoked skill's <root>/agents/<name>.md.
+    Counts the SAME FOUR CLASSES the ceiling governs: SKILL.md, every file under references/ (any
+    extension -- the packager applies no extension filter, so JSON schemas and rule packs count), for a
+    skill inside a multi-skill plugin every <root>/agents/**.md the skill can dispatch, and -- also for a
+    multi-skill plugin -- every <root>/references/** file the skill's authored text (or a dispatchable
+    agent) links (see `_resolve_corpus_root_references`; the run-dependent fourth TS clause, files the
+    agent actually read live, is out of scope for a static lint).
 
     Omitting the agents md is not a rounding error: a plugin whose SKILL.md + references sit in the INFO
     band while the agents md carries the corpus past the ceiling reported INFO and PASSED --strict on
@@ -1956,13 +2278,18 @@ def _lint_skill_corpus_size(md_path):
     refs = skill_dir / "references"
     if refs.is_dir():
         files.extend(p for p in sorted(refs.rglob("*")) if p.is_file())
-    # Multi-skill plugin layout: skillDir is <root>/skills/<name> and the invoked skill's sub-agent
-    # system prompt is <root>/agents/<name>.md -- the same resolution the critique command performs.
-    # A standalone skill (no `skills/` parent) has no agents md and is unaffected.
-    if skill_dir.parent.name == "skills":
-        agents_md = skill_dir.parent.parent / "agents" / f"{skill_dir.name}.md"
-        if agents_md.is_file():
-            files.append(agents_md)
+    # Multi-skill plugin layout: skillDir is <root>/skills/<name> and the skill's dispatchable sub-agent
+    # prompts live under <root>/agents/ -- the same resolution the critique command performs, via the
+    # shared `_resolve_corpus_agents`. This counted exactly ONE file (agents/<name>.md) while the packager
+    # shipped N, which under-reported the ceiling for precisely the multi-agent plugins that need the
+    # warning most. A standalone skill (no `skills/` parent) has no agents and is unaffected.
+    agents = _resolve_corpus_agents(skill_dir)
+    files.extend(agents)
+    # The packager also puts a multi-skill plugin's SHARED plugin-root `references/` files into the
+    # evidence corpus when the graded skill's own text (or a dispatchable agent) points at them -- see
+    # `_resolve_corpus_root_references`. Omitting this would under-report the ceiling for exactly the
+    # plugins that feature targets, the same failure mode the agents fix above was written to close.
+    files.extend(_resolve_corpus_root_references(skill_dir, agents))
     for p in files:
         try:
             total += p.stat().st_size
@@ -1977,9 +2304,11 @@ def _lint_skill_corpus_size(md_path):
                 f"skill content is {total:,} B ({pct:.0f}% of the {_EVIDENCE_CORPUS_CEILING:,} B critique "
                 f"evidence ceiling) — a critique will cut it before grading.",
                 "Split or trim the largest references/ files. This counts SKILL.md + references/** + "
-                "agents/<skill>.md, the same three classes the ceiling governs; it does not apply "
-                "staging's git-tracked filter, so an untracked reference inflates it. The critique "
-                "report's corpusCuts names exactly which files lose bytes.",
+                "agents/** (every agent the skill can dispatch) + linked plugin-root references/** "
+                "(the shared files the skill's own text or a dispatchable agent points at), the same "
+                "classes the ceiling governs; it does not apply staging's git-tracked filter, so an "
+                "untracked reference inflates it. The critique report's corpusCuts names exactly which "
+                "files lose bytes.",
                 str(skill_dir),
             )
         ]

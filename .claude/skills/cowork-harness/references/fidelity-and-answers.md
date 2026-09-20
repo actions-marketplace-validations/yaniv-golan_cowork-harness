@@ -1,6 +1,13 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 3.6.0` (baseline `desktop-2.2553.1`).
+Self-contained reference. Tracks `cowork-harness 3.7.0` (baseline `desktop-2.2553.1`).
+
+> **This page vs. the repo docs.** This is the **offline snapshot** that ships inside the installed
+> plugin — it is self-contained on purpose. The repo carries four other fidelity views, each answering a
+> different question: *which tier do I pick?* ([README → Fidelity tiers](https://github.com/yaniv-golan/cowork-harness/blob/main/README.md#fidelity-tiers-pick-per-scenario--per-ci-job)),
+> *what does a tier enforce?* ([docs/boundary.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/boundary.md)), *what does it NOT reproduce?*
+> ([docs/fidelity-gaps.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md)), and *why is it built this way?*
+> ([DESIGN.md § 2](https://github.com/yaniv-golan/cowork-harness/blob/main/DESIGN.md#2-parity-matrix-per-tier)).
 
 ## Fidelity tiers (`fidelity:` in the scenario)
 

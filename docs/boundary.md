@@ -11,6 +11,17 @@ This page describes the limitations the harness reproduces, how each tier enforc
 > `bash`/`web_fetch` route into, not a sandbox around the agent's own file tools. The rest of this page is
 > the *why* and the per-tier detail.
 
+> **This page vs. the other four.** Fidelity is documented in five places, on purpose — each answers a
+> different question:
+>
+> | Question | Page |
+> |---|---|
+> | *Which tier should I pick?* | [README → Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) — the decision table |
+> | *What does each tier enforce?* | **this page** |
+> | *What does each tier NOT reproduce?* | [fidelity-gaps.md](./fidelity-gaps.md) |
+> | *Why is it built this way?* | [DESIGN.md § 2 Parity matrix](../DESIGN.md#2-parity-matrix-per-tier) |
+> | *I only have the installed plugin* | [references/fidelity-and-answers.md](../.claude/skills/cowork-harness/references/fidelity-and-answers.md) — offline snapshot |
+
 ## The three limitations that matter
 
 | Limitation | In Cowork | Why a skill must respect it |

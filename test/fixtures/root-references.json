@@ -1,0 +1,123 @@
+{
+  "_comment": [
+    "Shared BEHAVIOURAL pin for the two implementations of 'which plugin-root references does this skill",
+    "point at': resolveRootReferences in src/critique/resolve-references.ts and _resolve_corpus_root_references",
+    "in scenario.py. Both sides materialize `tree`, resolve the skill's agents, and compare the resulting",
+    "plugin-root-relative paths to `expected` LITERALLY. The expectations are hand-written: deriving them",
+    "from either implementation makes the pin a tautology that passes while the two disagree.",
+    "Covers CLAUSES 1 and 2 only. Clause 3 (a reference the graded agent READ during the turn) is",
+    "run-dependent and cannot be mirrored by a static linter, so it is deliberately absent here.",
+    "Every case uses the <root>/skills/<name>/ layout, the only shape scenario.py resolves a root from.",
+    "NOTE: the Python half runs only in CI's `python` job -- `npm run ci` never runs pytest."
+  ],
+  "cases": [
+    {
+      "name": "the ARMING form: a directory token plus bare backticked filenames",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `a.md`, `b.md`\n",
+        "references/a.md": "A\n",
+        "references/b.md": "B\n",
+        "references/c.md": "C\n"
+      },
+      "expected": ["references/a.md", "references/b.md"]
+    },
+    {
+      "name": "arming does not carry to the next line",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nFrom `${CLAUDE_PLUGIN_ROOT}/references/`: `a.md`\nLocal: `b.md`\n",
+        "references/a.md": "A\n",
+        "references/b.md": "B\n"
+      },
+      "expected": ["references/a.md"]
+    },
+    {
+      "name": "a directory token ALONE packages nothing (never recurse into wholesale)",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee `${CLAUDE_PLUGIN_ROOT}/references/` for shared material.\n",
+        "references/a.md": "A\n",
+        "references/b.md": "B\n"
+      },
+      "expected": []
+    },
+    {
+      "name": "<plugin>/ prefix form",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee `plug/references/shared.md`.\n",
+        "references/shared.md": "S\n"
+      },
+      "expected": ["references/shared.md"]
+    },
+    {
+      "name": "a BARE references/x.md means the SKILL's own file, not the root's",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee `references/dup.md`.\n",
+        "skills/ms/references/dup.md": "LOCAL\n",
+        "references/dup.md": "ROOT\n"
+      },
+      "expected": []
+    },
+    {
+      "name": "a relative path that escapes INTO the root references dir",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee [model](../../references/shared.md).\n",
+        "references/shared.md": "S\n"
+      },
+      "expected": ["references/shared.md"]
+    },
+    {
+      "name": "link found only in the skill's OWN references/**, never in SKILL.md",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nNothing here.\n",
+        "skills/ms/references/deep.md": "See `plug/references/shared.md`.\n",
+        "references/shared.md": "S\n"
+      },
+      "expected": ["references/shared.md"]
+    },
+    {
+      "name": "link from an AGENT body, incl. frontmatter and an unbalanced trailing paren",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\n",
+        "agents/ms.md": "---\nname: ms\ndescription: (see plug/references/shared.md): does things\n---\nbody\n",
+        "references/shared.md": "S\n"
+      },
+      "expected": ["references/shared.md"]
+    },
+    {
+      "name": "a nested root reference resolves through its subdirectory",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee `plug/references/sub/deep.md`.\n",
+        "references/sub/deep.md": "D\n",
+        "references/sub/other.md": "O\n"
+      },
+      "expected": ["references/sub/deep.md"]
+    },
+    {
+      "name": "a cross-plugin-looking prefix that is not this plugin does not resolve",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee `other-plugin/references/shared.md`.\n",
+        "references/shared.md": "S\n"
+      },
+      "expected": []
+    }
+  ]
+}

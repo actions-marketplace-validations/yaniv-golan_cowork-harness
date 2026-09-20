@@ -20,14 +20,19 @@ describe("trace --view enum ↔ README docs", () => {
   const viewsBlock = src.slice(viewsIdx, src.indexOf("]", viewsIdx));
   const cliViews = [...viewsBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 
-  const readme = readFileSync(resolve("docs/cli.md"), "utf8");
-  // The trace row documents the view list as `--view tools\|questions\|...\|usage` inside a
-  // markdown table cell — pipes are backslash-escaped there to avoid breaking the table, so the
-  // separator to split on is the literal two-character sequence `\|`, not a bare `|`.
-  // Require at least one escaped pipe so this matches the trace row's full enum list rather than
-  // the single-view usage example elsewhere in the README (e.g. `--view tools` in a quickstart
-  // snippet, which has no `\|` and would otherwise match first).
-  const viewListMatch = readme.match(/--view ([a-zA-Z0-9-]+(?:\\\|[a-zA-Z0-9-]+)+)/);
+  const cliDoc = readFileSync(resolve("docs/cli.md"), "utf8");
+  // The enum lives in the `trace` bullet under "Flags worth knowing". Anchor on that bullet rather
+  // than on the first `--view` in the file: TWO other places carry a `--view` list, and matching
+  // either would compare the wrong enum against TRACE_VIEWS.
+  //   1. a quickstart snippet with a single view (`--view tools`), and
+  //   2. the `diff` bullet, whose own `--view tools|transcript|artifacts|meta` is a DIFFERENT enum
+  //      that happens to start with the same word.
+  // Pipes are bare here. They were once backslash-escaped, which was correct while the enum sat in
+  // a markdown TABLE cell (GFM's table parser consumes `\|`), but it moved to a list in 3.7.0 and
+  // outside a table `\|` inside a code span publishes a literal backslash. Accept either form so a
+  // future move back into a table does not silently break this guard.
+  const traceBullet = cliDoc.split("\n").find((l) => l.startsWith("- `trace`:")) ?? "";
+  const viewListMatch = traceBullet.match(/--view ([a-zA-Z0-9-]+(?:\\?\|[a-zA-Z0-9-]+)+)/);
 
   it("parsed a sane VIEWS set from src/cli.ts (guards against the array literal moving/renaming)", () => {
     expect(cliViews.length).toBeGreaterThan(3);
@@ -35,12 +40,12 @@ describe("trace --view enum ↔ README docs", () => {
     expect(cliViews).toContain("usage");
   });
 
-  it("found the --view list documented in docs/cli.md's trace row", () => {
-    expect(viewListMatch, "docs/cli.md's trace row no longer has a `--view a|b|c` list in the expected shape").not.toBeNull();
+  it("found the --view list documented in docs/cli.md's trace bullet", () => {
+    expect(viewListMatch, "docs/cli.md's `- `trace`:` bullet no longer has a `--view a|b|c` list in the expected shape").not.toBeNull();
   });
 
   it("src/cli.ts VIEWS and README.md's documented --view list are the same set", () => {
-    const readmeViews = (viewListMatch?.[1] ?? "").split("\\|");
+    const readmeViews = (viewListMatch?.[1] ?? "").split(/\\?\|/);
     const missingFromReadme = cliViews.filter((v) => !readmeViews.includes(v));
     const extraInReadme = readmeViews.filter((v) => !cliViews.includes(v));
     expect(

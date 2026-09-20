@@ -1,6 +1,6 @@
 {
   "name": "cowork-harness",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "description": "Scriptable, CI-friendly harness for Claude Cowork's runtime contract for testing skills across scenarios \u2014 same agent, mounts, egress allowlist, permission protocol, and sandbox limitations.",
   "license": "MIT",
   "type": "module",
@@ -62,6 +62,7 @@
     "DESIGN.md",
     "llms.txt",
     "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "RELEASING.md",
     "examples/README.md",

@@ -19,6 +19,14 @@ To actually run the live suite in CI, set the `ANTHROPIC_API_KEY` repo secret. T
 `SKIP_LIVE_SCENARIOS` override — the suite never hard-fails on a missing key, so there is nothing to
 override.
 
+> **Ran a live pass? Re-stamp `DESIGN.md`'s "Scope of that claim" note — it is the single authority for
+> the live pin,** naming the baseline, the agent version, which suites and which tiers. Nothing enforces
+> this, and that is deliberate: a cross-file "these three strings match" check is satisfiable by pasting
+> a digit without re-running anything, which is the copy-paste-satisfiable guard this repo has already
+> been burned by twice (see the reasoning at the top of `scripts/check-claims.ts`). The pin is stated
+> **once**; dated mentions elsewhere — a `CHANGELOG.md` release note, a `docs/protocol.md` changelog entry
+> — record what was true on their own date and are never restamped.
+
 ## The preferred three-phase sequence (branch → PR → merge → tag)
 
 CI triggers on pushes to `main`, on pull requests, and via manual `workflow_dispatch`. Pushing a release

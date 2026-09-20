@@ -1,0 +1,145 @@
+{
+  "_comment": [
+    "Shared BEHAVIOURAL pin for the two implementations of 'which agents can this skill dispatch':",
+    "src/critique/resolve-agents.ts (resolveDispatchableAgents) and scenario.py (_resolve_corpus_agents).",
+    "Both sides materialize `tree` into a temp dir and compare their resolved set to `expected` LITERALLY.",
+    "The expectations are hand-written on purpose: if either side derived them by calling its own resolver",
+    "the pin would be a tautology that passes while the two disagree. Every case uses the",
+    "<root>/skills/<name>/ layout, the only shape the Python sizing path resolves a plugin root from.",
+    "NOTE: the Python half runs only in CI's `python` job -- `npm run ci` is typecheck+build+test, no pytest."
+  ],
+  "cases": [
+    {
+      "name": "one agent, no literals: the union clause preserves pre-3.7 behaviour",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nNo dispatch literals here at all.\n",
+        "agents/ms.md": "system prompt for ms\n"
+      },
+      "expected": ["agents/ms.md"]
+    },
+    {
+      "name": "second skill-scoped agent, pulled in by a namespaced literal in SKILL.md",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nDispatch with subagent_type: \"plug:ms-redteam\" for the red team pass.\n",
+        "agents/ms.md": "primary\n",
+        "agents/ms-redteam.md": "red team persona\n"
+      },
+      "expected": ["agents/ms-redteam.md", "agents/ms.md"]
+    },
+    {
+      "name": "another skill's agent, referenced by nothing, stays OUT (this is why glob-all was rejected)",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\n",
+        "skills/other/SKILL.md": "# other\n",
+        "agents/ms.md": "primary\n",
+        "agents/other.md": "belongs to the other skill\n"
+      },
+      "expected": ["agents/ms.md"]
+    },
+    {
+      "name": "declared name differs from filename, no literal: clause 3 (was packaging NOTHING at N=1)",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\n",
+        "agents/redteam.md": "---\nname: ms\n---\nprompt body\n"
+      },
+      "expected": ["agents/redteam.md"]
+    },
+    {
+      "name": "literal lives in references/, not SKILL.md",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nSee references/dispatch.md.\n",
+        "skills/ms/references/dispatch.md": "Dispatch: subagent_type=\"plug:ms-redteam\"\n",
+        "agents/ms.md": "primary\n",
+        "agents/ms-redteam.md": "red team\n"
+      },
+      "expected": ["agents/ms-redteam.md", "agents/ms.md"]
+    },
+    {
+      "name": "cross-plugin literal must NOT match this plugin's same-named agent",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nsubagent_type: \"other-plugin:shared\"\n",
+        "agents/ms.md": "primary\n",
+        "agents/shared.md": "---\nname: shared\n---\nours, not theirs\n"
+      },
+      "expected": ["agents/ms.md"]
+    },
+    {
+      "name": "bare (non-namespaced) literal matches a declared name in this plugin",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nsubagent_type: ms-redteam\n",
+        "agents/ms.md": "primary\n",
+        "agents/ms-redteam.md": "red team\n"
+      },
+      "expected": ["agents/ms-redteam.md", "agents/ms.md"]
+    },
+    {
+      "name": "NESTED agent dir: dispatchable and hash-attributed, so it must be packageable too",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nsubagent_type: \"plug:ms-deep\"\n",
+        "agents/ms.md": "primary\n",
+        "agents/sub/deep.md": "---\nname: ms-deep\n---\nnested agent\n"
+      },
+      "expected": ["agents/ms.md", "agents/sub/deep.md"]
+    },
+    {
+      "name": "transitive: an agent that dispatches another agent",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nsubagent_type: \"plug:alpha\"\n",
+        "agents/ms.md": "primary\n",
+        "agents/alpha.md": "alpha, which then uses subagent_type: \"plug:beta\"\n",
+        "agents/beta.md": "beta, the depth-2 agent\n"
+      },
+      "expected": ["agents/alpha.md", "agents/beta.md", "agents/ms.md"]
+    },
+    {
+      "name": "transitive through the SKILL-NAMED agent (clause 1), the dominant real dispatcher",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nDispatch the primary agent.\n",
+        "agents/ms.md": "primary, which dispatches subagent_type: \"plug:ms-redteam\"\n",
+        "agents/ms-redteam.md": "red team persona\n"
+      },
+      "expected": ["agents/ms-redteam.md", "agents/ms.md"]
+    },
+    {
+      "name": "dispatch cycle terminates instead of looping forever",
+      "skill": "ms",
+      "tree": {
+        "plugin.json": "{\"name\": \"plug\"}",
+        "skills/ms/SKILL.md": "# ms\nsubagent_type: \"plug:alpha\"\n",
+        "agents/alpha.md": "alpha calls subagent_type: \"plug:beta\"\n",
+        "agents/beta.md": "beta calls subagent_type: \"plug:alpha\" right back\n"
+      },
+      "expected": ["agents/alpha.md", "agents/beta.md"]
+    },
+    {
+      "name": "no plugin manifest: a namespaced literal cannot be proven ours, so nothing resolves from it",
+      "skill": "ms",
+      "tree": {
+        "skills/ms/SKILL.md": "# ms\nsubagent_type: \"plug:ms-redteam\"\n",
+        "agents/ms.md": "primary\n",
+        "agents/ms-redteam.md": "red team\n"
+      },
+      "expected": ["agents/ms.md"]
+    }
+  ]
+}

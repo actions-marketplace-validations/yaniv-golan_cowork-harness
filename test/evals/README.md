@@ -69,7 +69,7 @@ per-PR path.
   exits 0). Its live acceptance test is `scripts/skill-critique-acceptance.ts`
   (`npm run skill-critique-acceptance`).
   **What the evaluator sees:** skill-authored content (`SKILL.md`, every `references/**` file,
-  `agents/<skill>.md`) is packaged WHOLE, governed by a combined 512 KiB sanity ceiling that cuts loudly and
+  every dispatchable `agents/**.md`) is packaged WHOLE, governed by a combined 512 KiB sanity ceiling that cuts loudly and
   names the file. The report's `evidenceBudget` says exactly what was shown — `corpusCuts` is empty on every
   real skill, `corpusExcluded` names host files staging would not deliver, and `packageTruncated` flags a
   bounded section being cut (usually the transcript's head+tail elision). Check those before treating a
