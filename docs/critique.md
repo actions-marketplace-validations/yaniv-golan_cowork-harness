@@ -28,6 +28,47 @@ Three mechanisms, all code rather than prompt instructions:
 > reproduce, fix, prove the re-run used the fixed body, compare generations — is in
 > [debugging.md](./debugging.md#the-whole-loop-end-to-end).
 
+## How it works
+
+Five steps, in this order. The middle one is not a model call — it is the boundary that makes step 4
+trustworthy.
+
+1. **Task turn** — your skill runs against the probe. An ordinary graded run.
+2. `── boundary: the run record is frozen here ──` — this is mechanism 1
+   [above](#how-it-resists-confabulation), and its scope is exactly what that wording says: the
+   reflection turn's own **output** cannot reach the record it is graded against.
+3. **Reflection turn** — a **resume of the same session**, so the agent still has its own context when
+   asked what confused it. Its answer is the self-report.
+4. **Evaluator pass 1 — independent.** Reads the frozen turn-1 record and the packaged corpus. It is
+   never sent the self-report (mechanism 2), and its claims are citation-checked against the package
+   before anything else is interpolated.
+5. **Evaluator pass 2 — adjudicating.** Everything pass 1 saw, **plus the self-report and pass 1's
+   validated findings**. **Skipped entirely when no self-report was captured**, in which case the report
+   carries pass 1's independent findings alone — so a critique is up to four model workloads, not always
+   four.
+
+### Who sees what
+
+The blindness in step 4 is the whole value proposition, so it is worth reading as a matrix rather than
+a sequence:
+
+| Workload | Sees the skill folder | Sees the run | Sees the self-report | Sees pass 1's findings |
+|---|---|---|---|---|
+| 1 · task turn | whole folder, incl. `scripts/` | is the run | — | — |
+| 2 · reflection turn | whole folder, incl. `scripts/` | its own session | writes it | — |
+| 3 · evaluator pass 1 | packaged corpus only | frozen turn-1 record | **no** | — |
+| 4 · evaluator pass 2 | packaged corpus only | frozen turn-1 record | yes, when captured (truncated, JSON-fenced) | validated only |
+
+Rows 1-2 versus 3-4 carry the asymmetry that surprises people most: the graded and reflection turns
+mount your whole skill folder including `scripts/`, while the evaluator only ever receives a **packaged
+corpus** — a bounded copy of the authored text, never the folder. What goes into it, and what is
+deliberately left out, is the `evidenceBudget` object under
+[Reading the report](#reading-the-report).
+
+An evidence section that is **empty** means the packager could not read it, never that the thing did not
+happen — see [Known limitations](#known-limitations) for the degraded-turn-1 states and how a verdict is
+downgraded rather than guessed.
+
 ## If you came from "loop engineering"
 
 This command is the **evaluator half** of the Evaluator-Optimizer pattern (Anthropic's *Building
@@ -180,13 +221,13 @@ It does **not** record their contents — see Known limitations.
 
 ## Cost and prerequisites
 
-- **Four model workloads per critique**: two graded runs (task + reflection) at the chosen tier and two
-  evaluator passes.
+- **Up to four model workloads per critique** — the two graded turns and the two evaluator passes of
+  [How it works](#how-it-works) (pass 2 is skipped when no self-report was captured).
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
   cost is roughly **fixed** (bounded by the evidence package: corpus + transcript caps); the graded task
-  turn is **unbounded**. On a trivial probe the two evaluator passes are ~3/4 of the total; on a real
+  turn is **unbounded**. On a trivial probe the two evaluator passes (steps 4-5) are ~3/4 of the total; on a real
   document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
   report's `cost:` line prints the four-way split and the evaluator's share of the total, and `costUsd`
   carries the same numbers — use those. A cheaper `--evaluator-model` can only ever buy you the

@@ -74,7 +74,7 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
   });
 
   it("a skill dir targeted DIRECTLY resolves the same agents as --skill (walks up for the plugin root)", () => {
-    // `critique <plugin>/skills/<name>` is an invocation docs/critique.md:114 recommends, and it packaged
+    // `critique <plugin>/skills/<name>` is an invocation docs/critique.md's "Multi-skill plugins" section recommends, and it packaged
     // ZERO agents while scenario.py sized them — the root was the positional folder, and a skill dir
     // has no agents/ of its own. The two spellings must agree or the packager and the linter describe
     // different corpora for the same tree.
