@@ -59,7 +59,15 @@ triggers, how it sequences tools, which questions it asks, whether it honours a 
 Environment-shaped conclusions do not: any assertion about a path, a mount, or a delivery mechanism
 is a claim about the local lane only. And if you are probing real Cowork to compare against this
 harness, **turn "Only on this computer" on first** — with it off you are measuring a lane this tool
-does not model, which has already cost one wasted probe.
+does not model, which has already cost one wasted probe. **The remote lane's toolchain is a different
+image, not the local rootfs with extras.** Measured 2026-09-21 with the setting off: `pip list` showed
+pandas 3.0.2 and numpy 2.4.4 where the local rootfs (Desktop 2.2553.1, captured the same day into
+`baselines/provisioning/rootfs-provisioning.json`) has pandas 2.3.3 and numpy 2.2.6, plus fourteen
+packages the local rootfs does not have at all — scipy, scikit-learn, scikit-image, networkx, httpx,
+Flask, uvicorn, starlette, playwright, mediapipe, `claude-agent-sdk`, `mcp`, pydantic. So a provisioning
+observation made with the setting off says nothing about what a local session — or this harness's
+`container`/`hostloop` image — provides, and a pandas-major difference is the kind that changes a skill's
+behaviour, not just its imports.
 
 ### The boundary is a missing flag, not an entrypoint string
 
