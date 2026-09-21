@@ -1752,9 +1752,12 @@ function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" 
   }
 }
 
-/** `opts.prompt` is required here by TYPE: a task turn cannot be built without a probe, and the only
- *  invocation that lacks one (`--corpus-only`) returns before this is reached. */
-export function buildTaskTurnArgs(opts: ParsedArgs & { prompt: string }, sessionId: string): string[] {
+/** A task turn cannot be built without a probe. The only invocation that lacks one (`--corpus-only`)
+ *  returns from `main` before this is reached, so a missing prompt here is an internal error — thrown,
+ *  not typed away: an intersection type on the parameter made every existing caller that passes a bare
+ *  `parseArgs()` result fail to compile, for an invariant the runtime already holds. */
+export function buildTaskTurnArgs(opts: ParsedArgs, sessionId: string): string[] {
+  if (opts.prompt === undefined || !opts.prompt.trim()) throw new Error("critique: internal — buildTaskTurnArgs called with no probe");
   const dotenvArgs = opts.dotenv ? ["--dotenv", opts.dotenv] : [];
   return [
     ...dotenvArgs,
@@ -2026,7 +2029,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // +60s covers staging and container start — not principled, and a cold image pull can exceed it.
     progress(1, "task turn (running the skill under test — this is the graded run)");
     const task = await runSkillTurn(
-      buildTaskTurnArgs({ ...opts, prompt }, sessionId),
+      buildTaskTurnArgs(opts, sessionId),
       opts.taskTimeoutMs ? Math.max(TURN_TIMEOUT_MS, opts.taskTimeoutMs + 60_000) : TURN_TIMEOUT_MS,
     );
     const outDir = extractOutDir(task);
