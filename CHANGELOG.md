@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.8.0] — 2026-09-22
+
 ### Upgrade notes
 
 - **Cassettes: re-record ONLY a cassette that performs a `web_fetch` at `hostloop` or `container`;
