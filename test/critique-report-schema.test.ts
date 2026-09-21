@@ -40,6 +40,8 @@ const FULL_STATE = {
   },
   gradedSkill: "demo-analyze",
   skillInvocationObserved: true,
+  commandShadowsSkill: true,
+  referenceAccessUnobservable: true,
   gateAnswers: [{ question: "Which format?", answer: "Markdown", answeredBy: "scripted" }],
   taskResult: "success" as const,
   gradedOutcome: "delivered_clean",

@@ -87,6 +87,7 @@ describe("critique limitations ↔ docs parity", () => {
         "microvm-tier-refused",
         "protocol-tier-refused",
         "skill-corpus-ceiling",
+        "skill-invocation-ambiguous-channel",
       ].sort(),
     );
   });

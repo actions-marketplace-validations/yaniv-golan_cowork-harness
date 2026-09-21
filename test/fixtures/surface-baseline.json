@@ -937,6 +937,9 @@
         "type": "object",
         "closed": true
       },
+      ".commandShadowsSkill": {
+        "type": "boolean"
+      },
       ".costUsd": {
         "type": "object",
         "closed": true
@@ -1213,6 +1216,9 @@
       ".prompt": {
         "type": "string",
         "required": true
+      },
+      ".referenceAccessUnobservable": {
+        "type": "boolean"
       },
       ".requestedFidelity": {
         "type": "string",

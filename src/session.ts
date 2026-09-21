@@ -439,19 +439,35 @@ export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
   const out: PluginSkillRoot[] = [];
   for (const m of plan.mounts) {
     if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
-    let name = basename(m.hostPath);
-    let skillsSubdir = "skills";
-    const pj = join(m.hostPath, ".claude-plugin", "plugin.json");
-    try {
-      const parsed = JSON.parse(readFileSync(pj, "utf8")) as { name?: unknown; skills?: unknown };
-      if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
-      if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
-    } catch {
-      /* missing/corrupt manifest — best-effort fallback */
-    }
+    const { name, skillsSubdir } = binaryPluginIdentity(m.hostPath);
     out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir, stageFilter: m.stageFilter });
   }
   return out;
+}
+
+/** The plugin NAME and skills subdir exactly as the agent binary derives them: `.claude-plugin/plugin.json`'s
+ *  `name` when present and non-empty, else the directory basename — a root-level `plugin.json` is NOT
+ *  consulted, because the binary does not consult it (measured: a plugin dir `rootpj-dir/` with only
+ *  `rootpj-dir/plugin.json` = `{"name":"rootpj-name"}` registers as `rootpj-dir:qux` in the init frame and
+ *  expands `/rootpj-dir:qux`). This is the qualifier the binary puts in `Skill{skill:"<q>:<name>"}` and in
+ *  `context.availableSkills[].id`, so it is the ONE rule to use wherever an observed id is compared to a
+ *  graded plugin. `readPluginName` in resolve-agents.ts is a different, deliberately lenient contract
+ *  (it mirrors the Python linter and accepts a root `plugin.json`) and must not be used for that
+ *  comparison: doing so turned a fully-invoked run into `skillInvocationObserved: false`. Never throws. */
+export function binaryPluginIdentity(pluginRoot: string): { name: string; skillsSubdir: string } {
+  let name = basename(pluginRoot);
+  let skillsSubdir = "skills";
+  try {
+    const parsed = JSON.parse(readFileSync(join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8")) as {
+      name?: unknown;
+      skills?: unknown;
+    };
+    if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
+    if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
+  } catch {
+    /* missing/corrupt manifest — best-effort fallback */
+  }
+  return { name, skillsSubdir };
 }
 
 /** A plugin the `plugins` SDK-MCP server's `list_plugins` (and the skills server's `installed_plugins`

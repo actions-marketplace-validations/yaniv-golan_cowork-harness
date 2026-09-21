@@ -201,9 +201,21 @@ adjudicable". So:
   invisible to either critique. Pairing critiques (above) tells you a finding reproduced; it does not
   surface a defect that exists only in the disagreement BETWEEN two skills. That one needs a human
   reading both, or a check outside this tool.
-- The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
-  `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
-  actually invoke it.
+- The report carries an advisory **`skillInvocationObserved`** whenever a single skill is being graded
+  (`--skill`, a single-skill plugin, or a `<plugin>/skills/<name>` positional). `true` means an
+  observable channel named the selected skill — the main agent's `Skill` tool call, a sub-agent's `Skill`
+  call (read from the turn's `events.jsonl`, which carries the name the timeline drops), or a leading
+  slash token in the prompt that resolves to a *staged skill*. The slash rule is the binary's, measured:
+  the `/` must be the first character, the token runs to the first whitespace (`/plugin:skill.` is sent as
+  prose, not expanded), and a bare `/name` resolves to the plugin skill. Expanding one inlines SKILL.md as
+  a user message rather than calling the tool, so a slash-command run shows `skillsInvoked: []` and is
+  **not** a non-invocation. `false` means all three channels were observable and none fired. The field
+  is **absent** when a channel could not be observed or the one that fired is ambiguous — an older
+  `result.json` with no prompt or skill inventory; an unreadable events slice; a top-level `Skill` call
+  whose id the record could not read; a bare `/name` that more than one staged skill answers to; or a
+  plugin that ships both a command and a skill under one name (`commandShadowsSkill`), where the slash
+  entry and the `Skill` tool launch either through one registry. Absent is never a synonym for `false`,
+  and the text report prints a NOTE when it is absent.
 
 ### Skills that need an attached file
 
@@ -255,8 +267,17 @@ It does **not** record their contents — see Known limitations.
 - **Reading `egress.log` on a research-heavy critique:** a `WebSearch` does **not** produce search-host
   entries in the container `egress.log`. An egress log showing only `api.anthropic.com` (plus denied
   telemetry) is consistent with WebSearch working normally — it is *not* evidence that research was
-  blocked. What **is** container-egress-gated is `web_fetch` (the hostname allowlist); a skill that
-  fetches off-allowlist hosts via `web_fetch` is denied at `container` and host-routed at `hostloop`.
+  blocked. `web_fetch` is **not** in that log on either tier: since `a459c80` (2.4.0) the container
+  tier registers the same host-side workspace handler that `hostloop` does whenever
+  `coworkWebFetchViaApi` is on (every baseline from `desktop-1.13576.1`), so its fetches run in the
+  harness's own Node process, outside the container network namespace, and the sidecar proxy never sees
+  them. Both tiers' `web_fetch` decisions land in `RunResult.egress` as bare `{host, decision}`
+  records — no `ts`, no `port`, no `reason` — while every row the sidecar proxy writes carries a
+  `ts` (its single log call stamps one before any per-decision detail, of which there are four shapes:
+  `{port, reason}` on a CONNECT deny, `{method, reason}`, `{method, path, port, bytes}`, `{port}`). So
+  the discriminator is `ts`: present on every proxy row, never on a `web_fetch` row. And a *provenanced* URL (one that appeared
+  in the prompt or a prior `web_fetch` result) is gated by the provenance set alone, so the hostname
+  allowlist is not consulted for it on either tier.
 - **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
   sub-agent does not increment the main `toolCounts.WebSearch` — a `0` there with researched facts in
   the output usually means the sub-agents did the searching. Those searches ARE captured (live/record
@@ -644,3 +665,13 @@ immediately and survive a reflection turn that never finishes. Prefer them, or `
   **0 dropped citations (0%)** — models quote body content, not across headings. Since a pre-armor rate
   cannot be below zero, armor costs nothing measurable here. DROPPED items are always shown, so any future
   regression would be visible rather than silent.
+- **`[deliberate]` An invocation the record cannot attribute to one skill is reported absent, never
+  false.** `skillInvocationObserved` reads three channels — the main agent's `Skill` tool calls, a
+  sub-agent's `Skill` calls (from the turn's `events.jsonl`, which carries the skill name on the parented
+  frame), and a leading slash token in the prompt. Two shapes leave a channel readable but the answer
+  undecidable: a bare `/name` that more than one staged skill answers to (the binary resolves it to a
+  plugin skill; the record does not say which when several qualify), and a plugin shipping both
+  `commands/<n>.md` and `skills/<n>/SKILL.md`, where the slash entry and the `Skill` tool launch either
+  through one registry and the run records the name, not the kind. Both report *absent* rather than a
+  guessed `true` — and the text report says so in a NOTE, so "could not observe" never reads like "not
+  applicable".
