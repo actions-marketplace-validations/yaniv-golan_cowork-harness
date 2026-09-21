@@ -6,6 +6,11 @@
  * JSON keys as well as ids: measured against a real run with zero invocations, selectors `fetch`,
  * `root` and `skill` all reported `true`, and `root` collided with the `(root)` sentinel itself.
  * Match ids structurally instead.
+ *
+ * The selector is a bare skill-directory NAME by construction: `resolveCritiquedSkillDir` refuses
+ * anything with a separator, a colon or a dot-dir (`safePathSegment`) before this module sees it, so
+ * there is no normalisation to do here — and none is attempted, because a second copy of the rule is
+ * how the two would drift.
  */
 
 /** The two sentinels `TimelineWriter`/`foldSkillActivity` emit for un-attributed activity
@@ -13,95 +18,125 @@
  *  collide with a real id — honour that here. */
 const SENTINELS = new Set(["(root)", "(unknown)"]);
 
-/** Reduce a selector to the bare skill-directory name. `resolveCritiquedSkillDir` validates the
- *  selector by `join(skillFolder, "skills", selector)`, and `path.join` normalizes — so
- *  `./deck-review`, `deck-review/` and `skills/../deck-review` all name the same directory on disk and
- *  must compare equal here. Splits on path separators ONLY: a colon is a plugin qualifier, not a
- *  separator, and must survive. */
-export function normalizeSkillSelector(selector: string): string {
-  const parts = selector.split(/[/\\]+/).filter((p) => p !== "" && p !== ".");
-  return parts.length ? parts[parts.length - 1] : selector;
-}
-
 /** Does an observed skill id name the selected skill? An id is either bare (`deck-review`) or
- *  plugin-qualified (`founder-skills:deck-review`) — both forms occur in the corpus — so accept the
- *  exact id and the `<plugin>:<name>` suffix, and nothing looser. `deck-review-lite` must NOT match
- *  `deck-review`, which is exactly what a substring test got wrong. */
-export function matchesSkillId(observedId: string, selector: string): boolean {
+ *  plugin-qualified (`founder-skills:deck-review`) — both forms occur in the corpus. A bare id must equal
+ *  the selector; a qualified id must match the name AND, when the graded plugin's name is known, the
+ *  qualifier. `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
+ *  `anthropic-skills:skill-creator` must NOT match a critique of `skill-creator:skill-creator` — on
+ *  `hostloop`/`protocol` the host's own plugins are in the inventory, and a same-named skill from
+ *  another plugin is exactly the kind of thing that is installed on a maintainer's machine. */
+export function matchesSkillId(observedId: string, selector: string, pluginName?: string): boolean {
   if (SENTINELS.has(observedId)) return false;
-  const want = normalizeSkillSelector(selector);
-  if (observedId === want || observedId === selector) return true;
   const colon = observedId.lastIndexOf(":");
-  return colon !== -1 && observedId.slice(colon + 1) === want;
+  if (colon === -1) return observedId === selector;
+  if (observedId.slice(colon + 1) !== selector) return false;
+  return pluginName === undefined || observedId.slice(0, colon) === pluginName;
 }
 
 /** What a prompt's leading slash token turned out to be. `unobservable` means the run did not record
  *  what we would need (an older `result.json` with no prompt, or an init frame that delivered no skill
- *  inventory) — distinct from `none`, which is a real negative. */
+ *  inventory), OR the token is a bare name that more than one staged skill answers to — distinct from
+ *  `none`, which is a real negative. */
 export type SlashInvocation = { kind: "skill"; id: string } | { kind: "none" } | { kind: "unobservable" };
 
 /** Did this prompt invoke a STAGED SKILL by slash command?
  *
- *  Only the LEADING token counts: the binary expands a slash command in first position, and a `/foo`
- *  mid-sentence is prose. The match is against the init frame's SKILL inventory, never against
- *  `slash_commands` — that list mixes plugin commands with auto-registered skills and carries no
- *  distinguisher, so keying off it accepts `founder-skills:feedback` and
- *  `creative-problem-solving:ideas` (both verified real, both plain commands) as skill invocations.
- *  Trailing sentence punctuation is excluded from the captured token so `/plugin:skill.` resolves. */
+ *  The rule is the BINARY's, measured (six prompts through the real host agent 2.1.278 with the API
+ *  unreachable; the expansion happens before any call, so the persisted transcript shows what it did):
+ *   - the slash must be the FIRST character — `"  /x"` is sent to the model as plain text;
+ *   - the token is everything up to the first whitespace — `/x.` and `/x,` are NOT expanded, so
+ *     trailing punctuation is part of the token and simply fails to resolve (an earlier version stripped
+ *     it "so `/plugin:skill.` resolves", and reported `true` over a run the model saw as prose);
+ *   - a BARE name resolves to the plugin skill (`/deck-review` → `founder-skills:deck-review`), while
+ *     the inventory spells every plugin skill qualified — so a bare token is matched by suffix, and one
+ *     that more than one staged skill answers to is `unobservable`, never `none`.
+ *  The match is against the init frame's SKILL inventory, never against `slash_commands` — that list
+ *  mixes plugin commands with auto-registered skills and carries no distinguisher, so keying off it
+ *  accepts `founder-skills:feedback` and `creative-problem-solving:ideas` (both verified real, both
+ *  plain commands) as skill invocations. */
 export function slashCommandSkillInvocation(
   prompt: string | undefined,
   availableSkills: readonly { id: string }[] | undefined,
 ): SlashInvocation {
   if (prompt === undefined || availableSkills === undefined) return { kind: "unobservable" };
-  const m = /^\s*\/([A-Za-z0-9_.:-]*[A-Za-z0-9_:-])/.exec(prompt);
+  const m = /^\/(\S+)/.exec(prompt);
   if (!m) return { kind: "none" };
-  const ids = new Set(availableSkills.map((s) => s.id));
-  return ids.has(m[1]) ? { kind: "skill", id: m[1] } : { kind: "none" };
+  const token = m[1];
+  const ids = availableSkills.map((s) => s.id);
+  if (ids.includes(token)) return { kind: "skill", id: token };
+  if (token.includes(":")) return { kind: "none" }; // a qualified token that is not a staged skill is a command, or prose
+  const bySuffix = ids.filter((id) => id.endsWith(`:${token}`));
+  if (bySuffix.length === 1) return { kind: "skill", id: bySuffix[0] };
+  if (bySuffix.length > 1) return { kind: "unobservable" }; // the binary picked one; the record does not say which
+  return { kind: "none" };
 }
 
-/** Did the turn's timeline contain a `Skill` call we could not attribute to any skill?
+/** The `Skill` calls a SUB-AGENT made during the turn, by the skill id each named — or `undefined` when
+ *  the record cannot say.
  *
  *  A `Skill` tool_use with a `parentToolUseId` is a sub-agent's own invocation. `run.ts`'s
  *  `isMainAgentFlow` gate drops it and `timeline.ts`'s sticky window ignores it, so it reaches no
- *  `skillActivity` entry — and the timeline records no tool `input`, so its skill NAME is
- *  unrecoverable from a graded result. Seeing one means "a skill ran somewhere we cannot name", which
- *  is enough to refuse a negative verdict and not enough to assert a positive one. */
-export function hasUnattributableSkillCall(timelineJsonl: string): boolean {
-  for (const line of timelineJsonl.split("\n")) {
+ *  `skillActivity` entry, and the TIMELINE records no tool input. But the turn's `events.jsonl` slice —
+ *  which the critique already snapshots — carries the same call as an `assistant` frame with
+ *  `parent_tool_use_id` set and `input.skill` populated, so the NAME is recoverable after all. Read it
+ *  from there. The earlier version declared the name unrecoverable and refused a verdict; the record
+ *  disagreed.
+ *
+ *  Returns `undefined` when the slice is unreadable or when a parented `Skill` call carries no string
+ *  `input.skill` — "a skill ran somewhere we cannot name" is enough to refuse a negative verdict and not
+ *  enough to assert a positive one. */
+export function subagentSkillCalls(eventsJsonl: string): string[] | undefined {
+  const ids: string[] = [];
+  let unnamed = false;
+  for (const line of eventsJsonl.split("\n")) {
     if (!line.trim()) continue;
-    let e: { type?: unknown; name?: unknown; parentToolUseId?: unknown };
+    let e: { type?: unknown; parent_tool_use_id?: unknown; message?: { content?: unknown } };
     try {
       e = JSON.parse(line) as typeof e;
     } catch {
       continue; // a torn final line is normal on an append-only stream; never fail the critique on it
     }
-    if (e.type === "tool_use" && e.name === "Skill" && typeof e.parentToolUseId === "string") return true;
+    if (e.type !== "assistant" || typeof e.parent_tool_use_id !== "string") continue;
+    const content = e.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const b of content as Array<{ type?: unknown; name?: unknown; input?: { skill?: unknown } }>) {
+      if (!b || b.type !== "tool_use" || b.name !== "Skill") continue;
+      if (typeof b.input?.skill === "string" && b.input.skill) ids.push(b.input.skill);
+      else unnamed = true;
+    }
   }
-  return false;
+  return unnamed ? undefined : ids;
 }
 
 /** critique's `skillInvocationObserved`, as a tri-state.
  *
- *  `true`  — a channel we can observe named the selected skill.
+ *  `true`  — a channel we can observe named the selected skill, and nothing makes that ambiguous.
  *  `false` — every channel was observable and none did.
- *  `undefined` — a channel could not be observed, so a negative would be an unsupportable claim
- *                rather than a finding. Absent is never a synonym for "no".
+ *  `undefined` — a channel could not be observed, or the one that fired is ambiguous, so a verdict
+ *                would be an unsupportable claim rather than a finding. Absent is never a synonym
+ *                for "no".
  *
- *  `commandShadowsSkill` is the undecidable case: a plugin shipping BOTH `commands/<n>.md` and
- *  `skills/<n>/SKILL.md` registers one slash entry and the run does not say which ran
- *  (`vercel@0.48.0` does exactly this). Report absent rather than guess. */
+ *  Channels: the main agent's `Skill` tool calls (`skillActivity`), a sub-agent's `Skill` calls (from the
+ *  events slice), and the prompt's leading slash token. `commandShadowsSkill` — a plugin shipping BOTH
+ *  `commands/<n>.md` and `skills/<n>/SKILL.md` (`vercel@0.48.0` does exactly this) — makes EVERY channel
+ *  ambiguous, not just the slash one: the `Skill` tool launches plugin commands through the same registry
+ *  (`Skill{skill:"creative-problem-solving:ideas"}` is a command, measured 24/24), so a `Skill` call naming
+ *  `vercel:bootstrap` is as undecidable as the slash token. Report absent rather than guess. */
 export function observedSkillInvocation(
   selector: string,
+  pluginName: string | undefined,
   skillActivity: ReadonlyArray<{ skillId?: unknown }> | undefined,
+  subagentSkills: readonly string[] | undefined,
   slash: SlashInvocation,
   commandShadowsSkill: boolean,
-  unattributableSkillCall: boolean,
 ): boolean | undefined {
-  const viaTool = skillActivity?.some((e) => typeof e?.skillId === "string" && matchesSkillId(e.skillId, selector));
-  if (viaTool) return true;
-  if (slash.kind === "skill" && matchesSkillId(slash.id, selector)) return commandShadowsSkill ? undefined : true;
-  if (skillActivity === undefined || slash.kind === "unobservable") return undefined;
-  // A skill ran inside a sub-agent and the record cannot name it — "not this skill" is unsupportable.
-  if (unattributableSkillCall) return undefined;
+  const named =
+    skillActivity?.some((e) => typeof e?.skillId === "string" && matchesSkillId(e.skillId, selector, pluginName)) ||
+    subagentSkills?.some((id) => matchesSkillId(id, selector, pluginName)) ||
+    (slash.kind === "skill" && matchesSkillId(slash.id, selector, pluginName));
+  if (named) return commandShadowsSkill ? undefined : true;
+  if (skillActivity === undefined || subagentSkills === undefined || slash.kind === "unobservable") return undefined;
+  // A top-level Skill call whose id the fold could not read is "cannot tell", not "not this skill".
+  if (skillActivity.some((e) => e?.skillId === "(unknown)")) return undefined;
   return false;
 }

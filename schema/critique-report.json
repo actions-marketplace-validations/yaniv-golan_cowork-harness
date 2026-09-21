@@ -105,7 +105,15 @@
     },
     "skillInvocationObserved": {
       "type": "boolean",
-      "description": "advisory: whether the graded run's own skillActivity mentions gradedSkill; false = the critique may be grading a run that never invoked the selected skill"
+      "description": "advisory: whether an observable channel — the main agent's Skill tool calls, a sub-agent's Skill calls (from the turn's events.jsonl), or a leading staged-skill slash token in the prompt — named gradedSkill; false = every channel was observable and none did (the critique may be grading a run that never invoked the selected skill); ABSENT = a channel could not be observed or the one that fired is ambiguous (see commandShadowsSkill), which is never a synonym for false"
+    },
+    "commandShadowsSkill": {
+      "type": "boolean",
+      "description": "advisory: the plugin ships BOTH commands/<gradedSkill>.md and skills/<gradedSkill>/SKILL.md, so the slash entry and the Skill tool launch either through one registry and the run records the name, not the kind — skillInvocationObserved is therefore absent, never true; present only when true"
+    },
+    "referenceAccessUnobservable": {
+      "type": "boolean",
+      "description": "the graded run recorded no reference-access list (a run kept before the signal existed, or one with no observable tool stream), so noSkillFilesRead is absent and must be read as unknown, never as \"nothing was read\"; present only when true"
     },
     "gateAnswers": {
       "type": "array",

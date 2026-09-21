@@ -19,13 +19,7 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
-import {
-  matchesSkillId,
-  normalizeSkillSelector,
-  observedSkillInvocation,
-  slashCommandSkillInvocation,
-  hasUnattributableSkillCall,
-} from "./skill-invocation.js";
+import { observedSkillInvocation, slashCommandSkillInvocation, subagentSkillCalls } from "./skill-invocation.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1427,7 +1421,13 @@ export function buildTextReport(state: ReportState): string {
     );
   if (state.commandShadowsSkill)
     out.push(
-      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command and the run does not record which ran, so slash-command invocation is not decidable here — rename one of the two to make it observable.`,
+      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so invocation of the selected skill is not decidable here. Rename one of the two to make it observable.`,
+    );
+  else if (state.gradedSkill !== undefined && state.skillInvocationObserved === undefined && !state.infraFailure)
+    // Absence is a real outcome and must be SAID: without this line "could not observe" read exactly
+    // like "not applicable", and a --skill user could not tell which they had.
+    out.push(
+      `  NOTE: whether the graded run invoked ${state.gradedSkill} could NOT be observed — the record lacks a prompt or skill inventory, a sub-agent Skill call it cannot name, or a bare slash token more than one staged skill answers to. Not evidence either way.`,
     );
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
@@ -2136,7 +2136,12 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // the slash channel undecidable for this skill — reported absent, never true.
     const commandShadowsSkill =
       gradedSkillName !== undefined &&
-      existsSync(join(dirname(dirname(resolvedSkill.skillDir)), "commands", `${normalizeSkillSelector(gradedSkillName)}.md`));
+      resolvedSkill.pluginRoot !== undefined &&
+      existsSync(join(resolvedSkill.pluginRoot, "commands", `${gradedSkillName}.md`));
+    // The qualifier a plugin-qualified observed id must carry to count — the manifest name, or the
+    // directory name it falls back to. Without it a same-named skill from ANOTHER installed plugin
+    // (present in the inventory at hostloop/protocol) would satisfy the match.
+    const gradedPluginName = resolvedSkill.pluginRoot !== undefined ? readPluginName(resolvedSkill.pluginRoot) : undefined;
     // NOTE: the verdict itself is computed after `snapshotTurnBoundary` below — it needs the turn-1
     // timeline slice, which does not exist until the boundary is captured.
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
@@ -2168,11 +2173,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // Graded-run validity (advisory), now that the turn-1 timeline slice is available. Three channels,
     // and the ABSENCE of a verdict is a real outcome: a run whose invocation we cannot observe must
     // never be reported as one that did not invoke.
-    const unattributableSkillCall = (() => {
+    const subagentSkills = (() => {
       try {
-        return hasUnattributableSkillCall(readTurn1Slice(outDir, "timeline.jsonl", boundary));
+        return subagentSkillCalls(readTurn1Slice(outDir, "events.jsonl", boundary));
       } catch {
-        return false; // a degraded slice is already surfaced as turn1SliceDegraded; do not double-fail
+        return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
       }
     })();
     const skillInvocationObserved =
@@ -2180,13 +2185,14 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         ? undefined
         : observedSkillInvocation(
             gradedSkillName,
+            gradedPluginName,
             gradedActivity,
+            subagentSkills,
             slashCommandSkillInvocation(
               typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
               (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
             ),
             commandShadowsSkill,
-            unattributableSkillCall,
           );
 
     // 3. Reflection turn: resume the SAME session.

@@ -266,8 +266,10 @@ It does **not** record their contents — see Known limitations.
   `coworkWebFetchViaApi` is on (every baseline from `desktop-1.13576.1`), so its fetches run in the
   harness's own Node process, outside the container network namespace, and the sidecar proxy never sees
   them. Both tiers' `web_fetch` decisions land in `RunResult.egress` as bare `{host, decision}`
-  records, with no `port` and no `reason` — that shape is how you tell them from the proxy's
-  `{host, decision, port, reason}` rows in the same array. And a *provenanced* URL (one that appeared
+  records — no `ts`, no `port`, no `reason` — while every row the sidecar proxy writes carries a
+  `ts` (its single log call stamps one before any per-decision detail, of which there are four shapes:
+  `{port, reason}` on a CONNECT deny, `{method, reason}`, `{method, path, port, bytes}`, `{port}`). So
+  the discriminator is `ts`: present on every proxy row, never on a `web_fetch` row. And a *provenanced* URL (one that appeared
   in the prompt or a prior `web_fetch` result) is gated by the provenance set alone, so the hostname
   allowlist is not consulted for it on either tier.
 - **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
@@ -657,7 +659,13 @@ immediately and survive a reflection turn that never finishes. Prefer them, or `
   **0 dropped citations (0%)** — models quote body content, not across headings. Since a pre-armor rate
   cannot be below zero, armor costs nothing measurable here. DROPPED items are always shown, so any future
   regression would be visible rather than silent.
-- **`[deliberate]` Sub-agent skill invocation is seen but unnamed.** `skillInvocationObserved` reads a
-  `Skill` tool call and a leading staged-skill slash command. A Skill call made inside a non-fork
-  sub-agent is seen but cannot be named — the recorded timeline carries no tool input — so a run whose
-  only invocation happens there reports *absent* rather than a verdict.
+- **`[deliberate]` An invocation the record cannot attribute to one skill is reported absent, never
+  false.** `skillInvocationObserved` reads three channels — the main agent's `Skill` tool calls, a
+  sub-agent's `Skill` calls (from the turn's `events.jsonl`, which carries the skill name on the parented
+  frame), and a leading slash token in the prompt. Two shapes leave a channel readable but the answer
+  undecidable: a bare `/name` that more than one staged skill answers to (the binary resolves it to a
+  plugin skill; the record does not say which when several qualify), and a plugin shipping both
+  `commands/<n>.md` and `skills/<n>/SKILL.md`, where the slash entry and the `Skill` tool launch either
+  through one registry and the run records the name, not the kind. Both report *absent* rather than a
+  guessed `true` — and the text report says so in a NOTE, so "could not observe" never reads like "not
+  applicable".

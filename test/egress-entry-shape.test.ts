@@ -14,7 +14,12 @@ import { resolve } from "node:path";
 const SRC = (p: string) => readFileSync(resolve(p), "utf8");
 
 describe("egress record shapes distinguish the two emitters", () => {
-  it("only the proxy writes port+reason", () => {
+  it("every proxy row carries `ts` — the ONE log call stamps it before any per-decision detail", () => {
+    // The proxy has four detail shapes; docs/critique.md names `ts` as the discriminator between a proxy
+    // row and a web_fetch row precisely because it is on the shared path, not on one shape.
+    expect(SRC("src/egress/proxy.ts")).toMatch(
+      /appendFileSync\(opts\.logPath, JSON\.stringify\(\{ ts: Date\.now\(\), host, decision, \.\.\.detail \}\)/,
+    );
     expect(SRC("src/egress/proxy.ts")).toContain('log(normalizedHost, "deny", { port, reason: "not on allowlist" });');
   });
 
@@ -26,6 +31,7 @@ describe("egress record shapes distinguish the two emitters", () => {
       expect(c).toMatch(/^onEgress\?\.\(\{ host(: [^,]+)?, decision: "(allow|deny)" \}\)$/);
       expect(c).not.toContain("port");
       expect(c).not.toContain("reason");
+      expect(c).not.toContain("ts");
     }
   });
 

@@ -57,6 +57,53 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique`'s `skillInvocationObserved` reported `false` over runs that fully invoked the skill, and
+  `true` over runs that invoked nothing.** Two independent defects in one advisory field.
+  - It was a substring scan — `JSON.stringify(skillActivity).includes(name)` — over a structure that
+    also contains tool names and JSON keys. Measured against a real run with **zero** invocations, a
+    selector of `fetch`, `root` or `skill` reported `true`, and `root` collided with the `(root)`
+    sentinel itself. Ids are now matched structurally: a bare id must equal the selector; a
+    `<plugin>:<name>` id must match the name AND the graded plugin's manifest name — on `hostloop` /
+    `protocol` the host's own plugins are in the inventory, and a same-named skill from another plugin
+    (`anthropic-skills:skill-creator` for a critique of `skill-creator:skill-creator`) must not count.
+    Never a substring, never a parenthesised sentinel.
+  - It was blind to the channel a `/plugin:skill` prompt actually uses. The binary auto-registers a
+    slash command per staged skill, and expanding one **inlines SKILL.md as a user message** — no
+    `Skill` tool call at all, so `skillsInvoked` is legitimately `[]`; the field read `false` over a
+    graded run with 109 KB of SKILL.md in its context. Detection now reads the prompt's leading token
+    against the init frame's staged-skill inventory (`context.availableSkills`), by **the binary's own
+    rule, measured** — six prompts through the real host agent with the API unreachable, so the persisted
+    transcript shows what it did: the slash must be the first character (leading whitespace is sent as
+    prose), the token runs to the first whitespace (`/plugin:skill.` and `/plugin:skill,` are NOT
+    expanded — an earlier draft of this fix stripped the punctuation and would have reported `true`
+    over a run the model saw as plain text), and a **bare** `/name` resolves to the plugin skill even
+    though the inventory spells it qualified. Deliberately not `slash_commands`, which mixes plugin
+    commands with skills and carries no distinguisher (`founder-skills:feedback` and
+    `creative-problem-solving:ideas` are both real, both plain commands).
+  - A sub-agent's own `Skill` call now counts. `timeline.jsonl` records the parented call without its
+    input, but the turn's `events.jsonl` — which critique already snapshots — carries `input.skill` on
+    the same frame, so the name is read from there rather than declared unrecoverable.
+- **`skillInvocationObserved` is now tri-state, and the text report SAYS when it is absent.** Absent
+  means "could not be observed or is ambiguous", never "no": the prompt or skill inventory was not
+  recorded; the sub-agent channel could not be read; a top-level `Skill` call's id could not be read
+  (the `(unknown)` sentinel); a bare `/name` that more than one staged skill answers to; or a plugin
+  that ships both `commands/<n>.md` and `skills/<n>/SKILL.md` (`vercel@0.48.0` does) — where the
+  `Skill` tool launches either through the same registry, so the shadow makes the **tool** channel
+  ambiguous too, not only the slash one. Each absence gets a NOTE naming the cause, so a `--skill` user
+  can tell "could not observe" from "not applicable". The new `commandShadowsSkill` field, and the
+  pre-existing `referenceAccessUnobservable`, are now declared in `schema/critique-report.json` — both
+  were emitted while the schema said `additionalProperties: false`, so every real report carrying either
+  failed validation; the tripwire test's fixture did not include them. `skillsInvoked` is deliberately
+  unchanged: it is a documented contract meaning "via the `Skill` tool" that the `skill_triggered`
+  assertion reads.
+- **`docs/critique.md` claimed off-allowlist `web_fetch` is "denied at `container`".** It is not: since
+  `a459c80` (2.4.0) the container tier registers the same host-side workspace handler as `hostloop`
+  under `coworkWebFetchViaApi`, so neither tier's `web_fetch` reaches the sidecar proxy, and a
+  provenanced URL consults no hostname allowlist on either tier. The way to tell the two apart in
+  `RunResult.egress` is `ts`: every proxy row carries one (stamped by its single log call, ahead of four
+  per-decision detail shapes); a `web_fetch` row is bare `{host, decision}`. `test/egress-entry-shape.test.ts`
+  pins both halves at their source, not at one of the four shapes. Added because the stale claim was found
+  by a consumer mis-reading a real run's `egress.log`, not by any guard.
 - **`mcp__workspace__web_fetch` could not reach any resolvable hostname** — every fetch to a non-literal-IP
   host died with `Fetch failed: Invalid IP address: undefined`, on both the provenanced (Path A) and
   allowlisted (Path B) paths. `pinnedRequest` overrides Node's DNS `lookup` so the address the SSRF
