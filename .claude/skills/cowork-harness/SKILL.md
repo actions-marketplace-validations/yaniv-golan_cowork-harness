@@ -568,7 +568,9 @@ Recognize these before "fixing" a non-bug:
 - **`missing_capability`** — the lean `core` agent image is a deliberate partial mirror of real Cowork's
   rootfs, so a skill that used `soffice`/LibreOffice (`office_convert`), `tesseract` (`ocr`),
   `markitdown`/`magika` (`ml_extract`), `cv2` (`cv`), `camelot`/`tabula` (`pdf_tables`), or `wand`
-  (`magick`) can trip this even though real Cowork **ships** those. The message says so ("likely a FALSE
+  (`magick`) can trip this even though real Cowork **ships** those (per the rootfs manifest captured at
+  Desktop `2.2553.1` — `baselines/provisioning/rootfs-provisioning.json`, which is the dated evidence
+  behind that sentence). The message says so ("likely a FALSE
   NEGATIVE (real Cowork ships them)"). Fix: rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`, point
   `COWORK_AGENT_IMAGE` at it), or — if the skill's fallback is genuinely equivalent — assert
   `allow_missing_capability: true`. (Two sources: a skill *observed using* an omitted family, live lane;

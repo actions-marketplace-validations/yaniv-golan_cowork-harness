@@ -49,6 +49,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **The "real Cowork ships them" claim behind `missing_capability` is now DATED, and was two baselines
+  stale.** `baselines/provisioning/rootfs-provisioning.json` — the captured rootfs toolchain that is the
+  sole evidence for that sentence — carried no Desktop version and no capture date, no shipped doc
+  referenced it, and `sync` never refreshes it (it needs a privileged loop-mount of the local
+  `rootfs.img`). It had last been captured 2026-08-29 from the Desktop 1.40609.0 rootfs; five baselines
+  shipped since with nothing saying so. Re-captured from the current rootfs (Desktop 2.2553.1, origin
+  `8825183…`): `tesseract-ocr` and the rest of the apt document stack unchanged, Node unchanged, 14
+  pip packages moved by a patch version (`pypdf` 6.15→6.18, `pikepdf`, `lxml`, `reportlab`, …), nothing
+  added or removed. The manifest now carries `desktopVersion`, `capturedAt` and `rootfsOrigin`;
+  `check:versions` invariant 14 fails when a shipped citation of it names a different Desktop version, or
+  when the manifest lags the newest baseline without the citation saying by how many; and the runtime
+  message itself now reads "likely a FALSE NEGATIVE (real Cowork ships them — per its rootfs manifest
+  captured at Desktop `X`)". A consumer who distrusted an inherited note now has the date to check.
 - **`critique --skill` is a NAME, not a path.** A selector such as `--skill ../../elsewhere` was joined
   onto `<plugin>/skills/` unchecked, so it resolved to a directory the mount can never contain and the
   packager graded it — and the same string was then used as the agent-match name, so no `agents/*.md`
@@ -69,6 +82,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **`COWORK_AGENT_IMAGE` governs the Bash sidecar at `hostloop` too, and is recorded in cassettes, not
+  `result.json`.** `docs/cli.md`'s entry said neither. hostloop's agent is a native host process, but its
+  `mcp__workspace__bash` runs in the Docker sidecar, so a full-parity image changes what a skill's
+  shell-outs find at either tier; the image tag + digest are stamped into a recorded cassette's
+  environment, while `result.json` records the fidelity tier only. A consumer asked both questions.
 - **The companion skill said a critique is "four model workloads"; it is up to four.** Evaluator pass 2
   is skipped entirely when no self-report was captured (nothing to verify), so a completed critique can be
   three workloads and its roll-up row covers three. `docs/critique.md` already said so; the shipped
