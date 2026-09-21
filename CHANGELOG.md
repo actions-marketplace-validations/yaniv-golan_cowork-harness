@@ -4,6 +4,51 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
+## [Unreleased]
+
+### Added
+
+- **`critique <skill-folder> [--skill <name>] --corpus-only [--output-format json] [--out <path>]` — NO
+  SPEND.** Runs the real packager (`packageEvidence`, the same call a paid critique makes, same
+  git-tracked filter, same 512 KiB ceiling) over an empty run dir and prints the six corpus fields —
+  `corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `corpusPackaged` / `corpusOmitted` —
+  then exits. `--prompt` becomes optional; every other flag is still parsed and type-checked as a
+  critique line, but a run-shaping one is not acted on and is named in `ignoredFlags` (JSON) and one
+  stderr line — a path value (`--upload`, `--folder`, `--plugin`) is only checked when a turn stages, so a
+  missing one does not fail the preview. Exit `0` means *measured*, even over the ceiling — it is a measurement, not a gate, so
+  gate yourself with `jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'`; exit `2` is a usage error, an
+  unresolvable target, no readable `SKILL.md`, a git work tree with 0 tracked files (mirrors staging's
+  own refusal), or a `--skill` subdirectory with nothing tracked under it (staging would mount the plugin
+  WITHOUT that skill, so a critique would grade a skill the agent never received). A folder that is not a
+  work tree is measured raw, exactly as staging copies it. **The number is a FLOOR**: a plugin-root reference
+  the agent READS during the graded turn is added to the corpus at critique time, so a paid run's
+  `corpusBytes` is always `>=` the preview's, and a `corpusOmitted[].reason` can change from `not-linked`
+  to `ambiguous-read` once a real run has happened.
+
+### Changed
+
+- **`critique`'s `--dry-run` refusal now names `--corpus-only`.** The rejection reason for `--dry-run` on
+  `critique` reads: "there is no meaningful two-turn preview — `critique --corpus-only` answers the
+  no-spend question for the evidence corpus, and `skill --dry-run` for the invocation plan" (previously it
+  named only `skill --dry-run`).
+- **The packager's over-ceiling `::warning::` line is tense-aware.** Under `critique --corpus-only` it now
+  reads "content WOULD BE cut before grading" instead of "content was cut before grading," so a CI
+  annotation from the no-spend preview never describes a grading that did not happen.
+
+### Upgrade notes
+
+- **If you followed 3.7.0's recommendation to pre-check the corpus with `lint-skill --strict`, know its
+  limits before relying on it further.** That instrument emits nothing below 80% of the evidence
+  ceiling — `lint-skill --json` prints `[]`, exit 0, indistinguishable from "counted, you're fine" — and
+  even where it emits, it diverges from what a critique actually packages on four measured axes: (1) it
+  counts an untracked file that staging would never deliver; (2) it cannot see a plugin-root reference the
+  graded agent only reaches by reading it during the run; (3) it counts a symlink pointing outside the
+  plugin that the packager's containment rule refuses; (4) it sums `st_size` while the packager measures
+  decoded UTF-8 length. `critique --corpus-only` (above) replaces it as the cheapest correct pre-check — it
+  IS the packager's own floor, computed by the packager — and it applies staging's git rules, which the
+  static count did not: a work tree with nothing tracked, or a `--skill` subdirectory with nothing tracked
+  under it, is refused, not counted.
+
 ## [3.7.0] — 2026-09-20
 
 > **Live-validated.** A full live pass ran on 2026-09-20 against `desktop-2.2553.1` / agent `2.1.275`,

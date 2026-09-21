@@ -44,8 +44,8 @@ trustworthy.
    before anything else is interpolated.
 5. **Evaluator pass 2 — adjudicating.** Everything pass 1 saw, **plus the self-report and pass 1's
    validated findings**. **Skipped entirely when no self-report was captured**, in which case the report
-   carries pass 1's independent findings alone — so a critique is up to four model workloads, not always
-   four.
+   carries pass 1's independent findings alone — so a critique is up to four model workloads (zero with
+   `--corpus-only`), not always four.
 
 ### Who sees what
 
@@ -221,8 +221,9 @@ It does **not** record their contents — see Known limitations.
 
 ## Cost and prerequisites
 
-- **Up to four model workloads per critique** — the two graded turns and the two evaluator passes of
-  [How it works](#how-it-works) (pass 2 is skipped when no self-report was captured).
+- **Up to four model workloads per critique (zero with `--corpus-only`)** — the two graded turns and the
+  two evaluator passes of [How it works](#how-it-works) (pass 2 is skipped when no self-report was
+  captured). See [Knowing before you pay](#knowing-before-you-pay) for the no-spend corpus check.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
@@ -370,6 +371,62 @@ it errs toward warning early either way, and a real report's `corpusCuts`/`corpu
 authority.
 On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
+
+### Knowing before you pay
+
+```bash
+cowork-harness critique ./my-skill --corpus-only
+cowork-harness critique ./my-plugin --skill my-skill --corpus-only --output-format json
+```
+
+NO SPEND — no session, no spawn, no model call. This runs the same `packageEvidence` call a paid
+critique makes, over an empty run dir, and stops. The text report is one block:
+
+```
+critique --corpus-only  .claude/skills/cowork-harness
+  evidence corpus (pre-run FLOOR): 281,029 B = 53.6% of the 524,288 B ceiling
+  packaged: 6 file(s)
+  lower bound — plugin-root references the agent READS during the graded turn are added at critique time, so a paid run's corpusBytes is >= this
+```
+
+(the harness's own bundled skill, on the tree this was written from — your numbers will differ)
+
+`--output-format json` emits the standard payload envelope (`{tool, command, ok, ...}` — `tool`/`command`
+are the discriminator; a critique **report** carries neither) with a `corpus` object holding the same six
+fields as `evidenceBudget` above (`trimRecord`/`packageTruncated` are absent — they describe a package a
+graded run produced) plus `ignoredFlags` (every run-shaping flag you passed that this mode parsed but
+did not act on) and the same `note`.
+
+**The number is a FLOOR, always.** A plugin-root reference the agent READS during the graded turn (not
+just linked from authored text) is added to the corpus at critique time — no static instrument can see
+that read — so a paid run's `corpusBytes` is `>=` the preview's, and a `corpusOmitted[].reason` can move
+from `not-linked` to `ambiguous-read` once a real run exists. Exit `0` means *measured*, even over the
+ceiling — it is a measurement, not a gate; gate yourself with `jq -e
+'.corpus.corpusBytes <= .corpus.corpusCeiling'`. Exit `2` covers a usage error, an unresolvable target, no
+readable `SKILL.md`, or a git work tree with 0 tracked files (mirrored from staging's own refusal; a
+folder that is not a work tree is measured raw, as staging copies it) — staging's git rules, which
+`lint-skill`'s static count never applied.
+
+**Why not just `lint-skill --strict`?** It's free and needs no git, but it diverges from what a critique
+actually packages on four measured axes: it counts (1) an untracked file staging would drop and (3) a
+symlink pointing outside the plugin that the packager's containment rule refuses — both **over-counts**
+— and it cannot see (2) a plugin-root reference read at run time, and (4) sums `st_size` where the
+packager measures decoded UTF-8 length — both **under-counts**. It also emits nothing below 80% of the
+ceiling, so a skill in that band gets no number at all. `--corpus-only` closes (1) and (3) by construction
+(it runs the real staging filter and the real containment rule) and states (2) as the floor rather than
+guessing at it.
+
+**Known gap — a skill that is a git submodule of its plugin, or any `--skill` subdirectory with nothing
+tracked under it.** Staging never delivers a gitlink's contents (nor an untracked subdirectory), so the
+mount carries an empty `skills/<name>/`; a LIVE critique's packager consults that directory's OWN git
+index (`corpusAcceptFor(skillDir)`) and packages `SKILL.md` anyway — grading a skill the agent never
+received. `--corpus-only` refuses both cases up front, in staging's terms (exit 2, "`skills/<name>/` has
+0 git-tracked files under …"). The live-packager side is pre-existing, rare, pinned by a test, and not
+fixed here.
+
+**`--dry-run` is refused on `critique`** with a reason pointing here: there is no meaningful two-turn
+preview, so `--corpus-only` answers the no-spend evidence-corpus question and `skill --dry-run` answers
+the no-spend invocation-plan question.
 
 **`scripts/` is outside the evaluator's corpus — deliberately, and with one consequence worth knowing.**
 The four classes above are the whole corpus: `SKILL.md`, the skill's own `references/**`, every

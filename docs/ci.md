@@ -61,6 +61,12 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 | **Token-free** (the headline lane) | `replay`, `lint`, `lint-skill`, `analyze-skill`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want. `lint`/`lint-skill` are thin passthroughs to the bundled `scenario.py` (python3, preinstalled on `ubuntu-latest`); `analyze-skill` is pure TS (no python3 needed) |
 | **Live** (`command: run`) | `run` | Docker + a provisioned agent binary + `anthropic-api-key` input | real inference against a live scenario — the action does **not** provision the agent binary or build the image for you (see [Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and the agent-binary provenance runbook in [`docs/maintenance.md`](./maintenance.md)); this is for a self-hosted runner that already has both staged, not a stock GitHub-hosted runner |
 
+**A free corpus pre-check before any paid `critique`:** `critique` is not an action `command`, but its
+no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^3 critique <folder> [--skill <name>]
+--corpus-only --output-format json | jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'` — and that
+`jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
+floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)).
+
 **Live lane, by design not oversight:** the action never downloads or stages the agent ELF itself.
 Pulling Anthropic's binary is a call about your own relationship with their distribution terms, so it
 stays a step in *your* workflow, not something a third-party action automates for you. A self-hosted-runner

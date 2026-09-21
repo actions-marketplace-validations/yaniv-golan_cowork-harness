@@ -131,6 +131,24 @@ has no run to read, so its number can under-report there. It also does not apply
 so an untracked skill-local reference inflates the figure the other way; `corpusCuts`/`corpusOmitted`
 below stay the authority.
 
+**Cheaper, and the packager's own floor: `critique <folder> --corpus-only`.** NO SPEND — no session, no spawn — it runs the
+same `packageEvidence` call a paid critique makes, over an empty run dir, and prints these six fields
+directly (`--output-format json` for the standard payload envelope; text mode prints the one-line
+percent-of-ceiling summary + packaged-file count). `--prompt` becomes optional; every other flag is still
+parsed and type-checked, but a run-shaping one is ignored and named in `ignoredFlags` (a path value such as
+`--upload` is only checked when a turn stages). The number is a FLOOR — a plugin-root
+reference the agent READS during the graded turn is added at critique time, so a paid run's `corpusBytes`
+is `>=` this. Exit 0 = measured (even over the ceiling — gate yourself on `corpusBytes <= corpusCeiling`);
+exit 2 = usage error, unresolvable target, no readable SKILL.md, or a work tree with 0 tracked files (a
+non-git folder is measured raw, as staging copies it). Unlike `lint-skill`'s static count, it IS the
+packager: untracked files and symlinks outside the plugin are excluded by the same filter and containment
+rule a critique applies, bytes are the same UTF-8-decoded measurement, and the one clause no static
+instrument can see (a plugin-root reference read at run time) is stated as the floor rather than guessed
+at. Known gap: a skill that is a git submodule of its plugin (or any `--skill` subdirectory with nothing
+tracked under it) is REFUSED by `--corpus-only` in staging's terms, but a live critique's packager still
+accepts it from the directory's own index and grades a skill the mount never delivers — pre-existing,
+rare, not fixed here.
+
 The report's `evidenceBudget` object says exactly what was shown — read it instead of inferring budgets
 from `dist/` source:
 

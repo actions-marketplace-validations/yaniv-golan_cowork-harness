@@ -2269,9 +2269,15 @@ def _lint_skill_corpus_size(md_path):
     content the packager would cut. A proximity check that greens a corpus destined to be cut is worse
     than no check.
 
-    Still approximate in ONE direction only, and it now over- rather than under-counts: the packager
-    applies staging's git-tracked filter, so an untracked reference inflates this figure. That errs
-    toward warning early. The report's corpusCuts stays the authority."""
+    It diverges from what a critique actually packages on four axes, two each way. OVER-counts: an untracked reference that staging would never deliver (the
+    packager applies staging's git-tracked filter; this walk does not), and a symlink pointing outside
+    the plugin, which the packager's containment rule refuses to follow. UNDER-counts: a plugin-root
+    reference the graded agent only reaches by reading it during the run (added to the corpus at
+    critique time -- invisible to any static count), and any byte that fails strict UTF-8 decoding, which
+    the packager replaces with a multi-byte U+FFFD that st_size never sees. `cowork-harness critique
+    <folder> --corpus-only` runs the packager's own packageEvidence call over an empty run and prints the
+    six corpus fields directly: the packager's own git filter, containment rule and byte measurement,
+    and a stated FLOOR for the run-time-read clause (a read can only add to it)."""
     skill_dir = Path(md_path).parent
     total = 0
     files = [Path(md_path)]

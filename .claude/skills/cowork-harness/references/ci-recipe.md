@@ -322,6 +322,16 @@ A typical skill repo runs four stages, fastest/cheapest first:
    literal only when your scenarios name a `fidelity:`; one still in the deprecation window prints one
    defaulted-fidelity notice per scenario.) A scenario that lints with only
    warnings can still be unloadable, so a green `lint` is not evidence the suite runs.
+
+   **If the repo pays for `critique`, gate the evidence corpus here first, for free:**
+
+   ```bash
+   cowork-harness critique <folder> [--skill <name>] --corpus-only --output-format json \
+     | jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'
+   ```
+
+   The `jq -e` IS the gate — `--corpus-only` exits 0 on a measurement even over the ceiling. Same
+   packager, same git filter as the paid run; the number is a floor (a run-time read can only add).
 3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
    Token-free; content + structure + gate delivery.
 4. **Parity / live (nightly, self-hosted)** — `cowork-harness run scenarios/` with a token + Docker +
