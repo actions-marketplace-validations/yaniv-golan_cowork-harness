@@ -163,6 +163,18 @@ export const KNOWN_BUILTIN_SKILLS: ReadonlySet<string> = new Set([
   "dataviz",
   "debug",
   "deep-research",
+  // EXTENDED 2026-09-18 (agent 2.1.275, Desktop 2.2553.1): surfaced on the first fresh `container`
+  // recording after this sync, on a cassette whose scenario declares `skills: []`. Product built-in by
+  // the same three criteria as the roster above: (1) recorded at `container`, which is SEALED (HOME=/tmp,
+  // no host ~/.claude) — stronger than the managed-config protocol case; (2) `"design"` is a bare quoted
+  // literal 18x in BOTH the staged agent ELF and the host CLI; (3) negative control — five personal skill
+  // names from the same machine (plaud-digest, overcut, docsend-to-pdf, skill-packager, proof-engine) are
+  // all 0 in that binary. Note it is NOT a new arrival in this agent: `design-consent` is present 4x in
+  // the 2.1.260 ELF too, and the design-consent/design-revoke SLASH COMMANDS were already in the
+  // previously shipped, guard-passing cassette. What changed is only that the feature now also registers
+  // in `skills[]` — an axis this scan treats more strictly than slash_commands — so allowlisting it
+  // publishes nothing that the cassette on main did not already carry.
+  "design",
   "design-sync",
   "doctor",
   "fewer-permission-prompts",

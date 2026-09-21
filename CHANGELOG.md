@@ -6,7 +6,403 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassettes: re-record ONLY a cassette that performs a `web_fetch` at `hostloop` or `container`;
+  everything else replays unchanged.** One emulated-tool change: `src/hostloop/workspace-handler.ts`'s
+  `pinnedRequest` (the `web_fetch` DNS pin, below) — a recording made before this fix froze `Fetch
+  failed: Invalid IP address: undefined` for every resolvable hostname, and a scenario asserting on that
+  fetch's outcome recorded the outage, not the behaviour. Nothing else on the record/replay path moved:
+  `src/runtime`, `src/staging`, `src/session.ts`, the spawn path, `baselines/` and the cassette constants
+  (`CASSETTE_VERSION` 12 / `MIN_SUPPORTED_CASSETTE_VERSION` 9) are untouched; the rest of the diff is
+  `src/critique/**`, one rejection string in `src/run/skill-flag-surface.ts`, docs and tests. (This
+  verdict line is now a fixed part of every release's upgrade notes — see
+  [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog reports no
+  tool-surface change" is a statement someone made, not an absence.)
+- **If you followed 3.7.0's recommendation to pre-check the corpus with `lint-skill --strict`, know its
+  limits before relying on it further.** That instrument emits nothing below 80% of the evidence
+  ceiling — `lint-skill --json` prints `[]`, exit 0, indistinguishable from "counted, you're fine" — and
+  even where it emits, it diverges from what a critique actually packages on four measured axes: (1) it
+  counts an untracked file that staging would never deliver; (2) it cannot see a plugin-root reference the
+  graded agent only reaches by reading it during the run; (3) it counts a symlink pointing outside the
+  plugin that the packager's containment rule refuses; (4) it sums `st_size` while the packager measures
+  decoded UTF-8 length — an axis that moves only where a file is NOT valid UTF-8 (each invalid byte becomes
+  a 3-byte U+FFFD); clean multibyte text round-trips byte-exact. `critique --corpus-only` (above) replaces it as the cheapest correct pre-check — it
+  IS the packager's own floor, computed by the packager — and it applies staging's git rules, which the
+  static count did not: a work tree with nothing tracked, or a `--skill` subdirectory with nothing tracked
+  under it, is refused, not counted.
+
 ### Added
+
+- **`critique <skill-folder> [--skill <name>] --corpus-only [--output-format json] [--out <path>]` — NO
+  SPEND.** Runs the real packager (`packageEvidence`, the same call a paid critique makes, same
+  git-tracked filter, same 512 KiB ceiling) over an empty run dir and prints the six corpus fields —
+  `corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `corpusPackaged` / `corpusOmitted` —
+  then exits. `--prompt` becomes optional; every other flag is still parsed and type-checked as a
+  critique line, but a run-shaping one is not acted on and is named in `ignoredFlags` (JSON) and one
+  stderr line — a path value (`--upload`, `--folder`, `--plugin`) is only checked when a turn stages, so a
+  missing one does not fail the preview. Exit `0` means *measured*, even over the ceiling — it is a measurement, not a gate, so
+  gate yourself with `jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'`; exit `2` is a usage error, an
+  unresolvable target, no readable `SKILL.md`, a git work tree with 0 tracked files (mirrors staging's
+  own refusal), or a `--skill` subdirectory with nothing tracked under it (staging would mount the plugin
+  WITHOUT that skill, so a critique would grade a skill the agent never received). A folder that is not a
+  work tree is measured raw, exactly as staging copies it. **The number is a FLOOR**: a plugin-root reference
+  the agent READS during the graded turn is added to the corpus at critique time, so a paid run's
+  `corpusBytes` is always `>=` the preview's, and a `corpusOmitted[].reason` can change from `not-linked`
+  to `ambiguous-read` once a real run has happened. The JSON is the standard `jsonPayloadEnvelope`
+  (`tool`/`command` are the discriminator; a critique REPORT carries neither) with a `corpus` object that is
+  a documented six-field subset of a report's `evidenceBudget`. Like the report, it is EXPERIMENTAL and
+  **not §12-frozen** — listed as such in SPEC.md alongside the report's own entry; parse it, but expect
+  additive change while it stabilizes.
+
+### Fixed
+
+- **`mcp__workspace__web_fetch` could not reach any resolvable hostname** — every fetch to a non-literal-IP
+  host died with `Fetch failed: Invalid IP address: undefined`, on both the provenanced (Path A) and
+  allowlisted (Path B) paths. `pinnedRequest` overrides Node's DNS `lookup` so the address the SSRF
+  backstop vetted is the one actually dialled, but it answered with the legacy `(err, address, family)`
+  triple only. `net.Socket.connect` asks for `{all: true}` whenever `autoSelectFamily` is on — Node's
+  **default since v20**, and this package has required `>=20` since its first commit — and then reads
+  `addresses[0].address` off what it expects to be an array. It read `.address` off a string, got
+  `undefined`, and threw. The override now honours `opts.all` and hands back **every** vetted address, so
+  Happy Eyeballs keeps its candidates. Literal-IP hosts were never affected: they skip pinning entirely.
+  **Two different outage windows, because the two tiers grew this path at different times** — `hostloop`
+  has been broken since the pinning landed in `90360f5` (2026-06-21, ~2.6 months); `container` only since
+  `a459c80` (2026-08-27, released in 2.4.0) gave it a host-routed web_fetch at all, and there only when
+  `coworkWebFetchViaApi` is on, which is every baseline from `desktop-1.13576.1` onward.
+- **`test/hostloop-webfetch-pinned-lookup.test.ts`** — the regression test, and the first thing in the repo
+  to execute `pinnedRequest` rather than imitate it. Every other web_fetch test injects a `rawFetch` fake;
+  one is named "pinnedRequest-style fake" and asserts against a hand-built copy of the function's return
+  value. **No test had ever run the function** — measured, not inferred: the full suite passes 6471/6471
+  against the pre-fix source with this file removed. No e2e scenario or cassette performs a `web_fetch`
+  either, so nothing else covered it. The new cases drive the real Node http stack over a loopback server
+  and cover the `{all: true}` shape, the forced-off legacy shape, the never-re-resolve guarantee, and a
+  multi-address pin whose first entry blackholes (which fails only if the fix stops returning all of them).
+- **The "real Cowork ships them" claim behind `missing_capability` is now DATED, and was two baselines
+  stale.** `baselines/provisioning/rootfs-provisioning.json` — the captured rootfs toolchain that is the
+  sole evidence for that sentence — carried no Desktop version and no capture date, no shipped doc
+  referenced it, and `sync` never refreshes it (it needs a privileged loop-mount of the local
+  `rootfs.img`). It had last been captured 2026-08-29 from the Desktop 1.40609.0 rootfs; five baselines
+  shipped since with nothing saying so. Re-captured from the current rootfs (Desktop 2.2553.1, origin
+  `8825183…`): `tesseract-ocr` and the rest of the apt document stack unchanged, Node unchanged, 14
+  pip packages moved by a patch version (`pypdf` 6.15→6.18, `pikepdf`, `lxml`, `reportlab`, …), nothing
+  added or removed. The manifest now carries `desktopVersion`, `capturedAt` and `rootfsOrigin`;
+  `check:versions` invariant 14 fails when a shipped citation of it names a different Desktop version, or
+  when the manifest lags the newest baseline without the citation saying by how many; and the runtime
+  message itself now reads "likely a FALSE NEGATIVE (real Cowork ships them — per its rootfs manifest
+  captured at Desktop `X`)". A consumer who distrusted an inherited note now has the date to check.
+- **`critique --skill` is a NAME, not a path.** A selector such as `--skill ../../elsewhere` was joined
+  onto `<plugin>/skills/` unchecked, so it resolved to a directory the mount can never contain and the
+  packager graded it — and the same string was then used as the agent-match name, so no `agents/*.md`
+  could ever match. Both turns still mounted the positional, so the evaluator judged content the agent
+  never had. The selector now goes through staging's own single-segment rule (`safePathSegment`): any
+  value containing `/`, `\\`, `:`, a control character, `.` or `..` is a usage error (exit 2) before
+  any spend, on the paid path and under `--corpus-only` alike.
+
+### Changed
+
+- **`critique`'s `--dry-run` refusal now names `--corpus-only`.** The rejection reason for `--dry-run` on
+  `critique` reads: "there is no meaningful two-turn preview — `critique --corpus-only` answers the
+  no-spend question for the evidence corpus, and `skill --dry-run` for the invocation plan" (previously it
+  named only `skill --dry-run`).
+- **The packager's over-ceiling `::warning::` line is tense-aware.** Under `critique --corpus-only` it now
+  reads "content WOULD BE cut before grading" instead of "content was cut before grading," so a CI
+  annotation from the no-spend preview never describes a grading that did not happen.
+
+### Documentation
+
+- **The bundled `scenario.py`'s functions and constants are declared NOT an API** (SPEC.md, the
+  not-covered list). The `lint` / `lint-skill` / `scaffold` subcommands are the surface; a consumer that
+  vendors or imports a `_helper` from the script is copying an implementation detail that may be renamed,
+  re-split or removed in any release. Prompted by a consumer who had vendored two of them to get the corpus
+  number the CLI did not expose — which is what `--corpus-only` now exposes.
+- **The remote lane's toolchain is a different image, not the local rootfs with extras** — stated with
+  numbers in `docs/fidelity-gaps.md`. A `pip list` from a session with "Only on this computer" OFF showed
+  pandas 3.0.2 / numpy 2.4.4 and fourteen packages (scipy, scikit-learn, playwright, `claude-agent-sdk`,
+  `mcp`, …) that the local rootfs, captured the same day at Desktop 2.2553.1, does not carry; the same
+  session with the setting ON matched the captured manifest exactly. A provisioning observation made
+  with the setting off is evidence about nothing this harness models.
+- **`COWORK_AGENT_IMAGE` governs the Bash sidecar at `hostloop` too, and is recorded in cassettes, not
+  `result.json`.** `docs/cli.md`'s entry said neither. hostloop's agent is a native host process, but its
+  `mcp__workspace__bash` runs in the Docker sidecar, so a full-parity image changes what a skill's
+  shell-outs find at either tier; the image tag + digest are stamped into a recorded cassette's
+  environment, while `result.json` records the fidelity tier only. A consumer asked both questions.
+- **The companion skill said a critique is "four model workloads"; it is up to four.** Evaluator pass 2
+  is skipped entirely when no self-report was captured (nothing to verify), so a completed critique can be
+  three workloads and its roll-up row covers three. `docs/critique.md` already said so; the shipped
+  `SKILL.md` and the in-plugin `references/critique.md` — the copy the skill-authoring agent reads —
+  stated the fixed count. Corrected to match.
+
+## [3.7.0] — 2026-09-20
+
+> **Live-validated.** A full live pass ran on 2026-09-20 against `desktop-2.2553.1` / agent `2.1.275`,
+> all four suites and all four tiers: `boundary-check` 6/6 · `npm run test:live` 19/19, zero skips ·
+> e2e self-tests 9/9 · `run examples/scenarios/` 7/7 on first run. Scope and caveats are in
+> [DESIGN.md](./DESIGN.md)'s "Scope of that claim" note, which is the single authority for the live pin.
+
+### Upgrade notes
+
+- **A `critique` on a multi-skill plugin now packages more than before**: the sub-agents the skill can
+  dispatch, and the plugin-root `references/` files it points at. Verdicts may shift — that is the point,
+  the evaluator was previously blind to that guidance — and a plugin already near the 512 KiB corpus
+  ceiling may newly see `corpusCuts`. `evidenceBudget.corpusPackaged` lists every file whose content actually shipped into the
+  corpus (a file the ceiling zeroed is not listed; a partially cut one is, with its loss in `corpusCuts`).
+- **If you wrote your own corpus/ceiling pre-check, it now UNDER-reports — silently.** The corpus was
+  documented as `SKILL.md` + the skill's `references/**` + `agents/<skill>.md`, and that formula was
+  correct until this release. It is now three classes short: every agent a pinned `subagent_type` literal
+  resolves to, every agent whose declared `name:` equals the skill name, and every plugin-root
+  `references/` file the skill points at. A guard written against the old formula does not error — it
+  returns a plausible number that is too small, which is the dangerous direction: over the ceiling the
+  failure mode is silent until someone reads `corpusCuts`, so a thin-margin skill is exactly where the
+  wrong number does the most damage. **This bit the harness's own bundled `scenario.py`**, whose
+  `_corpus_bytes` counted one agent file while the packager shipped N; it is fixed here, and a consumer
+  copy of that logic needs the same fix. Mirror `resolveDispatchableAgents` rather than reaching for
+  `agents/**` — a blanket glob counts agents the skill cannot dispatch and over-reports, which is a
+  different wrong number, not a safe one. Cheapest correct options: run `lint-skill --strict`, which now
+  counts the same four classes, or read `evidenceBudget.corpusBytes` off a real report.
+- **Verdicts can shift on a SINGLE-agent plugin too, if its agent's filename and declared `name:`
+  disagree.** The bullet above is about plugins with more than one agent, but the same filename-keyed
+  resolution had a worse failure at N=1: an `agents/redteam.md` declaring `name: market-sizing` matched
+  neither the filename lookup nor anything else, so the evaluator received an **empty** agent corpus and
+  graded the skill as though it had no sub-agent guidance at all. If that describes your plugin, expect a
+  larger verdict shift than a multi-agent one — you are going from nothing to something, not from one to
+  several. Check `evidenceBudget.corpusPackaged` on the first run after upgrading.
+- **If your plugin's `agents/` folder contains only subdirectories, `lint-skill --strict` may newly fail**
+  with `subagent-type-not-found-in-plugin`. The typo it names is real and was previously suppressed: the
+  linter could not enumerate nested agents, so it had nothing to check the pinned `subagent_type` against
+  and downgraded the finding to INFO. Nothing about your skill changed. A plugin with any top-level
+  `agents/*.md` is unaffected.
+
+### Fixed
+
+- **`critique` packaged exactly ONE sub-agent file, so a second agent's guidance was invisible to the
+  evaluator.** The graded turn mounts the whole plugin root, so any agent the skill dispatches really runs
+  — but the evidence corpus only ever carried `agents/<skill>.md`, resolved by FILENAME. A plugin with a
+  second, skill-scoped agent (`agents/<skill>-redteam.md`) had that agent's authored body structurally
+  absent, letting a critique report a guidance gap in an agent it never received. The corpus is now the
+  union of: `agents/<skill>.md`; every in-plugin agent a pinned `subagent_type` literal in the skill's
+  `SKILL.md` or `references/**` resolves to (by DECLARED frontmatter `name:`, not filename); and every
+  agent whose declared name equals the skill name — then a transitive closure, because an agent that
+  dispatches another agent had the same gap one level down. The union is deliberate: a skill that
+  dispatches dynamically keeps exactly the evidence it had before, so no plugin's corpus shrinks.
+  Reported by a `founder-skills` consumer.
+  - A blanket `agents/**` glob was measured and rejected: on that plugin's largest skill it produces a
+    534,867 B corpus against the 524,288 B ceiling — a real cut — while diluting the graded skill with
+    five other skills' agents.
+  - **Also fixed at N=1:** an agent whose frontmatter `name:` differed from its filename resolved to
+    nothing and was silently never packaged, however few agents the plugin had.
+- **A multi-skill plugin's SHARED plugin-root `references/` was outside the evaluator corpus.** The whole
+  plugin is mounted for the graded turn, so the agent could read those files while the evaluator could
+  not — on the plugin that reported this, `skills/cap-table/SKILL.md` links a 37,793 B shared
+  execution-model doc by name and the grader never saw it. The corpus now includes a plugin-root reference
+  when the graded skill points at it: from its own `SKILL.md` or `references/**`, from a sub-agent body
+  already in the corpus, or by the graded agent having read it during the run. Recognized link forms are
+  `${CLAUDE_PLUGIN_ROOT}/references/x.md`, `<plugin>/references/x.md`, and any relative path resolving
+  into that directory — a bare `references/x.md` still means the skill's OWN file.
+  - **Packaging the whole shared tree was measured and rejected.** It pushes that plugin's largest skill
+    to 107% of the ceiling and makes the allocator cut **the graded skill's own SKILL.md** by 37,295 B;
+    and because `already-covered` judges by presence with no notion of which skill authored a file,
+    another skill's shared docs would silently excuse a real gap — a true finding marked false.
+  - **What is left out is reported, not silent** — `evidenceBudget.corpusOmitted` names every unpackaged
+    plugin-root reference with a reason (`not-linked`, `not-utf8`, `ambiguous-read`), and the text report
+    renders it. That is what makes a narrow selection rule safe.
+  - Plugin-root references must be valid UTF-8; a binary asset (a font) is excluded as `not-utf8`. The
+    skill's own `references/**` keeps its deliberate no-filter rule — the asymmetry is documented.
+  - `lint-skill`'s ceiling sizing counts the same set (static clauses only; the read-during-the-run clause
+    cannot be mirrored statically). Verified byte-for-byte against the packager on a real 6-skill plugin.
+- **`evidenceBudget.corpusPackaged` listed files whose content never shipped.** Measured: a 300-file
+  corpus over the ceiling zeroed 45 of them and reported all 45 as packaged. Placeholders for unreadable
+  files were counted too — and consumed real ceiling allowance, against the ceiling's own "budgets file
+  content" contract — while the reference path had always skipped them. All three classes are consistent
+  now, and the field means what its name says.
+- **`evidenceBudget.corpusOmitted[].alsoUntracked`** distinguishes a plugin-root reference that is merely
+  unlinked from one staging would not deliver either — the two remedies `corpusOmitted` exists to keep
+  apart. THREE-state: absent means trackedness was not evaluated (git mode off, not a work tree, or an
+  unreadable index), never "tracked". Defaulting to `false` would have asserted a fact nothing established.
+- The corpus allocator and its cut ledger key on an internal tag, so a plugin named (or a plugin
+  DIRECTORY named) `agents` can no longer put a root reference and an agent file in one allowance slot,
+  nor let one file's zeroed row delete a different file's `corpusPackaged` listing. Displayed, cited and
+  reported strings are byte-identical. **The allocator half has no demonstrable output difference** — an
+  earlier review attributed a measured 11,388 B ceiling overshoot to this collision; re-measuring shows
+  the identical overshoot with a NON-colliding plugin name, so that was per-file header overhead, and I
+  could not construct an input distinguishing the two. It ships labelled as a correctness tidy. A first
+  cut of it also sorted the allocator's size tiebreak by the tag, which measurably reordered which
+  equal-sized files get zeroed — toward zeroing the skill's OWN references before the shared ones. The
+  tiebreak sorts by display key again: the tag decides identity, never priority.
+- **A resolved sub-agent whose file cannot be read is reported** (`corpusOmitted`, reason `unreadable`)
+  instead of appearing in no `evidenceBudget` field at all. It reaches the evaluator as a placeholder and
+  is not a corpus entry, so excluding it from `corpusPackaged` — correct on its own — had made it
+  invisible; trading a wrong label for silence breaks the rule that what is left out is reported.
+- **Section TITLES carried unsanitized third-party bytes.** `armor.ts` documented titles as trusted
+  ("never attacker bytes") — true until titles began interpolating an agent's frontmatter `name:`, a
+  filename, and the `via` provenance string. A block-scalar `name:` with newlines could forge a
+  `### [E-…] SKILL.md` heading that lands OUTSIDE any `⟦EVIDENCE-nonce⟧` fence, fabricating "SKILL.md
+  says …" claims that flip a real gap to `already-covered`; a filename could ship a verbatim truncation
+  marker, whose forgery routes claims to `not-adjudicable`. Titles are now sanitized at every
+  interpolation site AND flattened in `armorEvidence`, so the next interpolated title is safe by
+  construction rather than by remembering.
+- **The transitive agent closure did not run for the most likely dispatcher.** An agent reached by
+  clause 1 or 3 (the skill's own primary agent) was recorded but never scanned, so `agents/<skill>.md`
+  dispatching a second agent left that agent's body out of the corpus — the defect the closure exists to
+  close, one level down. Both the TypeScript resolver and the `scenario.py` mirror had it identically,
+  which is why the cross-language fixture agreed while both were wrong; the fixture now carries the case.
+- **A sibling skill's read could pull a plugin-root reference into this skill's corpus.** Read paths
+  collapse at the leftmost `/references/`, so `skills/other/references/shared.md` arrives indistinguishable
+  from the root file of that name. The ambiguity guard compared only against the graded skill's own
+  references; it now considers every skill's.
+- **`lint-skill` and the packager derived the plugin root differently outside `<root>/skills/<name>`.**
+  The linter used a layout rule and sized ZERO for a skill that is not under `skills/` but has a manifest
+  above it; it now walks up for the manifest first, falling back to the layout — neither rule alone
+  matches the packager.
+- **Link evidence now obeys corpus==mount.** A root reference linked only from an untracked agent body
+  was packaged on the strength of content staging never delivered.
+- A resolved link is matched by realpath identity rather than by reconstructing the walk's spelling, so a
+  case-only difference or a symlinked alias no longer resolves and then reports `not-linked` — an actively
+  wrong reason in the field the narrow selection rule depends on being truthful.
+- **`critique <plugin>/skills/<name>` packaged ZERO sub-agents** while `lint-skill` sized them for the
+  same tree — so the packager and the linter described different corpora for one plugin. Pointing
+  `critique` straight at a skill dir is an invocation `docs/critique.md` recommends alongside `--skill`,
+  but the plugin root was taken from the positional argument, and a skill dir has no `agents/` of its own.
+  It now walks UP for the enclosing plugin manifest, reusing `analyze-skill`'s `findEnclosingPluginDir`
+  rather than adding a third derivation of that rule. Pre-existing — the old code packaged no agents on
+  that branch either — and found while reviewing the change above.
+- **`lint-skill`'s corpus-ceiling sizing counted one agent while the packager shipped N.** It now sizes
+  the same resolved set (shared behavioural fixture, `test/fixtures/dispatchable-agents.json`, executed by
+  both the TypeScript and Python implementations). Without this, `skill-corpus-over-evidence-ceiling`
+  passed `--strict` on a corpus a critique would cut — for exactly the multi-agent plugins the warning
+  exists to protect.
+- **`analyze-skill --help` described its own directory scan wrongly.** It advertised a non-recursive
+  `agents/*.md`, and claimed a skill-dir target adds only the enclosing plugin's `agents/`; the code walks
+  `agents/**`, `references/**` and `commands/**` recursively. Stale independently of the change above.
+
+### Changed
+
+- **`CODE_OF_CONDUCT.md` now ships in the npm tarball** (`package.json` `files[]`). It was absent, and
+  `README.md`/`CONTRIBUTING.md` now link it, so an install would have carried two dead links.
+- **`lint-skill` now enumerates nested agents (`agents/sub/x.md`), not just `agents/*.md`.** Claude Code
+  discovers them and `skill-hash` already attributes them, so they were dispatchable but invisible to the
+  linter's `subagent_type` resolution. This moves severities in **both** directions:
+  - a literal naming a nested agent stops being a `subagent-type-not-found-in-plugin` **WARN** — that WARN
+    was a false positive, since the agent really is dispatchable; and
+  - **if your plugin's `agents/` directory contains only subdirectories, expect a new `--strict`
+    failure.** That set was previously empty, so every same-plugin literal fell through to
+    `subagent-type-unknown` (INFO, "can't confirm"). The plugin is now enumerable, so a genuinely typo'd
+    `<plugin>:<agent>` is reported as the WARN it always was. The finding is a true positive that was
+    being suppressed — but it is new output on an unchanged tree, and it gates `--strict`.
+
+### Added
+
+- **`evidenceBudget.corpusPackaged`** in the critique report and JSON schema — every corpus file whose
+  CONTENT shipped into the corpus sections, by the same key `corpusCuts` uses (a file the ceiling zeroed
+  is not listed; a partially cut one is, with its loss in `corpusCuts`). `corpusCuts`/`corpusExcluded` name files only when
+  something goes wrong with them, so nothing previously showed which sub-agent bodies a grade rested on.
+  Optional, and deliberately absent from the schema's `required`: stored reports predating it stay valid.
+- **`evidenceBudget.corpusOmitted`** in the critique report and JSON schema — every corpus file present
+  but NOT packaged, with the reason: `not-linked` (nothing in the skill's authored text, a packaged agent
+  body, or the graded agent's own read points at it), `not-utf8` (a plugin-root reference that is not
+  valid UTF-8, e.g. a font asset — the skill's **own** `references/**` has no such filter), `unreadable`
+  (a resolved sub-agent whose file could not be read, so the evaluator got a placeholder), or
+  `ambiguous-read` (the agent read a path that exists under both the skill's own `references/` and the
+  plugin root's, so which tree it read cannot be attributed). Each row may carry `alsoUntracked` —
+  THREE-state: `true`/`false` when trackedness was evaluated, and **absent**, never `false`, when it could
+  not be (git mode off, an unreadable index, a non-work-tree, or a work tree with nothing tracked).
+  Optional and absent from the schema's `required`, like `corpusPackaged`. The text report renders these
+  grouped by reason, with the untracked ones called out on their own line and their own remedy.
+- Each packaged agent section names **why** it is in the corpus (`skill-named`, or the `file:line` of the
+  `subagent_type` literal that pulled it in). The extraction has no context awareness, so a literal a
+  reference doc merely mentions — a template placeholder, a "never dispatch this" example — pulls its
+  agent in; the provenance lets the evaluator weigh that instead of reading it as operative guidance.
+
+### Documentation
+
+A documentation audit of the public surface. No behaviour changed; two entries below correct statements
+that were **wrong**, not merely terse.
+
+- **`--on-unanswered`'s documented default was wrong for a piped run.** `docs/cli.md` said the adaptive
+  default is "`prompt` on a TTY, `fail` in CI". The predicate is `isTTY && !CI`, so a **non-TTY, non-CI**
+  invocation — a driving agent shelling out with stdin piped, which is this project's core usage — gets
+  `fail`, not `prompt`. Corrected.
+- **The architecture diagrams drew the agent as `claude -p`.** `README.md` and `DESIGN.md` both labelled
+  the agent box `claude -p`, two sections below the argument for why Cowork is *not* `claude -p`. Only the
+  L0 `protocol` tier spawns `claude` from your `PATH`; `container`/`microvm` bind-mount the staged Linux
+  ELF (`claude-code-vm/<ver>/claude`) and `hostloop` spawns the staged **native macOS** binary directly on
+  the host. Both diagrams now say so.
+- **`docs/cli.md` carries the canonical "What ships" table.** Two pages pointed at a table that lived only
+  on the companion-skill install page — one of them said "the table above" with no table above it.
+- **"Commands at a glance" is readable.** Description cells ran to 1.7k characters (worst row: 1936
+  characters), which GitHub renders as an unscrollably wide table. Every description is now short; the flag
+  detail moved verbatim into **Flags worth knowing**, which is now a real heading you can link to.
+- **Contents lists** on `docs/scenario.md`, `docs/cassette.md`, `docs/subagents.md` and
+  `docs/fidelity-gaps.md` (1259–1389 lines each, none previously navigable without the right-rail outline).
+- **Each of the five fidelity pages now says what it is for** versus the other four (decide / enforce /
+  gaps / why / offline snapshot), so a reader landing mid-catalog can find the decision table.
+- **`CODE_OF_CONDUCT.md` is the full Contributor Covenant v2.1** with a named reporting address, replacing
+  a 7-line stub that adopted it by URL and pointed reports at a possibly-private profile email. It also
+  states where to report conduct concerning the sole maintainer, which neither channel can handle.
+- **`README.md` links Contributing / Conduct / Security.** None were reachable from the file npm and the
+  Action Marketplace render.
+- **Bug reports ask for `cowork-harness --version`**, and the baseline placeholder is current
+  (`desktop-2.2553.1` / agent `2.1.275`, was `desktop-1.12603.1` / `2.1.170`). Feature-request areas gained
+  the tiers and surfaces that shipped since they were written.
+- **`docs/protocol.md`'s v1 changelog warns that it is not in date order** and that its entries
+  cross-reference each other positionally, so a range edit anchored on two dates can swallow the entry
+  between them. It also points current live scope at `DESIGN.md`: the dated entries here pin the live pass
+  **as of their own date** and are never restamped.
+- Stale "README →" link text now says "CLI page →" where the target moved to `docs/cli.md`; the
+  `cli-help` guard's own names no longer claim to read the README.
+- Smaller corrections: `lint-skill`'s `python3` prerequisite, `lint`'s `*.yml` argument, `status`'s
+  `ps aux` rationale, `stats`' p50/p95 and `total=`, `critique`'s "not an independent attestation", and
+  `trace`'s per-failed-call stderr had all gone missing and are restored; a bash-block note claiming
+  `examples/scenarios/` ships only in a source checkout contradicted `package.json` `files[]`;
+  `docs/decisions/` now states that a record's context is frozen at its date.
+
+### Internal
+
+- **`npm run gen:surface` emits prettier-formatted output.** `JSON.stringify(x, null, 2)` puts every array
+  element on its own line while the committed baseline keeps short arrays inline at the repo's 140-column
+  width, so a regen reflowed ~460 untouched lines around whatever actually changed. Nothing was broken —
+  `test/surface-contract.test.ts` compares parsed data, not text — but a 468-line diff is one nobody reads
+  closely, and that snapshot exists precisely so a surface change DOES get read closely. It resolves
+  `.prettierrc` explicitly: `format({ filepath })` infers only the parser from the extension, so without
+  that the output formats at prettier's default 80 columns and still reflows.
+
+## [3.6.0] — 2026-09-18
+
+### Upgrade notes
+
+- **If you run against Claude Desktop 2.2553.1 (agent 2.1.275), upgrade — `critique` and `--decider-llm`
+  are broken on 3.5.0 there.** That agent makes an auxiliary Haiku call in `-p` mode, and 3.5.0's LLM
+  transport hard-fails on the two-model envelope it produces (`critique` exits 2 with no error text).
+  3.6.0 identifies the primary model instead of counting keys. Nothing changes on older agents.
+- **`latest` now resolves to `desktop-2.2553.1`.** A cassette you recorded against `1.46388.4` with
+  `baseline: latest` reports `baseline` staleness on replay (warn by default; `--strict` fails). Re-record
+  it, or pin the scenario to `desktop-1.46388.4` if you are not ready to move.
+- **The spawned agent's env gains `CLAUDE_CODE_DESKTOP_APP_VERSION`** on baselines from 2.2553.1 on. It
+  is the value the agent uses for the `anthropic-client-version` request header; older baselines are
+  unaffected. If you snapshot the spawn env, expect the new key.
+- **Every `-p` call and every run on agent 2.1.275 now carries a ~$0.001 Haiku entry** in `modelUsage`
+  and in the run result's cost. Cost comparisons across the 2.1.260→2.1.275 bump will show it — it is
+  the agent's spend, not the harness's.
+
+### Added
+- **Parity: baseline `desktop-2.2553.1` (agent 2.1.275)** — the first `2.x` Claude Desktop. `sync` refused
+  to write with **10 unknown deltas**; all are resolved and the baseline is clean. Two of the ten turned
+  out to be defects in this repo's own extractor rather than changes in Desktop:
+  - **The S6c Artifact-gate flag was a false alarm.** The frame-artifacts predicate is byte-identical; it
+    merely stopped being its own statement (it now shares a declaration with the Artifact host-grant
+    binding). The sentinel's value capture ran past the top-level comma and swallowed the sibling binding,
+    so an anchored whole-expression match rejected an unchanged predicate — and the message it printed
+    ("cached-arm/HIPAA/trailing-term change") was simply wrong. The value is now sliced brace/paren/quote
+    aware to the first top-level `,` or `;`. Both directions are pinned by tests: the sibling-binding shape
+    stays clean, and a real widening hidden before the comma still fires.
+  - **The path-gate tool set and path keys were refactored, not removed.** Desktop replaced two array
+    literals with one tool→path-key map plus `Object.keys` / `[...new Set(Object.values(…))]` derivations,
+    which accounted for 4 of the 10 deltas at once. Same five tools, same two keys — no contract change.
+    The extractor now accepts either form. The map is matched **exactly and in order**, because
+    `Object.keys` order reaches the sub-agent prompt through `.join(", ")` while the manifest fingerprint
+    hashes generator source — a reordered map would otherwise change what the model reads with every check
+    still green. Keys and values must resolve to the *same* map, and an ambiguous binding flags rather than
+    taking the first match: the bundle carries two more same-shaped maps that add Bash/NotebookEdit/MultiEdit.
 
 - **`npm run check:claims` — a staleness report for this repo's "binary-verified" claims.** It lists every
   version-stamped claim in `src/`, `scripts/` and `docs/` that is behind the currently pinned agent and
@@ -21,7 +417,7 @@ All notable changes to this project are documented here. The format is based on
   `docs/session.md`, `docs/subagents.md` or `src/session.ts` reintroduces the reversed order, which is the
   half CI can enforce and the way that claim went wrong in three places at once.
 
-**Why these two, stated plainly:** the repo carries ~49 version-stamped claims about the agent binary and,
+**Why these two:** the repo carries ~49 version-stamped claims about the agent binary and,
 before 3.5.0, exactly one was re-derived from the binary by a test. Both claims spot-checked during that
 release turned out wrong — the hook-event list and the model precedence. Two for two is not a sample that
 justifies leaving the rest unexamined, but it also does not justify pretending a report verifies them: it
@@ -29,41 +425,52 @@ shows the population and its age, and a human decides what to re-read.
 
 ### Fixed
 
-- **`critique`'s `skillInvocationObserved` reported `false` over runs that fully invoked the skill, and
-  `true` over runs that invoked nothing.** Two independent defects in one advisory field.
-  - It was a substring scan — `JSON.stringify(skillActivity).includes(name)` — over a structure that
-    also contains tool names and JSON keys. Measured against a real run with **zero** invocations, a
-    selector of `fetch`, `root` or `skill` reported `true`, and `root` collided with the `(root)`
-    sentinel itself. Selector forms `resolveCritiquedSkillDir` accepts (`./x`, `x/`, `skills/../x`)
-    false-negatived, because `path.join` normalised them but the raw string reached the scan. Ids are
-    now matched structurally: the exact id, or the `<plugin>:` qualified suffix, never a substring and
-    never a parenthesised sentinel.
-  - It was blind to the channel a `/plugin:skill` prompt actually uses. The binary auto-registers a
-    slash command per staged skill, and expanding one **inlines SKILL.md as a user message** — no
-    `Skill` tool call at all, so `skillsInvoked` is legitimately `[]`. Both producers gate on a
-    top-level `Skill` call, so the field read `false` over a graded run with 109 KB of SKILL.md in its
-    context. Detection now also reads the prompt against the init frame's staged-skill inventory
-    (`context.availableSkills`) — deliberately **not** its `slash_commands` list, which mixes plugin
-    commands with skills and carries no distinguisher, so keying off it would have accepted
-    `founder-skills:feedback` and `creative-problem-solving:ideas` (both real, both plain commands) as
-    skill invocations.
-- **`skillInvocationObserved` is now tri-state: absent means "could not be observed", never "no".** It
-  is omitted when the prompt or skill inventory was not recorded, when a plugin ships both a command
-  and a skill under one name (`vercel@0.48.0` does — one registered slash entry, and the run does not
-  say which ran; that case also gets a report line naming the collision so the author can rename one),
-  and when a `Skill` call inside a non-fork sub-agent is **seen but unnameable** — `timeline.jsonl`
-  records the parented call and carries no tool input. A run the harness cannot observe is no longer
-  reported as one that did not invoke. Both compromises are documented as known limitations rather than
-  left implicit. `skillsInvoked` is deliberately unchanged: it is a documented contract meaning "via
-  the `Skill` tool" that the `skill_triggered` assertion reads.
-- **`docs/critique.md` claimed off-allowlist `web_fetch` is "denied at `container`".** It is not: since
-  `a459c80` (2.4.0) the container tier registers the same host-side workspace handler as `hostloop`
-  under `coworkWebFetchViaApi`, so neither tier's `web_fetch` reaches the sidecar proxy, and a
-  provenanced URL consults no hostname allowlist on either tier. `test/egress-entry-shape.test.ts` now
-  pins the fact the corrected advice leans on — the proxy writes `{host, decision, port, reason}` and
-  the handler's `onEgress` writes `{host, decision}` at all 7 call sites — so it cannot go stale
-  silently. Added because the stale claim was found by a consumer mis-reading a real run's
-  `egress.log`, not by any guard.
+- **The LLM decider transport no longer hard-fails on agent 2.1.275's two-model envelope.** The agent that
+  ships with Desktop 2.2553.1 makes an auxiliary Haiku call in `-p` mode, so `claude -p --output-format json`
+  now reports two `modelUsage` keys where 2.1.260 reported one — measured with the same prompt and flags
+  against both native binaries. The transport asserted exactly one key, which turned **every** critique
+  evaluator pass and every `--decider-llm` gate into an instrument failure on the new agent (`critique`
+  exited 2 with no error text; found by the live lane, which had this test gated off in the previous pass).
+  The primary model is now *identified* as the key that resolves the requested `--model` (exact id, or the
+  id carrying a floating alias like `sonnet` as a dash-separated segment) rather than *assumed* from the
+  count. Zero or several keys resolving the request still fails closed — that ambiguity is the contract
+  break the check exists to catch. The whole usage map is still passed through, so the auxiliary call's
+  cost is not lost.
+- **The spawned agent now sends the client-identity headers production sends.** Desktop 2.2553.1 sets
+  `CLAUDE_CODE_DESKTOP_APP_VERSION` unconditionally on first-party sessions, and the agent reads it on the
+  `local-agent` entrypoint — which the harness pins — as the fallback source of the `anthropic-client-version`
+  header (its companion `anthropic-client-platform` is the hard-coded literal `desktop_app`) whenever
+  `ANTHROPIC_CUSTOM_HEADERS` carries none, which is the harness's case. The key is host-derived (an Electron `app.getVersion()` call), so it is allowlisted in the sync
+  **and** injected from the baseline's `appVersion` in both the container and native spawn envs — **version-gated** to baselines from 2.2553.1 on, since injecting it on an older baseline would hand the agent a key that baseline's Desktop never set (not symmetric with `CLAUDE_CODE_HOST_PLATFORM`, which every asar on record sets). Allowlisting
+  it alone would have been silent: the allowlist is consulted before the pin list and the key is not
+  required, so the harness would simply have stopped sending those headers with nothing failing.
+- **`CLAUDE_ARTIFACT_HOST_GRANT` is guarded, not merely allowlisted.** The new key is allowlisted on the
+  grounds that a default session never receives it — a claim that rests entirely on its guard. A new
+  sentinel requires it to stay gated on the *same* predicate as the Artifact tool spread, and fires if it
+  is ever constructed unconditionally or re-keyed. (The existing frame-artifacts assertion could not reach
+  it: the two spreads have different shapes.)
+- **`CLAUDE_CODE_DISABLE_CRON` gained a second disjunct** (a managed-settings scheduled-tasks switch). The
+  pinned value is unchanged at `"1"`, and it is *earned* rather than assumed — the spawn window still passes
+  `disableCron:!0`, which short-circuits. The resolver and its anchor admit the new shape; the disjunct is
+  not inert in general, only under that short-circuit.
+
+### Changed
+
+
+- `CLAUDE_CODE_MODEL_CATALOG` (new, third-party-only branch) is allowlisted, matching the standing rule for
+  third-party-only keys.
+- **`design` added to the host-inventory scan's known-built-in skill roster.** It surfaced as a finding on
+  the first fresh `container` recording after this sync, on a cassette whose scenario declares no skills.
+  It qualifies under the roster's existing three criteria: the recording was sealed (`container`, so
+  `HOME=/tmp` and no host `~/.claude`), `"design"` is a bare literal in both the staged agent ELF and the
+  host CLI, and five personal skill names from the same machine are absent from that binary. It is not new
+  to this agent — the `design-consent` / `design-revoke` slash commands were already in the previously
+  shipped cassette; what changed is that the feature now also registers in `skills[]`, an axis the scan
+  treats more strictly.
+- **All three committed cassettes in `examples/replays/` are re-recorded against `desktop-2.2553.1`**, each reporting no behavioural change versus the recording it replaced. The `protocol` fixture was recorded on the hermetic managed config dir (`ANTHROPIC_API_KEY` path) and the `container` one in a sealed container; `verify-cassettes` reports zero host-inventory findings on all three.
+- **A full live pass was run against `desktop-2.2553.1` / agent 2.1.275**, all four suites and all four tiers: `boundary-check` 6/6; e2e self-tests 9/9 including `smoke-l2-microvm` in a real VM and `smoke-multiselect-deciderdir` through the `--decider-llm` path; `npm run test:live` 19 tests, 18 passed, 1 failed, **0 skipped** (the previous pass had one skip — the hostloop `critique` case — which this pass exercised for the first time and which found the transport defect fixed above); `run examples/scenarios/` 7/7. The one live red is a pre-existing `live-matrix` case on old baselines where the model sometimes answers as text instead of calling `AskUserQuestion` — model variance, re-run and flipped, logged for hardening.
+- **`test/model-provenance.test.ts`'s pre-coverage-note test now builds its own fixture.** Every committed cassette now carries `model` coverage, so no shipped fixture emits the note the test reads. Rather than asserting the note's shape only when one happens to be present — a test that could not fail — it rewrites a real cassette's session fingerprint to the pre-`model` hash in a temp tree that preserves the relative session layout.
+
 
 ## [3.5.0] — 2026-09-06
 

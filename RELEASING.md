@@ -19,6 +19,14 @@ To actually run the live suite in CI, set the `ANTHROPIC_API_KEY` repo secret. T
 `SKIP_LIVE_SCENARIOS` override — the suite never hard-fails on a missing key, so there is nothing to
 override.
 
+> **Ran a live pass? Re-stamp `DESIGN.md`'s "Scope of that claim" note — it is the single authority for
+> the live pin,** naming the baseline, the agent version, which suites and which tiers. Nothing enforces
+> this, and that is deliberate: a cross-file "these three strings match" check is satisfiable by pasting
+> a digit without re-running anything, which is the copy-paste-satisfiable guard this repo has already
+> been burned by twice (see the reasoning at the top of `scripts/check-claims.ts`). The pin is stated
+> **once**; dated mentions elsewhere — a `CHANGELOG.md` release note, a `docs/protocol.md` changelog entry
+> — record what was true on their own date and are never restamped.
+
 ## The preferred three-phase sequence (branch → PR → merge → tag)
 
 CI triggers on pushes to `main`, on pull requests, and via manual `workflow_dispatch`. Pushing a release
@@ -175,6 +183,14 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
+- [ ] **State the cassette re-record verdict in the upgrade notes — positively, every release.** Either
+      `Cassettes: no re-record needed` (name the evidence: nothing under `src/runtime`, `src/hostloop`,
+      `src/staging`, `src/session.ts`, the spawn path, `baselines/`, or the cassette constants moved) or
+      `Cassettes: re-record — <what moved>`. Never leave it to absence: [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness)
+      tells consumers to re-record when the changelog *reports* a tool-surface/spawn-env/prompt change, so
+      a release that reports nothing reads as "unchanged" whether or not anyone checked — the same
+      silence-is-not-a-verdict failure the 3.8.0 corpus preview exists to close. A consumer diffed two
+      tags' `src/` by hand and still had to ask (2026-09-21) because the 3.7.0 notes said nothing either way.
 - [ ] Bump every version location (items 1–10) with **`npm run bump -- X.Y.Z --write`** — it rewrites all
       of them via targeted patterns and updates the lockfile + self-checks `check:versions` (run without
       `--write` first to preview the diff; dry-run is the default). It deliberately does **not** touch the

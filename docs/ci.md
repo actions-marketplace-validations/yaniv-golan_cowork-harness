@@ -61,6 +61,12 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 | **Token-free** (the headline lane) | `replay`, `lint`, `lint-skill`, `analyze-skill`, `verify-cassettes` | any `ubuntu-latest` | deterministic, no Docker, no API key, no agent binary — this is what most skill repos want. `lint`/`lint-skill` are thin passthroughs to the bundled `scenario.py` (python3, preinstalled on `ubuntu-latest`); `analyze-skill` is pure TS (no python3 needed) |
 | **Live** (`command: run`) | `run` | Docker + a provisioned agent binary + `anthropic-api-key` input | real inference against a live scenario — the action does **not** provision the agent binary or build the image for you (see [Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and the agent-binary provenance runbook in [`docs/maintenance.md`](./maintenance.md)); this is for a self-hosted runner that already has both staged, not a stock GitHub-hosted runner |
 
+**A free corpus pre-check before any paid `critique`:** `critique` is not an action `command`, but its
+no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^3 critique <folder> [--skill <name>]
+--corpus-only --output-format json | jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'` — and that
+`jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
+floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)).
+
 **Live lane, by design not oversight:** the action never downloads or stages the agent ELF itself.
 Pulling Anthropic's binary is a call about your own relationship with their distribution terms, so it
 stays a step in *your* workflow, not something a third-party action automates for you. A self-hosted-runner
@@ -74,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.260   # match your scenario's pinned baseline's agentVersion
+          V=2.1.275   # match your scenario's pinned baseline's agentVersion
           # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
           # served only from .../claude-code-releases/rc/<commit>/ — the stable path 404s for those, and
           # 2.1.255 is one. Take B from your pinned baseline's agentBinary.releaseBaseUrl; baselines
@@ -97,7 +103,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^3` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^3.5.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^3` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^3.7.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN/INFO), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
 
 CI uses `ANTHROPIC_API_KEY` specifically because there's no interactive browser available to run
 `claude setup-token`'s OAuth flow in a GitHub Actions runner; locally, the OAuth token is preferred because

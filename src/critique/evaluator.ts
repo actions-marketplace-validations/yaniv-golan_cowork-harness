@@ -3,6 +3,7 @@ import type { Complete } from "../decide/decider.js";
 import { extractAllJsonObjects } from "../decide/semantic-judge.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
 import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEvidence, type EvidenceSection } from "./armor.js";
+import { ROOT_REFERENCE_SECTION_PREFIX, AGENT_SECTION_PREFIX } from "./package-evidence.js";
 
 // The two-pass, tool-less evaluator. Reuses the shared `claude -p` transport (same reasoning as
 // `semantic-judge.ts`: the harness process itself is not behind the egress proxy, so a direct API call
@@ -322,7 +323,8 @@ Look for concrete, skill-improvement-relevant findings, e.g.:
   absent path is weak evidence and never proof the agent did not read the file: do NOT issue a finding
   whose only support is a path missing from it;
 - the transcript shows the agent guessing, backtracking, or asking a question that SKILL.md or a
-  references/ file already appears to answer (check the "SKILL.md" and "references/ available" sections);
+  references/ file already appears to answer (check the "SKILL.md", "references/ available",
+  "${AGENT_SECTION_PREFIX}" and "${ROOT_REFERENCE_SECTION_PREFIX}" sections);
 - redundant or wasted tool calls (see toolCounts/skillActivity) that a clearer instruction would avoid;
 - a sub-agent dispatch whose declared type/description suggests it duplicated work the main agent could
   have done directly, or vice versa.
@@ -335,8 +337,9 @@ that classification is reserved for verifying an EXTERNAL claim against the evid
 own findings.
 
 A missing or unclear instruction is a legitimate "grounded-and-actionable" finding EVEN IF the final answer
-turned out correct — judge whether the skill's text PROVIDED the guidance (check the SKILL.md / references
-sections), not whether the agent happened to manage without it. The agent succeeding is not evidence that
+turned out correct — judge whether the skill's text PROVIDED the guidance (check the SKILL.md, references,
+"${AGENT_SECTION_PREFIX}" and "${ROOT_REFERENCE_SECTION_PREFIX}" sections), not whether the agent happened
+to manage without it. The agent succeeding is not evidence that
 the guidance existed.
 
 Every item's "evidence" field MUST be a VERBATIM excerpt copied exactly from the evidence package above
@@ -443,16 +446,20 @@ classification by checking it against the evidence package:
   Be careful with referencesAccessed here: only its "read" channel is strong evidence the agent opened
   the file. Do NOT call a claim confabulated on a "bash" or "grep" entry alone — those mean a command
   named the path, which is weaker.
-- "already-covered": SKILL.md or a references/ file (see those sections) already covers this; the agent
-  overlooked or didn't act on existing guidance.
+- "already-covered": SKILL.md, a references/ file, an "${AGENT_SECTION_PREFIX}" section (a sub-agent's own
+  system prompt — authored guidance for the work that agent does), or a "${ROOT_REFERENCE_SECTION_PREFIX}"
+  section (see those sections) already covers this; the agent overlooked or didn't act on existing guidance. A
+  plugin-root reference section names why it is in the corpus: one the skill's own text links is its
+  guidance; one included only because the agent READ it is shared material the skill never pointed at, so
+  weigh it accordingly.
 - "not-adjudicable": the evidence CANNOT decide this claim — for example, a complaint about SKILL.md-
   resident guidance that the agent read but the evidence has no way to confirm was actually consulted (the
   full document is delivered as text, not logged as a Read), or a claim about what happened INSIDE a
   dispatched sub-agent (its internal tool calls aren't in this evidence). Use this rather than guessing a
   grounded/confabulated verdict you cannot actually support.
 
-A "the skill never says X" / missing-guidance complaint is judged by whether the SKILL.md and references
-sections shown actually contain X: if they don't, it is "grounded-and-actionable" (a real gap); if they do,
+A "the skill never says X" / missing-guidance complaint is judged by whether the SKILL.md, references,
+"${AGENT_SECTION_PREFIX}" and "${ROOT_REFERENCE_SECTION_PREFIX}" sections shown actually contain X: if they don't, it is "grounded-and-actionable" (a real gap); if they do,
 it is "already-covered". It is "confabulated" ONLY when the evidence POSITIVELY contradicts the claim (the
 skill demonstrably DOES state X, or a described event demonstrably did not occur). The agent still producing
 a correct answer is NOT a contradiction of a guidance gap — a gap is real even when the agent guessed well.
@@ -628,7 +635,9 @@ export async function runCritique(
 
 /** F31: mechanically force-downgrade every `"already-covered"` item to `"not-adjudicable"` (clearing its
  *  `evidence`, which `not-adjudicable` doesn't require). `"already-covered"` is, per both prompts' own
- *  classification rubric, ALWAYS a claim that "SKILL.md or a references/ file already covers this" — so
+ *  classification rubric, ALWAYS a claim that some packaged AUTHORED-GUIDANCE section — SKILL.md, a
+ *  references/ file, a sub-agent body, or a plugin-root reference — already covers this. SKILL.md is the
+ *  one whose absence cannot be worked around, so
  *  when the packaged SKILL.md source could not be confirmed readable, that specific verdict cannot be
  *  truthfully asserted, regardless of whether the model heeded `skillMdUnreadableCaveat(nonce)`. Every OTHER
  *  classification is left untouched (a `"grounded-and-actionable"` finding may be about something entirely

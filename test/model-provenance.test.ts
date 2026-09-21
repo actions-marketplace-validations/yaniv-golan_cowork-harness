@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { loadBaseline } from "../src/baseline.js";
+import { buildSessionFingerprint } from "../src/run/cassette.js";
 import { loadSession, buildLaunchPlan, applySessionOverrides } from "../src/session.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { Run } from "../src/run/run.js";
@@ -428,13 +429,35 @@ describe("model_fallback surfaces through a real replay", () => {
  *  so LENGTH is the part that was ours to fix: the note states what and what-to-do, and the reasoning
  *  lives in docs/fidelity-gaps.md where it is read once instead of N times. */
 describe("the pre-coverage note stays terse", () => {
+  // Since the 2.2553.1 re-records EVERY committed cassette carries `model` coverage, so no committed
+  // fixture emits this note any more — which is the right end state, and also the reason this test can
+  // no longer read it off `examples/replays`. Build a pre-coverage cassette SYNTHETICALLY instead: a real
+  // cassette whose sessionFingerprint is rewritten to the pre-`model` hash, in a temp tree that keeps the
+  // relative `../../e2e/sessions/…` layout so the session still resolves. The alternative — "assert the
+  // note's shape only when one is present" — would be a test that cannot fail.
+  const preCoverageDir = (): string => {
+    const src = resolve("examples/replays/example-multiselect-gate.cassette.json");
+    const cassette = JSON.parse(readFileSync(src, "utf8"));
+    const root = mkdtempSync(join(tmpdir(), "cwh-precov-"));
+    const replays = join(root, "examples", "replays");
+    const sessions = join(root, "e2e", "sessions");
+    mkdirSync(replays, { recursive: true });
+    mkdirSync(sessions, { recursive: true });
+    copyFileSync(resolve("e2e/sessions/minimal.yaml"), join(sessions, "minimal.yaml"));
+    const preModel = buildSessionFingerprint(cassette.scenario.session, replays, undefined, { omitModel: true });
+    expect(preModel, "could not build the pre-`model` fingerprint for the synthetic fixture").toBeDefined();
+    cassette.sessionFingerprint = preModel;
+    writeFileSync(join(replays, "precoverage.cassette.json"), JSON.stringify(cassette));
+    return replays;
+  };
+
   it("is one line, in the same register as the prompt-assets note beside it", () => {
-    const out = spawnSync("npx", ["tsx", "src/cli.ts", "verify-cassettes", "examples/replays"], {
+    const out = spawnSync("npx", ["tsx", "src/cli.ts", "verify-cassettes", preCoverageDir()], {
       encoding: "utf8",
       cwd: resolve("."),
     });
     const line = `${out.stdout}${out.stderr}`.split("\n").find((l) => l.includes("[note] session-fingerprint"));
-    expect(line, "expected a pre-coverage note on the committed example cassettes").toBeDefined();
+    expect(line, "expected a pre-coverage note on the synthetic pre-`model` cassette").toBeDefined();
     const message = line!.split("[note] ")[1];
     // The prompt-assets precedent is ~130 chars. A paragraph here regressed to ~370.
     expect(message.length).toBeLessThan(200);

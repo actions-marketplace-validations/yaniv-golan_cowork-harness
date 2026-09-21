@@ -35,6 +35,8 @@ see [ci-recipe.md](./.claude/skills/cowork-harness/references/ci-recipe.md).
 
 > **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
 
+By participating you agree to the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
 ## Project layout
 
 ```
@@ -54,13 +56,22 @@ src/
   boundary.ts         sandbox self-test probes
   assert.ts           synchronous assertion evaluator
   sync/               cowork-sync — derive platform baselines from the live app
+  prompt/ prompt.ts   system-prompt assembly (Cowork append, sub-agent append)
+  redact.ts scan.ts   cassette redaction + the privacy scan behind `verify-cassettes`
 test/                 vitest unit tests
   fixtures/           unit-test fixtures
 baselines/             committed platform baselines (one per Desktop release)
 examples/             user-facing worked examples (CI-verified): scenarios/ sessions/ skills/ data/
 e2e/                  the harness's own fidelity self-tests: scenarios/ sessions/
 fixtures/             harness runtime fixtures (protocol/ golden control-response vectors)
-docs/                 guides + references
+docs/                 guides + references (docs/internal/ is gitignored — never cite it from shipped files)
+schema/                published JSON schemas; scenario.schema.json is GENERATED (`npm run schema`)
+python/                the `cowork` pytest-lane helper package (its own README + tests)
+docker/                Dockerfile.agent — the core/full-parity agent images
+scripts/               release + drift checkers (check:versions, check:claims, check:surface, …)
+action.yml             the packaged GitHub Action (docs/ci.md is its README)
+.claude/skills/        the companion skill that ships to the plugin marketplace
+.githooks/             pre-commit cassette gate (wired by `npm install`)
 ```
 
 Paths inside a scenario/session resolve relative to that file (see [docs/session.md](./docs/session.md#path-expansion)), so each `examples/`/`e2e/` bundle is self-contained.
@@ -71,7 +82,7 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Don't weaken the boundary.** Changes to `src/runtime/container.ts`, `src/egress/sidecar.ts` (the live per-run network/egress enforcer — `docker/compose.yml` is a standalone reference shape only, not invoked), or `docker/compose.yml` must keep the default-deny network + sealed FS. Run `cowork-harness boundary-check` and add/adjust a probe in `src/boundary.ts` if you change the model.
 - **Mark unverified code.** Anything not yet run end-to-end against a live agent gets a `// UNVERIFIED` comment so reviewers know.
 - **Add a test.** New schema fields, `Decider` rules, or egress logic need a unit test in `test/`. Examples must validate (`test/examples.test.ts`).
-- **Consumer-visible workflow changes update the skill.** A change a scenario author would act on — a new assertion key, cassette field, CLI command, or a changed record/replay/verify workflow — must land with a matching update to `.claude/skills/cowork-harness/` (SKILL.md or `references/`). The machine-checkable slices are enforced (`test/skill-docs-sync.test.ts` pins the skill against the assertion-key catalog and the cassette schema's field list; `test/cli-help.test.ts` pins the README command table); prose workflows are on you — this checklist line exists because `effectiveFidelity` shipped consumer-visible and stayed undocumented in the skill until an external consumer flagged it.
+- **Consumer-visible workflow changes update the skill.** A change a scenario author would act on — a new assertion key, cassette field, CLI command, or a changed record/replay/verify workflow — must land with a matching update to `.claude/skills/cowork-harness/` (SKILL.md or `references/`). The machine-checkable slices are enforced (`test/skill-docs-sync.test.ts` pins the skill against the assertion-key catalog and the cassette schema's field list; `test/cli-help.test.ts` pins the `docs/cli.md` command table); prose workflows are on you — this checklist line exists because `effectiveFidelity` shipped consumer-visible and stayed undocumented in the skill until an external consumer flagged it.
 - **Typecheck.** `npm test` is `vitest run` — it strips types and does **not** typecheck. `tsconfig.json` covers only `src`; test files are typechecked solely by `tsconfig.test.json`, i.e. only via `npm run typecheck` (which `npm run ci` runs). After editing `src/`, run `npm run typecheck`, not just `npm test`.
 - **Format.** `npm run format:check` must pass (`npm run format:write` to fix).
 
@@ -121,7 +132,7 @@ The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-har
 | **build** | format check · version-lockstep guard · typecheck · source guards · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
 | **test** | the unit suite (vitest), sharded 4-way | nothing | every push/PR |
 | **floor** | the unit suite once, unsharded, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line) | nothing | every push/PR; gates the merge context |
-| **action-self-test** | packs this commit and runs the packaged `uses: ./` Action across its full case set — pass (committed example cassette), usage-error fail (nonexistent path), assertion fail (checks the reporter renders a ❌ row), `lint`, and `analyze-skill`; `ci.yml` currently carries 11 `command:` invocations, so re-count here rather than trusting this sentence | nothing | every push/PR |
+| **action-self-test** | packs this commit and runs the packaged `uses: ./` Action across its full case set — pass (committed example cassette), usage-error fail (nonexistent path), assertion fail (checks the reporter renders a ❌ row), `lint`, and `analyze-skill`; `ci.yml` currently runs the packaged action **5** times (3 × `replay`, then `lint` and `analyze-skill`) — count the `with: command:` keys, not a bare `grep -c 'command:'`, which also matches step names and log strings | nothing | every push/PR |
 | **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR |
 | **boundary** | builds the pinned agent image, brings up the default-deny network, runs `boundary-check`, then `npm run test:live` (live contract tests that guard the binary-resolution assumptions, no token needed) | Docker, arm64 runner | proves the sandbox enforces Cowork's limits — **no API key** |
 | **image-recipe** | compiles `docker/Dockerfile.agent` in **both** variants (lean/core and `COWORK_FULL_PARITY=1`) on an arm64 runner, so a recipe change cannot reach the merge gate uncompiled | Docker, arm64 runner | every push/PR; gates the merge context |
@@ -139,7 +150,7 @@ npm test              # vitest: decider, egress allowlist, launch plan, example 
 cowork-harness boundary-check   # self-verify the sandbox (needs Docker; not part of `npm run ci`)
 ```
 
-Unit tests cover the scripted-answer logic, the egress allowlist matcher, the session→launch-plan materialization (mounts + discovery settings + env-strip), and a **schema guard** that fails if any shipped baseline/session/scenario stops validating. Add a test alongside any new schema field or `Decider` rule — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+Unit tests cover the scripted-answer logic, the egress allowlist matcher, the session→launch-plan materialization (mounts + discovery settings + env-strip), and a **schema guard** that fails if any shipped baseline/session/scenario stops validating. Add a test alongside any new schema field or `Decider` rule.
 
 > Copy your starting scenarios/sessions from **`examples/`**. The **`e2e/`** directory is the harness's *own* fidelity self-tests (smoke scenarios per tier) — not a template to copy.
 

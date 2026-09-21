@@ -39,6 +39,16 @@ case "$FAKE_MODE" in
   zero-models)
     echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{}}'
     exit 0 ;;
+  aux-model)
+    # The REAL agent 2.1.275 shape for --model sonnet: an auxiliary haiku call beside the requested turn.
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":897,"outputTokens":8},"claude-sonnet-5":{"inputTokens":2,"outputTokens":4}}}'
+    exit 0 ;;
+  aux-ambiguous)
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-sonnet-5":{},"claude-sonnet-5[1m]":{}}}'
+    exit 0 ;;
+  aux-none)
+    echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-haiku-4-5-20251001":{},"claude-opus-5":{}}}'
+    exit 0 ;;
   *)
     echo '{"type":"result","is_error":false,"result":"OK-ANSWER","modelUsage":{"claude-sonnet-5":{}}}'; exit 0 ;;
 esac
@@ -99,7 +109,50 @@ describe("claudeCliComplete — retry transport", () => {
   it("a clean exit with zero resolved models fails loud (never records an unknown/empty model)", async () => {
     process.env.FAKE_MODE = "zero-models";
     process.env.FAKE_COUNTER = counterPath;
-    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/modelUsage has 0 keys/);
+    await expect(claudeCliComplete("q", "m")).rejects.toThrow(/modelUsage is empty/);
+  });
+
+  // Agent 2.1.275 (Desktop 2.2553.1) added an AUXILIARY haiku call in `-p` mode, so `modelUsage` carries
+  // two keys where 2.1.260 carried one — bracketed live against both native binaries with the same prompt
+  // and flags. The old "exactly 1 key" contract turned every critique evaluator pass and every
+  // --decider-llm gate into an instrument failure on the new agent. The primary model is now the key that
+  // RESOLVES the requested model; ambiguity still fails closed.
+  describe("agent 2.1.275: an auxiliary model beside the requested one", () => {
+    it("resolves a floating alias to the concrete id that carries it, and keeps the whole usage map", async () => {
+      process.env.FAKE_MODE = "aux-model";
+      process.env.FAKE_COUNTER = counterPath;
+      const r = await claudeCliComplete("q", "sonnet");
+      expect(r.text).toBe("OK-ANSWER");
+      expect(r.model).toBe("claude-sonnet-5"); // never the haiku side-call, never the alias
+      // The auxiliary call is real spend — it must not vanish from cost accounting.
+      expect(Object.keys(r.usage ?? {}).sort()).toEqual(["claude-haiku-4-5-20251001", "claude-sonnet-5"]);
+    });
+
+    it("resolves an exact concrete id the same way", async () => {
+      process.env.FAKE_MODE = "aux-model";
+      process.env.FAKE_COUNTER = counterPath;
+      expect((await claudeCliComplete("q", "claude-sonnet-5")).model).toBe("claude-sonnet-5");
+    });
+
+    it("two keys that BOTH resolve the request is still a contract break (fails closed)", async () => {
+      process.env.FAKE_MODE = "aux-ambiguous";
+      process.env.FAKE_COUNTER = counterPath;
+      await expect(claudeCliComplete("q", "sonnet")).rejects.toThrow(/2 of them resolve the requested model "sonnet"/);
+    });
+
+    it("two keys and NEITHER resolves the request is a contract break (the requested model is not what ran)", async () => {
+      process.env.FAKE_MODE = "aux-none";
+      process.env.FAKE_COUNTER = counterPath;
+      await expect(claudeCliComplete("q", "sonnet")).rejects.toThrow(/0 of them resolve the requested model "sonnet"/);
+    });
+
+    it("alias matching is by dash-segment, not substring", async () => {
+      process.env.FAKE_MODE = "aux-none"; // keys: claude-haiku-4-5-20251001, claude-opus-5
+      process.env.FAKE_COUNTER = counterPath;
+      // "opus" is a segment of claude-opus-5 → resolves; "op" is a substring only → must NOT.
+      expect((await claudeCliComplete("q", "opus")).model).toBe("claude-opus-5");
+      await expect(claudeCliComplete("q", "op")).rejects.toThrow(/0 of them resolve/);
+    });
   });
 
   it("exhausts the bounded retries then fails loud, with the child's STDOUT folded into the message", async () => {

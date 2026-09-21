@@ -198,39 +198,39 @@ describe("cli dispatch ↔ COMMANDS ↔ HELP membership", () => {
 // Docs guard: a command added to the COMMANDS allowlist but forgotten in docs/cli.md's "Commands at
 // a glance" table is undiscoverable from the docs a user actually reads first. Source of truth =
 // the same COMMANDS array parsed above (re-parsed here so this block stands alone).
-describe("cli COMMANDS ↔ README 'Commands at a glance' table", () => {
+describe("cli COMMANDS ↔ docs/cli.md 'Commands at a glance' table", () => {
   const src = readFileSync(resolve("src/cli.ts"), "utf8");
   const arr = src.indexOf("const COMMANDS = [");
   const arrBlock = src.slice(arr, src.indexOf("];", arr));
   const commands = [...arrBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 
-  const readme = readFileSync(resolve("docs/cli.md"), "utf8");
-  const tableStart = readme.indexOf("## Commands at a glance");
-  const tableEnd = readme.indexOf("\n## ", tableStart + 1);
-  const tableBlock = readme.slice(tableStart, tableEnd === -1 ? undefined : tableEnd);
+  const cliDoc = readFileSync(resolve("docs/cli.md"), "utf8");
+  const tableStart = cliDoc.indexOf("## Commands at a glance");
+  const tableEnd = cliDoc.indexOf("\n## ", tableStart + 1);
+  const tableBlock = cliDoc.slice(tableStart, tableEnd === -1 ? undefined : tableEnd);
 
   // Pull the first (command) cell out of every table row, then every backtick-quoted name inside
   // it — some rows pack two commands into one cell (e.g. "`record` / `replay`", "`gates` / `answer`",
   // "`sync` / `list`"), so a row can contribute more than one command name. Cells routinely contain
   // an escaped pipe (e.g. "`verify-cassettes <file\|dir>`") to show an alternation without breaking
   // the table, so the cell boundary must skip `\|` rather than stopping at it.
-  const readmeCommands = new Set<string>();
+  const docCommands = new Set<string>();
   for (const line of tableBlock.split("\n")) {
     if (!line.startsWith("|")) continue;
     const cell = line.match(/^\|\s*((?:\\.|[^|\\])*?)\s*\|/);
     if (!cell) continue;
     for (const span of cell[1].matchAll(/`([^`]+)`/g)) {
       const name = span[1].match(/^[a-zA-Z][a-zA-Z0-9-]*/);
-      if (name) readmeCommands.add(name[0]);
+      if (name) docCommands.add(name[0]);
     }
   }
 
-  it("parsed a sane README command set", () => {
-    expect(readmeCommands.size).toBeGreaterThan(10);
+  it("parsed a sane docs/cli.md command set", () => {
+    expect(docCommands.size).toBeGreaterThan(10);
   });
 
-  it("every COMMANDS entry appears in the README 'Commands at a glance' table", () => {
-    const missing = commands.filter((c) => !readmeCommands.has(c));
+  it("every COMMANDS entry appears in the docs/cli.md 'Commands at a glance' table", () => {
+    const missing = commands.filter((c) => !docCommands.has(c));
     expect(missing).toEqual([]);
   });
 
@@ -241,7 +241,7 @@ describe("cli COMMANDS ↔ README 'Commands at a glance' table", () => {
   // span's leading token parses as the literal "python3" (never a COMMANDS member). Those spans are
   // skipped explicitly below — by token or by the cell containing `scenario.py` — rather than widening
   // COMMANDS to paper over a bundled-script example, so the exemption stays auditable.
-  const readmeCommandsStrict = new Set<string>();
+  const docCommandsStrict = new Set<string>();
   for (const line of tableBlock.split("\n")) {
     if (!line.startsWith("|")) continue;
     const cell = line.match(/^\|\s*((?:\\.|[^|\\])*?)\s*\|/);
@@ -249,13 +249,13 @@ describe("cli COMMANDS ↔ README 'Commands at a glance' table", () => {
     for (const span of cell[1].matchAll(/`([^`]+)`/g)) {
       if (span[1].includes("scenario.py")) continue; // bundled-script row, not a cowork-harness subcommand
       const name = span[1].match(/^[a-zA-Z][a-zA-Z0-9-]*/);
-      if (name && name[0] !== "python3") readmeCommandsStrict.add(name[0]);
+      if (name && name[0] !== "python3") docCommandsStrict.add(name[0]);
     }
   }
 
-  it("every README table command token is a real COMMANDS entry (bundled-script python3 rows exempt)", () => {
-    const stale = [...readmeCommandsStrict].filter((c) => !commands.includes(c));
-    expect(stale, `README table has a command-like token not in COMMANDS: ${stale.join(", ")}`).toEqual([]);
+  it("every docs/cli.md table command token is a real COMMANDS entry (bundled-script python3 rows exempt)", () => {
+    const stale = [...docCommandsStrict].filter((c) => !commands.includes(c));
+    expect(stale, `docs/cli.md table has a command-like token not in COMMANDS: ${stale.join(", ")}`).toEqual([]);
   });
 });
 

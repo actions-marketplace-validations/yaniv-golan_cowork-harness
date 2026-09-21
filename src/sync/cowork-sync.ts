@@ -1706,6 +1706,59 @@ export function checkSyspromptMapFacts(files: Map<string, string>): string[] {
   return flags;
 }
 
+/** The tool→path-key map that the gated tool set and the path-key list BOTH derive from since Desktop
+ *  2.2553.1. Through 1.46388.4 each was its own inline array literal in the defining chunk:
+ *
+ *    <a>=["Read","Write","Edit","Glob","Grep"]        <b>=["file_path","path"]
+ *
+ *  2.2553.1 replaced both with one map and two derivations:
+ *
+ *    pWt={Read:"file_path",…,Grep:"path"}, mWt=Object.keys(pWt), hWt=[...new Set(Object.values(pWt))]
+ *
+ *  Same five tools in the same order, same two keys — a SHAPE change, not a contract change.
+ *
+ *  Pinned as an EXACT, ORDERED literal on purpose. `Object.keys()` preserves insertion order and the
+ *  sub-agent manifest renders the resulting set straight into the prompt (`<ns>.<prop>.join(", ")`), so a
+ *  REORDERED map would change the prompt text while a set-equality check passed and the manifest
+ *  fingerprint stayed put (it hashes generator SOURCE, which still reads `.join(", ")`, not the
+ *  expansion). Ordered equality is the only thing that closes that hole.
+ *
+ *  Exactness also disambiguates. The bundle carries two more same-SHAPED maps — the tool-permission
+ *  broker's `FILE_TOOL_PATH_INPUT_KEYS` and its chunk-local twin — which add MultiEdit, NotebookEdit and
+ *  Bash. A loose `Read:"file_path"[^}]*Grep:"path"` match binds either of them. Do not relax this. */
+const PATH_GATE_MAP_LITERAL = `\\{Read:"file_path",Write:"file_path",Edit:"file_path",Glob:"path",Grep:"path"\\}`;
+
+const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The single identifier bound to the path-gate map in `chunk`, or null.
+ *
+ *  Requires EXACTLY ONE binding. With two, "the keys and the values came from the same map" becomes
+ *  unprovable by identifier comparison, which is the check that stops a keys-from-A/values-from-B
+ *  split. Ambiguity resolves to null (→ the caller flags) rather than to the first match. */
+function pathGateMapId(chunk: string): string | null {
+  const all = [...chunk.matchAll(new RegExp(`(?<![\\w$])([A-Za-z_$][\\w$]*)=${PATH_GATE_MAP_LITERAL}`, "g"))];
+  return all.length === 1 ? all[0][1] : null;
+}
+
+/** How a local is bound: the pre-2.2553.1 array literal, or derived from the path-gate map. */
+type GateBinding = { form: "literal" } | { form: "derived"; map: string } | null;
+
+/** `<local>=["Read","Write","Edit","Glob","Grep"]` or `<local>=Object.keys(<path-gate map>)`. */
+function bindsGatedToolSet(chunk: string, local: string): GateBinding {
+  const e = reEsc(local);
+  if (new RegExp(`(?<![\\w$])${e}=\\["Read","Write","Edit","Glob","Grep"\\]`).test(chunk)) return { form: "literal" };
+  const m = chunk.match(new RegExp(`(?<![\\w$])${e}=Object\\.keys\\(([A-Za-z_$][\\w$]*)\\)`));
+  return m && m[1] === pathGateMapId(chunk) ? { form: "derived", map: m[1] } : null;
+}
+
+/** `<local>=["file_path","path"]` or `<local>=[...new Set(Object.values(<path-gate map>))]`. */
+function bindsPathKeys(chunk: string, local: string): GateBinding {
+  const e = reEsc(local);
+  if (new RegExp(`(?<![\\w$])${e}=\\["file_path","path"\\]`).test(chunk)) return { form: "literal" };
+  const m = chunk.match(new RegExp(`(?<![\\w$])${e}=\\[\\.\\.\\.new Set\\(Object\\.values\\(([A-Za-z_$][\\w$]*)\\)\\)\\]`));
+  return m && m[1] === pathGateMapId(chunk) ? { form: "derived", map: m[1] } : null;
+}
+
 export function checkPathHookFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
@@ -1716,7 +1769,6 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // B8 (Desktop 1.25927.0): the arrow export form `HOST_LOOP_PATH_GATED_BUILTIN_TOOLS:()=>Se` puts `(`
   // after the colon, which the old `[:=][\w$]` tail rejected — the chunk DOES still export the name.
   const definesExport = /[\w$]+\s+as\s+HOST_LOOP_PATH_GATED_BUILTIN_TOOLS\b|\bHOST_LOOP_PATH_GATED_BUILTIN_TOOLS(?::\(\)=>|[:=])[\w$]/;
-  const GATED_ARRAY = /\["Read","Write","Edit","Glob","Grep"\]/;
   // The install site's shape is name-independent and is the ONE anchor that survived 1.32352.0; it is
   // declared here (not below) because the defining-chunk fallback resolves through it.
   const installRe = /\[\.\.\.([\w$]+(?:\.[\w$]+)?),"MultiEdit"\]\.join\("\|"\)/;
@@ -1725,12 +1777,18 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   // machinery "gone". Try the readable name first (older asars + the fixtures bind it), then fall back to
   // the chunk the install site's spread actually RESOLVES to — and only accept that chunk if the spread
   // is still the gated 5-set, so a mis-resolution fails rather than silently re-pointing the sentinel.
+  // How the gated tool set turned out to be bound — needed further down, where the path keys are checked
+  // against the SAME map (see the "path key pair" anchor).
+  let toolsBinding: GateBinding = null;
   let defining = [...files.values()].find((c) => definesExport.test(c));
   if (!defining) {
     const site = [...files.values()].find((c) => installRe.test(c));
     const spreadId = site?.match(installRe)?.[1];
     const ref = site && spreadId ? resolveNamespaceRef(spreadId, site, files) : null;
-    if (ref && new RegExp(`(?<![\\w$])${esc(ref.local)}=${GATED_ARRAY.source}`).test(ref.chunk)) defining = ref.chunk;
+    // 2.2553.1: accept the derived form too — the spread now resolves to `Object.keys(<path-gate map>)`
+    // rather than to the array literal. Still a CONTENT check, so a mis-resolution fails rather than
+    // silently re-pointing the sentinel at whatever chunk the install site happened to import.
+    if (ref && bindsGatedToolSet(ref.chunk, ref.local)) defining = ref.chunk;
   }
   if (!defining) miss("defining chunk", "no chunk exports HOST_LOOP_PATH_GATED_BUILTIN_TOOLS");
   else {
@@ -1760,7 +1818,43 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       if (!isExportedLocal(defining, byContent[1]))
         miss(label, `the ${exportName} array is present (${byContent[1]}) but is no longer exported — it may be dead`);
     };
-    hop("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", /\["Read","Write","Edit","Glob","Grep"\]/, "gated 5-set");
+    /** `hop`, but for a set whose binding may be a literal OR a derivation of the path-gate map.
+     *  Mirrors hop's two branches exactly: bind by EXPORT NAME when it is still readable, else bind by
+     *  CONTENT and require the local to still be exported (which is what keeps a dead decoy from
+     *  passing). Returns the binding so the caller can require two exports to share one map. */
+    const hopBound = (exportName: string, binder: (c: string, l: string) => GateBinding, label: string): GateBinding => {
+      const local = exportLocalOf(defining!, exportName);
+      if (local) {
+        const b = binder(defining!, local);
+        if (!b)
+          miss(
+            label,
+            `the ${exportName} export's local (${local}) is bound to neither its array literal nor Object.keys/values of the path-gate map`,
+          );
+        return b;
+      }
+      // The export NAME is mangled (true since 1.32352.0/D5). Find the local by CONTENT, then require it
+      // to be exported — same rule hop() uses.
+      const mapId = pathGateMapId(defining!);
+      const forms = [`\\["Read","Write","Edit","Glob","Grep"\\]`, `\\["file_path","path"\\]`];
+      if (mapId) forms.push(`Object\\.keys\\(${reEsc(mapId)}\\)`, `\\[\\.\\.\\.new Set\\(Object\\.values\\(${reEsc(mapId)}\\)\\)\\]`);
+      const cand = [...defining!.matchAll(new RegExp(`(?<![\\w$])([A-Za-z_$][\\w$]*)=(?:${forms.join("|")})`, "g"))]
+        .map((m) => m[1])
+        .find((l) => binder(defining!, l));
+      if (!cand) {
+        miss(
+          label,
+          `neither the ${exportName} export nor any local bound to its literal or to the path-gate map is present in the defining chunk`,
+        );
+        return null;
+      }
+      if (!isExportedLocal(defining!, cand)) {
+        miss(label, `the ${exportName} value is present (${cand}) but is no longer exported — it may be dead`);
+        return null;
+      }
+      return binder(defining!, cand);
+    };
+    toolsBinding = hopBound("HOST_LOOP_PATH_GATED_BUILTIN_TOOLS", bindsGatedToolSet, "gated 5-set");
     // "PowerShell" joined the set at Desktop 1.24012.9 (was the 5-element list through 1.24012.1). It is a
     // REAL tool in the agent registry (its own "Executes a given PowerShell command…" description), but
     // win32-gated, so it never registers on the macOS/Linux runtimes this harness targets — hence no change
@@ -1800,7 +1894,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       if (local) ref = { chunk: defining, local };
     }
     if (!ref) miss("install site spread", `the PreToolUse matcher spread (${spreadId}) could not be resolved to a defining export`);
-    else if (!new RegExp(`(?<![\\w$])${esc(ref.local)}=\\["Read","Write","Edit","Glob","Grep"\\]`).test(ref.chunk))
+    else if (!bindsGatedToolSet(ref.chunk, ref.local))
       miss("install site spread", "the PreToolUse matcher no longer spreads the gated Read/Write/Edit/Glob/Grep set");
   }
   const inHook = (re: RegExp, label: string, why: string) => {
@@ -1827,7 +1921,53 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   inHook(/\(spooled tool results\)/, "spool deny", "the spooled-projects category text changed");
   inHook(/\(plugin, skill, or knowledge content\)/, "plugin deny", "the plugin category text changed");
   inHook(/"Path is outside allowed working directories"/, "SDK deny const", "the workingDir constant changed");
-  inHook(/\["file_path","path"\]/, "path key pair", "the file_path/path key array is gone");
+  // Path keys. Through 1.46388.4 these were an inline literal IN THE CONSUMER (`pe=["file_path","path"]`,
+  // read as `pe.map(…)`). 2.2553.1 hoisted them into the defining chunk as a derivation of the path-gate
+  // map, and the consumer now reads them across the namespace (`t.vM.map(…)`). Accept either, and in the
+  // derived case require BOTH that the export resolves to `[...new Set(Object.values(<map>))]` and that
+  // the consumer actually reads THAT export — otherwise an `Le` that quietly reverted to its own local
+  // key list would still pass on the strength of the defining chunk alone.
+  // The literal form counts ONLY when a local is bound to it AND the hook maps over that local (the real
+  // pre-2.2553.1 shape was `pe=["file_path","path"]` used as `pe.map(…)`). A bare presence test let any
+  // unrelated `["file_path","path"]` array anywhere in this ~515KB chunk switch the derived check off
+  // entirely — so a genuine widening of the gate's key list would pass behind a decoy.
+  // Real builds bind it (`var tl=["file_path","path"]` … `tl.map(…)`, verified in both 1.46388.4 and
+  // 2.2553.1); an inline `[…].map(` is accepted too so the rule is about CONSUMPTION rather than one
+  // codegen shape. What is rejected either way is a bare array the extraction never reads — which is the
+  // decoy that used to switch this whole check off.
+  const litLocal = consuming.match(/(?<![\w$])([A-Za-z_$][\w$]*)=\["file_path","path"\]/);
+  const literalBound =
+    /\["file_path","path"\]\.map\(/.test(consuming) ||
+    (!!litLocal && new RegExp(`(?<![\\w$])${esc(litLocal[1])}\\.map\\(`).test(consuming));
+  if (!literalBound) {
+    const ns = consuming.match(installRe)![1].split(".")[0];
+    // Candidate namespace properties the consumer feeds into the first-match extraction.
+    const readProps = [...consuming.matchAll(new RegExp(`(?<![\\w$])${esc(ns)}\\.([\\w$]+)\\.map\\(`, "g"))].map((m) => m[1]);
+    let bound: GateBinding = null;
+    let boundProp: string | null = null;
+    for (const prop of readProps) {
+      const ref = resolveNamespaceRef(`${ns}.${prop}`, consuming, files);
+      const b = ref ? bindsPathKeys(ref.chunk, ref.local) : null;
+      if (b) {
+        bound = b;
+        boundProp = prop;
+        break;
+      }
+    }
+    if (!bound)
+      miss(
+        "path key pair",
+        "the file_path/path key array is gone — no literal in the hook chunk, and no namespace property the hook maps over resolves to the path-gate map's values",
+      );
+    // Keys and values must come from the SAME map. Without this, a build that derived the tool set from
+    // the real map and the keys from the tool-permission broker's (which adds Bash/NotebookEdit/MultiEdit)
+    // would satisfy both anchors independently while the gate's real key list had widened.
+    else if (bound.form === "derived" && toolsBinding?.form === "derived" && bound.map !== toolsBinding.map)
+      miss(
+        "path-gate map",
+        `the gated tool set (${toolsBinding.map}) and the path keys (${ns}.${boundProp} → ${bound.map}) derive from DIFFERENT maps`,
+      );
+  }
   // First-string extraction over the path keys: `<keys>.map(k=>o[k]).find(v=>typeof v=="string")`.
   // The keys are bound to a local (real: `pe=["file_path","path"]`, used as `pe.map(…)`) rather than
   // inlined, so anchor the map/find/typeof-string SHAPE (both proven by the separate path-key anchor).
@@ -2581,7 +2721,13 @@ export function checkSubagentPromptFacts(
     // The manifest joins the path-gated builtin tool list. Assert the list itself by CONTENT — a tool
     // added to or removed from it changes what the sub-agent is told its file tools are, and would not
     // move the manifest's own prose fingerprint.
-    if (!/\["Read","Write","Edit","Glob","Grep"\]/.test(bundle))
+    // 2.2553.1 replaced the literal with `Object.keys(<path-gate map>)` (see PATH_GATE_MAP_LITERAL).
+    // ORDER is load-bearing here and nowhere else: the manifest renders `<ns>.<prop>.join(", ")` straight
+    // into the sub-agent's prompt, and the manifest fingerprint hashes the GENERATOR SOURCE — which still
+    // reads `.join(", ")` whatever the map says. So a reordered map would change the prompt text while
+    // this sentinel, the fingerprint and any set-equality check all stayed green. The map literal is
+    // matched exactly and in order, which is what closes that.
+    if (!/\["Read","Write","Edit","Glob","Grep"\]/.test(bundle) && !new RegExp(PATH_GATE_MAP_LITERAL).test(bundle))
       miss(
         "manifest tool list",
         'the ["Read","Write","Edit","Glob","Grep"] path-gated builtin tool list the manifest joins is gone or changed',
@@ -2696,6 +2842,25 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   CLAUDE_CODE_ORGANIZATION_UUID: "account-identity block; conditional on live login state",
   CLAUDE_CODE_ACCOUNT_TAGGED_ID: "account-identity block; conditional on live login state",
   CLAUDE_CODE_WORKSPACE_HOST_PATHS: "connected-folder list; runtime-derived per session",
+  // Desktop 2.2553.1. 3p-only: constructed inside the `...<isThirdParty>&&{DISABLE_GROWTHBOOK:"1",…}`
+  // spread in W3, never on first-party. Allowlisted, never pinned — the standing rule for a 3p-only key.
+  CLAUDE_CODE_MODEL_CATALOG: "3p-only deployment branch (DISABLE_GROWTHBOOK sibling); never constructed on first-party",
+  // Desktop 2.2553.1. Doubly conditional in W1: the frame-artifacts predicate AND a server-delivered
+  // `artifactHostGrant` session field. Both are off/absent on the modeled default first-party session, so
+  // there is no value to pin. NOTE: its spread condition is asserted to be the SAME predicate as the
+  // Artifact tool spread's by S6d — without that, a future build dropping the guard would be admitted here
+  // in silence, which is the failure S6d exists to prevent.
+  CLAUDE_ARTIFACT_HOST_GRANT: "frame-artifacts gated + server-delivered grant; absent on a default first-party session (guarded by S6f)",
+  // Desktop 2.2553.1. W2 base env, UNCONDITIONAL on first-party: `<dep>.type==="3p"?"":app.getVersion()`.
+  // Allowlisted because `app.getVersion()` is an Electron host call, not a structural fact the asar window
+  // can resolve — NOT because the key is optional. It is runtime-injected from `baseline.appVersion` in
+  // BOTH spawnEnv and hostNativeSpawnEnv (src/runtime/argv.ts), exactly as CLAUDE_CODE_HOST_PLATFORM is.
+  // Allowlisting WITHOUT that injection would be a silent contract loss: resolveInto hits the allowlist
+  // before SPAWN_PIN_KEYS and the key is not in REQUIRED_SPAWN_KEYS, so nothing would fail — while the
+  // agent, which reads this key on the `local-agent` entrypoint the harness pins, would stop sending the
+  // anthropic-client-platform / anthropic-client-version headers production always sends.
+  CLAUDE_CODE_DESKTOP_APP_VERSION:
+    "host-derived (Electron app.getVersion(); '' on 3p); runtime-injected from baseline.appVersion (src/runtime/argv.ts)",
   CLAUDE_PROJECT_UUID: "project-session-conditional (absent for the modeled standard chat session)",
   CLAUDE_PROJECT_TOOL: "project-session-conditional (absent for the modeled standard chat session)",
   MCP_CONNECT_TIMEOUT_MS: "gate 434204418-conditional (off; arrives with MCP_CONNECTION_NONBLOCKING:'0')",
@@ -2918,7 +3083,13 @@ export function resolveSpawnValue(
   // minifier-assigned, so each one is `[\w$]+` — NOT `\w+`, which cannot match a `$`-initial name.
   // Desktop 1.32885.1 shipped `t.$s` and `\w` excludes `$`; test/sync-sentinel-identifier-classes.test.ts
   // holds this file to zero identifier atoms that reject `$`.
-  if (/^[\w$]+\.disableCron\?"1":""$/.test(e)) return { value: "1" };
+  // D6 (Desktop 2.2553.1): a second disjunct appeared — `e.disableCron||!sC()?"1":""`, where `sC()` is the
+  // managed-settings scheduled-tasks switch (`workspace?.scheduledTasksEnabled!==!1`). The pin stays "1",
+  // and it stays EARNED rather than assumed: S12 requires W1 to keep passing `disableCron:!0`, so the
+  // left disjunct short-circuits and the managed-settings state cannot reach the value. If S12 ever stops
+  // matching, this rule must be re-derived — the disjunct is NOT inert in general, only under S12.
+  // Deliberately not resolving `sC()`: it is host policy state, not a structural fact of the asar.
+  if (/^[\w$]+\.disableCron(?:\|\|![\w$]+\(\))?\?"1":""$/.test(e)) return { value: "1" };
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="staging"\?"1":""$/.test(e)) return { value: "" };
   if (/^[\w$]+\.type!=="3p"&&[\w$]+==="local"\?"1":""$/.test(e)) return { value: "" };
   if ((m = e.match(/^[\w$]+\.type==="3p"\?"[^"]*":"([^"]*)"$/))) return { value: m[1] };
@@ -2960,7 +3131,7 @@ function sliceSpawnValue(text: string, i: number): string {
     else if (c === "}" || c === ")" || c === "]") {
       if (depth === 0) break;
       depth--;
-    } else if (c === "," && depth === 0) break;
+    } else if ((c === "," || c === ";") && depth === 0) break;
   }
   return text.slice(start, i);
 }
@@ -3470,7 +3641,15 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
       // and fails CLOSED (miss) if a future build hoists it out, while still excluding same-named locals
       // in other function scopes.
       const win = toolsSite.slice(Math.max(0, at - 8000), at);
-      const def = win.match(new RegExp(`(?:\\b(?:const|let|var)\\s+|[,;({])${escC}=([^;]*);`));
+      // D6 (Desktop 2.2553.1): the condition is no longer its own statement — it shares a declaration with
+      // the Artifact host-grant binding (`let re=(…)&&!t.WI(),ie=Jl(a.artifactHostGrant);`). The old
+      // `([^;]*);` capture ran straight past the top-level comma and swallowed `,ie=…`, so the
+      // `^…$`-anchored whole-expression match below rejected a predicate that had not changed at all —
+      // a FALSE ALARM that reads exactly like a real gate widening. Slice the value brace/paren/quote-aware
+      // and stop at the first TOP-LEVEL `,` or `;` instead. The `^…$` anchors stay: they are what makes an
+      // appended `||!0` or a replaced conjunct fire, and both must keep firing.
+      const defAt = win.search(new RegExp(`(?:\\b(?:const|let|var)\\s+|[,;({])${escC}=`));
+      const def = defAt === -1 ? null : ([, sliceSpawnValue(win, win.indexOf("=", defAt) + 1)] as unknown as RegExpMatchArray);
       if (!def)
         miss(
           "S6c Artifact gate",
@@ -3577,6 +3756,44 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         "S6d frame-artifacts env key",
         "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it",
       );
+    // S6f (Desktop 2.2553.1): CLAUDE_ARTIFACT_HOST_GRANT joined the same spread run, and carries the same
+    // allowlist hazard for the same reason — it is allowlisted as "absent on a default session", and that
+    // claim rests ENTIRELY on its guard. Its spread has a different SHAPE from the frame-artifacts one
+    // (`...<cond>&&<grant>!==void 0&&{…}`), so S6d's regex does not reach it.
+    //
+    // Scoped to the WHOLE BUNDLE, and expressed as a COUNT, for two reasons a first draft of this got
+    // wrong and an adversarial review caught:
+    //  (1) `toolsSite` is only the chunk holding the tools[] literal. W2 lives in a DIFFERENT CHUNK in
+    //      this very build — CLAUDE_CODE_DESKTOP_APP_VERSION is constructed there — so a toolsSite-scoped
+    //      search goes SILENT the moment the key moves one window over, which is exactly the drift this
+    //      guard exists to catch.
+    //  (2) Branching on the first match structurally cannot see a SECOND construction added alongside the
+    //      guarded one. Requiring every construction to BE a guarded spread is what closes that.
+    // Export-table declarations (`KEY:()=>local`) are not constructions — there are 2 in this build — so
+    // they are excluded rather than inflating the count.
+    const GRANT_KEY = "CLAUDE_ARTIFACT_HOST_GRANT";
+    const grantCtors = [...bundle.matchAll(new RegExp(`${GRANT_KEY}:(?!\\(\\)=>)`, "g"))].length;
+    const grantSpreads = [...bundle.matchAll(new RegExp(`\\.\\.\\.([\\w$]+)&&[\\w$]+!==void 0&&\\{${GRANT_KEY}:`, "g"))];
+    if (grantCtors !== grantSpreads.length)
+      miss(
+        "S6f artifact host grant",
+        `${grantCtors} construction(s) of ${GRANT_KEY} in the bundle but ${grantSpreads.length} guarded ` +
+          "`...<cond>&&<grant>!==void 0&&{…}` spread(s) — at least one construction is unguarded or newly shaped, " +
+          "so the allowlist's 'absent on a default session' claim no longer holds; reclassify",
+      );
+    else if (grantSpreads.length > 0 && artifactCond === undefined)
+      miss(
+        "S6f artifact host grant",
+        `${GRANT_KEY} is constructed without the Artifact tool spread — the allowlist entry would admit it unchecked`,
+      );
+    // Identifier equality is only meaningful within the chunk `artifactCond` was captured in; a spread in
+    // another chunk necessarily has a different local name, and demanding equality there would be the S6c
+    // false-alarm class all over again. The count rule above already requires that one to be guarded.
+    else if (artifactCond !== undefined && grantSpreads.some((g) => siteOf(g[0]) === toolsSite && g[1] !== artifactCond))
+      miss(
+        "S6f artifact host grant",
+        `${GRANT_KEY} is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it`,
+      );
   }
   // S8 (widened, Desktop 1.28929.0): pin the WHOLE tools[] tail through its closing bracket, not just the
   // first spread after "ToolSearch". The old anchor stopped at `...X.sessionType===`, so anything appended
@@ -3639,7 +3856,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     miss("S11 ENTRYPOINT local-agent", "the W1 local-agent entrypoint literal is gone");
   if (!w1 || !has(/disableCron:!0/, w1) || !has(/localAgent:!0/, w1))
     miss("S12 OnA call args", "disableCron:!0 / localAgent:!0 no longer earn the DISABLE_CRON / PROVIDER_MANAGED_BY_HOST pins");
-  if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:[\w$]+\.disableCron\?"1":""/, w2))
+  if (!w2 || !has(/CLAUDE_CODE_DISABLE_CRON:[\w$]+\.disableCron(?:\|\|![\w$]+\(\))?\?"1":""/, w2))
     miss("S13 DISABLE_CRON ternary", "the disableCron?'1':'' shape changed");
   // B7 (Desktop 1.25927.0): the loop binding is emitted as `let` in the new codegen (`for(let t of[…])`).
   // The binding keyword is a minifier choice, never a contract fact — admit all three. Its NAME is a

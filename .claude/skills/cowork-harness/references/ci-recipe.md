@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 3.5.0` (baseline `desktop-1.46388.4`).
+Self-contained reference. Tracks `cowork-harness 3.7.0` (baseline `desktop-2.2553.1`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -17,7 +17,7 @@ job-summary reporter (verdict table, staleness findings, cost/turns when availab
 CLI major reaches your workflow the moment it is promoted even though your `uses:` ref never changed — so a
 copy-pasted recipe that omits the input takes a major bump with no say in it. `^2` holds the major, needs no
 patch number to remember, and only wants a human decision at the next major. Pin an exact version
-(e.g. `version: "3.5.0"`) instead when you want byte-reproducible CI.
+(e.g. `version: "3.7.0"`) instead when you want byte-reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
-          V=2.1.260   # match your scenario's pinned baseline's agentVersion
+          V=2.1.275   # match your scenario's pinned baseline's agentVersion
           # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
           # served only from .../claude-code-releases/rc/<commit>/ — the stable path 404s for those, and
           # 2.1.255 is one. Take B from your pinned baseline's agentBinary.releaseBaseUrl; baselines
@@ -73,7 +73,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@^3.5.0"
+- run: npm i -g "cowork-harness@^3.7.0"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
@@ -322,6 +322,16 @@ A typical skill repo runs four stages, fastest/cheapest first:
    literal only when your scenarios name a `fidelity:`; one still in the deprecation window prints one
    defaulted-fidelity notice per scenario.) A scenario that lints with only
    warnings can still be unloadable, so a green `lint` is not evidence the suite runs.
+
+   **If the repo pays for `critique`, gate the evidence corpus here first, for free:**
+
+   ```bash
+   cowork-harness critique <folder> [--skill <name>] --corpus-only --output-format json \
+     | jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'
+   ```
+
+   The `jq -e` IS the gate — `--corpus-only` exits 0 on a measurement even over the ceiling. Same
+   packager, same git filter as the paid run; the number is a floor (a run-time read can only add).
 3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
    Token-free; content + structure + gate delivery.
 4. **Parity / live (nightly, self-hosted)** — `cowork-harness run scenarios/` with a token + Docker +
@@ -350,7 +360,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@^3.5.0"
+      - run: npm i -g "cowork-harness@^3.7.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -379,7 +389,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@^3.5.0"
+        run: npm i -g "cowork-harness@^3.7.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

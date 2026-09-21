@@ -560,7 +560,8 @@ there are three families:
   though a caller may compute `ok` however it likes — e.g. `probe-dispatch` sets it from its
   projection's `verdict.pass`). Callers include **`assertions`, `probe-dispatch`,
   `diff`, `trace`, `analyze-skill`, `lint`/`lint-skill`**, plus `record --dry-run`'s discovery
-  payload, `verify-cassettes` (§11.1), `doctor` (§11.2), and `rehash`.
+  payload, `critique --corpus-only`'s corpus payload, `verify-cassettes` (§11.1), `doctor` (§11.2), and
+  `rehash`.
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
   array, no wrapper object), **`boundary-check`**, **`init-redact`**, **`decide`**, **`answer`**,
   **`gates --follow`** (an NDJSON stream, not a single object), **`stats`**, **`status`**,
@@ -915,6 +916,15 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   critique is EXPERIMENTAL and additive field changes may land in any minor release (the schema's own
   `description` says so). Its presence in the surface-drift baseline is for change *visibility*, not
   coverage. It is the promotion CANDIDATE once critique stabilizes, on the `doctor.json` template.
+  `critique --corpus-only`'s preview payload (the `corpus` object above) is the same experimental
+  surface — a documented subset of `evidenceBudget`, same field names and meaning — and may change while
+  it stabilizes too.
+- **The bundled `scenario.py`'s functions, constants and module layout** — the `lint` / `lint-skill` /
+  `scaffold` subcommands (and the CLI's passthroughs to them) are the surface; the script is not an
+  importable API, and a consumer that vendors or imports a `_helper` from it is copying an implementation
+  detail that may be renamed, re-split or removed in any release. Ask for a subcommand or flag instead —
+  `critique --corpus-only` exists because a consumer had vendored two of these to get a number the CLI
+  did not expose.
 - **`docs/internal/**`** — untracked working notes.
 - **The reconstructed system-prompt append text** — a paraphrase by design (see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.

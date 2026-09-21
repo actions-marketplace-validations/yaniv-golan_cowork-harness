@@ -12,6 +12,17 @@ assert:
 
 The full schema below documents every optional field.
 
+## On this page
+
+- [Full schema](#full-schema)
+- [Lanes (`lane:`)](#lanes-lane--which-delivery-contract-the-run-is-held-to)
+- [Fidelity tiers (`fidelity:`)](#fidelity-tiers-fidelity)
+- [Scripted answers](#scripted-answers)
+- [Assertions](#assertions)
+- [Output](#output)
+- [Running](#running)
+- [The `microvm` tier](#the-microvm-tier--vm-init-prerequisites--troubleshooting)
+
 ## Full schema
 
 > **Machine-readable:** [`schema/scenario.schema.json`](../schema/scenario.schema.json) is generated from the zod source of truth (`npm run schema`) and pinned by a drift-guard test. Editors with a YAML language server validate scenarios against it automatically — the bundled examples carry a `# yaml-language-server: $schema=../../schema/scenario.schema.json` hint.
@@ -689,7 +700,9 @@ Several fail-severity signals read like a skill gap but are really a property of
 or the fidelity tier. Recognize these before "fixing" a non-bug:
 
 - **`missing_capability`** — the lean `core` agent image is a deliberate partial mirror of real Cowork's
-  rootfs. A skill that used a capability the `core` image omits (but real Cowork **ships**) trips this;
+  rootfs. A skill that used a capability the `core` image omits (but real Cowork **ships** — per the
+  rootfs manifest captured at Desktop `2.2553.1`, `baselines/provisioning/rootfs-provisioning.json`,
+  the dated evidence behind that claim; a manifest that lags the newest baseline says so here) trips this;
   the message says so ("likely a FALSE NEGATIVE (real Cowork ships them)"). **Fix:** rebuild full parity
   (`--build-arg COWORK_FULL_PARITY=1`, point `COWORK_AGENT_IMAGE` at the result), or assert
   `allow_missing_capability: true` when the skill's fallback is genuinely equivalent — **on an open-ended

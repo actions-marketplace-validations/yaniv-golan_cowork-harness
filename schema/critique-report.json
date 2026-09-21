@@ -188,7 +188,7 @@
     },
     "evidenceBudget": {
       "type": "object",
-      "description": "what the evaluator was actually shown. Skill-authored content (SKILL.md + references + agents md) ships WHOLE; these fields exist so a consumer never has to read compiled source to learn the budgets — the previous per-file caps were discoverable only by inspecting dist/, and let 11 of 13 reference files go permanently ungraded with no signal",
+      "description": "what the evaluator was actually shown. Skill-authored content (SKILL.md + references + every dispatchable agent md) ships WHOLE; these fields exist so a consumer never has to read compiled source to learn the budgets — the previous per-file caps were discoverable only by inspecting dist/, and let 11 of 13 reference files go permanently ungraded with no signal",
       "properties": {
         "corpusBytes": {
           "type": "number",
@@ -196,7 +196,7 @@
         },
         "corpusCeiling": {
           "type": "number",
-          "description": "the sanity ceiling governing SKILL.md + references + agents md COMBINED"
+          "description": "the sanity ceiling governing SKILL.md + references + every dispatchable agent md COMBINED"
         },
         "corpusCuts": {
           "type": "array",
@@ -226,6 +226,36 @@
           "description": "skill files present on the HOST but excluded because staging would not deliver them (untracked, git-mode on). They were never in the agent's mount, so grading against them would manufacture false already-covered verdicts — but the author must be told, or the grade silently covers less than they believe",
           "items": {
             "type": "string"
+          }
+        },
+        "corpusPackaged": {
+          "type": "array",
+          "description": "every corpus file whose CONTENT shipped into the corpus sections, by the same key corpusCuts uses. Excludes a file the ceiling zeroed and a placeholder for an unreadable file; a PARTIALLY cut file IS listed, with its loss in corpusCuts. OPTIONAL and deliberately absent from `required`: reports predating the field omit it, and requiring it would invalidate every stored report",
+          "items": {
+            "type": "string"
+          }
+        },
+        "corpusOmitted": {
+          "type": "array",
+          "description": "corpus files present but NOT packaged, with the reason \u2014 plugin-root references/ files under <plugin>/references/ (a raw HOST walk), plus any resolved sub-agent whose file could not be read (`unreadable`), which would otherwise appear in no field at all. (A raw filesystem walk, so an UNTRACKED file \u2014 which staging would not deliver \u2014 is listed here too; `alsoUntracked` says so when it was evaluated.) OPTIONAL and deliberately absent from `required`: reports predating the plugin-root reference corpus omit it. A narrow selection rule is only safe if what it leaves out is visible, which is what this field is for",
+          "items": {
+            "type": "object",
+            "required": ["name", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "the file's DISPLAY key (<plugin>/references/<path>) \u2014 the same spelling corpusCuts and corpusPackaged use, never the plugin-root-relative accept key"
+              },
+              "reason": {
+                "type": "string",
+                "enum": ["not-linked", "not-utf8", "ambiguous-read", "unreadable"]
+              },
+              "alsoUntracked": {
+                "type": "boolean",
+                "description": "true when staging would ALSO not deliver this file, so linking it is not enough on its own. THREE-state: ABSENT means trackedness was not evaluated (git mode off, not a work tree, or the tracked set could not be read) \u2014 absent is never to be read as false"
+              }
+            }
           }
         },
         "trimRecord": {

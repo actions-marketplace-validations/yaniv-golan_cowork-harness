@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, or asserting artifacts, egress, or sub-agent dispatch. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 3.5.0
-  tracks-harness: cowork-harness 3.5.0 (baseline desktop-1.46388.4)
+  version: 3.7.0
+  tracks-harness: cowork-harness 3.7.0 (baseline desktop-2.2553.1)
 ---
 
 # cowork-harness
@@ -25,8 +25,8 @@ flagged with a loud `::warning::`, not silent — auto-answer a gate, observe an
 allowlist). This skill exists mostly to keep you out of those traps — the Gotchas section below is
 the highest-value part. Read it.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 3.5.0` (baseline
-> `desktop-1.46388.4`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 3.7.0` (baseline
+> `desktop-2.2553.1`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
@@ -42,7 +42,7 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 3.5.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^3.5.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^3.5.0"`. **Pin `@^3.5.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 3.7.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^3.7.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^3.7.0"`. **Pin `@^3.7.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
@@ -81,7 +81,7 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
   correct answers after you edit it?) → author `semantic_matches` scenarios and gate on the per-claim
   profile. See **Recipe 5** in `references/task-recipes.md` (validity, N≥3, discrimination — the traps).
 - **"What is WRONG with this skill?"** (a graded critique, not a pass/fail) → `cowork-harness critique
-  <folder> --prompt "<probe>"`. Four model workloads and 10–20 minutes; budget from
+  <folder> --prompt "<probe>"`. Up to four model workloads (zero with `--corpus-only`; pass 2 is skipped with no self-report) and 10–20 minutes; budget from
   `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
   **DO**" — routing, artifact location, narration — use `skill` instead**: no evaluator, a fraction of
   the cost, and it answers that question directly. Report and evidence-package shapes:
@@ -568,7 +568,9 @@ Recognize these before "fixing" a non-bug:
 - **`missing_capability`** — the lean `core` agent image is a deliberate partial mirror of real Cowork's
   rootfs, so a skill that used `soffice`/LibreOffice (`office_convert`), `tesseract` (`ocr`),
   `markitdown`/`magika` (`ml_extract`), `cv2` (`cv`), `camelot`/`tabula` (`pdf_tables`), or `wand`
-  (`magick`) can trip this even though real Cowork **ships** those. The message says so ("likely a FALSE
+  (`magick`) can trip this even though real Cowork **ships** those (per the rootfs manifest captured at
+  Desktop `2.2553.1` — `baselines/provisioning/rootfs-provisioning.json`, which is the dated evidence
+  behind that sentence). The message says so ("likely a FALSE
   NEGATIVE (real Cowork ships them)"). Fix: rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`, point
   `COWORK_AGENT_IMAGE` at it), or — if the skill's fallback is genuinely equivalent — assert
   `allow_missing_capability: true`. (Two sources: a skill *observed using* an omitted family, live lane;

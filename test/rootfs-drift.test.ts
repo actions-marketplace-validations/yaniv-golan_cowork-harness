@@ -20,6 +20,8 @@ function makeManifest(overrides: Partial<ProvisioningManifest> = {}): Provisioni
   for (const name of corePip) pip[name] = "1.0.0";
   return {
     capturedFrom: "rootfs.img",
+    desktopVersion: "1.0.0",
+    capturedAt: "2026-01-01",
     node: "v22.22.3",
     pip,
     aptDocStack: ["poppler-utils", "ghostscript"],

@@ -1118,3 +1118,236 @@ def test_embedded_enums_equals_generated():
     # the in-code fallback must equal the generated map, else a missing file silently reintroduces drift
     generated = json.loads(KEYS_JSON.read_text(encoding="utf-8"))["enums"]
     assert scenario._EMBEDDED_ENUMS == generated
+
+
+# ── Cross-language pin: _resolve_corpus_agents ↔ resolveDispatchableAgents (TS) ──────────────────
+#
+# `critique` packaged exactly ONE `agents/<skill>.md` through 3.6.0 while mounting the whole plugin, so a
+# second skill-scoped agent ran with its authored body absent from the evaluator's evidence. Fixing the TS
+# packager without the Python corpus sizing would leave `skill-corpus-*-evidence-ceiling` under-reporting
+# for exactly the multi-agent plugins that need the warning — so both sides resolve the same set, and this
+# executes the SHARED fixture to prove it.
+#
+# The expectations in the fixture are hand-written literals. Deriving them from either implementation would
+# make this a tautology that passes while the two disagree.
+#
+# NOTE: this lane is CI-only — `npm run ci` is typecheck+build+test and never runs pytest.
+
+DISPATCHABLE_AGENTS_FIXTURE = REPO / "test/fixtures/dispatchable-agents.json"
+
+
+def _materialize(tree, root):
+    for rel, content in tree.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    return root
+
+
+def _fixture_cases():
+    data = json.loads(DISPATCHABLE_AGENTS_FIXTURE.read_text(encoding="utf-8"))
+    return data["cases"]
+
+
+def test_fixture_is_non_trivial():
+    """A fixture that lost its cases must not read as a clean pass on either side."""
+    assert len(_fixture_cases()) >= 10
+
+
+@pytest.mark.parametrize("case", _fixture_cases(), ids=lambda c: c["name"])
+def test_resolve_corpus_agents_matches_shared_fixture(case, tmp_path):
+    root = _materialize(case["tree"], tmp_path / "plugin")
+    resolved = scenario._resolve_corpus_agents(root / "skills" / case["skill"])
+    got = sorted(p.relative_to(root).as_posix() for p in resolved)
+    assert got == sorted(case["expected"])
+
+
+def test_corpus_sizing_counts_every_dispatchable_agent(tmp_path):
+    """The ceiling warning must size what the packager actually ships. Sizing one agent while the packager
+    shipped N under-reported precisely the multi-agent plugins the warning exists for."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": '# ms\nsubagent_type: "plug:ms-redteam"\n',
+            "agents/ms.md": "a" * 1000,
+            "agents/ms-redteam.md": "b" * 2000,
+        },
+        tmp_path / "plugin",
+    )
+    agents = scenario._resolve_corpus_agents(root / "skills" / "ms")
+    assert sorted(p.name for p in agents) == ["ms-redteam.md", "ms.md"]
+    assert sum(p.stat().st_size for p in agents) == 3000
+
+
+def test_nested_agents_move_subagent_type_severity_in_both_directions(tmp_path):
+    """Making agent enumeration recursive is not a one-way strictness relaxation.
+
+    Direction 1: a literal naming a NESTED agent stops being a `subagent-type-not-found-in-plugin` WARN,
+    because the agent really is dispatchable and that WARN was a false positive.
+
+    Direction 2: a plugin whose `agents/` holds ONLY subdirectories used to enumerate to the EMPTY set,
+    which sent every same-plugin literal down `_classify_subagent_type`'s falsy-`plugin_agent_types`
+    branch to `subagent-type-unknown` (INFO). It is now enumerable, so a typo'd literal surfaces as the
+    WARN it always was -- a true positive that was suppressed, and a NEW --strict failure on an unchanged
+    tree. Pinned here because the first version of this change claimed it could not happen."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": '# ms\nsubagent_type: "plug:deep"\nsubagent_type: "plug:typoed-name"\n',
+            "agents/sub/deep.md": "---\nname: deep\n---\nnested only\n",
+        },
+        tmp_path / "plugin",
+    )
+    skill_md = root / "skills/ms/SKILL.md"
+    rules = [f.rule for f in scenario._lint_subagent_types(str(skill_md), skill_md.read_text().splitlines())]
+    # the nested agent resolves cleanly -> no finding for it at all
+    assert "subagent-type-unresolvable" not in rules
+    # and the typo is now a provable one rather than an unconfirmable unknown
+    assert rules == ["subagent-type-not-found-in-plugin"]
+
+
+# ── Cross-language pin: _resolve_corpus_root_references ↔ resolveRootReferences (TS) ────────────────
+#
+# The critique packager now puts a multi-skill plugin's SHARED plugin-root `references/` files into the
+# evaluator corpus when the graded skill's authored text (or a dispatchable agent) points at them.
+# `_lint_skill_corpus_size` must size the same files or the ceiling warning under-reports exactly the
+# plugins this feature targets. Verified against the real founder-skills tree during development (all
+# six multi-skill plugins there matched exactly: cap-table 1, competitive-positioning 4, deck-review 1,
+# financial-model-review 6, ic-sim 1, market-sizing 1) -- that tree lives outside this repo, so these
+# tests exercise the same rules against small, self-contained fixtures instead.
+
+
+def test_root_references_arming_form(tmp_path):
+    """`From \\`${CLAUDE_PLUGIN_ROOT}/references/\\` (shared): \\`a.md\\`, \\`b.md\\`` -- the dominant real
+    shape, where only the DIRECTORY token carries a separator and the filenames are bare. The armed line
+    matches its bare basenames against the plugin root; an unmentioned root file is left out."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": (
+                "# ms\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `shared-a.md`, `shared-b.md`\n"
+            ),
+            "references/shared-a.md": "a",
+            "references/shared-b.md": "b",
+            "references/shared-c.md": "c",  # never mentioned -- must stay out
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert sorted(p.name for p in resolved) == ["shared-a.md", "shared-b.md"]
+
+
+def test_bare_references_path_does_not_match_root_basename(tmp_path):
+    """A slash-bearing token (`references/x.md`) is resolved by PATH, never by basename, even when a
+    plugin-root file happens to share that basename. It resolves relative to the file's own directory
+    (the skill's own references/, which doesn't have this file here), so it must NOT fall back to
+    matching the plugin root's `x.md` -- that fallback is bare-token-only, and this line is never armed."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\nSee references/x.md for details.\n",
+            "references/x.md": "root x",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert resolved == []
+
+
+def test_unbalanced_trailing_paren_stripped(tmp_path):
+    """`(Mitigation 2 — see plug/references/shared-a.md).` -- the trailing punctuation run `).` (an
+    UNBALANCED lone `)` plus a sentence-ending `.`) must be stripped without requiring bracket balance,
+    same as `TRAILING_PUNCT` in resolve-references.ts."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\n(Mitigation 2 — see plug/references/shared-a.md).\n",
+            "references/shared-a.md": "a",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert [p.name for p in resolved] == ["shared-a.md"]
+
+
+def test_link_found_only_in_skill_own_references(tmp_path):
+    """A root reference is counted when only the SKILL's own references/** text links it, never
+    mind SKILL.md itself -- clause 1 covers the whole `references/**` tree, not just SKILL.md."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\nnothing relevant here\n",
+            "skills/ms/references/local.md": (
+                "See `${CLAUDE_PLUGIN_ROOT}/references/shared-a.md` for shared context.\n"
+            ),
+            "references/shared-a.md": "shared",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert [p.name for p in resolved] == ["shared-a.md"]
+
+
+def test_linked_binary_excluded(tmp_path):
+    """Link-first, THEN utf8: a plugin-root file that IS linked but is not valid UTF-8 must be excluded
+    from the packaged set entirely, not merely skipped for byte counting."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "plug"}',
+            "skills/ms/SKILL.md": "# ms\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `binary.bin`\n",
+            "references/binary.bin": "placeholder",
+        },
+        tmp_path / "plugin",
+    )
+    (root / "references" / "binary.bin").write_bytes(b"\xff\xfe\x00\x01broken")
+    resolved = scenario._resolve_corpus_root_references(root / "skills" / "ms", [])
+    assert resolved == []
+
+
+def test_same_directory_skip(tmp_path):
+    """SKIP (not "dedupe") the standalone-skill shape where the plugin root and the skill dir are the
+    same directory: those files are already packaged as skill-local, so running this pass too would
+    double-count them under two different display keys. Exercised directly against the low-level
+    `_resolve_root_references` worker so the guard is tested independent of how a caller derives
+    `plugin_dir` (the `skills/<name>` heuristic in `_resolve_corpus_root_references` never actually
+    produces `plugin_dir == skill_dir`, so this shape can't be reached through the public entry point)."""
+    root = _materialize(
+        {
+            "plugin.json": '{"name": "solo"}',
+            "SKILL.md": "# solo\nFrom `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `shared-a.md`\n",
+            "references/shared-a.md": "a",
+        },
+        tmp_path / "plugin",
+    )
+    resolved = scenario._resolve_root_references(root, root, [])
+    assert resolved == []
+
+
+# ── Cross-language pin: _resolve_corpus_root_references ↔ resolveRootReferences (TS) ────────────
+#
+# The packager and this linter agreeing on one real tree today is not a pin. This executes the SAME
+# hand-written fixture both sides run, so a rule change that moves one and not the other fails on
+# behaviour rather than on text. Clauses 1-2 only: clause 3 (a reference the graded agent READ during
+# the turn) is run-dependent and a static lint has no run to mirror.
+#
+# CI-only, like the fixture above: `npm run ci` is typecheck+build+test and never runs pytest.
+
+ROOT_REFERENCES_FIXTURE = REPO / "test/fixtures/root-references.json"
+
+
+def _root_reference_cases():
+    return json.loads(ROOT_REFERENCES_FIXTURE.read_text(encoding="utf-8"))["cases"]
+
+
+def test_root_reference_fixture_is_non_trivial():
+    assert len(_root_reference_cases()) >= 10
+
+
+@pytest.mark.parametrize("case", _root_reference_cases(), ids=lambda c: c["name"])
+def test_resolve_corpus_root_references_matches_shared_fixture(case, tmp_path):
+    root = _materialize(case["tree"], tmp_path / "plugin")
+    skill_dir = root / "skills" / case["skill"]
+    agents = scenario._resolve_corpus_agents(skill_dir)
+    resolved = scenario._resolve_corpus_root_references(skill_dir, agents)
+    got = sorted(p.relative_to(root).as_posix() for p in resolved)
+    assert got == sorted(case["expected"])

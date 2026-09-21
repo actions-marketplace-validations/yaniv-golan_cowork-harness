@@ -26,6 +26,17 @@ const ROOTFS = join(BUNDLE, "rootfs.img");
 
 export interface ProvisioningManifest {
   capturedFrom: "rootfs.img";
+  /** The Claude Desktop version whose bundle the rootfs was read from (Info.plist CFBundleShortVersionString).
+   *  This is what makes "real Cowork ships X" a DATED claim: without it a consumer reading the
+   *  `missing_capability` message cannot tell whether the assertion is one baseline old or five. A
+   *  capture that lags the newest `baselines/desktop-*.json` is reported by `check:versions` (invariant 14),
+   *  the same way the DESIGN.md live pin is. */
+  desktopVersion: string;
+  /** ISO date of the capture. */
+  capturedAt: string;
+  /** Desktop's own identity for the rootfs (`.rootfs.img.origin` beside the image), when present — the
+   *  precise "which rootfs" key, since one Desktop version can adopt a rootfs delta without a version bump. */
+  rootfsOrigin?: string;
   node: string;
   pip: Record<string, string>; // name -> version (from pip freeze)
   aptDocStack: string[]; // notable doc/OCR/office apt packages present (name list)
@@ -48,6 +59,27 @@ const APT_OF_INTEREST = [
   "qpdf",
   "ruby",
 ];
+
+/** Desktop's version, read the same way `cowork-sync` reads it (Info.plist). Fails loud: a manifest with
+ *  no Desktop version is the undated claim this field exists to end. */
+function readDesktopVersion(): string {
+  const plistPath = "/Applications/Claude.app/Contents/Info.plist";
+  if (!existsSync(plistPath)) throw new Error(`Claude Desktop not found at ${plistPath} — cannot stamp the manifest's desktopVersion`);
+  const plist = readFileSync(plistPath, "utf8");
+  const m = plist.match(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/);
+  if (!m) throw new Error("could not read CFBundleShortVersionString from Claude Desktop's Info.plist");
+  return m[1];
+}
+
+function readRootfsOrigin(): string | undefined {
+  const p = join(BUNDLE, ".rootfs.img.origin");
+  try {
+    const v = readFileSync(p, "utf8").trim();
+    return v || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Run a shell snippet inside the loop-mounted rootfs (privileged container, chroot). Returns stdout. */
 function inRootfs(snippet: string): string {
@@ -111,6 +143,9 @@ function capture(): ProvisioningManifest {
   };
   return {
     capturedFrom: "rootfs.img",
+    desktopVersion: readDesktopVersion(),
+    capturedAt: new Date().toISOString().slice(0, 10),
+    ...(readRootfsOrigin() ? { rootfsOrigin: readRootfsOrigin() } : {}),
     node: section("NODE").trim() || "unknown",
     pip: parsePipFreeze(section("PIP")),
     aptDocStack: section("APT")

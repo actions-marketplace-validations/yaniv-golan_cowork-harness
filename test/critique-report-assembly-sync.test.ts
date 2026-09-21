@@ -62,3 +62,36 @@ describe("ReportState assembly", () => {
 // — e.g. evaluatorIntegrity before the evaluator has run. In JSON an absent key and an `undefined` value
 // are indistinguishable, and "absent = never checked" is the honest reading, so those omissions are
 // correct rather than bugs. This test therefore pins the SUCCESS path only, deliberately.
+
+// The guard above parses TOP-LEVEL ReportState fields only (`/^\s{2}(\w+)\??:/gm` — two spaces of
+// indent). `evidenceBudget` is a NESTED object assembled in its own literal, so a field added to its
+// interface and to the packager but never threaded into that literal ships inert with every test green —
+// which is verbatim the failure this file exists to prevent, one level down. `corpusPackaged` shipped
+// before this guard existed; `corpusOmitted` is covered by it.
+describe("evidenceBudget assembly (the NESTED literal the top-level guard cannot see)", () => {
+  function evidenceBudgetInterfaceFields(): string[] {
+    const i = SRC.indexOf("evidenceBudget?: {");
+    expect(i, "expected an `evidenceBudget?: {` block in ReportState").toBeGreaterThan(-1);
+    const body = SRC.slice(i, SRC.indexOf("\n  };", i));
+    return [...body.matchAll(/^\s{4}(\w+)\??:/gm)].map((m) => m[1]!);
+  }
+  /** The `evidenceBudget = { … }` assignment that feeds the report. */
+  function evidenceBudgetLiteral(): string {
+    const marker = "evidenceBudget = {";
+    const i = SRC.indexOf(marker);
+    expect(i, "expected an `evidenceBudget = {` assignment").toBeGreaterThan(-1);
+    return SRC.slice(i, SRC.indexOf("\n      };", i));
+  }
+
+  it("every evidenceBudget interface field is actually assembled", () => {
+    const literal = evidenceBudgetLiteral();
+    const missing = evidenceBudgetInterfaceFields().filter((f) => !new RegExp(`^\\s+${f}[,:]`, "m").test(literal));
+    expect(missing, `evidenceBudget fields declared but never assembled: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("covers the fields this change added, so the guard cannot be trivially satisfied", () => {
+    const fields = evidenceBudgetInterfaceFields();
+    expect(fields).toContain("corpusPackaged");
+    expect(fields).toContain("corpusOmitted");
+  });
+});

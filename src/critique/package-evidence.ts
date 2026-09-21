@@ -1,4 +1,8 @@
 import type { EvidenceSection } from "./armor.js";
+import type { ResolvedAgent } from "./resolve-agents.js";
+import { listSkillFilesRecursive } from "./corpus-walk.js";
+import { resolveRootReferences, type OmissionReason } from "./resolve-references.js";
+import { flattenTitle } from "./armor.js";
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, type Dirent } from "node:fs";
 import { join, basename, sep } from "node:path";
 import { warn } from "../io.js";
@@ -223,75 +227,6 @@ function sec(title: string, body: string): EvidenceSection {
   return { title, body: body.trim().length ? body.trim() : "(none)" };
 }
 
-/** Every file under `references/`, RECURSIVELY, as forward-slash relative paths, sorted. `statSync` (not
- *  the dirent's `isFile()`) so a SYMLINK to a real file is followed and counted — the old dirent filter
- *  silently dropped both symlinks and subdirectories. Cycle-guarded via a visited-realpath set: a symlinked
- *  directory loop would otherwise recurse forever. A dangling link (its `statSync` throws) is skipped, the
- *  same posture as an unreadable file. */
-function listSkillFilesRecursive(root: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  // CONTAINMENT. Following symlinks lets a link escape the skill entirely — `references/out -> /anywhere`
-  // walked that directory and packaged its file CONTENTS into the evidence document, and
-  // `references/up -> <skillDir>` re-packaged SKILL.md as a reference. Both ship material the agent's mount
-  // never contained, which is the false-`already-covered` defect this packager exists to close, and the
-  // first also puts arbitrary host content into a document sent to a model. The old code ignored symlinks
-  // entirely, so this exposure arrived WITH the symlink support — resolve every entry and refuse anything
-  // whose real path is not under the references root.
-  let rootReal: string | undefined;
-  try {
-    rootReal = realpathSync(root);
-  } catch {
-    return out; // no references/ dir at all
-  }
-  const contained = (full: string): boolean => {
-    try {
-      const rp = realpathSync(full);
-      return rp === rootReal || rp.startsWith(rootReal + sep);
-    } catch {
-      return false;
-    }
-  };
-  seen.add(rootReal); // else a self-referential link (references/self -> references) duplicates every file
-  const walk = (dir: string, prefix: string): void => {
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return; // no references/ subdir, or unreadable — an empty list is a legitimate answer
-    }
-    for (const e of entries) {
-      const full = join(dir, e.name);
-      const rel = prefix ? `${prefix}/${e.name}` : e.name;
-      if (!contained(full)) continue; // symlink pointing outside references/ — see the containment note above
-      let st;
-      try {
-        st = statSync(full); // follows symlinks, unlike the dirent
-      } catch {
-        continue; // dangling symlink / vanished entry
-      }
-      if (st.isDirectory()) {
-        let key: string;
-        try {
-          key = realpathSync(full);
-        } catch {
-          continue;
-        }
-        if (seen.has(key)) continue; // symlinked-directory cycle
-        seen.add(key);
-        walk(full, rel);
-      } else if (st.isFile()) {
-        // REAL path, never a sanitized one: this string is both the `readFileSync` argument and the
-        // git tracked-set key. Neutralizing here made a marker-named file unreadable (ENOENT) and
-        // mislabeled it "could not be read" — sanitize at RENDER time instead, see `displayName`.
-        out.push(rel);
-      }
-    }
-  };
-  walk(root, "");
-  return out.sort();
-}
-
 /** The corpus the evaluator is shown must be the corpus the AGENT was given. Staging delivers git-TRACKED
  *  files only (`session.ts`'s `stageFilterFor`; untracked files are excluded with a notice, not a hard
  *  fail) while this packager reads the host source dir directly — so an UNCOMMITTED reference file was
@@ -363,7 +298,8 @@ const ATTACHED_INPUTS_CAP = 1 * 1024;
 // (agentType/description only), which made every such claim not-adjudicable.
 export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
 
-/** SKILL-AUTHORED CONTENT IS NOT RATIONED. SKILL.md, every `references/**` file and `agents/<skill>.md`
+/** SKILL-AUTHORED CONTENT IS NOT RATIONED. SKILL.md, every `references/**` file and every dispatchable
+ *  `agents/**.md`
  *  ship WHOLE. The previous design capped SKILL.md at 64KB and shared 8KB across ALL references (filled in
  *  filename order, so the alphabetically-first file took everything) — measured across 9 real runs, 11 of 13
  *  distinct reference files had NEVER reached an evaluator, including the scoring rubric a sub-agent had
@@ -375,7 +311,21 @@ export const SUBAGENT_RESEARCH_CAP = 8 * 1024;
  *  This ceiling is a SANITY VALVE, not an allocation: ~2.3x the largest real skill observed (~230KB), and
  *  a breach is CUT LOUDLY (named file + bytes on stderr and in the report), never silently and never by
  *  refusing the run — refusing would turn a degraded grade into no grade, and this is a discovery
- *  instrument. Governs SKILL.md + references + agents md COMBINED. */
+ *  instrument. Governs SKILL.md + references + every packaged agent md COMBINED. */
+/** The section-title prefix for a packaged plugin-root reference. Exported and shared: `trimPriority`
+ *  matches it, and `evaluator.ts` names it when telling the model which sections are authored guidance.
+ *  A literal repeated in those places is a title/prompt mismatch waiting to happen — the packager would
+ *  emit sections the prompt never mentions, and every test would still pass. */
+export const ROOT_REFERENCE_SECTION_PREFIX = "plugin-root references/ content";
+
+/** The section-title prefix for a packaged sub-agent body. Same contract as the constant above and for
+ *  the same reason: `trimPriority` matches it and `evaluator.ts` names it when telling the model which
+ *  sections are authored guidance. These bodies entered the corpus without the prompt ever being told,
+ *  so the evaluator graded them while still being instructed that guidance lives in "SKILL.md and
+ *  references" — a packaged section the rubric does not know about is evidence the model is told to
+ *  ignore. */
+export const AGENT_SECTION_PREFIX = "agents markdown";
+
 export const SKILL_CORPUS_CEILING = 512 * 1024;
 /** Minimum bytes any single corpus file keeps when the ceiling forces a cut. Below this a slice is not
  *  worth packaging (it would be a heading and an intro), so such a file is marked omitted instead — a
@@ -440,7 +390,7 @@ export interface PackageEvidenceResult {
   turn1SliceDegraded: boolean;
   /** F31: see `SkillMdStatus`. */
   skillMdStatus: SkillMdStatus;
-  /** Total bytes of skill-authored content found (SKILL.md + references + agents md), BEFORE any ceiling
+  /** Total bytes of skill-authored content found (SKILL.md + references + every packaged agent md), BEFORE any ceiling
    *  cut. With `corpusCeiling` this makes "how close is this skill to the valve" answerable without a run. */
   corpusBytes: number;
   /** The active `SKILL_CORPUS_CEILING`, reported so a consumer never has to read the source to learn it —
@@ -455,6 +405,18 @@ export interface PackageEvidenceResult {
    *  manufacture false `already-covered` verdicts — but the author must be TOLD, or their grade silently
    *  covers less than they believe. */
   corpusExcluded: string[];
+  /** Every corpus file whose CONTENT shipped into the corpus sections, by the same key `corpusCuts` uses.
+   *  `corpusCuts`/`corpusExcluded` name files only when something went wrong, so a reader could not
+   *  otherwise tell which sub-agent bodies a grade rested on. Excludes a file the ceiling zeroed (it
+   *  contributed nothing) and a placeholder for an unreadable file (never a corpus entry); a PARTIALLY cut
+   *  file is listed, with its loss in `corpusCuts`. The later `trimToPackageCap` pass can still shave a
+   *  section after this is computed — `trimRecord` reports that. */
+  corpusPackaged: string[];
+  /** Plugin-root `references/` files present in the MOUNT but not packaged, and why. This is what makes
+   *  a narrow selection rule safe: an author who expected a shared file to be graded is told it was not,
+   *  and which of the three reasons applied — rather than the omission being silent, which is the defect
+   *  class this whole change exists to close. */
+  corpusOmitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }>;
   /** True when the graded turn Read NO `references/` or `scripts/` file at all — neither the main agent nor
    *  any sub-agent — on a non-degraded result. Stated OBSERVATIONALLY, and consumers must render it that
    *  way: the underlying predicate matches `references/`+`scripts/` only (never `assets/`, never SKILL.md
@@ -495,15 +457,25 @@ export function packageEvidence(
   skillDir: string,
   isResume = false,
   opts: {
-    /** Path to the invoked skill's agent system-prompt markdown (a multi-skill plugin's
-     *  `agents/<skill>.md`, resolved by the caller) — packaged as its own bounded section when given.
-     *  For sub-agent-heavy skills this file IS most of the operative guidance. */
-    agentsMdPath?: string;
-    /** The plugin ROOT the agents md is tracked relative to, and its root-relative POSIX key. Both are
-     *  needed because the agents md sits outside `skillDir`: without them it cannot be checked against the
-     *  tracked set that decides what staging actually delivered. */
-    agentsMdRoot?: string;
-    agentsMdRel?: string;
+    /** EVERY sub-agent the invoked skill can dispatch (resolved by the caller — see
+     *  `resolveDispatchableAgents`), each packaged as its own bounded, separately-keyed section. For
+     *  sub-agent-heavy skills these files ARE most of the operative guidance.
+     *
+     *  This was a single `agents/<skill>.md` through 3.6.0. The graded turn mounts the whole plugin, so a
+     *  second skill-scoped agent really ran while its authored body was structurally absent from the
+     *  evidence — letting a critique report a guidance gap in an agent it never received. */
+    agents?: ResolvedAgent[];
+    /** The plugin ROOT. Agent files and the shared `references/` tree both sit OUTSIDE `skillDir`, so
+     *  without it neither can be checked against the tracked set that decides what staging delivered.
+     *  Named for what it is, not for its first consumer — an `agentsRoot` reused for references is how a
+     *  single rule ends up with several derivations. */
+    pluginRoot?: string;
+    /** `"preview"` when called by `critique --corpus-only` over an EMPTY run dir: the same corpus
+     *  computation, no graded turn. Changes ONE thing — the tense of the over-ceiling warning ("would be
+     *  cut", not "was cut before grading") — so a CI annotation never describes a grading that did not
+     *  happen. It must not change any corpus field: the preview's whole value is that it IS this
+     *  function's answer, and a mode that computed differently would be a second derivation. */
+    mode?: "preview";
   } = {},
 ): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
@@ -664,7 +636,7 @@ export function packageEvidence(
   const deliveredScripts = accept ? allScriptFiles.filter((rel) => accept(`scripts/${rel}`)) : allScriptFiles;
 
   // references/ CONTENT — read WHOLE. Bodies are read here; the combined corpus ceiling is applied below,
-  // across SKILL.md + references + agents md together, so no per-file rationing happens at this step.
+  // across SKILL.md + references + every packaged agent md together, so no per-file rationing here.
   // Read failures degrade per-file to a loud inline note, never sink packaging.
   // Neutralized HERE, once. Everything downstream (ceiling measurement, per-file cuts, section assembly)
   // treats these as already-clean and must bound them with `boundText`, never `bound` — see `applyCorpus`.
@@ -676,28 +648,100 @@ export function packageEvidence(
     }
   });
 
-  // agents/<skill>.md content — only when the caller resolved one (see the opts doc comment).
-  let agentsMdBody: string | undefined;
-  let agentsMdTitle: string | undefined;
-  if (opts.agentsMdPath !== undefined) {
-    agentsMdTitle = `agents markdown (${basename(opts.agentsMdPath)} — the invoked skill's sub-agent system prompt / dispatch guidance)`;
-    // Same corpus==mount rule as SKILL.md/references, but keyed off the PLUGIN ROOT: agents md lives at
-    // <root>/agents/<name>.md while `skillDir` is <root>/skills/<name>, so skillDir's tracked-set key space
-    // cannot express it and it would otherwise ship unfiltered — the one corpus class the first pass missed.
-    const agentsRel = opts.agentsMdRel;
-    const rootAccept = opts.agentsMdRoot !== undefined ? corpusAcceptFor(opts.agentsMdRoot) : null;
-    if (agentsRel !== undefined && rootAccept && !rootAccept(agentsRel)) {
-      corpusExcluded.push(agentsRel);
-      agentsMdBody = undefined;
-      agentsMdTitle = undefined;
-    } else if (!existsSync(opts.agentsMdPath)) {
-      agentsMdBody = `(no file found at ${opts.agentsMdPath})`;
-    } else {
-      try {
-        agentsMdBody = neutralizeForgedTruncationMarkers(readFileSync(opts.agentsMdPath, "utf8"));
-      } catch {
-        agentsMdBody = `(exists at ${opts.agentsMdPath} but could not be read)`;
+  // Sub-agent bodies — one section, one corpus key, one ceiling slice PER FILE. The bare `"agents"` key
+  // this replaced was unambiguous only while exactly one agent could ever be packaged; at N>1 an
+  // over-ceiling cut could not have named the file it cut, which is the whole point of "cut loudly".
+  //
+  // Same corpus==mount rule as SKILL.md/references, but keyed off the PLUGIN ROOT: agent files live at
+  // <root>/agents/**.md while `skillDir` is <root>/skills/<name>, so skillDir's tracked-set key space
+  // cannot express them and they would otherwise ship unfiltered. The check is PER FILE — one agent being
+  // untracked must not suppress the others.
+  // Declared here, not beside the root-reference pass: an UNREADABLE AGENT is recorded into it below,
+  // and a corpus file that reaches the evaluator as a placeholder must not be silent in every field.
+  const corpusOmitted: Array<{ name: string; reason: OmissionReason; alsoUntracked?: boolean }> = [];
+  const agentBodies: Array<{ key: string; title: string; body: string; isPlaceholder: boolean }> = [];
+  {
+    const rootAccept = opts.pluginRoot !== undefined ? corpusAcceptFor(opts.pluginRoot) : null;
+    for (const agent of opts.agents ?? []) {
+      if (rootAccept && !rootAccept(agent.rel)) {
+        corpusExcluded.push(agent.rel);
+        continue;
       }
+      let body: string;
+      let isPlaceholder = false;
+      if (!existsSync(agent.absPath)) {
+        body = `(no file found at ${agent.absPath})`;
+        isPlaceholder = true;
+      } else {
+        try {
+          body = neutralizeForgedTruncationMarkers(readFileSync(agent.absPath, "utf8"));
+        } catch {
+          body = `(exists at ${agent.absPath} but could not be read)`;
+          isPlaceholder = true;
+        }
+      }
+      // `via` is load-bearing, not decoration: the `subagent_type` extraction has no context awareness, so
+      // a literal that a reference doc merely MENTIONS (a template placeholder, a "never dispatch this"
+      // example) pulls its agent in. Naming the file:line lets the evaluator weigh that itself rather than
+      // reading a mentioned agent as operative guidance.
+      // A resolved agent whose file cannot be read reaches the evaluator as a placeholder and is not a
+      // corpus entry — so without this row it appears in NO evidenceBudget field at all. Before the
+      // placeholder change it was at least visible in `corpusPackaged`, mislabelled; trading a wrong label
+      // for total silence breaks this module's own rule that what is left out is REPORTED.
+      if (isPlaceholder) corpusOmitted.push({ name: agent.rel, reason: "unreadable" });
+      agentBodies.push({
+        isPlaceholder,
+        key: agent.rel,
+        title: flattenTitle(
+          `${AGENT_SECTION_PREFIX} (${neutralizeForgedTruncationMarkers(basename(agent.absPath))} — sub-agent system prompt / dispatch guidance for \`${neutralizeForgedTruncationMarkers(agent.name)}\`; in corpus via ${neutralizeForgedTruncationMarkers(agent.via)})`,
+        ),
+        body,
+      });
+    }
+  }
+
+  // ---- plugin-root references/ ----
+  // A multi-skill plugin's SHARED references/ is mounted for the graded turn but was rooted at `skillDir`,
+  // so a root file the skill's own SKILL.md points at was invisible to the evaluator. Only files the skill
+  // (or one of its packaged agents, or the graded agent's own reads) actually points at are packaged:
+  // the whole tree was measured and rejected — it cuts the graded SKILL.md, and `already-covered` judges
+  // by PRESENCE with no notion of which skill authored a file, so another skill's docs silently excuse a
+  // real gap. Files left out are REPORTED (`corpusOmitted`), which is what makes the narrow rule safe.
+  const rootRefBodies: Array<{ key: string; title: string; body: string; isPlaceholder: boolean }> = [];
+  if (opts.pluginRoot !== undefined) {
+    const rootAccept = corpusAcceptFor(opts.pluginRoot);
+    const resolved = resolveRootReferences({
+      pluginRoot: opts.pluginRoot,
+      skillDir,
+      agents: opts.agents ?? [],
+      accesses: allAccesses,
+      accept: rootAccept,
+    });
+    corpusOmitted.push(...resolved.omitted);
+    for (const ref of resolved.packaged) {
+      // TWO KEYS. `gitAccept` can only match the plugin-root-relative spelling; everything the reader
+      // sees uses the display key, because `references/x.md` exists under BOTH roots and the two would
+      // otherwise render indistinguishably — including in `corpusExcluded`, whose line says "git add them".
+      if (rootAccept && !rootAccept(ref.rel)) {
+        corpusExcluded.push(ref.displayKey);
+        continue;
+      }
+      let body: string;
+      let isPlaceholder = false;
+      try {
+        body = neutralizeForgedTruncationMarkers(readFileSync(ref.absPath, "utf8"));
+      } catch {
+        body = `(exists at ${ref.absPath} but could not be read)`;
+        isPlaceholder = true;
+      }
+      rootRefBodies.push({
+        isPlaceholder,
+        key: ref.displayKey,
+        title: flattenTitle(
+          `${ROOT_REFERENCE_SECTION_PREFIX} (${neutralizeForgedTruncationMarkers(ref.displayKey)} — shared across the plugin, in corpus via ${neutralizeForgedTruncationMarkers(ref.via)}; a read of it appears in referencesAccessed as \`${neutralizeForgedTruncationMarkers(ref.rel)}\`)`,
+        ),
+        body,
+      });
     }
   }
 
@@ -707,13 +751,35 @@ export function packageEvidence(
   // could not name the file it cut, which is the whole point of "cut loudly". A slice below CORPUS_MIN_SLICE
   // is marked omitted with a DISTINCT reason (split this file) rather than shipped as a useless sliver
   // (the corpus as a whole is too big) — the two tell an author to do opposite things.
-  const corpusCuts: Array<{ name: string; keptBytes: number; totalBytes: number; omitted: boolean }> = [];
-  const corpusEntries: Array<{ key: string; bytes: number }> = [
-    ...(skillMdStatus === "readable" ? [{ key: "SKILL.md", bytes: Buffer.byteLength(skillMd, "utf8") }] : []),
+  // `tag` is internal and is what reconciliation must match on: `name` is the DISPLAY key and is NOT
+  // unique (see the collision note below), so filtering `corpusPackaged` by name would let one file's
+  // zeroed row delete a DIFFERENT file's listing — the same false-negative the filter exists to remove.
+  const corpusCuts: Array<{ tag: string; name: string; keptBytes: number; totalBytes: number; omitted: boolean }> = [];
+  // TWO keys again, for a different reason than the accept/display split. `key` is the DISPLAY string —
+  // what a reader, a citation and a remedy see — and it is NOT unique: a plugin named (or a plugin
+  // DIRECTORY named, since `readPluginName` falls back to the basename) `agents` gives a root reference at
+  // `references/x.md` the display key `agents/references/x.md`, identical to an agent at
+  // `<root>/agents/references/x.md`. That collided in the allocator's Map: last-writer-wins on the
+  // allowance while `remaining` was decremented for BOTH, measured at an 11,388 B ceiling overshoot.
+  // `tag` disambiguates the allocator and the cut ledger ONLY — every rendered, cited and reported string
+  // stays byte-identical, because a synthetic suffix in a display key hands the author a path that does
+  // not exist on disk in the one field whose job is to be actionable.
+  //
+  // A placeholder body — `(no file found at …)`, `(exists at … but could not be read)` — is NOT an entry.
+  // References already worked this way (`r.body !== null`); agents and root references counted their
+  // placeholders, so phantom bytes consumed real ceiling allowance against `SKILL_CORPUS_CEILING`'s own
+  // "budgets file CONTENT" contract, and the file was then reported as packaged.
+  const corpusEntries: Array<{ tag: string; key: string; bytes: number }> = [
+    ...(skillMdStatus === "readable" ? [{ tag: "skill\u0000SKILL.md", key: "SKILL.md", bytes: Buffer.byteLength(skillMd, "utf8") }] : []),
     ...referenceBodies
       .filter((r) => r.body !== null)
-      .map((r) => ({ key: `references/${r.name}`, bytes: Buffer.byteLength(r.body!, "utf8") })),
-    ...(agentsMdBody !== undefined ? [{ key: "agents", bytes: Buffer.byteLength(agentsMdBody, "utf8") }] : []),
+      .map((r) => ({ tag: `ref\u0000references/${r.name}`, key: `references/${r.name}`, bytes: Buffer.byteLength(r.body!, "utf8") })),
+    ...agentBodies
+      .filter((a) => !a.isPlaceholder)
+      .map((a) => ({ tag: `agent\u0000${a.key}`, key: a.key, bytes: Buffer.byteLength(a.body, "utf8") })),
+    ...rootRefBodies
+      .filter((r) => !r.isPlaceholder)
+      .map((r) => ({ tag: `rootref\u0000${r.key}`, key: r.key, bytes: Buffer.byteLength(r.body, "utf8") })),
   ];
   const corpusBytes = corpusEntries.reduce((a, e) => a + e.bytes, 0);
   const corpusAllowance = new Map<string, number>();
@@ -725,19 +791,26 @@ export function packageEvidence(
     // ~175 KB when ~518 KB was available — 343 KB of guidance discarded for nothing, on precisely the axis
     // this whole change exists to fix. Small files are protected either way (they always fit under the
     // fair share); only the large ones are affected, and only this order allocates them correctly.
+    // Tiebreak on the DISPLAY key, deliberately, even though the allowance is looked up by tag: sorting
+    // by tag silently reorders equal-sized files (`rootref\0…` collates after `ref\0…`, and `localeCompare`
+    // ignores the NUL), which measurably flips WHICH equal-sized files get zeroed — and in the unfavourable
+    // direction, zeroing the skill's OWN references before the shared plugin-root ones. The tag disambiguates
+    // identity; it must not decide priority.
     const bySizeAsc = [...corpusEntries].sort((a, b) => a.bytes - b.bytes || a.key.localeCompare(b.key));
     let left = bySizeAsc.length;
     for (const e of bySizeAsc) {
       const fair = Math.floor(remaining / left);
       const give = Math.min(e.bytes, Math.max(0, fair));
-      corpusAllowance.set(e.key, give < CORPUS_MIN_SLICE && give < e.bytes ? 0 : give);
-      remaining -= corpusAllowance.get(e.key)!;
+      corpusAllowance.set(e.tag, give < CORPUS_MIN_SLICE && give < e.bytes ? 0 : give);
+      remaining -= corpusAllowance.get(e.tag)!;
       left--;
     }
     truncated = true;
     warn(
       `::warning:: [critique] skill corpus is ${corpusBytes.toLocaleString()} B, over the ${SKILL_CORPUS_CEILING.toLocaleString()} B evidence ceiling — ` +
-        `content was cut before grading; see corpusCuts in the report for which files and how much.\n`,
+        (opts.mode === "preview"
+          ? `content WOULD BE cut before grading; see corpusCuts in the preview for which files and how much.\n`
+          : `content was cut before grading; see corpusCuts in the report for which files and how much.\n`),
     );
   }
   /** Apply the ceiling's per-file allowance, recording what each file actually contributed.
@@ -748,21 +821,22 @@ export function packageEvidence(
    *  this function had just appended and redacted it — so on the "cut loudly" path the evaluator saw
    *  `[truncation-marker-lookalike redacted]`, whose defined meaning is "hostile content forged a marker
    *  here", exactly where the packager had legitimately cut. */
-  const applyCorpus = (key: string, body: string): string => {
+  const applyCorpus = (tag: string, key: string, body: string): string => {
     const total = Buffer.byteLength(body, "utf8");
-    const allowance = corpusAllowance.get(key);
+    const allowance = corpusAllowance.get(tag);
     if (allowance === undefined || allowance >= total) return body;
     if (allowance === 0) {
-      corpusCuts.push({ name: key, keptBytes: 0, totalBytes: total, omitted: true });
+      corpusCuts.push({ tag, name: key, keptBytes: 0, totalBytes: total, omitted: true });
       return `(omitted — its share of the ${SKILL_CORPUS_CEILING.toLocaleString()} B corpus ceiling would be below the ${CORPUS_MIN_SLICE.toLocaleString()} B minimum useful slice; SPLIT THIS FILE rather than shrinking the others)`;
     }
     const cut = boundText(body, allowance);
     truncated = true;
-    corpusCuts.push({ name: key, keptBytes: Buffer.byteLength(cut, "utf8"), totalBytes: total, omitted: false });
+    corpusCuts.push({ tag, name: key, keptBytes: Buffer.byteLength(cut, "utf8"), totalBytes: total, omitted: false });
     return cut;
   };
-  if (skillMdStatus === "readable") skillMd = applyCorpus("SKILL.md", skillMd);
-  if (agentsMdBody !== undefined) agentsMdBody = applyCorpus("agents", agentsMdBody);
+  if (skillMdStatus === "readable") skillMd = applyCorpus("skill\u0000SKILL.md", "SKILL.md", skillMd);
+  for (const a of agentBodies) if (!a.isPlaceholder) a.body = applyCorpus(`agent\u0000${a.key}`, a.key, a.body);
+  for (const r of rootRefBodies) if (!r.isPlaceholder) r.body = applyCorpus(`rootref\u0000${r.key}`, r.key, r.body);
   // Header/note overhead is NOT free: the allocator budgets file CONTENT, while the assembled section also
   // carries a `### <path>` line per file plus any omission notes. With hundreds of references that overhead
   // ran past the fixed slack and the section-level bound then chopped the tail — silently, with corpusCuts
@@ -778,7 +852,7 @@ export function packageEvidence(
   const referenceParts = referenceBodies.map(({ name, body }) => {
     if (body === null) return `### ${displayName(name)}\n(could not be read — presence known from the listing, content unavailable)`;
     const before = corpusCuts.length;
-    const included = applyCorpus(`references/${name}`, body);
+    const included = applyCorpus(`ref\u0000references/${name}`, `references/${name}`, body);
     // An OMITTED file's ~150-byte note is packager text the allocator budgeted ZERO for. Counting it as
     // body understated the overhead by that much per omission, so the section bound below cut the tail a
     // second time — files vanished header-and-all while `corpusCuts` still reported bytes shipped for them
@@ -854,9 +928,10 @@ export function packageEvidence(
     // Corpus sections: the ceiling was already applied per-file above, so these are passed through the
     // forgery-neutralizing `bound` at their own (already-satisfied) size rather than re-rationed here.
     sec(skillMdSectionTitle, boundText(skillMdSectionBody, SKILL_CORPUS_CEILING)),
-    ...(agentsMdBody !== undefined ? [sec(agentsMdTitle!, boundText(agentsMdBody, SKILL_CORPUS_CEILING))] : []),
+    ...agentBodies.map((a) => sec(a.title, boundText(a.body, SKILL_CORPUS_CEILING))),
+    ...rootRefBodies.map((r) => sec(r.title, boundText(r.body, SKILL_CORPUS_CEILING))),
     sec(
-      "references/ available (filenames as paths relative to references/, recursive)",
+      "references/ available (the SKILL's own, as paths relative to references/, recursive; a multi-skill plugin's SHARED references are listed separately below as their own content sections)",
       bound(referenceFiles.length ? referenceFiles.map(displayName).join("\n") : "(none)", REFERENCE_LIST_CAP),
     ),
     sec(
@@ -899,8 +974,14 @@ export function packageEvidence(
     skillMdStatus,
     corpusBytes,
     corpusCeiling: SKILL_CORPUS_CEILING,
-    corpusCuts,
+    // `tag` is internal reconciliation state; the reported row keeps only what a consumer needs.
+    corpusCuts: corpusCuts.map(({ name, keptBytes, totalBytes, omitted }) => ({ name, keptBytes, totalBytes, omitted })),
     corpusExcluded,
+    // Entry keys MINUS anything the ceiling zeroed. A partially cut file stays listed: content did ship,
+    // and `corpusCuts` already reports the byte loss, so dropping it would under-report the other way.
+    // Placeholders never become entries at all (see `corpusEntries`), so they need no filtering here.
+    corpusPackaged: corpusEntries.filter((e) => !corpusCuts.some((c) => c.omitted && c.tag === e.tag)).map((e) => e.key),
+    corpusOmitted,
     trimRecord,
     packageTruncated: truncated,
     // `undefined` when the turn-1 result was degraded (unknown) OR when the skill ships no references at
@@ -910,7 +991,12 @@ export function packageEvidence(
     // "we could not look" must never render as "nothing was opened".
     referenceAccessUnobservable: !accessObservable,
     noSkillFilesRead:
-      turn1ResultDegraded || !accessObservable || (referenceFiles.length === 0 && deliveredScripts.length === 0)
+      // Packaged plugin-root references are readable material too: a skill with NO local references but a
+      // linked shared tree has something to read, so the "nothing to read" suppression must account for
+      // them or it reports a skill as having nothing when it has six files.
+      turn1ResultDegraded ||
+      !accessObservable ||
+      (referenceFiles.length === 0 && deliveredScripts.length === 0 && rootRefBodies.length === 0)
         ? undefined
         : (allAccesses ?? []).length === 0,
   };
@@ -945,8 +1031,8 @@ export function trimToPackageCap(
  *  LAST, no matter where it sits in render order. Corpus content goes first: it is the only thing large
  *  enough to cause a breach, and its per-file cut is already accounted for and reported. */
 function trimPriority(title: string): number {
-  if (title.startsWith("references/ content")) return 3;
-  if (title.startsWith("SKILL.md") || title.startsWith("agents markdown")) return 2;
+  if (title.startsWith("references/ content") || title.startsWith(ROOT_REFERENCE_SECTION_PREFIX)) return 3;
+  if (title.startsWith("SKILL.md") || title.startsWith(AGENT_SECTION_PREFIX)) return 2;
   if (title.startsWith("Transcript")) return 0;
   return 1;
 }

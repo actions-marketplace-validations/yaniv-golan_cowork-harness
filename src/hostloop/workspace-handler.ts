@@ -166,24 +166,42 @@ export type RawFetch = (
  *  slices/streams to the same value — single source of truth so the two paths can't drift. */
 const WEB_FETCH_BYTE_CAP = 200000;
 
+/** The two shapes Node's `net` may invoke an injected `lookup` with: the legacy
+ *  `(err, address, family)` triple, and — when autoSelectFamily requested `{all: true}` — a single
+ *  array of `{address, family}`. `pinnedRequest` must be able to answer either. */
+type LookupCb = {
+  (err: NodeJS.ErrnoException | null, address: string, family: number): void;
+  (err: NodeJS.ErrnoException | null, addresses: { address: string; family: number }[]): void;
+};
+
 /** Pin the connection to a pre-vetted IP: a Node http(s) request whose DNS `lookup` is overridden to
  *  hand back only the vetted address(es), so the host that passed the SSRF check is the host contacted.
  *  The Host header and TLS servername stay the original hostname (name-based vhosts / SNI keep working). */
-function pinnedRequest(
+export function pinnedRequest(
   url: string,
   pinned: string[],
 ): Promise<{ status: number; location?: string; text(): Promise<string>; body?: ReadableStream<Uint8Array> | null; truncated?: boolean }> {
   const u = new URL(url);
   const mod = u.protocol === "https:" ? https : http;
-  const family = net.isIP(pinned[0]); // 4 | 6
   return new Promise((resolve, reject) => {
     const req = mod.request(
       url,
       {
         servername: u.hostname, // SNI uses the real name, not the pinned IP
         // Override resolution: always return a vetted address, never re-resolve the name.
-        lookup: (_host: string, _opts: unknown, cb: (err: NodeJS.ErrnoException | null, addr: string, fam: number) => void) =>
-          cb(null, pinned[0], family || 4),
+        // TWO CALLBACK SHAPES, and the caller picks — `net.Socket.connect` asks for `{all: true}`
+        // whenever autoSelectFamily is on (Node's DEFAULT since v20) and then reads `addresses[0].address`
+        // off an ARRAY. Answering that call with the legacy `(err, address, family)` triple makes Node
+        // read `.address` off a string, get `undefined`, and throw `Invalid IP address: undefined` — so
+        // every pinned (i.e. every resolvable non-literal) host failed. Honour `opts.all` instead of
+        // assuming a shape, and hand back EVERY vetted address so Happy Eyeballs still has candidates.
+        lookup: (_host: string, opts: { all?: boolean } | undefined, cb: LookupCb) =>
+          opts?.all
+            ? cb(
+                null,
+                pinned.map((address) => ({ address, family: net.isIP(address) || 4 })),
+              )
+            : cb(null, pinned[0], net.isIP(pinned[0]) || 4),
         signal: AbortSignal.timeout(30000),
       },
       (res) => {

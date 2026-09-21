@@ -89,7 +89,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | In-band gate answering from a driving agent (`gates` / `answer`) | [decider-dir.md](./decider-dir.md) |
 | Checking a background run's liveness (`status`) and locating a scenario's newest run (`status --latest-for`) | [run-status.md](./run-status.md) |
 | Fidelity — three isolation tiers (L0/L1/L2) + two loop overlays (`hostloop`, `cowork`) | [boundary.md](./boundary.md), [README](../README.md) |
-| Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) (frozen historical research, verified on `desktop-1.12603.1`; control-protocol fields re-verified unchanged through `desktop-1.20186.0`; mount-layout fork at ≥`1.14271.0`; volatile fields — `agentVersion`, egress allowlist, GrowthBook gates — tracked in `baselines/`); see also [SPEC.md](../SPEC.md) |
+| Control-protocol / spawn contract | [cowork-spawn-contract-1.12603.1.md](./cowork-spawn-contract-1.12603.1.md) — **frozen historical research; the live values are `baselines/desktop-*.json` (currently `desktop-2.2553.1`)**. The version in the filename is when it was written, not an expiry. Verified on `desktop-1.12603.1`, with a mount-layout fork at ≥`1.14271.0`.<sup>1</sup> See also [SPEC.md](../SPEC.md) |
 | AI agent instructions for this repo | [AGENTS.md](../AGENTS.md) |
 | Security & threat model | [../SECURITY.md](../SECURITY.md) |
 | Contributing | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
@@ -97,3 +97,5 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 | Releasing — the branch → PR → tag publish flow | [../RELEASING.md](../RELEASING.md) |
 | Machine-readable project summary | [../llms.txt](../llms.txt) |
 | Architecture decision records — the "why" behind a cross-cutting default (e.g. verification strictness, fidelity) | [docs/decisions/](./decisions/) |
+
+<sup>1</sup> Control-protocol fields were re-verified unchanged through `desktop-1.20186.0`; that is also the last **live** end-to-end protocol pass. Volatile fields — `agentVersion`, the egress allowlist, GrowthBook gates — are tracked in `baselines/`, never here. See [protocol.md § v1 changelog](./protocol.md#v1-changelog) for per-release coverage.

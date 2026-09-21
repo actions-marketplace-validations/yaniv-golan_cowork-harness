@@ -28,6 +28,47 @@ Three mechanisms, all code rather than prompt instructions:
 > reproduce, fix, prove the re-run used the fixed body, compare generations — is in
 > [debugging.md](./debugging.md#the-whole-loop-end-to-end).
 
+## How it works
+
+Five steps, in this order. The middle one is not a model call — it is the boundary that makes step 4
+trustworthy.
+
+1. **Task turn** — your skill runs against the probe. An ordinary graded run.
+2. `── boundary: the run record is frozen here ──` — this is mechanism 1
+   [above](#how-it-resists-confabulation), and its scope is exactly what that wording says: the
+   reflection turn's own **output** cannot reach the record it is graded against.
+3. **Reflection turn** — a **resume of the same session**, so the agent still has its own context when
+   asked what confused it. Its answer is the self-report.
+4. **Evaluator pass 1 — independent.** Reads the frozen turn-1 record and the packaged corpus. It is
+   never sent the self-report (mechanism 2), and its claims are citation-checked against the package
+   before anything else is interpolated.
+5. **Evaluator pass 2 — adjudicating.** Everything pass 1 saw, **plus the self-report and pass 1's
+   validated findings**. **Skipped entirely when no self-report was captured**, in which case the report
+   carries pass 1's independent findings alone — so a critique is up to four model workloads (zero with
+   `--corpus-only`), not always four.
+
+### Who sees what
+
+The blindness in step 4 is the whole value proposition, so it is worth reading as a matrix rather than
+a sequence:
+
+| Workload | Sees the skill folder | Sees the run | Sees the self-report | Sees pass 1's findings |
+|---|---|---|---|---|
+| 1 · task turn | whole folder, incl. `scripts/` | is the run | — | — |
+| 2 · reflection turn | whole folder, incl. `scripts/` | its own session | writes it | — |
+| 3 · evaluator pass 1 | packaged corpus only | frozen turn-1 record | **no** | — |
+| 4 · evaluator pass 2 | packaged corpus only | frozen turn-1 record | yes, when captured (truncated, JSON-fenced) | validated only |
+
+Rows 1-2 versus 3-4 carry the asymmetry that surprises people most: the graded and reflection turns
+mount your whole skill folder including `scripts/`, while the evaluator only ever receives a **packaged
+corpus** — a bounded copy of the authored text, never the folder. What goes into it, and what is
+deliberately left out, is the `evidenceBudget` object under
+[Reading the report](#reading-the-report).
+
+An evidence section that is **empty** means the packager could not read it, never that the thing did not
+happen — see [Known limitations](#known-limitations) for the degraded-turn-1 states and how a verdict is
+downgraded rather than guessed.
+
 ## If you came from "loop engineering"
 
 This command is the **evaluator half** of the Evaluator-Optimizer pattern (Anthropic's *Building
@@ -111,7 +152,7 @@ ignored.
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
-| `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ its `agents/<name>.md`) instead of a missing plugin-root SKILL.md — see below |
+| `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ every `agents/**.md` it can dispatch, + any plugin-root `references/` file the skill actually links) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop\|cowork` | container (default) or hostloop; `cowork` resolves via the baseline's loop gate to one of those two and pins BOTH turns to it. `microvm`/`protocol` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
 | `--dotenv <path>` | credentials — works **before** `critique` (the global form) or **after** it |
@@ -138,8 +179,11 @@ plain skill folder has no SKILL.md to read, which downgrades every coverage find
 adjudicable". So:
 
 - **`--skill <name>`** makes the packager grade `skills/<name>/SKILL.md`, and also packages the invoked
-  skill's **`agents/<name>.md`** (sub-agent system prompts) plus bounded **`references/*.md` content** —
-  for sub-agent-heavy skills that is where most operative guidance lives.
+  skill's **dispatchable `agents/**.md`** (sub-agent system prompts) and its own **`references/**` content**
+  — for sub-agent-heavy skills that is where most operative guidance lives — plus, for a multi-skill
+  plugin, the **shared plugin-root `references/`** files the skill actually links (never the whole shared
+  tree, and never an unlinked one — see [Known limitations](#known-limitations) for the recognized link
+  forms, the measured reason the whole tree is rejected, and `evidenceBudget.corpusOmitted`).
 - A multi-skill root with **no `--skill` is refused before any model spend**; a single-skill plugin
   auto-selects with a notice.
 - **Selection only:** the positional folder is still what both turns mount (session identity is
@@ -183,13 +227,14 @@ It does **not** record their contents — see Known limitations.
 
 ## Cost and prerequisites
 
-- **Four model workloads per critique**: two graded runs (task + reflection) at the chosen tier and two
-  evaluator passes.
+- **Up to four model workloads per critique (zero with `--corpus-only`)** — the two graded turns and the
+  two evaluator passes of [How it works](#how-it-works) (pass 2 is skipped when no self-report was
+  captured). See [Knowing before you pay](#knowing-before-you-pay) for the no-spend corpus check.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
   cost is roughly **fixed** (bounded by the evidence package: corpus + transcript caps); the graded task
-  turn is **unbounded**. On a trivial probe the two evaluator passes are ~3/4 of the total; on a real
+  turn is **unbounded**. On a trivial probe the two evaluator passes (steps 4-5) are ~3/4 of the total; on a real
   document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
   report's `cost:` line prints the four-way split and the evaluator's share of the total, and `costUsd`
   carries the same numbers — use those. A cheaper `--evaluator-model` can only ever buy you the
@@ -310,22 +355,105 @@ workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFid
 it resolved to — and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
 malformed evaluator items (the surviving findings are then not necessarily the complete reply). An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
-(total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + references +
-agents md), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
-actually breached), `corpusExcluded` (files present on the host but never delivered to the agent by
+(total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
+own references + every packaged agent md + every packaged plugin-root reference), `corpusPackaged`
+(every file whose CONTENT shipped into the corpus sections, by the same key — so a reader can see which
+sub-agent bodies and shared references the grade rests on; a file the ceiling zeroed is not listed, a
+partially cut one is, with its loss in `corpusCuts`), `corpusCuts` (per-file — empty on every real skill; only non-empty once the ceiling is
+actually breached), `corpusOmitted` (plugin-root `references/` files present on the HOST under
+`<plugin>/references/` but **not** packaged — a raw walk, so an untracked file that staging would not
+deliver is listed here too, and `alsoUntracked` says so when trackedness was evaluated; that property is
+ABSENT, never `false`, when it could not be — git mode off, an unreadable index, a non-work-tree, or a
+work tree with nothing tracked —
+with why: `not-linked` — nothing in the skill's authored text or a packaged agent body points at
+it, and the graded agent's own read didn't either; `not-utf8` — it failed to decode as clean UTF-8, e.g. a
+font asset (only plugin-root references are filtered this way — the skill's **own** `references/**` still
+ships with no extension or content filter at all); or `ambiguous-read` — the graded agent read a path that
+exists under both the skill's own `references/` and the plugin root's, so which tree it read cannot be
+attributed), `corpusExcluded` (files present on the host but never delivered to the agent by
 staging — untracked, with git-mode on), and `trimRecord` (any section the overall belt-and-suspenders cap
-shaved). `cowork-harness lint-skill <skill-dir>` answers the same proximity question **without a paid
+shaved). `cowork-harness lint-skill <skill-dir>` answers a narrower proximity question **without a paid
 run** — `skill-corpus-near-evidence-ceiling` (INFO) from 80%, `skill-corpus-over-evidence-ceiling` (WARN,
-so it fails `--strict`) past it. It counts the same three classes the ceiling governs: `SKILL.md`, every
+so it fails `--strict`) past it. It counts the same four classes: `SKILL.md`, every
 file under `references/` (**any extension** — the packager applies no extension filter, so JSON schemas
-and rule packs count), and a plugin skill's `agents/<name>.md`. It does not apply staging's git-tracked
-filter, so an untracked reference inflates the figure — it errs toward warning early, and `corpusCuts`
-stays the authority.
+and rule packs count), every `agents/**.md` a plugin skill can dispatch, and every plugin-root
+`references/` file the skill links. The one clause it cannot mirror is the run-dependent one — a root
+reference included only because the graded agent READ it — since a static lint has no run to read. It also does not apply
+staging's git-tracked filter, so an untracked skill-local reference inflates the figure the other way —
+it errs toward warning early either way, and a real report's `corpusCuts`/`corpusOmitted` stay the
+authority.
 On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
 
+### Knowing before you pay
+
+```bash
+cowork-harness critique ./my-skill --corpus-only
+cowork-harness critique ./my-plugin --skill my-skill --corpus-only --output-format json
+```
+
+NO SPEND — no session, no spawn, no model call. This runs the same `packageEvidence` call a paid
+critique makes, over an empty run dir, and stops. The text report is one block:
+
+```
+critique --corpus-only  .claude/skills/cowork-harness
+  evidence corpus (pre-run FLOOR): 281,029 B = 53.6% of the 524,288 B ceiling
+  packaged: 6 file(s)
+  lower bound — plugin-root references the agent READS during the graded turn are added at critique time, so a paid run's corpusBytes is >= this
+```
+
+(the harness's own bundled skill, on the tree this was written from — your numbers will differ)
+
+`--output-format json` emits the standard payload envelope (`{tool, command, ok, ...}` — `tool`/`command`
+are the discriminator; a critique **report** carries neither) with a `corpus` object holding the same six
+fields as `evidenceBudget` above (`trimRecord`/`packageTruncated` are absent — they describe a package a
+graded run produced) plus `ignoredFlags` (every run-shaping flag you passed that this mode parsed but
+did not act on) and the same `note`.
+
+**The number is a FLOOR, always.** A plugin-root reference the agent READS during the graded turn (not
+just linked from authored text) is added to the corpus at critique time — no static instrument can see
+that read — so a paid run's `corpusBytes` is `>=` the preview's, and a `corpusOmitted[].reason` can move
+from `not-linked` to `ambiguous-read` once a real run exists. Exit `0` means *measured*, even over the
+ceiling — it is a measurement, not a gate; gate yourself with `jq -e
+'.corpus.corpusBytes <= .corpus.corpusCeiling'`. Exit `2` covers a usage error, an unresolvable target, no
+readable `SKILL.md`, or a git work tree with 0 tracked files (mirrored from staging's own refusal; a
+folder that is not a work tree is measured raw, as staging copies it) — staging's git rules, which
+`lint-skill`'s static count never applied.
+
+**Why not just `lint-skill --strict`?** It's free and needs no git, but it diverges from what a critique
+actually packages on four measured axes: it counts (1) an untracked file staging would drop and (3) a
+symlink pointing outside the plugin that the packager's containment rule refuses — both **over-counts**
+— and it cannot see (2) a plugin-root reference read at run time, and (4) sums `st_size` where the
+packager measures decoded UTF-8 length — both **under-counts**. Axis (4) moves only where a file is NOT
+valid UTF-8 (each invalid byte decodes to a 3-byte U+FFFD); clean multibyte text — em dashes, curly
+quotes — round-trips byte-exact, so on ordinary markdown its delta is zero. It also emits nothing below 80% of the
+ceiling, so a skill in that band gets no number at all. `--corpus-only` closes (1) and (3) by construction
+(it runs the real staging filter and the real containment rule) and states (2) as the floor rather than
+guessing at it.
+
+**Known gap — a skill that is a git submodule of its plugin, or any `--skill` subdirectory with nothing
+tracked under it.** Staging never delivers a gitlink's contents (nor an untracked subdirectory), so the
+mount carries an empty `skills/<name>/`; a LIVE critique's packager consults that directory's OWN git
+index (`corpusAcceptFor(skillDir)`) and packages `SKILL.md` anyway — grading a skill the agent never
+received. `--corpus-only` refuses both cases up front, in staging's terms (exit 2, "`skills/<name>/` has
+0 git-tracked files under …"). A second shape of the same gap is NOT caught by the preview: `critique
+<plugin>/skills/<name>` mounts only that folder, yet the packager walks up to the enclosing plugin and
+packages its `agents/**.md` — sub-agent prompts the mounted agent could never dispatch — so `--corpus-only`
+on that positional reports a floor that already over-counts. Both shapes have one cause (the packager
+reads a git-tracked set per class from that class's own directory, where staging reads one at the mount
+root) and one fix, tracked as
+[#182](https://github.com/yaniv-golan/cowork-harness/issues/182); the live-packager side is pre-existing,
+pinned by a test, and not fixed here. Until then, run `critique` on the plugin root with `--skill`.
+
+**`--dry-run` is refused on `critique`** with a reason pointing here: there is no meaningful two-turn
+preview, so `--corpus-only` answers the no-spend evidence-corpus question and `skill --dry-run` answers
+the no-spend invocation-plan question.
+
 **`scripts/` is outside the evaluator's corpus — deliberately, and with one consequence worth knowing.**
-The three classes above are the whole corpus: `SKILL.md`, `references/**`, and `agents/<name>.md`. The
+The four classes above are the whole corpus: `SKILL.md`, the skill's own `references/**`, every
+dispatchable `agents/**.md`, and — for a multi-skill plugin — the shared plugin-root `references/` files
+the skill actually links (never the whole shared tree; see [Multi-skill plugins](#multi-skill-plugins---skill)
+above). The
 *graded* agent, by contrast, has the skill's `scripts/` mounted and is explicitly invited to reflect on it
 (the reflection prompt asks about "SKILL.md and anything under `references/` or `scripts/`"). The two
 actors therefore see different things, which is correct — the evaluator grades authored *guidance*, not
@@ -450,9 +578,30 @@ the two cannot disagree.
 - **`[not-built]` The protocol tier is refused** — it never plumbs a session id or `--resume`, so
   critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
   (which also runs with no sandbox) would be the work.
-- **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — SKILL.md, every `references/**`
-  file, and `agents/<skill>.md` are packaged in full, up to a **512 KiB combined corpus ceiling** covering
-  all three together. The ceiling is a sanity valve, not an allocation (~2.3x the largest skill measured
+- **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — SKILL.md, the skill's own
+  `references/**`, and every dispatchable `agents/**.md` are packaged in full, up to a **512 KiB combined
+  corpus ceiling** covering all three together. For a multi-skill plugin, a **fourth** class joins the
+  ceiling: plugin-root `references/` files that the skill's own text, a packaged agent body, or the graded
+  agent's own read of it actually points at. Recognized link forms are `${CLAUDE_PLUGIN_ROOT}/references/x.md`,
+  `<plugin-name>/references/x.md`, or a relative path that resolves into the plugin-root `references/`
+  dir — a bare `references/x.md` in a skill's own text means the skill's **own** references, never the
+  root's. Packaging the WHOLE shared tree instead was measured and rejected: on a real 6-skill plugin it
+  pushed one skill's corpus to 107% of the ceiling and made the allocator cut that skill's own SKILL.md by
+  37,295 B, and because the `already-covered` classification judges by presence with no notion of which
+  skill authored a file, another skill's shared docs would silently excuse a real gap. A fourth link
+  form is less obvious: a token resolving to the shared `references/` **directory** arms bare-filename
+  matching **for that line only**, so ``From `${CLAUDE_PLUGIN_ROOT}/references/` (shared): `a.md`, `b.md```
+  links both files though neither carries a path. That is the shape most real plugins use. The cost is
+  that matching is textual with no notion of intent — a filename on an arming line is packaged even if the
+  prose says *not* to read it, and a link inside a fenced code block counts like any other — so each
+  packaged section states the `file:line` it came from, the same provenance the sub-agent sections carry
+  and for the same reason. A plugin-root
+  reference must additionally decode as clean UTF-8 to be packaged — a binary asset such as a font is
+  excluded — while the skill's **own** `references/**` still has no extension or content filter at all;
+  that asymmetry is deliberate, not an oversight. Every plugin-root file the rule leaves out is reported in
+  `evidenceBudget.corpusOmitted` (`not-linked`, `not-utf8`, or `ambiguous-read`, plus `alsoUntracked`
+  where it could be evaluated), never dropped silently.
+  The ceiling itself is a sanity valve, not an allocation (~2.3x the largest skill measured
   when it was sized); a breach is cut **loudly** — the named file and byte counts are reported — never
   refused, and never silent. The **transcript** is bounded separately at **128 KiB**, with a head+tail cut
   and an elided middle, so both a run's setup and its conclusions survive a cut rather than just one end.
