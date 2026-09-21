@@ -6,35 +6,6 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Added
-
-- **`critique <skill-folder> [--skill <name>] --corpus-only [--output-format json] [--out <path>]` — NO
-  SPEND.** Runs the real packager (`packageEvidence`, the same call a paid critique makes, same
-  git-tracked filter, same 512 KiB ceiling) over an empty run dir and prints the six corpus fields —
-  `corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `corpusPackaged` / `corpusOmitted` —
-  then exits. `--prompt` becomes optional; every other flag is still parsed and type-checked as a
-  critique line, but a run-shaping one is not acted on and is named in `ignoredFlags` (JSON) and one
-  stderr line — a path value (`--upload`, `--folder`, `--plugin`) is only checked when a turn stages, so a
-  missing one does not fail the preview. Exit `0` means *measured*, even over the ceiling — it is a measurement, not a gate, so
-  gate yourself with `jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'`; exit `2` is a usage error, an
-  unresolvable target, no readable `SKILL.md`, a git work tree with 0 tracked files (mirrors staging's
-  own refusal), or a `--skill` subdirectory with nothing tracked under it (staging would mount the plugin
-  WITHOUT that skill, so a critique would grade a skill the agent never received). A folder that is not a
-  work tree is measured raw, exactly as staging copies it. **The number is a FLOOR**: a plugin-root reference
-  the agent READS during the graded turn is added to the corpus at critique time, so a paid run's
-  `corpusBytes` is always `>=` the preview's, and a `corpusOmitted[].reason` can change from `not-linked`
-  to `ambiguous-read` once a real run has happened.
-
-### Changed
-
-- **`critique`'s `--dry-run` refusal now names `--corpus-only`.** The rejection reason for `--dry-run` on
-  `critique` reads: "there is no meaningful two-turn preview — `critique --corpus-only` answers the
-  no-spend question for the evidence corpus, and `skill --dry-run` for the invocation plan" (previously it
-  named only `skill --dry-run`).
-- **The packager's over-ceiling `::warning::` line is tense-aware.** Under `critique --corpus-only` it now
-  reads "content WOULD BE cut before grading" instead of "content was cut before grading," so a CI
-  annotation from the no-spend preview never describes a grading that did not happen.
-
 ### Upgrade notes
 
 - **Cassettes: no re-record needed.** Nothing under `src/runtime`, `src/hostloop`, `src/staging`,
@@ -56,6 +27,53 @@ All notable changes to this project are documented here. The format is based on
   IS the packager's own floor, computed by the packager — and it applies staging's git rules, which the
   static count did not: a work tree with nothing tracked, or a `--skill` subdirectory with nothing tracked
   under it, is refused, not counted.
+
+### Added
+
+- **`critique <skill-folder> [--skill <name>] --corpus-only [--output-format json] [--out <path>]` — NO
+  SPEND.** Runs the real packager (`packageEvidence`, the same call a paid critique makes, same
+  git-tracked filter, same 512 KiB ceiling) over an empty run dir and prints the six corpus fields —
+  `corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `corpusPackaged` / `corpusOmitted` —
+  then exits. `--prompt` becomes optional; every other flag is still parsed and type-checked as a
+  critique line, but a run-shaping one is not acted on and is named in `ignoredFlags` (JSON) and one
+  stderr line — a path value (`--upload`, `--folder`, `--plugin`) is only checked when a turn stages, so a
+  missing one does not fail the preview. Exit `0` means *measured*, even over the ceiling — it is a measurement, not a gate, so
+  gate yourself with `jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'`; exit `2` is a usage error, an
+  unresolvable target, no readable `SKILL.md`, a git work tree with 0 tracked files (mirrors staging's
+  own refusal), or a `--skill` subdirectory with nothing tracked under it (staging would mount the plugin
+  WITHOUT that skill, so a critique would grade a skill the agent never received). A folder that is not a
+  work tree is measured raw, exactly as staging copies it. **The number is a FLOOR**: a plugin-root reference
+  the agent READS during the graded turn is added to the corpus at critique time, so a paid run's
+  `corpusBytes` is always `>=` the preview's, and a `corpusOmitted[].reason` can change from `not-linked`
+  to `ambiguous-read` once a real run has happened.
+
+### Fixed
+
+- **`critique --skill` is a NAME, not a path.** A selector such as `--skill ../../elsewhere` was joined
+  onto `<plugin>/skills/` unchecked, so it resolved to a directory the mount can never contain and the
+  packager graded it — and the same string was then used as the agent-match name, so no `agents/*.md`
+  could ever match. Both turns still mounted the positional, so the evaluator judged content the agent
+  never had. The selector now goes through staging's own single-segment rule (`safePathSegment`): any
+  value containing `/`, `\\`, `:`, a control character, `.` or `..` is a usage error (exit 2) before
+  any spend, on the paid path and under `--corpus-only` alike.
+
+### Changed
+
+- **`critique`'s `--dry-run` refusal now names `--corpus-only`.** The rejection reason for `--dry-run` on
+  `critique` reads: "there is no meaningful two-turn preview — `critique --corpus-only` answers the
+  no-spend question for the evidence corpus, and `skill --dry-run` for the invocation plan" (previously it
+  named only `skill --dry-run`).
+- **The packager's over-ceiling `::warning::` line is tense-aware.** Under `critique --corpus-only` it now
+  reads "content WOULD BE cut before grading" instead of "content was cut before grading," so a CI
+  annotation from the no-spend preview never describes a grading that did not happen.
+
+### Documentation
+
+- **The companion skill said a critique is "four model workloads"; it is up to four.** Evaluator pass 2
+  is skipped entirely when no self-report was captured (nothing to verify), so a completed critique can be
+  three workloads and its roll-up row covers three. `docs/critique.md` already said so; the shipped
+  `SKILL.md` and the in-plugin `references/critique.md` — the copy the skill-authoring agent reads —
+  stated the fixed count. Corrected to match.
 
 ## [3.7.0] — 2026-09-20
 
