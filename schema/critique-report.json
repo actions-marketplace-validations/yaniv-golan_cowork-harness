@@ -109,7 +109,7 @@
     },
     "commandShadowsSkill": {
       "type": "boolean",
-      "description": "advisory: the plugin ships BOTH commands/<gradedSkill>.md and skills/<gradedSkill>/SKILL.md, so the slash entry and the Skill tool launch either through one registry and the run records the name, not the kind — skillInvocationObserved is therefore absent, never true; present only when true"
+      "description": "advisory: the plugin ships BOTH commands/<gradedSkill>.md and skills/<gradedSkill>/SKILL.md, so the slash entry and the Skill tool launch either through one registry and the run records the name, not the kind — skillInvocationObserved is therefore absent or false, never true; present only when true"
     },
     "referenceAccessUnobservable": {
       "type": "boolean",

@@ -63,10 +63,13 @@ All notable changes to this project are documented here. The format is based on
     also contains tool names and JSON keys. Measured against a real run with **zero** invocations, a
     selector of `fetch`, `root` or `skill` reported `true`, and `root` collided with the `(root)`
     sentinel itself. Ids are now matched structurally: a bare id must equal the selector; a
-    `<plugin>:<name>` id must match the name AND the graded plugin's manifest name — on `hostloop` /
-    `protocol` the host's own plugins are in the inventory, and a same-named skill from another plugin
-    (`anthropic-skills:skill-creator` for a critique of `skill-creator:skill-creator`) must not count.
-    Never a substring, never a parenthesised sentinel.
+    `<plugin>:<name>` id must match the name AND the qualifier the binary itself uses for the graded
+    plugin — `.claude-plugin/plugin.json#name`, else the directory basename; a root-level `plugin.json`
+    is ignored, because the binary ignores it (measured: `rootpj-dir/plugin.json` naming `rootpj-name`
+    still registers as `rootpj-dir:qux`). That rule is now one function (`binaryPluginIdentity`) shared
+    with staging, not a second derivation. On `hostloop` / `protocol` the host's own plugins are in the
+    inventory, and a same-named skill from another plugin (`anthropic-skills:skill-creator` for a critique
+    of `skill-creator:skill-creator`) must not count. Never a substring, never a parenthesised sentinel.
   - It was blind to the channel a `/plugin:skill` prompt actually uses. The binary auto-registers a
     slash command per staged skill, and expanding one **inlines SKILL.md as a user message** — no
     `Skill` tool call at all, so `skillsInvoked` is legitimately `[]`; the field read `false` over a
@@ -89,11 +92,15 @@ All notable changes to this project are documented here. The format is based on
   (the `(unknown)` sentinel); a bare `/name` that more than one staged skill answers to; or a plugin
   that ships both `commands/<n>.md` and `skills/<n>/SKILL.md` (`vercel@0.48.0` does) — where the
   `Skill` tool launches either through the same registry, so the shadow makes the **tool** channel
-  ambiguous too, not only the slash one. Each absence gets a NOTE naming the cause, so a `--skill` user
-  can tell "could not observe" from "not applicable". The new `commandShadowsSkill` field, and the
+  ambiguous too, not only the slash one. An absent verdict gets a NOTE listing the routes to absence
+  (the report does not carry which one fired), so a `--skill` user can tell "could not observe" from
+  "not applicable"; the shadow NOTE prints only beside an absent verdict, since a `false` under a shadow
+  is sound (no channel named the skill at all). The advisory now also fires for a
+  `critique <plugin>/skills/<name>` positional, whose skill name the resolver already knew. The new `commandShadowsSkill` field, and the
   pre-existing `referenceAccessUnobservable`, are now declared in `schema/critique-report.json` — both
   were emitted while the schema said `additionalProperties: false`, so every real report carrying either
-  failed validation; the tripwire test's fixture did not include them. `skillsInvoked` is deliberately
+  failed validation; the tripwire test's fixture did not include them. `referenceAccessUnobservable` is
+  now emitted only when true (it was always-present, 21 of 21 corpus reports carrying `false`). `skillsInvoked` is deliberately
   unchanged: it is a documented contract meaning "via the `Skill` tool" that the `skill_triggered`
   assertion reads.
 - **`docs/critique.md` claimed off-allowlist `web_fetch` is "denied at `container`".** It is not: since

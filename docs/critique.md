@@ -201,15 +201,21 @@ adjudicable". So:
   invisible to either critique. Pairing critiques (above) tells you a finding reproduced; it does not
   surface a defect that exists only in the disagreement BETWEEN two skills. That one needs a human
   reading both, or a check outside this tool.
-- The report carries an advisory **`skillInvocationObserved`**. `true` means an observable channel
-  named the selected skill: a `Skill` tool call, or a leading `/plugin:skill` slash command in the
-  prompt that matches a *staged skill* — the binary auto-registers one per staged skill, and expanding
-  it inlines SKILL.md as a user message rather than calling the tool, so a slash-command run shows
-  `skillsInvoked: []` and is **not** a non-invocation. `false` means both channels were observable and
-  neither fired. The field is **absent** when a channel could not be observed — an older `result.json`
-  with no prompt or skill inventory, a plugin that ships both a command and a skill under one name
-  (where nothing in the run says which ran), or a `Skill` call inside a sub-agent that the record
-  cannot name. Absent is never a synonym for `false`.
+- The report carries an advisory **`skillInvocationObserved`** whenever a single skill is being graded
+  (`--skill`, a single-skill plugin, or a `<plugin>/skills/<name>` positional). `true` means an
+  observable channel named the selected skill — the main agent's `Skill` tool call, a sub-agent's `Skill`
+  call (read from the turn's `events.jsonl`, which carries the name the timeline drops), or a leading
+  slash token in the prompt that resolves to a *staged skill*. The slash rule is the binary's, measured:
+  the `/` must be the first character, the token runs to the first whitespace (`/plugin:skill.` is sent as
+  prose, not expanded), and a bare `/name` resolves to the plugin skill. Expanding one inlines SKILL.md as
+  a user message rather than calling the tool, so a slash-command run shows `skillsInvoked: []` and is
+  **not** a non-invocation. `false` means all three channels were observable and none fired. The field
+  is **absent** when a channel could not be observed or the one that fired is ambiguous — an older
+  `result.json` with no prompt or skill inventory; an unreadable events slice; a top-level `Skill` call
+  whose id the record could not read; a bare `/name` that more than one staged skill answers to; or a
+  plugin that ships both a command and a skill under one name (`commandShadowsSkill`), where the slash
+  entry and the `Skill` tool launch either through one registry. Absent is never a synonym for `false`,
+  and the text report prints a NOTE when it is absent.
 
 ### Skills that need an attached file
 

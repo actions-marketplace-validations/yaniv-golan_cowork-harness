@@ -64,7 +64,9 @@ export function slashCommandSkillInvocation(
   const token = m[1];
   const ids = availableSkills.map((s) => s.id);
   if (ids.includes(token)) return { kind: "skill", id: token };
-  if (token.includes(":")) return { kind: "none" }; // a qualified token that is not a staged skill is a command, or prose
+  // A qualified token that is not a staged skill is a command, or prose: the suffix rule below cannot
+  // match it either (that would need an id with two colons, of which the corpus has none), so no
+  // separate guard — one that nothing can exercise is a claim, not a check.
   const bySuffix = ids.filter((id) => id.endsWith(`:${token}`));
   if (bySuffix.length === 1) return { kind: "skill", id: bySuffix[0] };
   if (bySuffix.length > 1) return { kind: "unobservable" }; // the binary picked one; the record does not say which

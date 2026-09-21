@@ -52,10 +52,6 @@ describe("slashCommandSkillInvocation — the binary's rule", () => {
     expect(slashCommandSkillInvocation("/founder-skills:feedback it broke", SKILLS)).toEqual({ kind: "none" });
   });
 
-  it("a qualified token is never suffix-matched (`/other:deck-review` is not founder-skills' skill)", () => {
-    expect(slashCommandSkillInvocation("/other:deck-review", SKILLS)).toEqual({ kind: "none" });
-  });
-
   it("ignores a slash that is not in leading position", () => {
     expect(slashCommandSkillInvocation("please run /founder-skills:deck-review", SKILLS)).toEqual({ kind: "none" });
   });
@@ -149,6 +145,16 @@ describe("observedSkillInvocation", () => {
     // The Skill tool launches plugin commands through the same registry (`Skill{skill:"creative-problem-solving:ideas"}`
     // is a command, measured 24/24), so a Skill call naming `vercel:bootstrap` is as undecidable as the slash token.
     expect(observedSkillInvocation("bootstrap", "vercel", activity(["vercel:bootstrap"]), [], NONE, true)).toBe(undefined);
+  });
+
+  it("undefined — never true — when a same-named command shadows the skill, on the SUB-AGENT channel too", () => {
+    expect(observedSkillInvocation("bootstrap", "vercel", activity(["(root)"]), ["vercel:bootstrap"], NONE, true)).toBe(undefined);
+  });
+
+  it("false (not undefined) under a shadow when NO channel named the skill at all", () => {
+    // The shadow withholds a POSITIVE; it does not manufacture an unknown where every channel was read
+    // and none fired. The text report prints the shadow NOTE only beside an absent verdict.
+    expect(observedSkillInvocation("bootstrap", "vercel", activity(["(root)"]), [], NONE, true)).toBe(false);
   });
 
   it("undefined, not false, when a top-level Skill call's id could not be read (the `(unknown)` sentinel)", () => {

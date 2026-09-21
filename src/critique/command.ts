@@ -29,12 +29,13 @@ import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
 import { jsonPayloadEnvelope } from "../run/envelope.js";
 import { gitModeEnabled, gitStageStats } from "../run/skill-files.js";
+import { binaryPluginIdentity } from "../session.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
 import { findEnclosingPluginDir } from "../run/analyze-skill.js";
 import { safePathSegment } from "../staging/resolve.js";
-import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice } from "./evidence.js";
+import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice, type TurnBoundary } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
@@ -1417,17 +1418,22 @@ export function buildTextReport(state: ReportState): string {
     );
   if (state.skillInvocationObserved === false)
     out.push(
-      `  NOTE: neither observable invocation channel (a Skill tool call, or a staged-skill slash command leading the prompt) names the selected skill — this critique may be grading a run that did not actually invoke it.`,
+      `  NOTE: no observable invocation channel (the main agent's Skill tool calls, a sub-agent's Skill calls, or a staged-skill slash token leading the prompt) names the selected skill — this critique may be grading a run that did not actually invoke it.`,
     );
-  if (state.commandShadowsSkill)
+  if (state.commandShadowsSkill && state.skillInvocationObserved === undefined)
+    // Only when the shadow is what withheld the verdict. A `false` alongside a shadow is sound — nothing
+    // named the skill by ANY channel — and printing "not decidable" next to "none named it" contradicts.
     out.push(
-      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so invocation of the selected skill is not decidable here. Rename one of the two to make it observable.`,
+      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so a positive invocation verdict is not decidable here. Rename one of the two to make it observable.`,
     );
-  else if (state.gradedSkill !== undefined && state.skillInvocationObserved === undefined && !state.infraFailure)
+  else if (state.gradedSkill !== undefined && state.skillInvocationObserved === undefined)
     // Absence is a real outcome and must be SAID: without this line "could not observe" read exactly
-    // like "not applicable", and a --skill user could not tell which they had.
+    // like "not applicable", and a --skill user could not tell which they had. One generic line: the
+    // report does not carry WHICH of the five routes to absent fired, so it lists them rather than
+    // pretend to know. (Printed on an instrument failure too — the field is absent there for the same
+    // reason, no observable record.)
     out.push(
-      `  NOTE: whether the graded run invoked ${state.gradedSkill} could NOT be observed — the record lacks a prompt or skill inventory, a sub-agent Skill call it cannot name, or a bare slash token more than one staged skill answers to. Not evidence either way.`,
+      `  NOTE: whether the graded run invoked ${state.gradedSkill} could NOT be observed — no graded result, or one with no prompt/skill inventory; an unreadable events slice; a top-level Skill call whose id the record could not read; a sub-agent Skill call it cannot name; or a bare slash token more than one staged skill answers to. Not evidence either way.`,
     );
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
@@ -1666,7 +1672,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     skillMdStatus,
     evidenceBudget: state.evidenceBudget,
     noSkillFilesRead: state.noSkillFilesRead,
-    referenceAccessUnobservable: state.referenceAccessUnobservable,
+    referenceAccessUnobservable: state.referenceAccessUnobservable || undefined,
     verdictProvenance: VERDICT_PROVENANCE,
   };
   // The phase/kind ride WITH the reason, never separately: a consumer that reads `infraFailure` and not
@@ -1984,6 +1990,75 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ReturnType<typeof resolveC
   return 0;
 }
 
+/** The skill whose invocation the advisory checks, or undefined when there is no single named skill to
+ *  check (a plain skill folder). `--skill` wins; then a single-skill plugin's auto-selection; then the
+ *  shape-2 positional (`critique <plugin>/skills/<name>`) — its name is the directory's, and the
+ *  resolver already found the enclosing plugin, so leaving the advisory off for the recommended
+ *  invocation form was an omission, not a decision. */
+export function gradedSkillNameFor(
+  skillSelector: string | undefined,
+  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "skillDir" | "pluginRoot" | "autoSelectedSkill">,
+): string | undefined {
+  if (skillSelector !== undefined) return skillSelector;
+  if (resolved.autoSelectedSkill !== undefined) return resolved.autoSelectedSkill;
+  if (resolved.pluginRoot !== undefined && resolve(resolved.pluginRoot) !== resolve(resolved.skillDir)) return basename(resolved.skillDir);
+  return undefined;
+}
+
+/** A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash command,
+ *  and the `Skill` tool launches either through the same registry; the run records the name, not the
+ *  kind (vercel@0.48.0 does exactly this). That makes EVERY channel undecidable for this skill — a match
+ *  is reported absent, never true. */
+export function commandShadowsSkillFor(
+  gradedSkillName: string | undefined,
+  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "pluginRoot">,
+): boolean {
+  return (
+    gradedSkillName !== undefined &&
+    resolved.pluginRoot !== undefined &&
+    existsSync(join(resolved.pluginRoot, "commands", `${gradedSkillName}.md`))
+  );
+}
+
+/** critique's `skillInvocationObserved`, computed from a graded run's on-disk record. Extracted from
+ *  `main` so it can be exercised over a real result.json + events.jsonl + plugin tree without a run —
+ *  every earlier test sat at the function boundary below this, and the defect that motivated the
+ *  extraction (the qualifier read from the wrong manifest) lived exactly in this wiring. */
+export function computeSkillInvocationVerdict(args: {
+  outDir: string;
+  boundary: TurnBoundary;
+  taskRaw: Record<string, unknown> | null;
+  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "skillDir" | "pluginRoot" | "autoSelectedSkill">;
+  gradedSkillName: string | undefined;
+}): boolean | undefined {
+  const { outDir, boundary, taskRaw, resolved, gradedSkillName } = args;
+  if (gradedSkillName === undefined) return undefined;
+  // The qualifier a plugin-qualified observed id must carry to count — derived the way the BINARY
+  // derives it (`.claude-plugin/plugin.json#name`, else the directory basename; a root `plugin.json` is
+  // ignored), not via `readPluginName`, whose root-`plugin.json` leniency made a fully-invoked
+  // `rootpj-dir:qux` run read as never invoked. Without the qualifier a same-named skill from ANOTHER
+  // installed plugin (present in the inventory at hostloop/protocol) would satisfy the match.
+  const gradedPluginName = resolved.pluginRoot !== undefined ? binaryPluginIdentity(resolved.pluginRoot).name : undefined;
+  const subagentSkills = (() => {
+    try {
+      return subagentSkillCalls(readTurn1Slice(outDir, "events.jsonl", boundary));
+    } catch {
+      return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
+    }
+  })();
+  return observedSkillInvocation(
+    gradedSkillName,
+    gradedPluginName,
+    taskRaw?.skillActivity as Array<{ skillId?: unknown }> | undefined,
+    subagentSkills,
+    slashCommandSkillInvocation(
+      typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
+      (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
+    ),
+    commandShadowsSkillFor(gradedSkillName, resolved),
+  );
+}
+
 async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
     writeAllSync(1, usage() + "\n");
@@ -2129,21 +2204,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // skillActivity actually names it — packaging can be perfectly plugin-aware and still be grading a
     // run that never invoked the selected skill. `undefined` = not applicable (plain skill folder) or
     // no evidence either way (absent result).
-    const gradedSkillName = opts.skillSelector ?? resolvedSkill.autoSelectedSkill;
-    const gradedActivity = taskRaw?.skillActivity as Array<{ skillId?: unknown }> | undefined;
-    // A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash
-    // command, and the run does not record which one ran (vercel@0.48.0 does exactly this). That makes
-    // the slash channel undecidable for this skill — reported absent, never true.
-    const commandShadowsSkill =
-      gradedSkillName !== undefined &&
-      resolvedSkill.pluginRoot !== undefined &&
-      existsSync(join(resolvedSkill.pluginRoot, "commands", `${gradedSkillName}.md`));
-    // The qualifier a plugin-qualified observed id must carry to count — the manifest name, or the
-    // directory name it falls back to. Without it a same-named skill from ANOTHER installed plugin
-    // (present in the inventory at hostloop/protocol) would satisfy the match.
-    const gradedPluginName = resolvedSkill.pluginRoot !== undefined ? readPluginName(resolvedSkill.pluginRoot) : undefined;
+    const gradedSkillName = gradedSkillNameFor(opts.skillSelector, resolvedSkill);
+    const commandShadowsSkill = commandShadowsSkillFor(gradedSkillName, resolvedSkill);
     // NOTE: the verdict itself is computed after `snapshotTurnBoundary` below — it needs the turn-1
-    // timeline slice, which does not exist until the boundary is captured.
+    // events slice, which does not exist until the boundary is captured.
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
     // does this in its footer; critique's report gets the same courtesy). Defensive over the raw shape.
     const gpGates = (taskRaw?.gateProvenance as { gates?: unknown } | undefined)?.gates;
@@ -2173,27 +2237,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // Graded-run validity (advisory), now that the turn-1 timeline slice is available. Three channels,
     // and the ABSENCE of a verdict is a real outcome: a run whose invocation we cannot observe must
     // never be reported as one that did not invoke.
-    const subagentSkills = (() => {
-      try {
-        return subagentSkillCalls(readTurn1Slice(outDir, "events.jsonl", boundary));
-      } catch {
-        return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
-      }
-    })();
-    const skillInvocationObserved =
-      gradedSkillName === undefined
-        ? undefined
-        : observedSkillInvocation(
-            gradedSkillName,
-            gradedPluginName,
-            gradedActivity,
-            subagentSkills,
-            slashCommandSkillInvocation(
-              typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
-              (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
-            ),
-            commandShadowsSkill,
-          );
+    const skillInvocationObserved = computeSkillInvocationVerdict({ outDir, boundary, taskRaw, resolved: resolvedSkill, gradedSkillName });
 
     // 3. Reflection turn: resume the SAME session.
     // The reflection turn keeps the FIXED default budget deliberately (a forwarded --timeout stretches
