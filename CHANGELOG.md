@@ -8,11 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **Cassettes: no re-record needed.** Nothing under `src/runtime`, `src/hostloop`, `src/staging`,
-  `src/session.ts`, the spawn path, `baselines/`, or the cassette constants (`CASSETTE_VERSION` 12 /
-  `MIN_SUPPORTED_CASSETTE_VERSION` 9) moved; the changes are `src/critique/**`, one rejection string in
-  `src/run/skill-flag-surface.ts`, docs and tests. A cassette recorded at 3.6.0 or 3.7.0 replays
-  unchanged. (This line is now a fixed part of every release's upgrade notes — see
+- **Cassettes: re-record ONLY a cassette that performs a `web_fetch` at `hostloop` or `container`;
+  everything else replays unchanged.** One emulated-tool change: `src/hostloop/workspace-handler.ts`'s
+  `pinnedRequest` (the `web_fetch` DNS pin, below) — a recording made before this fix froze `Fetch
+  failed: Invalid IP address: undefined` for every resolvable hostname, and a scenario asserting on that
+  fetch's outcome recorded the outage, not the behaviour. Nothing else on the record/replay path moved:
+  `src/runtime`, `src/staging`, `src/session.ts`, the spawn path, `baselines/` and the cassette constants
+  (`CASSETTE_VERSION` 12 / `MIN_SUPPORTED_CASSETTE_VERSION` 9) are untouched; the rest of the diff is
+  `src/critique/**`, one rejection string in `src/run/skill-flag-surface.ts`, docs and tests. (This
+  verdict line is now a fixed part of every release's upgrade notes — see
   [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog reports no
   tool-surface change" is a statement someone made, not an absence.)
 - **If you followed 3.7.0's recommendation to pre-check the corpus with `lint-skill --strict`, know its
@@ -53,6 +57,27 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`mcp__workspace__web_fetch` could not reach any resolvable hostname** — every fetch to a non-literal-IP
+  host died with `Fetch failed: Invalid IP address: undefined`, on both the provenanced (Path A) and
+  allowlisted (Path B) paths. `pinnedRequest` overrides Node's DNS `lookup` so the address the SSRF
+  backstop vetted is the one actually dialled, but it answered with the legacy `(err, address, family)`
+  triple only. `net.Socket.connect` asks for `{all: true}` whenever `autoSelectFamily` is on — Node's
+  **default since v20**, and this package has required `>=20` since its first commit — and then reads
+  `addresses[0].address` off what it expects to be an array. It read `.address` off a string, got
+  `undefined`, and threw. The override now honours `opts.all` and hands back **every** vetted address, so
+  Happy Eyeballs keeps its candidates. Literal-IP hosts were never affected: they skip pinning entirely.
+  **Two different outage windows, because the two tiers grew this path at different times** — `hostloop`
+  has been broken since the pinning landed in `90360f5` (2026-06-21, ~2.6 months); `container` only since
+  `a459c80` (2026-08-27, released in 2.4.0) gave it a host-routed web_fetch at all, and there only when
+  `coworkWebFetchViaApi` is on, which is every baseline from `desktop-1.13576.1` onward.
+- **`test/hostloop-webfetch-pinned-lookup.test.ts`** — the regression test, and the first thing in the repo
+  to execute `pinnedRequest` rather than imitate it. Every other web_fetch test injects a `rawFetch` fake;
+  one is named "pinnedRequest-style fake" and asserts against a hand-built copy of the function's return
+  value. **No test had ever run the function** — measured, not inferred: the full suite passes 6471/6471
+  against the pre-fix source with this file removed. No e2e scenario or cassette performs a `web_fetch`
+  either, so nothing else covered it. The new cases drive the real Node http stack over a loopback server
+  and cover the `{all: true}` shape, the forced-off legacy shape, the never-re-resolve guarantee, and a
+  multi-address pin whose first entry blackholes (which fails only if the fix stops returning all of them).
 - **The "real Cowork ships them" claim behind `missing_capability` is now DATED, and was two baselines
   stale.** `baselines/provisioning/rootfs-provisioning.json` — the captured rootfs toolchain that is the
   sole evidence for that sentence — carried no Desktop version and no capture date, no shipped doc
