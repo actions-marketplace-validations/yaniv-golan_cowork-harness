@@ -919,6 +919,12 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `critique --corpus-only`'s preview payload (the `corpus` object above) is the same experimental
   surface — a documented subset of `evidenceBudget`, same field names and meaning — and may change while
   it stabilizes too.
+- **The bundled `scenario.py`'s functions, constants and module layout** — the `lint` / `lint-skill` /
+  `scaffold` subcommands (and the CLI's passthroughs to them) are the surface; the script is not an
+  importable API, and a consumer that vendors or imports a `_helper` from it is copying an implementation
+  detail that may be renamed, re-split or removed in any release. Ask for a subcommand or flag instead —
+  `critique --corpus-only` exists because a consumer had vendored two of these to get a number the CLI
+  did not expose.
 - **`docs/internal/**`** — untracked working notes.
 - **The reconstructed system-prompt append text** — a paraphrase by design (see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md)); behaviorally equivalent, not byte-stable.

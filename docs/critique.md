@@ -411,7 +411,9 @@ folder that is not a work tree is measured raw, as staging copies it) — stagin
 actually packages on four measured axes: it counts (1) an untracked file staging would drop and (3) a
 symlink pointing outside the plugin that the packager's containment rule refuses — both **over-counts**
 — and it cannot see (2) a plugin-root reference read at run time, and (4) sums `st_size` where the
-packager measures decoded UTF-8 length — both **under-counts**. It also emits nothing below 80% of the
+packager measures decoded UTF-8 length — both **under-counts**. Axis (4) moves only where a file is NOT
+valid UTF-8 (each invalid byte decodes to a 3-byte U+FFFD); clean multibyte text — em dashes, curly
+quotes — round-trips byte-exact, so on ordinary markdown its delta is zero. It also emits nothing below 80% of the
 ceiling, so a skill in that band gets no number at all. `--corpus-only` closes (1) and (3) by construction
 (it runs the real staging filter and the real containment rule) and states (2) as the floor rather than
 guessing at it.

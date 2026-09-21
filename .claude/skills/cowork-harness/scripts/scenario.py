@@ -2274,7 +2274,8 @@ def _lint_skill_corpus_size(md_path):
     the plugin, which the packager's containment rule refuses to follow. UNDER-counts: a plugin-root
     reference the graded agent only reaches by reading it during the run (added to the corpus at
     critique time -- invisible to any static count), and any byte that fails strict UTF-8 decoding, which
-    the packager replaces with a multi-byte U+FFFD that st_size never sees. `cowork-harness critique
+    the packager replaces with a 3-byte U+FFFD that st_size never sees (clean multibyte text round-trips
+    byte-exact, so this axis is zero on ordinary markdown). `cowork-harness critique
     <folder> --corpus-only` runs the packager's own packageEvidence call over an empty run and prints the
     six corpus fields directly: the packager's own git filter, containment rule and byte measurement,
     and a stated FLOOR for the run-time-read clause (a read can only add to it)."""

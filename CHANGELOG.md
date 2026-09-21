@@ -37,6 +37,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **Cassettes: no re-record needed.** Nothing under `src/runtime`, `src/hostloop`, `src/staging`,
+  `src/session.ts`, the spawn path, `baselines/`, or the cassette constants (`CASSETTE_VERSION` 12 /
+  `MIN_SUPPORTED_CASSETTE_VERSION` 9) moved; the changes are `src/critique/**`, one rejection string in
+  `src/run/skill-flag-surface.ts`, docs and tests. A cassette recorded at 3.6.0 or 3.7.0 replays
+  unchanged. (This line is now a fixed part of every release's upgrade notes — see
+  [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog reports no
+  tool-surface change" is a statement someone made, not an absence.)
 - **If you followed 3.7.0's recommendation to pre-check the corpus with `lint-skill --strict`, know its
   limits before relying on it further.** That instrument emits nothing below 80% of the evidence
   ceiling — `lint-skill --json` prints `[]`, exit 0, indistinguishable from "counted, you're fine" — and
@@ -44,7 +51,8 @@ All notable changes to this project are documented here. The format is based on
   counts an untracked file that staging would never deliver; (2) it cannot see a plugin-root reference the
   graded agent only reaches by reading it during the run; (3) it counts a symlink pointing outside the
   plugin that the packager's containment rule refuses; (4) it sums `st_size` while the packager measures
-  decoded UTF-8 length. `critique --corpus-only` (above) replaces it as the cheapest correct pre-check — it
+  decoded UTF-8 length — an axis that moves only where a file is NOT valid UTF-8 (each invalid byte becomes
+  a 3-byte U+FFFD); clean multibyte text round-trips byte-exact. `critique --corpus-only` (above) replaces it as the cheapest correct pre-check — it
   IS the packager's own floor, computed by the packager — and it applies staging's git rules, which the
   static count did not: a work tree with nothing tracked, or a `--skill` subdirectory with nothing tracked
   under it, is refused, not counted.

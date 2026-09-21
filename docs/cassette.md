@@ -768,7 +768,9 @@ Re-record a cassette when:
 
 Re-record AND re-verify all cassettes on every **harness major** (x.0.0) bump — **and on any release,
 including a minor, whose changelog reports a change to the emulated tool surface, spawn env, or system
-prompt.** A minor can change what the agent sees: **1.10.0** is the first such release (it added the
+prompt.** From 3.8.0 every release's upgrade notes carry an explicit `Cassettes: …` verdict — `no
+re-record needed`, with the evidence, or `re-record — <what moved>` — so read that line rather than
+inferring from silence; a release that says nothing has not been checked, not cleared. A minor can change what the agent sees: **1.10.0** is the first such release (it added the
 `skills`/`plugins` discovery servers, so `container`/`hostloop`/`cowork` cassettes recorded before it froze
 a tool inventory five tools short). Cassettes recorded earlier keep replaying correctly — but a scenario
 asserting `tool_available: "mcp__skills__.*"` will fail against them, correctly, because that recording
