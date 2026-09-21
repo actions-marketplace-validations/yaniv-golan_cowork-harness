@@ -45,7 +45,11 @@ All notable changes to this project are documented here. The format is based on
   work tree is measured raw, exactly as staging copies it. **The number is a FLOOR**: a plugin-root reference
   the agent READS during the graded turn is added to the corpus at critique time, so a paid run's
   `corpusBytes` is always `>=` the preview's, and a `corpusOmitted[].reason` can change from `not-linked`
-  to `ambiguous-read` once a real run has happened.
+  to `ambiguous-read` once a real run has happened. The JSON is the standard `jsonPayloadEnvelope`
+  (`tool`/`command` are the discriminator; a critique REPORT carries neither) with a `corpus` object that is
+  a documented six-field subset of a report's `evidenceBudget`. Like the report, it is EXPERIMENTAL and
+  **not §12-frozen** — listed as such in SPEC.md alongside the report's own entry; parse it, but expect
+  additive change while it stabilizes.
 
 ### Fixed
 
@@ -82,6 +86,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **The bundled `scenario.py`'s functions and constants are declared NOT an API** (SPEC.md, the
+  not-covered list). The `lint` / `lint-skill` / `scaffold` subcommands are the surface; a consumer that
+  vendors or imports a `_helper` from the script is copying an implementation detail that may be renamed,
+  re-split or removed in any release. Prompted by a consumer who had vendored two of them to get the corpus
+  number the CLI did not expose — which is what `--corpus-only` now exposes.
+- **The remote lane's toolchain is a different image, not the local rootfs with extras** — stated with
+  numbers in `docs/fidelity-gaps.md`. A `pip list` from a session with "Only on this computer" OFF showed
+  pandas 3.0.2 / numpy 2.4.4 and fourteen packages (scipy, scikit-learn, playwright, `claude-agent-sdk`,
+  `mcp`, …) that the local rootfs, captured the same day at Desktop 2.2553.1, does not carry; the same
+  session with the setting ON matched the captured manifest exactly. A provisioning observation made
+  with the setting off is evidence about nothing this harness models.
 - **`COWORK_AGENT_IMAGE` governs the Bash sidecar at `hostloop` too, and is recorded in cassettes, not
   `result.json`.** `docs/cli.md`'s entry said neither. hostloop's agent is a native host process, but its
   `mcp__workspace__bash` runs in the Docker sidecar, so a full-parity image changes what a skill's
