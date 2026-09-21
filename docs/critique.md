@@ -435,7 +435,10 @@ symlink pointing outside the plugin that the packager's containment rule refuses
 packager measures decoded UTF-8 length — both **under-counts**. Axis (4) moves only where a file is NOT
 valid UTF-8 (each invalid byte decodes to a 3-byte U+FFFD); clean multibyte text — em dashes, curly
 quotes — round-trips byte-exact, so on ordinary markdown its delta is zero. It also emits nothing below 80% of the
-ceiling, so a skill in that band gets no number at all. `--corpus-only` closes (1) and (3) by construction
+ceiling, so a skill in that band gets no number at all. On a clean tree — everything tracked, no symlinks,
+clean UTF-8, and before any run — the two numbers agree exactly (measured: all six skills of a consumer
+plugin, delta zero); the axes bite only when one of those conditions is violated, which is precisely
+when you cannot tell from the static number alone. `--corpus-only` closes (1) and (3) by construction
 (it runs the real staging filter and the real containment rule) and states (2) as the floor rather than
 guessing at it.
 
