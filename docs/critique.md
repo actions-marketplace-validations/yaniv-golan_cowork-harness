@@ -423,8 +423,14 @@ tracked under it.** Staging never delivers a gitlink's contents (nor an untracke
 mount carries an empty `skills/<name>/`; a LIVE critique's packager consults that directory's OWN git
 index (`corpusAcceptFor(skillDir)`) and packages `SKILL.md` anyway — grading a skill the agent never
 received. `--corpus-only` refuses both cases up front, in staging's terms (exit 2, "`skills/<name>/` has
-0 git-tracked files under …"). The live-packager side is pre-existing, rare, pinned by a test, and not
-fixed here.
+0 git-tracked files under …"). A second shape of the same gap is NOT caught by the preview: `critique
+<plugin>/skills/<name>` mounts only that folder, yet the packager walks up to the enclosing plugin and
+packages its `agents/**.md` — sub-agent prompts the mounted agent could never dispatch — so `--corpus-only`
+on that positional reports a floor that already over-counts. Both shapes have one cause (the packager
+reads a git-tracked set per class from that class's own directory, where staging reads one at the mount
+root) and one fix, tracked as
+[#182](https://github.com/yaniv-golan/cowork-harness/issues/182); the live-packager side is pre-existing,
+pinned by a test, and not fixed here. Until then, run `critique` on the plugin root with `--skill`.
 
 **`--dry-run` is refused on `critique`** with a reason pointing here: there is no meaningful two-turn
 preview, so `--corpus-only` answers the no-spend evidence-corpus question and `skill --dry-run` answers
