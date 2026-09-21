@@ -236,6 +236,11 @@ It does **not** record their contents — see Known limitations.
 - **Up to four model workloads per critique (zero with `--corpus-only`)** — the two graded turns and the
   two evaluator passes of [How it works](#how-it-works) (pass 2 is skipped when no self-report was
   captured). See [Knowing before you pay](#knowing-before-you-pay) for the no-spend corpus check.
+- **No `[provenance]` footer on critique's stderr, by construction.** That line is the `skill`/`run`
+  lane's per-run footer; critique spawns its two graded turns with their output captured, so it never
+  reaches your terminal. The same facts are in the report instead: `gradedModels`,
+  `gradedEffectiveFidelity`, `skillInvocationObserved`. A consumer grepped both streams for it and found
+  nothing — that is the expected shape, not a missing line.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
