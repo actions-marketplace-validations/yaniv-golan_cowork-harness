@@ -1,0 +1,5 @@
+# Session for the Stop-hook probe: a plugin whose only content is a Stop hook that blocks once.
+model: claude-sonnet-5
+plugins:
+  local_plugins:
+    - ../probes/stop-hook-probe

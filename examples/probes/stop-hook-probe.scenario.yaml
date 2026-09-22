@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe: a plugin's Stop hook fires under the harness, its block reaches the stream as a
+# `hook_response` frame with exit_code 2, and the agent honours the block by resending.
+#
+# The agent streams hook frames for events other than SessionStart/Setup only under
+# --include-hook-events, which the harness passes exactly when a staged plugin declares hooks (this one
+# does). Before this probe no kept run had ever carried a hook_response for any event but SessionStart.
+#
+# Recorded at `container`: hooks run inside the sandbox, no host-hook consent needed, and the frames
+# copied from this run into test/fixtures/hook-frames/ must never carry the recording machine's environment.
+name: stop-hook-probe
+baseline: latest
+session: ../sessions/stop-hook-probe.yaml
+fidelity: container
+prompt: |
+  Reply with exactly the word hello and nothing else. Do not call any tools.
