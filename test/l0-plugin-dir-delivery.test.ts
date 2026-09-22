@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pluginDirArgs } from "../src/runtime/argv.js";
 import { buildProtocolEnv, managedConfigMode } from "../src/runtime/protocol.js";
-import { checkHostHookConsent, pluginRootsWithRunnableHooks } from "../src/run/hook-events.js";
+import { checkHostHookConsent, pluginRootsWithRunnableHooks, warnUnservedHookEvents } from "../src/run/hook-events.js";
 import type { LaunchPlan } from "../src/session.js";
 
 const tmps: string[] = [];
@@ -210,5 +210,18 @@ describe("manifest-declared hooks reach the consent gate", () => {
     mkdirSync(join(root, ".claude-plugin"), { recursive: true });
     writeFileSync(join(root, ".claude-plugin", "plugin.json"), "{ not json");
     expect(() => checkHostHookConsent([root], false)).not.toThrow();
+  });
+});
+
+describe("the unserved-hook notice names the assertion keys instead of denying they exist", () => {
+  it("mentions hook_event_fired / hook_event_blocked for a declared Stop hook", () => {
+    const msgs: string[] = [];
+    warnUnservedHookEvents([pluginWithHooks(["Stop"])], (m) => msgs.push(m));
+    const notice = msgs.join("\n");
+    expect(notice).toMatch(/hook_event_fired: Stop/);
+    expect(notice).toMatch(/hook_event_blocked: Stop/);
+    expect(notice).not.toMatch(/no assertion key/);
+    // Stop is now live-verified (examples/probes/stop-hook-probe.scenario.yaml), so the notice says it WILL fire.
+    expect(notice).toMatch(/WILL fire/);
   });
 });

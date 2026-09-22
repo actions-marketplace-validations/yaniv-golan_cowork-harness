@@ -25,9 +25,10 @@
  * "is a real event … whether a run reaches its trigger has not been verified here". Widening the
  * confident wording means running the case, not editing the sentence.
  *
- * What is actually missing is twofold, and both are about the HARNESS, not the plugin: there is no
- * assertion key for any event but PreToolUse (so a scenario cannot gate on it), and the harness does not
- * install the additional hooks real Cowork installs for that event (so their effects are absent).
+ * What is actually missing is about the HARNESS, not the plugin: it does not install the additional hooks
+ * real Cowork installs for that event (so their effects are absent). Gating on the plugin's own hook is
+ * covered — `hook_event_fired` / `hook_event_blocked` read the agent's hook_response frames, which the
+ * spawn turns on (`--include-hook-events`) exactly when a staged plugin declares hooks.
  *
  * PLACEMENT MATTERS AND IS SILENT. The binary reads `<plugin>/hooks/hooks.json`. The identical file at
  * the plugin ROOT fires nothing, with no error anywhere — which is exactly how a probe (and a consumer)
@@ -112,10 +113,12 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
                   ? "it WILL fire (a plugin's own hooks are executed by the agent)"
                   : "the agent accepts it as a real event and loads a plugin's own hooks itself (whether a " +
                     "harness run ever reaches this event's trigger has not been verified here)"
-              }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: there is no ` +
-                `assertion key for \`${name}\`, so a scenario cannot gate on it, and if real Cowork installs a ` +
-                `\`${name}\` hook of its own it is not reproduced here (it installs hooks for PreToolUse, ` +
-                `PostToolUse and UserPromptSubmit only). Assert the hook's observable effect instead.\n`
+              }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: ` +
+                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` grade it from the agent's own ` +
+                `hook_response frames (the harness passes --include-hook-events because this plugin declares ` +
+                `hooks), and if real Cowork installs a \`${name}\` hook of its own it is not reproduced here ` +
+                `(it installs hooks for PreToolUse, PostToolUse and UserPromptSubmit only). Assert the hook's ` +
+                `observable effect as well.\n`
             : `::warning:: [hooks] ${f} declares \`${name}\`, which is not a hook event the agent recognizes — it is ` +
                 `ignored everywhere, so this hook never runs. Check spelling/capitalization.\n`,
         );

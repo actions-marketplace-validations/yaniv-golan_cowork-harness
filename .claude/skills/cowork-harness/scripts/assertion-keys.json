@@ -152,6 +152,7 @@
   "liveVerifiedHookEvents": [
     "PostToolUse",
     "SessionStart",
+    "Stop",
     "UserPromptSubmit"
   ],
   "enums": {

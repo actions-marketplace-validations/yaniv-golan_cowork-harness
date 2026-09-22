@@ -236,7 +236,7 @@ _FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
 # The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
 # hostloop). Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
-_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse"}
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"}
 
 
 def _load_hook_events():
@@ -1576,14 +1576,15 @@ def _lint_hook_events(path):
             findings.append(Finding(
                 "INFO", "hook-event-not-served",
                 f"`{name}` {fires} — but cowork-harness "
-                f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. Two "
-                f"consequences: there is no assertion key for this event, so a scenario cannot GATE on it; "
-                f"and if real Cowork installs a `{name}` hook of its own, the harness does not reproduce it, "
-                f"so anything driven by that is absent here. (Cowork installs hooks of its own for "
+                f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. "
+                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` grade it from the agent's own "
+                f"hook_response frames (the harness passes --include-hook-events because this plugin declares "
+                f"hooks); but if real Cowork installs a `{name}` hook of its own, the harness does not reproduce "
+                f"it, so anything driven by that is absent here. (Cowork installs hooks of its own for "
                 f"PreToolUse, PostToolUse and UserPromptSubmit only.)",
-                "The harness does not block your hook — this is about assertability, not breakage. To gate "
-                "on its effect, assert the OBSERVABLE result instead (a file it writes, a tool it blocks), "
-                "not the hook itself.",
+                "The harness does not block your hook — this is about what is reproduced, not breakage. Assert "
+                "the hook with those keys, and its OBSERVABLE result as well (a file it writes, a tool it blocks) "
+                "for anything Cowork's own hooks would have driven.",
                 path, line_no,
             ))
         elif name.lower() in {e.lower() for e in KNOWN_HOOK_EVENTS}:
