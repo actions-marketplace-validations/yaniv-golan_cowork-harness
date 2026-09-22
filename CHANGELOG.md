@@ -10,14 +10,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **Cassettes: re-record ONLY a cassette that performs a `web_fetch` at `hostloop` or `container`;
-  everything else replays unchanged.** One emulated-tool change: `src/hostloop/workspace-handler.ts`'s
-  `pinnedRequest` (the `web_fetch` DNS pin, below) — a recording made before this fix froze `Fetch
-  failed: Invalid IP address: undefined` for every resolvable hostname, and a scenario asserting on that
-  fetch's outcome recorded the outage, not the behaviour. Nothing else on the record/replay path moved:
-  `src/runtime`, `src/staging`, `src/session.ts`, the spawn path, `baselines/` and the cassette constants
-  (`CASSETTE_VERSION` 12 / `MIN_SUPPORTED_CASSETTE_VERSION` 9) are untouched; the rest of the diff is
-  `src/critique/**`, one rejection string in `src/run/skill-flag-surface.ts`, docs and tests. (This
+- **Cassettes: re-record ONLY a cassette that performs a `web_fetch` at `hostloop` or `container`, OR that
+  stages a plugin declaring hooks and wants `hook_event_fired`/`hook_event_blocked` to grade; everything
+  else replays unchanged.** Two things moved on the record/replay path. (1) One emulated-tool change:
+  `src/hostloop/workspace-handler.ts`'s `pinnedRequest` (the `web_fetch` DNS pin, below) — a recording made
+  before this fix froze `Fetch failed: Invalid IP address: undefined` for every resolvable hostname, and a
+  scenario asserting on that fetch's outcome recorded the outage, not the behaviour. (2) One spawn-argv
+  change, conditional: `src/session.ts` + `src/runtime/argv.ts` add `--include-hook-events` **only when a
+  staged plugin declares runnable hooks** (below). It is telemetry-only — the agent then streams
+  `hook_started`/`hook_response` frames for every hook event; nothing the model sees changes — so an
+  existing cassette of such a plugin replays with the same verdict on every key that existed before, and
+  the two NEW keys report "never fired" on it until it is re-recorded (fail-loud, never a false green).
+  Everything else is untouched: `src/runtime` beyond that one spread, `src/staging`, the cassette
+  constants (`CASSETTE_VERSION` 12 / `MIN_SUPPORTED_CASSETTE_VERSION` 9) and `baselines/`; `src/run/cassette.ts`
+  changes only by adding the two keys to `ALWAYS_CONTENT_KEYS`. The rest of the diff is `src/critique/**`,
+  one rejection string in `src/run/skill-flag-surface.ts`, the assertion evaluator, docs and tests. (This
   verdict line is now a fixed part of every release's upgrade notes — see
   [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog reports no
   tool-surface change" is a statement someone made, not an absence.)
@@ -56,6 +63,23 @@ All notable changes to this project are documented here. The format is based on
   a documented six-field subset of a report's `evidenceBudget`. Like the report, it is EXPERIMENTAL and
   **not §12-frozen** — listed as such in SPEC.md alongside the report's own entry; parse it, but expect
   additive change while it stabilizes.
+
+- **`hook_event_fired: <HookEvent>` / `hook_event_blocked: <HookEvent>` assertions.** A plugin's command hook
+  (`hooks/hooks.json` or a manifest hook) is now gradable for any event the agent recognises, from the
+  `hook_response` system frames the agent streams — content-class, so a cassette replays them without
+  `controlOut`. Until now only the harness's own PreToolUse decisions were assertable (`hook_blocked`), and
+  the unserved-hook notice told authors there was "no assertion key" for anything else; the notice (CLI and
+  linter) now names these two. `exit_code` is optional on the wire and is reported, never inferred: a frame
+  without it is "fired", never "blocked". Recorded end-to-end for `Stop`
+  (`examples/probes/stop-hook-probe.scenario.yaml`, a hook that blocks once with exit 2 and passes on the
+  resend), with a live-lane test (`test/live-stop-hook.test.ts`) so the committed frames cannot go stale
+  unnoticed. Other event names match the same frame shape but have not each been recorded.
+- **The spawn passes `--include-hook-events` when a staged plugin declares hooks.** The agent emits hook
+  lifecycle frames only for `SessionStart`/`Setup` by default (measured: the identical block-and-resend
+  produced zero hook frames without the flag and four with it); this flag is what puts every other event on
+  the stream. It gates exactly three frame emitters and nothing the model sees. Desktop's own spawn never
+  passes it, so the harness emits it only when there is something to observe — the default argv and the
+  golden snapshots are unchanged.
 
 ### Fixed
 
@@ -188,6 +212,14 @@ All notable changes to this project are documented here. The format is based on
   three workloads and its roll-up row covers three. `docs/critique.md` already said so; the shipped
   `SKILL.md` and the in-plugin `references/critique.md` — the copy the skill-authoring agent reads —
   stated the fixed count. Corrected to match.
+- **`docs/fidelity-gaps.md` — the remote lane, measured from inside.** One in-app cloud-lane session
+  reported its environment, filesystem, upload path, link rendering and hook timing; the lane section now
+  carries that table (every row n = 1, dated), a concrete check for placing a live bug report on a lane
+  before comparing it to a harness run, and the fact that `CLAUDE_CODE_REMOTE` is the switch that makes
+  hook frames visible there (the same one as `--include-hook-events`). It reconciles two earlier probes
+  that disagreed about `/mnt/user-data/outputs` (absent one day, an empty symlink another — neither is a
+  delivery channel) and records that a plugin's MCP servers are not started in the cloud container but are
+  bridged from the Mac as `<server>__<tool>` tools.
 
 ## [3.7.0] — 2026-09-20
 

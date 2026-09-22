@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { KNOWN_HOOK_EVENTS } from "./agent/session.js";
 
 /** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999 — the ONE budget
  *  extended thinking ever runs at when it's ON (there is no arbitrary N; off is 0/disabled, never a
@@ -584,6 +585,18 @@ export const Assertion = z.strictObject({
     .optional()
     .describe(
       "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
+    ),
+  hook_event_fired: z
+    .enum(KNOWN_HOOK_EVENTS)
+    .optional()
+    .describe(
+      "a COMMAND hook for this event (a plugin's hooks/hooks.json or manifest hook — `Stop`, `SessionStart`, `PostToolUse`, …) ran: the agent emitted a `hook_response` system frame with this `hook_event` (RunResult.contextEvents). Any outcome counts as fired. The harness passes `--include-hook-events` whenever a staged plugin declares hooks, which is what makes events other than SessionStart/Setup appear on the stream at all — a recording made without it (older cassettes, or a plugin that declared no hooks) reports 'never fired'. Content-class, so it grades on replay. Recorded end-to-end for `Stop`; other names match the same frame but have not each been recorded. Distinct from `hook_blocked`, which reads the harness's OWN PreToolUse decisions from controlOut",
+    ),
+  hook_event_blocked: z
+    .enum(KNOWN_HOOK_EVENTS)
+    .optional()
+    .describe(
+      "that command hook BLOCKED at least once: a `hook_response` frame for the event carried `exit_code: 2` (the agent's blocking exit; the frame also carries outcome 'error'). Fails naming the exit codes/outcomes seen when the hook fired without blocking (`exit_code` is optional on the wire — a frame without it is reported as such, never counted as blocked); fails 'no hook_response' when it never fired; cannot-verify when the run has no context events. Content-class. Recorded end-to-end for `Stop`",
     ),
   no_scratchpad_leak: z
     .literal(true)

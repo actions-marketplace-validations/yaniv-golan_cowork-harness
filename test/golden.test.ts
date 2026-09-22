@@ -132,6 +132,16 @@ describe("golden — container (VM-loop)", () => {
     expect(debugOff).not.toContain("--thinking");
   });
 
+  it("hook lifecycle frames: default plan emits NO --include-hook-events (fidelity: Desktop's spawn never passes it)", () => {
+    expect(args).not.toContain("--include-hook-events");
+  });
+
+  it("hook lifecycle frames: includeHookEvents:true emits --include-hook-events among the fixed flags", () => {
+    const withHooks = agentArgs(baseline, plan({ includeHookEvents: true }), { mntRoot });
+    expect(withHooks).toContain("--include-hook-events");
+    expect(withHooks.indexOf("--include-hook-events")).toBeLessThan(withHooks.indexOf("--tools"));
+  });
+
   it("thinking display: default plan emits NO --thinking-display (fidelity: real Cowork passes none)", () => {
     expect(args).not.toContain("--thinking-display");
   });
