@@ -42,7 +42,9 @@ Settings → Cowork rather than trusting that date.
 
 That matters for how you read the rest of this file. Gaps documented here are gaps against the
 *local* lane. On the remote lane the environment is different in kind, not degree: the cloud
-container's cwd is `/home/claude` with no `mnt/` tree, delivery is `SendUserFile` rather than
+container's cwd is `/home/claude` with no `/sessions/<id>/mnt` tree (a `/mnt/user-data/outputs` symlink was
+observed on 2026-09-21 — empty, and writing there produced no card; on 2026-09-05 the path did not exist — so its
+presence is not a channel), delivery is `SendUserFile` rather than
 `present_files`, and the session reaches the user's disk through the `device_*` tools into a local
 VM (see "File delivery" and the device-tool section below). Its environment prompt is **authored by
 the server**, not by Desktop — the heading and markers a remote sub-agent reports are 0 occurrences
@@ -68,6 +70,8 @@ Flask, uvicorn, starlette, playwright, mediapipe, `claude-agent-sdk`, `mcp`, pyd
 observation made with the setting off says nothing about what a local session — or this harness's
 `container`/`hostloop` image — provides, and a pandas-major difference is the kind that changes a skill's
 behaviour, not just its imports.
+The interpreter differs too: Python **3.11.15** at `/usr/bin/python3` (the local rootfs ships 3.10), with
+`tesseract`, `pdftoppm`, `pdfplumber` and `soffice` preinstalled (2026-09-21; none are in the local rootfs baseline).
 
 ### The boundary is a missing flag, not an entrypoint string
 
@@ -88,6 +92,36 @@ attachment) and the `/worker/skill-manifest` fetch. Neither can occur here, and 
 spoofing would change that — the harness would have to pass a flag Desktop itself does not know.
 
 `sdk-url` has **0 occurrences in this repo**, which is correct: there is nothing to model.
+
+### The remote lane, measured from inside (2026-09-21/22, one session — every line is n = 1)
+
+A throwaway plugin run through the Cowork app on a remote-lane session (`CLAUDE_CODE_ENTRYPOINT=remote_cowork`)
+reported the following from a shell and a hook inside the container. Nothing here is modeled; it is recorded so
+a live bug report can be placed on the right lane before it is compared to a harness run.
+
+| Surface | Remote lane (measured) | Local lane / this harness |
+|---|---|---|
+| Agent version | **≥ 2.1.248** by payload-field dating (`scratchpad_dir`, `prompt_cache_likely_expired`, … are agent-side fields absent ≤ 2.1.247), contemporary with Desktop's. `CLAUDE_CODE_VERSION=2.1.42` in that env is **runner-set metadata the agent never reads** — not its version. Runner `release-bfe55864c5-ext`, `/opt/claude-code/bin/claude` | the Desktop-staged agent (2.1.275 that day). No measured skew; a hook running `grep -o '"version":"[^"]*"' "$transcript_path"` would give the number |
+| cwd / user | `/home/claude`, runs as **root**, `HOME=/root`; shell and file tools share one filesystem and cwd | `/sessions/<id>/mnt/outputs`, non-root; shell and file tools have different roots |
+| Uploads | `$HOME/.claude/uploads/<session-id>/<8-hex>-<original name>` (under `/root/.claude/uploads/`). **`/mnt/user-data/uploads` does not exist** although the lane's environment text names it | `/sessions/<id>/mnt/uploads/<name>` |
+| Outputs | `/mnt/user-data/outputs -> /mnt/attach/outputs`, empty throughout; presenting a file from `/home/claude` produced the card | `mnt/outputs` is the channel; `present_files` promotes into it |
+| Links | every `computer://` form renders as plain text; a bare absolute path becomes a broken `https://claude.ai/home/claude/…` link | `computer://` links resolve (`computer_links_resolve` at hostloop) |
+| `CLAUDE_CODE_DESKTOP_APP_VERSION` | **unset** (and the agent reads it only under the `claude-desktop`/`local-agent` entrypoints) | set by Desktop ≥ 2.2553.1 and by this harness at hostloop from the baseline |
+| Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a Desktop-local stream | frames for SessionStart/Setup only; the harness passes the flag itself when a staged plugin declares hooks |
+| Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
+| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1 | stubbed to zero tools by Desktop; run real here (see the plugin-MCP section under "Plugins" — the bridge is a third data point for that open decision) |
+| Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier; `hook_event_fired` / `hook_event_blocked` grade them |
+| Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | none are in the pinned spawn env |
+
+**Placing a live bug report on a lane — do this before comparing it to any harness run.** Look at the paths in
+the report's artifacts and transcript: `/home/claude/…` or `/root/.claude/uploads/…` means remote;
+`/sessions/<id>/mnt/…` means local. If the environment is quoted, `CLAUDE_CODE_ENTRYPOINT` settles it. A week
+went into reproducing a remote-lane report at hostloop fidelity before this check existed; only
+behaviour-shaped conclusions travel between lanes.
+
+Not established: whether the lane is per account or per session; whether at-start attachments land where
+mid-session ones did; whether `/mnt/attach/outputs` is ever populated; the order of Cowork's own Stop hooks
+versus a plugin's. Re-measure before relying on any row.
 
 ---
 
@@ -1355,7 +1389,8 @@ or an assertion against these tools:
    connected folder — silently, with a success result. No relative path from the file tools reaches a
    connected folder. See [scenario.md](./scenario.md), "Where a relative path actually lands".
 
-The **cloud** lane shares none of this: cwd is `/home/claude`, there is no `mnt/` tree, and the shell and
+The **cloud** lane shares none of this: cwd is `/home/claude`, there is no `/sessions/<id>/mnt` tree (see "The
+remote lane, measured from inside" above for what `/mnt/user-data` holds), and the shell and
 file tools share one root.
 
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
@@ -1397,7 +1432,9 @@ this harness disagree about file delivery, establish which lane the probe ran on
   directory *is* the channel: Cowork's own system prompt tells the agent to save final deliverables into
   the workspace folder, and `present_files` layers on top of that. **On the remote lane location delivers
   nothing.** Verified by live probe in a `CLAUDE_CODE_ENTRYPOINT=remote_cowork` session: both
-  `/mnt/user-data/outputs/` and a cwd-relative `outputs/` had to be created — **neither existed**, where a
+  `/mnt/user-data/outputs/` and a cwd-relative `outputs/` had to be created — **neither existed** on
+  2026-09-05; a 2026-09-21 session found `/mnt/user-data/outputs -> /mnt/attach/outputs` pre-existing but still
+  empty after presenting a file from `/home/claude` — two probes, two layouts, one conclusion — where a
   provisioned channel would (the local lane's `mnt/outputs` pre-exists as a mounted host directory) — and
   files written into them produced no card and an empty Outputs panel. An undelivered file dies with the
   container.
