@@ -14,3 +14,7 @@ session: ../sessions/stop-hook-probe.yaml
 fidelity: container
 prompt: |
   Reply with exactly the word hello and nothing else. Do not call any tools.
+assert:
+  - hook_event_fired: Stop
+  - hook_event_blocked: Stop
+  - transcript_matches: "PINEAPPLE"

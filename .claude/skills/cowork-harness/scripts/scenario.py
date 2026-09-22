@@ -111,6 +111,8 @@ CONTENT_KEYS = {
     "max_redundant_tool_calls",
     "max_turns",
     "compaction_occurred",
+    "hook_event_fired",
+    "hook_event_blocked",
     "all_tasks_completed",
     "task_count_min",
     "task_status",
@@ -218,7 +220,9 @@ _FALLBACK_SERVED_HOOK_EVENTS = {"PreToolUse"}
 # Re-sourced 2026-09-06 from the agent's OWN hooks-config validator array (ELF 2.1.260), not from a grep
 # for event-name constants. The previous 9-name set reported the other 24 -- PostCompact and
 # MessageDisplay among them -- identically to a misspelling, at ERROR severity below.
-_FALLBACK_KNOWN_HOOK_EVENTS = {
+# Ordered exactly like the TS `KNOWN_HOOK_EVENTS` array: the `hook_event_fired`/`hook_event_blocked` enum
+# values in _EMBEDDED_ENUMS are derived from this list and must compare equal to the generated map.
+_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED = [
     "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
     "Notification", "UserPromptSubmit", "UserPromptExpansion", "SessionStart",
     "SessionEnd", "Stop", "StopFailure", "SubagentStart", "SubagentStop",
@@ -227,7 +231,8 @@ _FALLBACK_KNOWN_HOOK_EVENTS = {
     "TaskCreated", "TaskCompleted", "Elicitation", "ElicitationResult",
     "ConfigChange", "WorktreeCreate", "WorktreeRemove", "InstructionsLoaded",
     "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
-}
+]
+_FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
 # The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
 # hostloop). Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
@@ -350,6 +355,8 @@ _EMBEDDED_ENUMS = {
     "assert.path_denied.source": ["pretooluse", "can_use_tool", "permission_denied"],
     "assert.path_denied.agent_scope": ["main", "subagent", "any"],
     "assert.question_options.order": ["exact", "any"],
+    "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
 }
 
 

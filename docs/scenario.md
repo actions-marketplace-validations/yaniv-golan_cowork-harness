@@ -486,6 +486,7 @@ assertions --list` prints the same set grouped the same way.)
 | the sandbox actually blocked the network | `egress_denied: <host>` — **live-only**, skipped loud on replay |
 | a pre-existing input wasn't mutated | `input_unmodified: <glob>` (live / `verify-run`) |
 | a hook blocked (or didn't block) a tool | `hook_blocked: <rx>`, `no_hook_blocked: true` — replay needs a `controlOut` cassette |
+| a plugin's own Stop / SessionStart / PostToolUse hook ran (or blocked) | `hook_event_fired: <HookEvent>`, `hook_event_blocked: <HookEvent>` — stream content, no `controlOut` needed |
 | spend stayed inside a ceiling | `max_cost_usd`, `max_tokens`, `max_turns` — on **replay** these assert the *recording's* spend, which never changes |
 
 Two axes decide whether a key you pick actually runs: the **tier** it needs (some are `container`-only) and
@@ -559,6 +560,8 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `no_mcp_error: true` | no MCP round-trip failed during the run (`RunResult.mcpErrors` is empty) — **live lane only** (excluded on replay); **only `true` is valid** |
 | `hook_blocked: <regex>` | a `PreToolUse` hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay-checkable only when the cassette carries `controlOut` |
 | `no_hook_blocked: true` | no tool was hook-blocked during the run — distinguishes a genuine tool crash from an intentional block; replay-checkable only when the cassette carries `controlOut`; **only `true` is valid** — **Mutually exclusive** with `hook_blocked` (one requires a block to exist, the other requires none — `run`/`skill`/`record` refuse the pair) |
+| `hook_event_fired: <HookEvent>` | a **command hook** for this event (a plugin's `hooks/hooks.json` or manifest hook — `Stop`, `SessionStart`, `PostToolUse`, …) ran: a `hook_response` system frame with that `hook_event` was recorded (`RunResult.contextEvents`). Any outcome counts. The harness passes `--include-hook-events` whenever a staged plugin declares hooks — that is what puts events other than SessionStart/Setup on the stream — so a recording made without it reports "never fired". Content-class, grades on replay. Recorded end-to-end for `Stop` (`examples/probes/stop-hook-probe.scenario.yaml`); the other names match the same frame but have not each been recorded |
+| `hook_event_blocked: <HookEvent>` | that command hook **blocked** at least once — a `hook_response` frame for the event carried `exit_code: 2`. Fails naming the exit codes seen when it fired without blocking (a frame with no `exit_code` is reported as such, never counted); fails "never fired" otherwise; cannot-verify when the run has no context events. Content-class |
 | `vm_path_denied: true` | **`fidelity: hostloop` only** — at least one recorded path denial (`RunResult.pathDenials`, any of the three sources) targeted a `/sessions` VM path; decision-level — replay-checkable only when the cassette carries `controlOut` (else skipped-and-surfaced, not a false-green); any other tier **FAILS** ("cannot verify"); **only `true` is valid** |
 | `path_denied: {tool?, path_matches?, source?, agent_scope?}` | **`fidelity: hostloop` only** — a path denial matching **all** given matchers was recorded (`tool` glob, `path_matches` regex, `source` ∈ pretooluse/can_use_tool/permission_denied, `agent_scope` ∈ main/subagent/any — subagent means the binary's `agent_id` attribution is present); decision-level — needs `controlOut` on replay; any other tier **FAILS** ("cannot verify") |
 | `no_path_denied: true` | **`fidelity: hostloop` only** — NO path denial was recorded at all (the channel is already path-scoped, unlike `no_hook_blocked`'s indiscriminate reject); decision-level — needs `controlOut` on replay; any other tier **FAILS** ("cannot verify"); **only `true` is valid** — **Mutually exclusive** with `path_denied` and `vm_path_denied` (same channel, opposite demands — refused by `run`/`skill`/`record`) |
@@ -784,7 +787,7 @@ alongside the explicit exclusion list `LIVE_ONLY_KEYS`; the table below is deriv
 `skill_triggered`, `no_skill_triggered`, `reference_read`, `no_observed_reference_access`,
 `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
 `max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`,
-`skill_tool_used`, `compaction_occurred`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
+`skill_tool_used`, `compaction_occurred`, `hook_event_fired`, `hook_event_blocked`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`,
 `present_files_called`, `no_vm_path_file_op`,
 `result`, and the verdict modifiers `allow_permissive_auto_allow` / `allow_missing_capability` /
 `allow_l0_host_config_contamination` / `allow_stall` / `allow_undelivered_deliverables` / `allow_outputs_delete` / `allow_delete_in` (kept on replay as no-op passes). `max_cost_usd`/`max_tokens`

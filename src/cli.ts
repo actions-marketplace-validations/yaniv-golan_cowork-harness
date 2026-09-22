@@ -4565,7 +4565,7 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
     { title: "Outcome", match: (k) => k === "result" || k === "compaction_occurred" || k === "semantic_matches" },
     { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
     { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
-    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") },
+    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") },
     {
       title: "Path denial / VM paths",
       match: (k) => k.includes("path_denied") || k === "no_vm_path_file_op" || k === "transcript_no_host_path",

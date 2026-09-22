@@ -6727,6 +6727,8 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "max_redundant_tool_calls",
   "max_turns",
   "compaction_occurred",
+  "hook_event_fired", // hook_response system frames are stream content — the re-drive reproduces them via parseMessage
+  "hook_event_blocked",
   "all_tasks_completed",
   "task_count_min",
   "task_status",

@@ -528,6 +528,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass. **`: 0` asserts nothing**; `>= 1` is mutually exclusive with `questions_count_max: 0` |
 | `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
 | `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
+| `hook_event_fired` / `hook_event_blocked` | a plugin's command hook for the named event ran / blocked (`hook_response` system frames) — replay: content-class, re-derived from the frozen stream, no `controlOut` needed |
 | `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
 | `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`) — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
 | `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all — replay: needs `controlOut`. **Only `true` is valid**; any other tier FAILS "cannot verify" |

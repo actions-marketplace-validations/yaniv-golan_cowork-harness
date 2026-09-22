@@ -1949,6 +1949,52 @@ function check(
       );
     }
   }
+  // Command-hook frames. With --include-hook-events (passed whenever a staged plugin declares hooks) the
+  // agent streams hook_started/hook_response system frames for every hook event; Run records them into
+  // contextEvents, and replay re-derives them from the frozen stream. exit_code 2 is the agent's blocking
+  // exit; exit_code is OPTIONAL on the wire, so its absence is reported, never read as a block or a pass.
+  // `hook_blocked` above is a different channel: the harness's own PreToolUse callbacks in controlOut.
+  const hookResponses = (event: string) =>
+    (ctx.contextEvents ?? [])
+      .filter((e) => e.subtype === "hook_response" && e.data?.hook_event === event)
+      .map((e) => ({
+        name: typeof e.data?.hook_name === "string" ? e.data.hook_name : event,
+        exitCode: typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined,
+        outcome: typeof e.data?.outcome === "string" ? e.data.outcome : "unknown",
+      }));
+  const describeFrame = (f: { exitCode?: number; outcome: string }) =>
+    f.exitCode === undefined ? `${f.outcome} (no exit code)` : String(f.exitCode);
+  if (a.hook_event_fired !== undefined) {
+    if (ctx.contextEvents === undefined)
+      results.push(fail(`hook_event_fired: no context events captured (older run / lane without context events) — cannot verify`));
+    else {
+      const fired = hookResponses(a.hook_event_fired);
+      results.push(
+        fired.length > 0
+          ? ok(`${fired.length} hook_response frame(s): ${fired.map((f) => `${f.name} exit ${describeFrame(f)}`).join(", ")}`)
+          : fail(
+              `hook_event_fired: no hook_response frame for \`${a.hook_event_fired}\` was recorded — the staged plugin declares no such hook, the hook never ran, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`,
+            ),
+      );
+    }
+  }
+  if (a.hook_event_blocked !== undefined) {
+    if (ctx.contextEvents === undefined)
+      results.push(fail(`hook_event_blocked: no context events captured (older run / lane without context events) — cannot verify`));
+    else {
+      const fired = hookResponses(a.hook_event_blocked);
+      const blocked = fired.filter((f) => f.exitCode === 2);
+      results.push(
+        blocked.length > 0
+          ? ok(`${blocked.length} blocking hook_response frame(s): ${blocked.map((f) => f.name).join(", ")}`)
+          : fired.length > 0
+            ? fail(
+                `hook_event_blocked: \`${a.hook_event_blocked}\` fired ${fired.length}× but never blocked (exit codes seen: ${fired.map(describeFrame).join(", ")})`,
+              )
+            : fail(`hook_event_blocked: no hook_response frame for \`${a.hook_event_blocked}\` was recorded — the hook never fired`),
+      );
+    }
+  }
   if (a.no_scratchpad_leak !== undefined) {
     // THE HARNESS now serves present_files at BOTH container and hostloop (closing the prior coverage
     // gap — see present_files_called below). But this key's promotion/leak semantics stay genuinely
