@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BINARY_TOOL_CANONICALIZATION, toolNameSpellings } from "../src/run/tool-name-canonicalization";
+import { BINARY_TOOL_CANONICALIZATION, RETIRED_BY_BINARY, toolNameSpellings } from "../src/run/tool-name-canonicalization";
 import { evaluate, type AssertContext } from "../src/assert";
 
 // The BINARY's legacy→canonical tool-name rename, and the assertion matching that depends on it.
@@ -112,14 +112,63 @@ const BINARY = stagedAgentBinary();
 // drift. Extracting the map in `cowork-sync` as a synced `spawn.toolAliases`, with the usual version
 // sentinel, is the durable fix and remains follow-up work.
 describe.skipIf(!BINARY)("BINARY_TOOL_CANONICALIZATION matches the staged agent binary", () => {
-  it("every entry in the binary's canonicalizer map is present here, with the same target", () => {
+  /** The binary's own map, lifted from the staged ELF. */
+  function mapFromBinary(): Record<string, string> {
     const blob = readFileSync(BINARY!, "latin1");
     // The map is emitted as a single object literal keyed on `Task:"Agent"`. Anchor on that pair rather
     // than on a variable name, which is minifier-assigned and changes between builds.
     const m = /Task:"Agent"[^}]*/.exec(blob);
     expect(m, 'the binary no longer contains a `Task:"Agent"` canonicalizer map — re-derive the table by hand').not.toBeNull();
-    const fromBinary = Object.fromEntries([...m![0].matchAll(/(\w+):"(\w+)"/g)].map((p) => [p[1]!, p[2]!]));
-    expect(Object.keys(fromBinary).length).toBeGreaterThanOrEqual(12);
-    expect(fromBinary).toEqual({ ...BINARY_TOOL_CANONICALIZATION });
+    return Object.fromEntries([...m![0].matchAll(/(\w+):"(\w+)"/g)].map((p) => [p[1]!, p[2]!]));
+  }
+
+  // The extraction must be proven to WORK before anything is concluded from what it returned: an anchor
+  // that still matches while the literal moved would yield a short map, and every subset check below
+  // would pass vacuously on it. A count threshold used to serve this and was wrong for the job — it
+  // conflated "the regex broke" with "the binary retired an alias", and the second is what actually
+  // happened at 2.1.280 (four TaskOutput spellings dropped), reddening a guard that had found no drift.
+  it("the extraction works — the anchored literal carries the invariant core", () => {
+    const fromBinary = mapFromBinary();
+    for (const [legacy, canonical] of [
+      ["Task", "Agent"],
+      ["KillShell", "TaskStop"],
+      ["ListPeers", "ListAgents"],
+      ["ReadMcpResourceDir", "ReadMcpResourceDirTool"],
+    ] as const) {
+      expect(fromBinary[legacy], `the binary's map no longer carries ${legacy} → ${canonical}; the anchor may have moved`).toBe(canonical);
+    }
+  });
+
+  // The drift that matters: an entry the binary ADDS or RETARGETS. Either one desyncs the matcher from
+  // production silently, because nothing syncs this table.
+  it("every entry in the binary's map is present here, with the same target", () => {
+    const fromBinary = mapFromBinary();
+    for (const [legacy, canonical] of Object.entries(fromBinary)) {
+      expect(BINARY_TOOL_CANONICALIZATION[legacy], `the binary canonicalizes ${legacy} → ${canonical}; this table does not`).toBe(
+        canonical,
+      );
+    }
+  });
+
+  // The other direction, which a plain equality check could not express: this table may hold MORE than
+  // the binary does, but only names the binary is known to have retired. A leftover entry from a bad
+  // grep, or one whose retirement nobody recorded, still fails.
+  it("every extra entry here is a RECORDED retirement, not a stale guess", () => {
+    const fromBinary = mapFromBinary();
+    const extra = Object.keys(BINARY_TOOL_CANONICALIZATION).filter((k) => !(k in fromBinary));
+    expect(
+      extra.filter((k) => !(k in RETIRED_BY_BINARY)),
+      "in this table but neither in the binary's map nor in RETIRED_BY_BINARY — record the agent version that dropped it, or delete it",
+    ).toEqual([]);
+  });
+
+  // A retirement that the binary has since REINSTATED must not stay recorded as retired: the record
+  // would then be describing a binary that no longer exists.
+  it("no RECORDED retirement is back in the binary's map", () => {
+    const fromBinary = mapFromBinary();
+    expect(
+      Object.keys(RETIRED_BY_BINARY).filter((k) => k in fromBinary),
+      "listed as retired but present in the staged binary — drop it from RETIRED_BY_BINARY",
+    ).toEqual([]);
   });
 });

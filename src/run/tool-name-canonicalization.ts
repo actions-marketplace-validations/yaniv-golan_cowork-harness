@@ -27,6 +27,15 @@
  * write either spelling; `tool_available: "Task"` keeps matching the inventory's literal `Task`, and no
  * committed cassette changes meaning.
  *
+ * A NAME THE BINARY RETIRES STAYS HERE. `TaskOutput`'s four legacy spellings (`AgentOutputTool`,
+ * `BashOutputTool`, `AgentOutput`, `BashOutput`) were in the map through agent 2.1.260 and are GONE from
+ * 2.1.280's — measured on both staged ELFs; in 2.1.280 those names survive only as strings in a tool-name
+ * list, not as keys. They are kept below on purpose. The map exists so an ASSERTION may be written in
+ * either spelling against data recorded VERBATIM, and a cassette or kept run from an older agent still
+ * carries the retired spelling — forgetting it would break matching on exactly the historical data the
+ * harness replays. Retired entries are listed in `RETIRED_BY_BINARY` so the drift test can tell a
+ * deliberately-kept legacy name from a table that has silently gone stale.
+ *
  * VERSION-COUPLED. This is a property of the agent binary and can change when it does. It is NOT yet
  * extracted by `cowork-sync` into the baseline — `test/tool-name-canonicalization.test.ts` diffs it against the staged
  * binary when one is present (skipped in CI, which has no Desktop install), so drift is caught on a
@@ -50,6 +59,17 @@ export const BINARY_TOOL_CANONICALIZATION: Readonly<Record<string, string>> = Ob
   ListMcpResources: "ListMcpResourcesTool",
   ReadMcpResource: "ReadMcpResourceTool",
   ReadMcpResourceDir: "ReadMcpResourceDirTool",
+});
+
+/** Entries the binary once had and no longer does, with the last agent version observed to carry them.
+ *  Kept in the table above (see "A NAME THE BINARY RETIRES STAYS HERE"); listed here so the drift guard
+ *  can distinguish "deliberately retained" from "this table is stale". Anything in the table but neither
+ *  in the binary's map nor in this list fails `test/tool-name-canonicalization.test.ts`. */
+export const RETIRED_BY_BINARY: Readonly<Record<string, string>> = Object.freeze({
+  AgentOutputTool: "2.1.260",
+  BashOutputTool: "2.1.260",
+  AgentOutput: "2.1.260",
+  BashOutput: "2.1.260",
 });
 
 /** canonical → the legacy spellings that canonicalize to it. Several legacy names share one canonical
