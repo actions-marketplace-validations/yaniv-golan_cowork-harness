@@ -89,9 +89,13 @@ All notable changes to this project are documented here. The format is based on
   start at `<hostCwd>`." became the constant "Pass absolute paths to these tools."** Verified both
   directions against both asars, with every other manifest template character-identical modulo minifier
   renames. A sub-agent is no longer told where a relative path resolves; it is told not to use one.
-- **OPEN fidelity gap, recorded not fixed:** `hostLoopCwds()` still models the agent process cwd as the
-  outputs dir. A skill writing a bare relative path lands in `outputs/` here and in `/var/empty` in
-  production. See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+- **OPEN fidelity gap, recorded not fixed, and MEASURED in production:** `hostLoopCwds()` still models
+  the agent process cwd as the outputs dir. A host-loop Cowork task running hourly across the Desktop
+  upgrade splits cleanly on it — the agent's patched `cwd` is `<sessionDir>/outputs` in 43 occurrences
+  before `appVersion` becomes `2.7032.0` and `/var/empty` in 10 after, with the agent held at 2.1.280
+  throughout. Production REFUSES a relative `Write`/`Edit` with *"needs an absolute path here — use
+  `<outputs>/x`"* rather than mis-writing it, so the harness's gap is that it silently accepts what
+  production rejects. See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
 - **The agent RETIRED THE `TaskOutput` TOOL, which is why its canonicalizer shrank 12 → 8.**
   `AgentOutputTool`, `BashOutputTool`, `AgentOutput` and `BashOutput` are gone from 2.1.280's map — and
   so is the tool they pointed at: measured on both staged ELFs, 2.1.260 defines `TaskOutput` while

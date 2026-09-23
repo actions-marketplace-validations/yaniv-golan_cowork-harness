@@ -1366,9 +1366,23 @@ purpose" — and collapsing them into one value is the mistake this arrangement 
 > (unwritable) in production. That is a skill passing here and failing there — the exact asymmetry the
 > cwd SPLIT exists to prevent, reintroduced by a Desktop change rather than by a harness edit.
 >
+> **Measured in production, not only read from the asar.** A host-loop Cowork task that ran hourly across
+> the Desktop upgrade splits cleanly on it in `~/Library/Logs/Claude/main.log`: the agent's patched `cwd`
+> is `<sessionDir>/outputs` in 43 occurrences before `appVersion` becomes `2.7032.0` and `/var/empty` in
+> 10 after, with no overlap and the agent held at 2.1.280 throughout. Desktop `2.2553.13` still used
+> outputs, so the change arrived at 2.7032.0.
+>
+> **Production REFUSES a relative path; it does not mis-write.** The path gate resolves no relative path
+> into outputs: a relative `Write`/`Edit`/`MultiEdit` is blocked with *"needs an absolute path here — use
+> `<outputs>/x`"*, `Grep`/`Glob` are re-anchored to outputs, and the agent backfills `file_path` against
+> its cwd before hooks so a relative write arrives as `/var/empty/x`, which `disallowedTools` and `deny`
+> also cover. So the harness's gap is that it silently ACCEPTS what production refuses with an actionable
+> message — the skill still behaves differently, but the production symptom is a clear refusal rather
+> than a file in the wrong place.
+>
 > Not fixed in the sync that recorded it: following production means changing what every host-loop run
-> does, which wants its own change and its own live evidence. Found by an internals session reading the
-> 2.7032.0 asar and confirmed here against the same bundle.
+> does, which wants its own change. Found by an internals session and verified here against both the
+> 2.7032.0 asar and this machine's own logs.
 
 Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; anything written outside
 `<vmCwd>/mnt/` (including `/tmp`) stays in that environment and never reaches the user or your file
