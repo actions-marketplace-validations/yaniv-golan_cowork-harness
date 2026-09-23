@@ -26,7 +26,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 32 o
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
-- **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production replaces them with zero-tool stubs](#a-plugins-declared-mcp-servers-run-here-production-replaces-them-with-zero-tool-stubs) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases)
+- **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: four env-delivered keys the harness never sets](#auto-memory-four-env-delivered-keys-the-harness-never-sets) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host)
@@ -109,7 +109,7 @@ a live bug report can be placed on the right lane before it is compared to a har
 | `CLAUDE_CODE_DESKTOP_APP_VERSION` | **unset** (and the agent reads it only under the `claude-desktop`/`local-agent` entrypoints) | set by Desktop ≥ 2.2553.1 and by this harness at hostloop from the baseline |
 | Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a Desktop-local stream | frames for SessionStart/Setup only; the harness passes the flag itself when a staged plugin declares hooks |
 | Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
-| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1 | stubbed to zero tools by Desktop; run real here (see the plugin-MCP section under "Plugins" — the bridge is a third data point for that open decision) |
+| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
 | Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier; `hook_event_fired` / `hook_event_blocked` grade them |
 | Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | none are in the pinned spawn env |
 
@@ -317,22 +317,31 @@ in a real unattended Cowork session, where these actions now refuse rather than 
 
 ---
 
-## A plugin's declared MCP servers run here; production replaces them with zero-tool stubs
+## A plugin's declared MCP servers run here; production stubs them under conditions the harness cannot see
 
-**Real Cowork behaviour:** Desktop rewrites a plugin's MCP servers before the spawn rather than passing them
-through. Two rules, with different conditions:
+**Real Cowork behaviour (read in asar 2.7032.0):** Desktop can rewrite a plugin's MCP servers before
+the spawn rather than passing them through. Two rules, each with its own condition — **neither fires on an
+ordinary session**:
 
-- **Remote servers** — a `config.url` with `type` in `{http, streamable-http, sse}` — are replaced
-  unconditionally by an empty SDK server, logged *"Plugin `<name>` declares remote MCP servers (…).
-  Overriding with no-ops so the CLI does not open its own client."*
+- **Remote servers** — a `config.url` with `type` in `{http, streamable-http, sse}` — are replaced when the
+  session shadows remote servers at all (gate `2529235968`, or at least one third-party direct MCP server
+  present) **and** a stand-in already provides that server, matched by URL hostname or by name. The
+  stand-ins are the session's claude.ai connectors that carry at least one enabled tool, plus those direct
+  servers. Logged *"Plugin `<name>` declares remote MCP servers (…). Overriding with no-ops so the CLI does
+  not open its own client."* With the gate off and no such server, the remote arm never runs, and a
+  plugin's remote servers reach the CLI intact. Earlier builds (1.37937.0 through 1.46388.x) stubbed
+  **every** remote plugin server once the gate was on; the stand-in narrowing arrives with 2.2553.1.
 - **Local / `.mcpb` servers** — `isMcpb`, or a `config.command` — are replaced when an MCP policy is active:
   local MCP disabled, or for `.mcpb` specifically, extensions disabled, signature required, or a directory
-  policy in force.
+  policy in force. With no policy in force, a local stdio plugin server keeps its real tools.
 
-Both are renamed `plugin:<pluginName>:<serverName>` and constructed as `createSdkMcpServer({name, tools: []})`
-— **the server name is present in the session's inventory and offers zero tools.** The rewritten set is
-delivered to the agent as an `--mcp-config` payload, and when an MCP policy is active and that delivery
-fails, Desktop refuses to start the session rather than launching with unenforced plugin servers.
+A plugin Desktop treats as official is exempt from both arms unless a policy is active.
+
+A replaced server is renamed `plugin:<pluginName>:<serverName>` and constructed as
+`createSdkMcpServer({name, tools: []})` — **the server name is present in the session's inventory and offers
+zero tools.** The rewritten set is written to `cowork-plugin-mcp-shadow.json` and delivered to the agent as
+an `--mcp-config` payload; when the session shadows remote servers *and* an MCP policy is active, a failed
+delivery makes Desktop refuse to start the session rather than launch with unenforced plugin servers.
 
 **What the harness does:** nothing. Plugins are staged with `--plugin-dir` and the CLI reads each plugin's
 own declaration, so a plugin under test gets **working** MCP servers with their real tools.
@@ -346,17 +355,21 @@ deliberately kept separate from plugin delivery.
 and therefore behaves identically here. Anything Desktop computes and hands over is absent unless the
 harness computes it too.
 
-**What this means for a scenario.** A plugin that declares MCP servers is tested against a tool surface
-production would not give it: assertions naming those tools can pass here and be unreachable in Cowork, and
-a skill that leans on such a server will work in a harness run and find a zero-tool server in production.
-The failure is silent in both directions — nothing errors, the tools are simply there or not.
+**What this means for a scenario.** A plugin that declares MCP servers is tested against the tool surface
+its own declaration asks for, which is what an unpolicied production session also gives it. The divergence
+appears only for the reader whose Desktop trips one of the two conditions above: there, assertions naming
+those tools pass here and the tools are unreachable, and a skill that leans on such a server works in a
+harness run and finds a zero-tool server. The failure is silent in both directions — nothing errors, the
+tools are simply there or not — so a scenario cannot detect which side of the condition its reader is on.
 
-**Not modeled, and modelling it needs a design decision rather than a patch.** The remote-server rule is
-unconditional and therefore mechanically reproducible; the local/`.mcpb` rule is conditioned on Desktop
-policy state (local-MCP enablement, extension signature and directory policy) that the harness has no
-source for. Modelling only the unconditional half would be faithful for remote servers and silently wrong
-for the rest, so which half to model — and whether a session should be able to opt out — is the decision to
-make first.
+**Not modeled, and modelling it needs a design decision rather than a patch.** Neither rule is
+mechanically reproducible: the remote arm is conditioned on a server-side gate and on which claude.ai
+connectors the session has enabled, and the local/`.mcpb` arm on Desktop policy state (local-MCP
+enablement, extension signature and directory policy). The harness has a source for none of it, and the
+common case — no policy, no matching connector — is the one where production and the harness already
+agree. Modelling one arm would be faithful for the sessions that trip it and silently wrong for the rest,
+so what a session should be able to *declare* about its own Desktop state — rather than which half to
+hard-code — is the decision to make first.
 
 ---
 

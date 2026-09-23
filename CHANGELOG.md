@@ -134,6 +134,16 @@ All notable changes to this project are documented here. The format is based on
   is now dead and says so, `prompt.ts`'s `{{cwd}}` and `hostOutputsDir` docs name the 2.7032.0 behaviour,
   and the 1.46388.3 hl asset's header no longer claims the manifest's relative-paths clause is "where
   production now states it".
+- **`docs/fidelity-gaps.md` overstated the plugin-MCP gap: production does NOT stub a plugin's remote MCP
+  servers unconditionally.** The page claimed the remote arm fires for every `config.url` server and drew
+  its "mechanically reproducible, so modelling it is a design decision about the other half" conclusion
+  from that. Read in asar 2.7032.0, the remote arm runs only when the session shadows remote servers at
+  all — gate `2529235968`, or at least one third-party direct MCP server — **and** a stand-in already
+  provides that server, matched by URL hostname or name against the session's enabled claude.ai
+  connectors; the stand-in narrowing arrives with 2.2553.1, replacing the blanket stubbing of
+  1.37937.0–1.46388.x. The local/`.mcpb` arm is unchanged and still policy-gated. So on an ordinary
+  session neither arm fires, the harness and production already agree, and the open decision is no longer
+  "which half to hard-code" but what a session should be able to declare about its own Desktop state.
 
 ### Fixed
 
