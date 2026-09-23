@@ -327,7 +327,7 @@ ordinary session**:
   session shadows remote servers at all (gate `2529235968`, or at least one third-party direct MCP server
   present) **and** a stand-in already provides that server, matched by URL hostname or by name. The
   stand-ins are the session's claude.ai connectors that carry at least one enabled tool, plus those direct
-  servers. Logged *"Plugin `<name>` declares remote MCP servers (…). Overriding with no-ops so the CLI does
+  servers. Logged *"Plugin `<id>` declares remote MCP servers (…). Overriding with no-ops so the CLI does
   not open its own client."* With the gate off and no such server, the remote arm never runs, and a
   plugin's remote servers reach the CLI intact. Earlier builds (1.37937.0 through 1.46388.x) stubbed
   **every** remote plugin server once the gate was on; the stand-in narrowing arrives with 2.2553.1.
@@ -339,9 +339,28 @@ A plugin Desktop treats as official is exempt from both arms unless a policy is 
 
 A replaced server is renamed `plugin:<pluginName>:<serverName>` and constructed as
 `createSdkMcpServer({name, tools: []})` — **the server name is present in the session's inventory and offers
-zero tools.** The rewritten set is written to `cowork-plugin-mcp-shadow.json` and delivered to the agent as
-an `--mcp-config` payload; when the session shadows remote servers *and* an MCP policy is active, a failed
-delivery makes Desktop refuse to start the session rather than launch with unenforced plugin servers.
+zero tools.** Every stub reaches the agent in Desktop's in-process SDK server map. Which stubs are _also_
+named in `cowork-plugin-mcp-shadow.json`, delivered as an `--mcp-config` payload, depends on whether
+Desktop enforces remote shadowing for the session: gate `2529235968` on **and** no enterprise
+managed-configuration override in force. When it does, the file names every replaced server, policy stubs
+included. When it does not, the file names only the remote servers a stand-in replaced, and a session with
+none writes no file at all; local and `.mcpb` policy stubs then travel in the SDK map alone.
+
+While an MCP policy is active, Desktop refuses to start the session rather than launch with unenforced
+plugin servers whenever building the overrides fails, whatever the gate: a failed plugin scan (*"Plugin MCP
+scan failed while an MCP policy is active"*) or any other error in that step. It also refuses when the
+shadow file cannot be written, but only while it enforces remote shadowing; otherwise a failed write is
+logged and the spawn goes ahead without the file.
+
+Desktop's own MCP pool, `LocalMcpServerManager`, takes only a plugin's local stdio and `.mcpb` servers, and
+skips any a policy blocks. Remote plugin servers that no stand-in replaced are left for the CLI to open
+itself. **A stub therefore never appears as a `LocalMcpServerManager` connection**, which makes Desktop's
+`main.log` an unambiguous record of the remote arm: each replacement logs
+`Replacing plugin "<plugin>" MCP server "<server>": "<connector>" already provides it (matched by url)`,
+then `Plugin "<id>" declares remote MCP servers (…). Overriding with no-ops …`. On a Desktop whose
+connected Slack, Notion or Airtable connector matches a plugin's declared server by URL, both lines appear
+for every session that loads the plugin, and the plugin servers that connect through
+`LocalMcpServerManager` are only local stdio ones.
 
 **What the harness does:** nothing. Plugins are staged with `--plugin-dir` and the CLI reads each plugin's
 own declaration, so a plugin under test gets **working** MCP servers with their real tools.
