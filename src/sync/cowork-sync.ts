@@ -154,14 +154,16 @@ export const PINNED_GATES: Record<string, string> = {
   // (`resolveSkillDiscoveryGates`), so a flip here CHANGES the declared tool set on container/hostloop
   // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
-  // proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate
-  // the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with
-  // this gate OFF.) It has THREE effects, not two: it swaps suggest_skills's description, adds `trigger`,
-  // AND is passed into generateSkillsSystemPrompt, where it swaps the suggest-guidance line inside the
-  // dynamically-generated `<skills_instructions>` block (plus a once-per-conversation sentence). A prior
-  // version of this comment claimed "only swaps the description and adds `trigger`" — that was wrong about
-  // the product. The harness models the first two and renders no `<skills_instructions>` section at all,
-  // so the prompt effect is a disclosed gap, not a modelled surface (same shape as canSaveSkill below).
+  // proactive (unprompted) suggest mode. DEAD IN DESKTOP CODE FROM 1.46388.3: 2 occurrences in the 1.40609.1
+  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 2.7032.0, and the `proactiveSkillSuggestEnabled`
+  // name is gone too. From that build Desktop gives suggest_skills its proactive description and `trigger`
+  // param unconditionally whenever the tool is declared. Up to 1.44121.1 the gate was live, with three effects:
+  // the description swap, `trigger`, and a swapped suggest-guidance line in the generated
+  // `<skills_instructions>` block (a prompt effect the harness never models).
+  // LATENT DIVERGENCE: the harness still READS this row at spawn (`resolveSkillDiscoveryGates`), so it
+  // matches production only while the fcache keeps serving it on/force. A server-side flip to off would be
+  // reported here as a real drift and would switch the harness's proactive mode off while production keeps
+  // it on. Like canSaveSkill below, the row is a record of what the server sends, not a sentinel.
   "1598976391": "proactiveSkillSuggestEnabled",
   // DEAD IN DESKTOP CODE SINCE 1.44121.1 — THIS PIN PROVIDES NO COVERAGE OF `save_skill`. The id has 3
   // occurrences in the 1.40609.1 asar and 0 in every asar from 1.44121.1 through 2.7032.0 (count with

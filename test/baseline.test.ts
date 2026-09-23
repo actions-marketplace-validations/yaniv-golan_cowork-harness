@@ -211,9 +211,9 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
   });
 
   it("PINNED_GATES tracks the skill-discovery gates (present in fcache, so NOT dark)", () => {
-    // The gates that govern whether the Desktop SDK-MCP skill/plugin discovery tools render.
-    // 245679952 is live on/force; a flip of any of these changes the model's tool surface, and
-    // none was pinned before — so a live change was invisible to the drift guard.
+    // 245679952 is live on/force and gates whether suggest_skills is declared: a flip of it changes the
+    // model's tool surface. 1598976391 is dead in Desktop code from 1.46388.3 (proactive mode is
+    // unconditional there), so its row is a record only — though the harness still reads it at spawn.
     expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
     expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
   });
