@@ -312,7 +312,10 @@ const DARK_GATES = new Set([
 
 /**
  * Decode the Claude Desktop GrowthBook feature cache (`~/Library/Application Support/Claude/fcache`).
- * Binary-verified format (app.asar 1.12603.1): bytes 0..2 = "CLF" magic, byte 3 = version (0x01),
+ * Binary-verified format (app.asar 1.12603.1): bytes 0..2 = "CLF" magic, byte 3 = version — 0x01 when
+ * this was written, 0x02 since Desktop 1.34493.1. The readers below check the 3-byte magic ONLY and are
+ * deliberately version-agnostic, which is why that bump cost nothing; a reader that pinned 0x01 would
+ * reject every current file.
  * bytes 4..7 = a length/checksum field, bytes 8.. = a gzip stream that inflates to JSON
  * `{ timestamp, features: { <id>: { value, on, off, source, ruleId } } }`.
  * Returns the pinned gates' states, or null if the cache is absent/unreadable (caller flags it).

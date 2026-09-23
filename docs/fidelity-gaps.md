@@ -1382,7 +1382,11 @@ purpose" — and collapsing them into one value is the mistake this arrangement 
 > gate messages are in the asar (2 and 1 hits, 0 in the ELF). `Grep`/`Glob` skip that validation, reach
 > the hook, and have their input re-anchored to outputs. So the harness's gap is that it silently ACCEPTS
 > what production refuses — the production symptom is a clear permission refusal, not a file in the wrong
-> place. Static reading; not yet observed in a live run.
+> place. **Confirmed live** (Desktop 2.7032.0 / agent 2.1.280, host-loop Cowork, probed twice): a bare
+> `probe-rel.md` written or read, and a write to `/var/empty/probe2.md`, all return the tool_use_error
+> *"File is in a directory that is denied by your permission settings."* and nothing is written, while a
+> pathless `Glob *.md` and `Grep x` DO find a file seeded in outputs — so the hook re-anchoring is real
+> too. Desktop's own message never appears, exactly as the string locations predict.
 >
 > Not fixed in the sync that recorded it: following production means changing what every host-loop run
 > does, which wants its own change. Found by an internals session and verified here against both the
