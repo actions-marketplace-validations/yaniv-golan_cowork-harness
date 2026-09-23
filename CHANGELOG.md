@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Proactive `suggest_skills` mode follows the Desktop version, not a gate Desktop no longer reads.**
+  From Desktop 1.46388.3 the asar has no reference to gate `1598976391` (`proactiveSkillSuggestEnabled`):
+  `suggest_skills` always carries the proactive description and `trigger` param when it is declared. The
+  server still serves the gate, and the harness read it for every baseline, so a server-side flip to off
+  would have switched proactive mode off here while production kept it on. For a baseline at 1.46388.3 or
+  later the row is now ignored and proactive mode is on; older baselines still read the gate, and
+  `skills.proactive_suggest_enabled` still overrides both. No change for any committed baseline: all of
+  them from 1.46388.3 on carry the gate on.
+
 ## [3.8.0] — 2026-09-22
 
 ### Upgrade notes

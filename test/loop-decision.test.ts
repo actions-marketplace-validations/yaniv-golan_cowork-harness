@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { decideLoop, decideLoopFromBaseline, readGateBool, readGateFlag, resolveSkillDiscoveryGates } from "../src/loop-decision.js";
+import {
+  decideLoop,
+  decideLoopFromBaseline,
+  PROACTIVE_SUGGEST_UNCONDITIONAL_FROM,
+  readGateBool,
+  readGateFlag,
+  resolveSkillDiscoveryGates,
+} from "../src/loop-decision.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { PlatformBaseline } from "../src/types.js";
 
@@ -96,6 +103,35 @@ describe("readGateBool / resolveSkillDiscoveryGates (A2 discovery gates)", () =>
   // to desktop-1.24012.1, where the gate is off, so this asymmetry would be invisible there. (From the
   // 1.24012.11 baseline the gate IS on, so `latest` would now exercise it — but pinning the synthetic
   // keeps the guard independent of which baseline happens to be newest.)
+  // Gate 1598976391 is dead in Desktop code from 1.46388.3: proactive mode is unconditional there. A
+  // server-side flip of the still-served row must NOT turn the harness's proactive mode off.
+  describe("proactive mode is version-dependent (gate dead from 1.46388.3)", () => {
+    const withVersion = (appVersion: string, on: boolean) =>
+      ({ appVersion, provenance: { gates: { "proactiveSkillSuggestEnabled:1598976391": { on } } } }) as unknown as PlatformBaseline;
+    it("ignores the gate from 1.46388.3 on — an OFF row still resolves proactive", () => {
+      expect(PROACTIVE_SUGGEST_UNCONDITIONAL_FROM).toBe("1.46388.3");
+      for (const v of ["1.46388.3", "1.46388.4", "2.2553.1", "2.7032.0", "3.0.0"])
+        expect(resolveSkillDiscoveryGates(withVersion(v, false)).proactiveSkillSuggestEnabled, v).toBe(true);
+    });
+    it("reads the gate before 1.46388.3 — both states round-trip", () => {
+      for (const v of ["1.44121.1", "1.46388.2", "1.24012.11"]) {
+        expect(resolveSkillDiscoveryGates(withVersion(v, false)).proactiveSkillSuggestEnabled, v).toBe(false);
+        expect(resolveSkillDiscoveryGates(withVersion(v, true)).proactiveSkillSuggestEnabled, v).toBe(true);
+      }
+    });
+    it("the session knob still wins on a new baseline, in both directions", () => {
+      const b = withVersion("2.7032.0", false);
+      expect(resolveSkillDiscoveryGates(b, { proactive_suggest_enabled: false }).proactiveSkillSuggestEnabled).toBe(false);
+      expect(
+        resolveSkillDiscoveryGates(withVersion("1.44121.1", false), { proactive_suggest_enabled: true }).proactiveSkillSuggestEnabled,
+      ).toBe(true);
+    });
+    it("every committed baseline from 1.46388.3 on resolves proactive (shipped behaviour unchanged)", () => {
+      for (const v of ["1.46388.3", "1.46388.4", "2.2553.1", "2.7032.0"])
+        expect(resolveSkillDiscoveryGates(loadBaseline(`desktop-${v}`)).proactiveSkillSuggestEnabled, v).toBe(true);
+    });
+  });
+
   it("an explicit false knob beats an ON gate on the proactive line too (?? not ||)", () => {
     const on = gated({ "1598976391": { on: true } });
     expect(resolveSkillDiscoveryGates(on).proactiveSkillSuggestEnabled).toBe(true);

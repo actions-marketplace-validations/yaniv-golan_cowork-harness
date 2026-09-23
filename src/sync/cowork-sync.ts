@@ -150,9 +150,10 @@ export const PINNED_GATES: Record<string, string> = {
   // init.tools of 8 real sessions) render, and in what mode. None was pinned before, so 245679952
   // being live on/force was invisible to the drift guard. Present in the live fcache (NOT dark), so
   // they are read at their real state — no DARK_GATES entry. BEHAVIORALLY MODELED since A2: the harness
-  // declares the skills/plugins SDK-MCP servers and reads BOTH gates at spawn
-  // (`resolveSkillDiscoveryGates`), so a flip here CHANGES the declared tool set on container/hostloop
-  // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
+  // declares the skills/plugins SDK-MCP servers and reads 245679952 at spawn (`resolveSkillDiscoveryGates`),
+  // so a flip of it CHANGES the declared tool set on container/hostloop (see
+  // `src/hostloop/skills-handler.ts`) — it is NOT inert. 1598976391 is read only for a baseline older than
+  // 1.46388.3 (see its entry below). A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
   // proactive (unprompted) suggest mode. DEAD IN DESKTOP CODE FROM 1.46388.3: 2 occurrences in the 1.40609.1
   // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 2.7032.0, and the `proactiveSkillSuggestEnabled`
@@ -160,10 +161,10 @@ export const PINNED_GATES: Record<string, string> = {
   // param unconditionally whenever the tool is declared. Up to 1.44121.1 the gate was live, with three effects:
   // the description swap, `trigger`, and a swapped suggest-guidance line in the generated
   // `<skills_instructions>` block (a prompt effect the harness never models).
-  // LATENT DIVERGENCE: the harness still READS this row at spawn (`resolveSkillDiscoveryGates`), so it
-  // matches production only while the fcache keeps serving it on/force. A server-side flip to off would be
-  // reported here as a real drift and would switch the harness's proactive mode off while production keeps
-  // it on. Like canSaveSkill below, the row is a record of what the server sends, not a sentinel.
+  // The harness reads this row at spawn ONLY for a baseline older than 1.46388.3; from there
+  // `resolveSkillDiscoveryGates` ignores it and proactive mode is always on, as in production. So a
+  // server-side flip here is a sync diff with no effect on runs against a current baseline. Like
+  // canSaveSkill below, the row is a record of what the server sends, not a sentinel.
   "1598976391": "proactiveSkillSuggestEnabled",
   // DEAD IN DESKTOP CODE SINCE 1.44121.1 — THIS PIN PROVIDES NO COVERAGE OF `save_skill`. The id has 3
   // occurrences in the 1.40609.1 asar and 0 in every asar from 1.44121.1 through 2.7032.0 (count with

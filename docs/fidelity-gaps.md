@@ -871,19 +871,23 @@ over the control protocol (`sdkMcpServers` in `initialize`, tunneled as `mcp_mes
 `list_skills` returns no match, and the result renders an "Add" card. The call has **no side effect**
 (nothing installs; the user's Add click happens out of band). Ground truth: these tools appear in the
 `system/init` `tools` array of real on-disk sessions (`local-agent-mode-sessions/**/audit.jsonl`); the
-`suggestSkillsEnabled` gate `245679952` is on. A proactive-suggestion mode sits behind a second gate
-`1598976391` (`proactiveSkillSuggestEnabled`), which is **served ON** for a standard account as of the
-`1.24012.11` baseline — by a server-side rollout, not a Desktop change (the gate reads ON on earlier
-Desktop versions too). With it off, `suggest_skills` keeps its base description and the model suggests
-only when the conversation invites it. With it on, the tool gains an optional `trigger` parameter
+`suggestSkillsEnabled` gate `245679952` is on. `suggest_skills` also has a proactive-suggestion mode.
+From Desktop `1.46388.3` (the first backed-up build after `1.44121.1`) that mode is **unconditional** whenever `suggest_skills` is declared: no gate
+is read for it. Up to `1.44121.1` it sits behind gate `1598976391`
+(`proactiveSkillSuggestEnabled`), which the server serves **on** for a standard account from the
+`1.24012.11` baseline; the server still serves that gate, but Desktop from `1.46388.3` never reads it.
+With the mode off, `suggest_skills` keeps its base description and the model suggests only when the
+conversation invites it. With it on, the tool gains an optional `trigger` parameter
 (`user_asked` | `proactive`), a proactive description that also carries production's *constraints* (a
 do-not-call list, a suggest-at-most-once-per-conversation rule, a no-lead-in rule, and forwarding the
 same keywords **and trigger** to `search_plugins`), and an empty-catalog `note` that chains into
 `search_plugins` for every trigger state — silence is only the `proactive` tail, and a trigger the model
-never supplied is never forwarded back to it. One production effect is **not** modeled: the flag is also
-passed into Desktop's `generateSkillsSystemPrompt`, where it swaps a guidance line inside the generated
-`<skills_instructions>` block. The harness renders no such section at all, so that effect lands in an
-already-unmodeled surface.
+never supplied is never forwarded back to it. One production effect is **not** modeled: a proactive
+suggest-guidance line (with a suggest-at-most-once-per-conversation sentence) inside the generated
+`<skills_instructions>` block. Up to `1.44121.1` the gate selects it; from `1.46388.3` Desktop emits it
+whenever `suggest_skills` and `search_plugins` are available, so on a current baseline this gap applies to
+every session that declares `suggest_skills`. The harness renders no such section at all, so the effect
+lands in an already-unmodeled surface.
 
 **Harness behaviour:** `container` and `hostloop` (and `cowork`, which resolves to one of those) now
 declare a `skills` and a `plugins` SDK-MCP server alongside `cowork`/`workspace` (`combineSdkMcp`,
@@ -897,9 +901,11 @@ synced baseline (`readGateBool`, bare-boolean shape — distinct from the sub-fl
 reads) with a session-level override (`skills.suggest_enabled` / `skills.proactive_suggest_enabled`, see
 [session.md](./session.md)). Precedence is knob ▸ baseline gate ▸ hardcoded fallback, and the three are
 distinct: omit the knob and the value comes from the **synced baseline** (on `latest` that is
-`suggestSkillsEnabled` on and `proactiveSkillSuggestEnabled` **on**, mirroring what production serves);
-the hardcoded fallback, which applies only to a baseline old enough to predate the gate entirely, stays
-on for `suggestSkillsEnabled` and **off** for `proactiveSkillSuggestEnabled`.
+`suggestSkillsEnabled` on); the hardcoded fallback, which applies only to a baseline old enough to predate
+the gate entirely, is on. Proactive mode follows the Desktop version the same way production does: from
+the `1.46388.3` baseline it is **always on** and the `1598976391` row is ignored, so a server-side flip of
+a gate Desktop does not read cannot change a run; for an older baseline the synced gate decides, with a
+hardcoded fallback of **off** for a baseline that predates it.
 
 **How exact is the model?** Not uniformly — and the difference matters, so it is stated plainly. The
 tool **inventory** (which five tools exist), their **inputSchemas**, the **gating** semantics, and the

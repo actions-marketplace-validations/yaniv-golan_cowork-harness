@@ -213,7 +213,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
   it("PINNED_GATES tracks the skill-discovery gates (present in fcache, so NOT dark)", () => {
     // 245679952 is live on/force and gates whether suggest_skills is declared: a flip of it changes the
     // model's tool surface. 1598976391 is dead in Desktop code from 1.46388.3 (proactive mode is
-    // unconditional there), so its row is a record only — though the harness still reads it at spawn.
+    // unconditional there), so its row is a record only; the harness reads it only for older baselines.
     expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
     expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
   });
