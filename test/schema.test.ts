@@ -72,6 +72,19 @@ describe("AnswerRule rejects inert rules, accepts valid shapes", () => {
   });
 });
 
+describe("hook_event_fired / hook_event_blocked take a hook event the agent recognises", () => {
+  it("rejects an unknown hook name at LOAD time", () => {
+    expect(Assertion.safeParse({ hook_event_fired: "Stopp" }).success).toBe(false);
+    expect(Assertion.safeParse({ hook_event_blocked: "stop" }).success).toBe(false);
+  });
+  it("accepts every KNOWN_HOOK_EVENTS member", () => {
+    for (const e of KNOWN_HOOK_EVENTS) {
+      expect(Assertion.safeParse({ hook_event_fired: e }).success).toBe(true);
+      expect(Assertion.safeParse({ hook_event_blocked: e }).success).toBe(true);
+    }
+  });
+});
+
 describe("count assertions require nonnegative integers", () => {
   it("rejects negative and fractional counts", () => {
     expect(Assertion.safeParse({ dispatch_count_max: -1 }).success).toBe(false);
@@ -211,6 +224,8 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
         "assert.path_denied.source",
         "assert.path_denied.agent_scope",
         "assert.question_options.order",
+        "assert.hook_event_fired",
+        "assert.hook_event_blocked",
       ].sort(),
     );
     expect(enums.fidelity).toEqual([...FIDELITY_TIERS]);

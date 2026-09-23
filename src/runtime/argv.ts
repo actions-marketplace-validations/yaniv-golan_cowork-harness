@@ -108,6 +108,10 @@ export function baseAgentArgs(
     // the agent inherits its own turn ceiling (fidelity: real Cowork passes no --max-turns for interactive
     // sessions). The flag is verified supported by the staged agent binary.
     ...(plan.agentMaxTurns !== undefined ? ["--max-turns", String(plan.agentMaxTurns)] : []),
+    // Hook lifecycle frames — emitted ONLY when a staged plugin declares runnable hooks (see
+    // LaunchPlan.includeHookEvents). Telemetry-only on the agent side; Desktop never passes it, so the
+    // default omits it → goldens unchanged.
+    ...(plan.includeHookEvents ? ["--include-hook-events"] : []),
     ...(opts.disallowed?.length ? ["--disallowedTools", ...opts.disallowed] : []),
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
     ...(plan.model ? ["--model", plan.model] : []),

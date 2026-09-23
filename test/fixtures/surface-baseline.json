@@ -937,6 +937,9 @@
         "type": "object",
         "closed": true
       },
+      ".commandShadowsSkill": {
+        "type": "boolean"
+      },
       ".costUsd": {
         "type": "object",
         "closed": true
@@ -1213,6 +1216,9 @@
       ".prompt": {
         "type": "string",
         "required": true
+      },
+      ".referenceAccessUnobservable": {
+        "type": "boolean"
       },
       ".requestedFidelity": {
         "type": "string",
@@ -3159,6 +3165,82 @@
       },
       ".assert[].hook_blocked": {
         "type": "string"
+      },
+      ".assert[].hook_event_blocked": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ]
+      },
+      ".assert[].hook_event_fired": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ]
       },
       ".assert[].input_unmodified<anyOf:0>": {
         "type": "string"

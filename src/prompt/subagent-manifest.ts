@@ -45,7 +45,12 @@ export interface SubagentManifestFolder {
 export interface SubagentManifestInputs {
   /** The VM session root, `/sessions/<id>` — from `resolveMounts`, never a local literal. */
   vmCwd: string;
-  /** Where relative paths in the file tools resolve: production's `hostCwd ?? vmCwd`. */
+  /** DEAD as of Desktop 2.7032.0 and kept only so this shape still reads against production's generator
+   *  signature. It fed the retired "Relative paths in these tools start at `<hostCwd>`." sentence; nothing
+   *  in `generateSubagentFolderManifest` reads it now. Production dropped `hostCwd` as a parameter in the
+   *  same change and the agent process cwd moved OFF the outputs dir (to `/var/empty`, or a per-session
+   *  `host-cwd` dir when that is unusable) — which is why the sentence became an instruction rather than a
+   *  value. Removing this field is a follow-up, not a silent deletion: callers still pass it. */
   hostCwd: string;
   /** This session's outputs folder on the host. Production passes it only in host-loop mode; when it
    *  is absent AND there are no folders, the manifest takes its no-list variant. */
@@ -74,7 +79,14 @@ export const SUBAGENT_SKILL_SENTENCE =
  */
 export function generateSubagentFolderManifest(inp: SubagentManifestInputs): string {
   const tools = SUBAGENT_MANIFEST_FILE_TOOLS.join(", ");
-  const relative = `Relative paths in these tools start at \`${inp.hostCwd}\`.`;
+  // Desktop 2.7032.0 REPLACED the cwd sentence with a constant instruction. Through 2.2553.1 this read
+  // "Relative paths in these tools start at `<hostCwd>`." — a per-session VALUE. It is now the fixed
+  // "Pass absolute paths to these tools.", and `hostCwd` left the delivery site's argument list in the
+  // same change (the sentence was its only consumer here). Measured on both asars: the old literal is
+  // absent from 2.7032.0 and the new one absent from 2.2553.1, with the rest of the manifest identical
+  // modulo minifier renames. A sub-agent is no longer told where a relative path resolves — it is told
+  // not to use one.
+  const paths = "Pass absolute paths to these tools.";
   const lines: string[] = [];
   if (inp.hostOutputsDir) {
     lines.push(`- \`${inp.hostOutputsDir}\` (this session's outputs folder; shell: \`${inp.vmCwd}/mnt/outputs/\`)`);
@@ -87,10 +99,10 @@ export function generateSubagentFolderManifest(inp: SubagentManifestInputs): str
     );
   }
   if (lines.length === 0) {
-    return `\n\n${tools} act on the user's computer, and reject \`/sessions/\` paths. ${relative}`;
+    return `\n\n${tools} act on the user's computer, and reject \`/sessions/\` paths. ${paths}`;
   }
   return (
-    `\n\n${tools} take the first path on each line below, and reject \`/sessions/\` paths. ${relative} ` +
+    `\n\n${tools} take the first path on each line below, and reject \`/sessions/\` paths. ${paths} ` +
     `The shell takes the shell path.\n\n` +
     `Folders on the user's computer (only read or write inside these; the user can attach more folders, ` +
     `so the list can be incomplete):\n` +

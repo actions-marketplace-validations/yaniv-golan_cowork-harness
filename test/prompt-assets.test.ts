@@ -189,11 +189,35 @@ describe("subagentAppend — per-tier branch selection (subagent_env_hl / subage
     hostUploadsDir: "/Users/me/runs/x/work/session/mnt/uploads",
   };
 
-  it("hostloop renders the hl asset: host cwd for file tools, VM root for the bash mount clause", () => {
+  it("hostloop composes the folder manifest into the append: outputs bullet + host→shell mapping", () => {
+    // The case above exercises the manifest's EMPTY variant. This one exercises the list variant, which is
+    // the only place the composed append states a host path at all now, and pins the host→shell mapping
+    // that a host/VM swap would break.
+    const { subagentAppend } = renderPrompts(baseline, session, sessionId, undefined, {
+      ...hlOpts,
+      hostOutputsDir: "/Users/me/runs/x/work/session/mnt/outputs",
+      subagentFolders: [{ hostPath: "/Users/me/docs", mountPath: "docs", reachable: true }],
+    });
+    expect(subagentAppend).toContain("(this session's outputs folder; shell: `/sessions/" + sessionId + "/mnt/outputs/`)");
+    expect(subagentAppend).toContain("- `/Users/me/docs` (shell: `/sessions/" + sessionId + "/mnt/docs/`)");
+    expect(subagentAppend).toContain("Pass absolute paths to these tools.");
+  });
+
+  it("hostloop renders the hl asset: VM root for the bash mount clause, and NO host cwd (2.7032.0)", () => {
     const { subagentAppend } = renderPrompts(baseline, session, sessionId, undefined, hlOpts);
     expect(subagentAppend).toBeTruthy();
-    // {{cwd}} -> host cwd (file tools reach the real filesystem there)
-    expect(subagentAppend).toContain("/Users/me/runs/x/work/session/mnt/outputs");
+    // The host cwd used to appear here, via the folder manifest's "Relative paths in these tools start
+    // at `<hostCwd>`." sentence. Desktop 2.7032.0 replaced that sentence with the constant "Pass absolute
+    // paths to these tools." — measured on both asars — so with no outputs dir and no attached folders
+    // the append names no host path at all. Asserting its ABSENCE is what keeps a re-introduced cwd
+    // clause from slipping back in unnoticed; production no longer tells a sub-agent where a relative
+    // path resolves, it tells it not to use one.
+    expect(subagentAppend).not.toContain("/Users/me/runs/x/work/session/mnt/outputs");
+    expect(subagentAppend).not.toContain("Relative paths in these tools start at");
+    // POSITIVE, and the reason this case is not just three negations: the composed append must carry the
+    // manifest's replacement instruction. Without this, an empty-variant manifest — or a manifest that
+    // emitted nothing at all — would satisfy every `not.toContain` above.
+    expect(subagentAppend).toContain("Pass absolute paths to these tools.");
     // {{vmCwd}}/mnt/ -> the VM session root's mount path (bash side)
     expect(subagentAppend).toContain(`/sessions/${sessionId}/mnt/`);
     expect(subagentAppend).toContain("mcp__workspace__bash");

@@ -183,6 +183,14 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] **CHANGELOG.md** — move everything under `## [Unreleased]` into a new
       `## [X.Y.Z] — YYYY-MM-DD` section; leave an empty `## [Unreleased]` on top. Include any
       **upgrade notes** (e.g. "re-record cassettes after the staleness-hash change").
+- [ ] **State the cassette re-record verdict in the upgrade notes — positively, every release.** Either
+      `Cassettes: no re-record needed` (name the evidence: nothing under `src/runtime`, `src/hostloop`,
+      `src/staging`, `src/session.ts`, the spawn path, `baselines/`, or the cassette constants moved) or
+      `Cassettes: re-record — <what moved>`. Never leave it to absence: [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness)
+      tells consumers to re-record when the changelog *reports* a tool-surface/spawn-env/prompt change, so
+      a release that reports nothing reads as "unchanged" whether or not anyone checked — the same
+      silence-is-not-a-verdict failure the 3.8.0 corpus preview exists to close. A consumer diffed two
+      tags' `src/` by hand and still had to ask (2026-09-21) because the 3.7.0 notes said nothing either way.
 - [ ] Bump every version location (items 1–10) with **`npm run bump -- X.Y.Z --write`** — it rewrites all
       of them via targeted patterns and updates the lockfile + self-checks `check:versions` (run without
       `--write` first to preview the diff; dry-run is the default). It deliberately does **not** touch the

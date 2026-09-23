@@ -42,7 +42,9 @@ export interface RenderPromptOpts {
    *  (hostloop -> subagent_env_hl asset; container/microvm -> subagent_env_vm asset;
    *  protocol -> no append, a decided divergence — see docs/fidelity-gaps.md). */
   effectiveFidelity: string;
-  /** `{{cwd}}` -> this (production: `hostCwd ?? sessionRoot`). */
+  /** `{{cwd}}` -> this (production through Desktop 2.2553.1: `hostCwd ?? sessionRoot`; at 2.7032.0 the
+   *  substitution map's `hostCwd` key is fed by `hostOutputsDir ?? vmRoot` — the distinct host-cwd concept
+   *  was removed). */
   hostCwd?: string;
   /** Pre-replacement target for the literal substring `{{cwd}}/mnt/uploads` — MUST be applied before
    *  the general `{{cwd}}` substitution (see below), or a naive `{{cwd}}`-then-append-`/mnt/uploads`
@@ -55,7 +57,8 @@ export interface RenderPromptOpts {
    *  path `?? hostCwd`). */
   hostWorkspaceFolder?: string;
   /** The session's outputs folder on the host, for the generated sub-agent folder manifest. Production
-   *  passes this as its OWN parameter (`hostOutputsDir`) alongside `hostCwd`, so it is passed
+   *  passed this as its OWN parameter (`hostOutputsDir`) alongside `hostCwd` through 2.2553.1, and at
+   *  2.7032.0 it is the only one of the two left, so it is passed
    *  separately here too — the generator's signature can then be read straight against production's.
    *  Today both call sites derive them from the same join; that is a fact about the harness's staging,
    *  not a reason to collapse two of production's parameters into one. */

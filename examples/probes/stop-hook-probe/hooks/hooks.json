@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys\np=json.load(sys.stdin)\nif p.get('stop_hook_active') or 'PINEAPPLE' in (p.get('last_assistant_message') or ''): sys.exit(0)\nsys.stderr.write('Your final message must end with the word PINEAPPLE. Resend it with that word appended.')\nsys.exit(2)\""
+          }
+        ]
+      }
+    ]
+  }
+}

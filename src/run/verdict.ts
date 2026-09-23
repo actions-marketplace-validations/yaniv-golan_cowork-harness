@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
 
@@ -332,7 +333,8 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         severity: "fail",
         message:
           `the agent image omits capabilit(ies) the skill used: ${result.missingCapabilityUse.join(", ")} — ` +
-          "likely a FALSE NEGATIVE (real Cowork ships them). Rebuild full parity (--build-arg COWORK_FULL_PARITY=1); " +
+          `likely a FALSE NEGATIVE (real Cowork ships them${rootfsManifestDesktopVersion() ? ` — per its rootfs manifest captured at Desktop ${rootfsManifestDesktopVersion()}` : ""}). ` +
+          "Rebuild full parity (--build-arg COWORK_FULL_PARITY=1); " +
           "or assert allow_missing_capability: true if the fallback is equivalent.",
       });
 

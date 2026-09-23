@@ -470,6 +470,12 @@ export function packageEvidence(
      *  Named for what it is, not for its first consumer — an `agentsRoot` reused for references is how a
      *  single rule ends up with several derivations. */
     pluginRoot?: string;
+    /** `"preview"` when called by `critique --corpus-only` over an EMPTY run dir: the same corpus
+     *  computation, no graded turn. Changes ONE thing — the tense of the over-ceiling warning ("would be
+     *  cut", not "was cut before grading") — so a CI annotation never describes a grading that did not
+     *  happen. It must not change any corpus field: the preview's whole value is that it IS this
+     *  function's answer, and a mode that computed differently would be a second derivation. */
+    mode?: "preview";
   } = {},
 ): PackageEvidenceResult {
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
@@ -802,7 +808,9 @@ export function packageEvidence(
     truncated = true;
     warn(
       `::warning:: [critique] skill corpus is ${corpusBytes.toLocaleString()} B, over the ${SKILL_CORPUS_CEILING.toLocaleString()} B evidence ceiling — ` +
-        `content was cut before grading; see corpusCuts in the report for which files and how much.\n`,
+        (opts.mode === "preview"
+          ? `content WOULD BE cut before grading; see corpusCuts in the preview for which files and how much.\n`
+          : `content was cut before grading; see corpusCuts in the report for which files and how much.\n`),
     );
   }
   /** Apply the ceiling's per-file allowance, recording what each file actually contributed.

@@ -412,7 +412,7 @@ Rendered, with real mounts, that is:
 
 ```
 Read, Write, Edit, Glob, Grep take the first path on each line below, and reject `/sessions/` paths.
-Relative paths in these tools start at `<host outputs dir>`. The shell takes the shell path.
+Pass absolute paths to these tools. The shell takes the shell path.
 
 Folders on the user's computer (only read or write inside these; the user can attach more folders,
 so the list can be incomplete):

@@ -233,7 +233,9 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
-> real Cowork's install-from-repo behavior) — an untracked skill mounts empty. **Not at `hostloop`, for
+> real Cowork's install-from-repo behavior). A skill dir with SOME untracked files stages the tracked ones
+> and warns; one with ZERO tracked files is a hard failure (`BoundaryError`, `src/session.ts:675`), not an
+> empty mount — staging refuses rather than launching an agent that cannot load the skill. **Not at `hostloop`, for
 > `folders[]`:** connected content is bind-mounted there rather than copied (matching production), and the
 > git filter lives in the copy path — so the same session exposes untracked files at `hostloop` that are
 > invisible at `container`. The **content** staged is the

@@ -1,6 +1,6 @@
 # Critique — the facts a plugin install can't otherwise reach
 
-Tracks `cowork-harness 3.7.0` (baseline `desktop-2.2553.1`). This is **not** a trim of the full
+Tracks `cowork-harness 3.8.0` (baseline `desktop-2.7032.0`). This is **not** a trim of the full
 [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only —
 flags, cost, reproduction discipline, known limitations all live there). This file covers exactly what a
 plugin install cannot otherwise discover: the run-dir artifact a harvester actually reads, the report's
@@ -22,9 +22,12 @@ finding's `evidence` excerpt must resolve verbatim against this package, or it l
 
 ## Cost across critiques — the index, not the reports
 
-A critique is FOUR model workloads but only TWO produce a run, so only two produce index rows; the
-evaluator passes produce none. Each critique therefore appends a **roll-up row** (`critiqueRole:"rollup"`)
-carrying `critiqueTotalUsd` — the whole four-workload spend. Its own `costUsd` is the **evaluator passes
+A critique is **up to FOUR** model workloads — two graded turns and two evaluator passes — but only the
+TWO graded turns produce a run, so only two produce index rows; the evaluator passes produce none. Each
+critique therefore appends a **roll-up row** (`critiqueRole:"rollup"`) carrying `critiqueTotalUsd` — the
+whole spend across whatever workloads actually ran. **Evaluator pass 2 is skipped entirely when no
+self-report was captured** (nothing to verify), so a completed critique can be three workloads and the
+roll-up covers three. Its own `costUsd` is the **evaluator passes
 only**, so `sum(costUsd)` over every row is exactly true spend with nothing double-counted or missed. The
 turn rows carry `critiqueRole:"task"` / `"reflection"`.
 
@@ -127,6 +130,24 @@ run-dependent one (a root reference included only because the graded agent READ 
 has no run to read, so its number can under-report there. It also does not apply staging's git-tracked filter,
 so an untracked skill-local reference inflates the figure the other way; `corpusCuts`/`corpusOmitted`
 below stay the authority.
+
+**Cheaper, and the packager's own floor: `critique <folder> --corpus-only`.** NO SPEND — no session, no spawn — it runs the
+same `packageEvidence` call a paid critique makes, over an empty run dir, and prints these six fields
+directly (`--output-format json` for the standard payload envelope; text mode prints the one-line
+percent-of-ceiling summary + packaged-file count). `--prompt` becomes optional; every other flag is still
+parsed and type-checked, but a run-shaping one is ignored and named in `ignoredFlags` (a path value such as
+`--upload` is only checked when a turn stages). The number is a FLOOR — a plugin-root
+reference the agent READS during the graded turn is added at critique time, so a paid run's `corpusBytes`
+is `>=` this. Exit 0 = measured (even over the ceiling — gate yourself on `corpusBytes <= corpusCeiling`);
+exit 2 = usage error, unresolvable target, no readable SKILL.md, or a work tree with 0 tracked files (a
+non-git folder is measured raw, as staging copies it). Unlike `lint-skill`'s static count, it IS the
+packager: untracked files and symlinks outside the plugin are excluded by the same filter and containment
+rule a critique applies, bytes are the same UTF-8-decoded measurement, and the one clause no static
+instrument can see (a plugin-root reference read at run time) is stated as the floor rather than guessed
+at. Known gap: a skill that is a git submodule of its plugin (or any `--skill` subdirectory with nothing
+tracked under it) is REFUSED by `--corpus-only` in staging's terms, but a live critique's packager still
+accepts it from the directory's own index and grades a skill the mount never delivers — pre-existing,
+rare, not fixed here.
 
 The report's `evidenceBudget` object says exactly what was shown — read it instead of inferring budgets
 from `dist/` source:
