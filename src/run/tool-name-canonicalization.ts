@@ -27,10 +27,15 @@
  * write either spelling; `tool_available: "Task"` keeps matching the inventory's literal `Task`, and no
  * committed cassette changes meaning.
  *
- * A NAME THE BINARY RETIRES STAYS HERE. `TaskOutput`'s four legacy spellings (`AgentOutputTool`,
- * `BashOutputTool`, `AgentOutput`, `BashOutput`) were in the map through agent 2.1.260 and are GONE from
- * 2.1.280's — measured on both staged ELFs; in 2.1.280 those names survive only as strings in a tool-name
- * list, not as keys. They are kept below on purpose. The map exists so an ASSERTION may be written in
+ * A NAME THE BINARY RETIRES STAYS HERE — AND SO DOES A TARGET IT RETIRES. `TaskOutput`'s four legacy
+ * spellings (`AgentOutputTool`, `BashOutputTool`, `AgentOutput`, `BashOutput`) were in the map through
+ * agent 2.1.260 and are GONE from 2.1.280's. The shrink is not the whole story: **`TaskOutput` itself is
+ * gone as a tool.** Measured on both staged ELFs — 2.1.260 defines it (searchHint "read output/logs from
+ * a background task", 2 hits, a `[Deprecated]` description, those four in its own `aliases:[]`); 2.1.280
+ * has 0 hits for that hint and the only surviving `"TaskOutput"` literal is a member of a REMOVED-TOOLS
+ * set alongside `Frame`, `TeamCreate` and friends, whose four consumers all warn "names a removed tool".
+ * So against a 2.1.280 run there is nothing to canonicalize INTO: an author writing `tool_called:
+ * "TaskOutput"` will not match, because that agent emits no such call. They are kept below on purpose. The map exists so an ASSERTION may be written in
  * either spelling against data recorded VERBATIM, and a cassette or kept run from an older agent still
  * carries the retired spelling — forgetting it would break matching on exactly the historical data the
  * harness replays. Retired entries are listed in `RETIRED_BY_BINARY` so the drift test can tell a
@@ -39,8 +44,11 @@
  * VERSION-COUPLED. This is a property of the agent binary and can change when it does. It is NOT yet
  * extracted by `cowork-sync` into the baseline — `test/tool-name-canonicalization.test.ts` diffs it against the staged
  * binary when one is present (skipped in CI, which has no Desktop install), so drift is caught on a
- * maintainer's machine during the sync that would introduce it. Folding it into `sync` as a synced
- * `spawn.toolAliases`, with the usual version sentinel, is the durable fix and remains follow-up work.
+ * maintainer's machine during the sync that would introduce it. Folding it into `sync` with the usual
+ * version sentinel is the durable fix and remains follow-up work — but NOT as `spawn.toolAliases`, which
+ * an earlier version of this comment suggested and which is a different mechanism: `toolAliases` is the
+ * SDK's single-hop remap applied to a MODEL-EMITTED name before resolution (`Bash` -> the workspace bash
+ * tool), host-supplied per spawn, while this map is binary-baked and applied after. 2.1.280 keeps both.
  *
  * DO NOT ADD AN ENTRY FROM A GREP OF RUN DATA. "Called but not offered" is equally the signature of a
  * MODEL HALLUCINATING A TOOL NAME: the one observed `mcp__workspace__present_files` call sits in its
@@ -66,6 +74,8 @@ export const BINARY_TOOL_CANONICALIZATION: Readonly<Record<string, string>> = Ob
  *  can distinguish "deliberately retained" from "this table is stale". Anything in the table but neither
  *  in the binary's map nor in this list fails `test/tool-name-canonicalization.test.ts`. */
 export const RETIRED_BY_BINARY: Readonly<Record<string, string>> = Object.freeze({
+  // All four retired together at 2.1.280, WITH their canonical target: `TaskOutput` is no longer a tool
+  // in that build, only a member of its removed-tools set. Matching them still serves historical data.
   AgentOutputTool: "2.1.260",
   BashOutputTool: "2.1.260",
   AgentOutput: "2.1.260",

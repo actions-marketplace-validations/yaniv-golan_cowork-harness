@@ -92,10 +92,15 @@ All notable changes to this project are documented here. The format is based on
 - **OPEN fidelity gap, recorded not fixed:** `hostLoopCwds()` still models the agent process cwd as the
   outputs dir. A skill writing a bare relative path lands in `outputs/` here and in `/var/empty` in
   production. See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
-- **The agent's tool canonicalizer retired four names.** `AgentOutputTool`, `BashOutputTool`,
-  `AgentOutput` and `BashOutput` (all → `TaskOutput`) are gone from 2.1.280's map;
-  `BINARY_TOOL_CANONICALIZATION` keeps them deliberately, because a cassette or kept run from an older
-  agent still carries them.
+- **The agent RETIRED THE `TaskOutput` TOOL, which is why its canonicalizer shrank 12 → 8.**
+  `AgentOutputTool`, `BashOutputTool`, `AgentOutput` and `BashOutput` are gone from 2.1.280's map — and
+  so is the tool they pointed at: measured on both staged ELFs, 2.1.260 defines `TaskOutput` while
+  2.1.280 carries it only inside a removed-tools set whose consumers warn "names a removed tool". So
+  against a 2.1.280 run there is nothing to canonicalize into, and `tool_called: "TaskOutput"` will not
+  match. `BINARY_TOOL_CANONICALIZATION` keeps all four names deliberately — they still appear in
+  cassettes and kept runs from older agents — and its guard is now four assertions that each catch a
+  distinct drift, replacing an equality check with a count floor that mistook this retirement for
+  breakage.
 - **RC and stable serve DIFFERENT builds under the same version number.** 2.1.280's `releaseBaseUrl` is
   an RC path, and both bases return HTTP 200 for it with different bytes, checksums and commits — the
   staged binary is the RC one. The CI recipes' agent-download step now says so: "the stable URL returns
