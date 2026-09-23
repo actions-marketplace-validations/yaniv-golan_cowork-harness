@@ -17,6 +17,28 @@ All notable changes to this project are documented here. The format is based on
   `skills.proactive_suggest_enabled` still overrides both. No change for any committed baseline: all of
   them from 1.46388.3 on carry the gate on.
 
+### Documentation
+
+- **`docs/fidelity-gaps.md` — what the plugin-MCP shadow file carries depends on enforcement.** The page
+  said the whole rewritten server set goes into `cowork-plugin-mcp-shadow.json`. Read in the 2.7032.0
+  asar, that holds only when Desktop enforces remote shadowing (gate `2529235968` on and no enterprise
+  managed-configuration override); otherwise the file names only the remote servers a stand-in replaced,
+  policy stubs travel in the in-process SDK server map alone, and a failed write is logged rather than
+  refusing the session. The section also states that any failure building the stubs refuses the session
+  while an MCP policy is active, that a stub never appears as a `LocalMcpServerManager` connection, and
+  which `main.log` lines record the remote arm.
+- **Two pinned gate rows are records, not sentinels.** `canSaveSkill` (`3246569822`) has no reference in
+  any Desktop asar from 1.44121.1 on, and `proactiveSkillSuggestEnabled` (`1598976391`) none from
+  1.46388.3 on; the server still serves both, so `sync` keeps recording them. The gates `$comment` in the
+  2.7032.0 baseline, which `sync` carries forward, says so, and a flip of either row changes no run
+  against a current baseline.
+- **The unmodeled proactive skills-prompt line applies to every current session.** From Desktop 1.46388.3,
+  Desktop's generated `<skills_instructions>` block always carries its proactive suggestion guidance when
+  `suggest_skills` and `search_plugins` are available; the harness renders no such block, and
+  `docs/fidelity-gaps.md` states the gap at that scope. `skills.proactive_suggest_enabled: false` on such
+  a baseline builds a non-proactive `suggest_skills` that production does not ship there —
+  `docs/session.md`, the session schema's description and the companion skill's schema reference say so.
+
 ## [3.8.0] — 2026-09-22
 
 ### Upgrade notes
