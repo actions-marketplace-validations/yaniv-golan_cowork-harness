@@ -44,8 +44,8 @@ trustworthy.
    before anything else is interpolated.
 5. **Evaluator pass 2 — adjudicating.** Everything pass 1 saw, **plus the self-report and pass 1's
    validated findings**. **Skipped entirely when no self-report was captured**, in which case the report
-   carries pass 1's independent findings alone — so a critique is up to four model workloads, not always
-   four.
+   carries pass 1's independent findings alone — so a critique is up to four model workloads (zero with
+   `--corpus-only`), not always four.
 
 ### Who sees what
 
@@ -201,9 +201,21 @@ adjudicable". So:
   invisible to either critique. Pairing critiques (above) tells you a finding reproduced; it does not
   surface a defect that exists only in the disagreement BETWEEN two skills. That one needs a human
   reading both, or a check outside this tool.
-- The report carries an advisory **`skillInvocationObserved`**: `false` means the graded run's own
-  `skillActivity` never mentions the selected skill — the critique may be grading a run that did not
-  actually invoke it.
+- The report carries an advisory **`skillInvocationObserved`** whenever a single skill is being graded
+  (`--skill`, a single-skill plugin, or a `<plugin>/skills/<name>` positional). `true` means an
+  observable channel named the selected skill — the main agent's `Skill` tool call, a sub-agent's `Skill`
+  call (read from the turn's `events.jsonl`, which carries the name the timeline drops), or a leading
+  slash token in the prompt that resolves to a *staged skill*. The slash rule is the binary's, measured:
+  the `/` must be the first character, the token runs to the first whitespace (`/plugin:skill.` is sent as
+  prose, not expanded), and a bare `/name` resolves to the plugin skill. Expanding one inlines SKILL.md as
+  a user message rather than calling the tool, so a slash-command run shows `skillsInvoked: []` and is
+  **not** a non-invocation. `false` means all three channels were observable and none fired. The field
+  is **absent** when a channel could not be observed or the one that fired is ambiguous — an older
+  `result.json` with no prompt or skill inventory; an unreadable events slice; a top-level `Skill` call
+  whose id the record could not read; a bare `/name` that more than one staged skill answers to; or a
+  plugin that ships both a command and a skill under one name (`commandShadowsSkill`), where the slash
+  entry and the `Skill` tool launch either through one registry. Absent is never a synonym for `false`,
+  and the text report prints a NOTE when it is absent.
 
 ### Skills that need an attached file
 
@@ -221,8 +233,14 @@ It does **not** record their contents — see Known limitations.
 
 ## Cost and prerequisites
 
-- **Up to four model workloads per critique** — the two graded turns and the two evaluator passes of
-  [How it works](#how-it-works) (pass 2 is skipped when no self-report was captured).
+- **Up to four model workloads per critique (zero with `--corpus-only`)** — the two graded turns and the
+  two evaluator passes of [How it works](#how-it-works) (pass 2 is skipped when no self-report was
+  captured). See [Knowing before you pay](#knowing-before-you-pay) for the no-spend corpus check.
+- **No `[provenance]` footer on critique's stderr, by construction.** That line is the `skill`/`run`
+  lane's per-run footer; critique spawns its two graded turns with their output captured, so it never
+  reaches your terminal. The same facts are in the report instead: `gradedModels`,
+  `gradedEffectiveFidelity`, `skillInvocationObserved`. A consumer grepped both streams for it and found
+  nothing — that is the expected shape, not a missing line.
 - The evaluator defaults to the most expensive tier. Override with `--evaluator-model <id>` or
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
@@ -254,8 +272,17 @@ It does **not** record their contents — see Known limitations.
 - **Reading `egress.log` on a research-heavy critique:** a `WebSearch` does **not** produce search-host
   entries in the container `egress.log`. An egress log showing only `api.anthropic.com` (plus denied
   telemetry) is consistent with WebSearch working normally — it is *not* evidence that research was
-  blocked. What **is** container-egress-gated is `web_fetch` (the hostname allowlist); a skill that
-  fetches off-allowlist hosts via `web_fetch` is denied at `container` and host-routed at `hostloop`.
+  blocked. `web_fetch` is **not** in that log on either tier: since `a459c80` (2.4.0) the container
+  tier registers the same host-side workspace handler that `hostloop` does whenever
+  `coworkWebFetchViaApi` is on (every baseline from `desktop-1.13576.1`), so its fetches run in the
+  harness's own Node process, outside the container network namespace, and the sidecar proxy never sees
+  them. Both tiers' `web_fetch` decisions land in `RunResult.egress` as bare `{host, decision}`
+  records — no `ts`, no `port`, no `reason` — while every row the sidecar proxy writes carries a
+  `ts` (its single log call stamps one before any per-decision detail, of which there are four shapes:
+  `{port, reason}` on a CONNECT deny, `{method, reason}`, `{method, path, port, bytes}`, `{port}`). So
+  the discriminator is `ts`: present on every proxy row, never on a `web_fetch` row. And a *provenanced* URL (one that appeared
+  in the prompt or a prior `web_fetch` result) is gated by the provenance set alone, so the hostname
+  allowlist is not consulted for it on either tier.
 - **Sub-agent research is not in the main turn's `toolCounts`.** A `WebSearch` issued by a dispatched
   sub-agent does not increment the main `toolCounts.WebSearch` — a `0` there with researched facts in
   the output usually means the sub-agents did the searching. Those searches ARE captured (live/record
@@ -370,6 +397,73 @@ it errs toward warning early either way, and a real report's `corpusCuts`/`corpu
 authority.
 On a normal skill this is one reassuring line; the other fields only grow teeth on a genuinely
 oversized skill or an untracked-file mistake.
+
+### Knowing before you pay
+
+```bash
+cowork-harness critique ./my-skill --corpus-only
+cowork-harness critique ./my-plugin --skill my-skill --corpus-only --output-format json
+```
+
+NO SPEND — no session, no spawn, no model call. This runs the same `packageEvidence` call a paid
+critique makes, over an empty run dir, and stops. The text report is one block:
+
+```
+critique --corpus-only  .claude/skills/cowork-harness
+  evidence corpus (pre-run FLOOR): 281,029 B = 53.6% of the 524,288 B ceiling
+  packaged: 6 file(s)
+  lower bound — plugin-root references the agent READS during the graded turn are added at critique time, so a paid run's corpusBytes is >= this
+```
+
+(the harness's own bundled skill, on the tree this was written from — your numbers will differ)
+
+`--output-format json` emits the standard payload envelope (`{tool, command, ok, ...}` — `tool`/`command`
+are the discriminator; a critique **report** carries neither) with a `corpus` object holding the same six
+fields as `evidenceBudget` above (`trimRecord`/`packageTruncated` are absent — they describe a package a
+graded run produced) plus `ignoredFlags` (every run-shaping flag you passed that this mode parsed but
+did not act on) and the same `note`.
+
+**The number is a FLOOR, always.** A plugin-root reference the agent READS during the graded turn (not
+just linked from authored text) is added to the corpus at critique time — no static instrument can see
+that read — so a paid run's `corpusBytes` is `>=` the preview's, and a `corpusOmitted[].reason` can move
+from `not-linked` to `ambiguous-read` once a real run exists. Exit `0` means *measured*, even over the
+ceiling — it is a measurement, not a gate; gate yourself with `jq -e
+'.corpus.corpusBytes <= .corpus.corpusCeiling'`. Exit `2` covers a usage error, an unresolvable target, no
+readable `SKILL.md`, or a git work tree with 0 tracked files (mirrored from staging's own refusal; a
+folder that is not a work tree is measured raw, as staging copies it) — staging's git rules, which
+`lint-skill`'s static count never applied.
+
+**Why not just `lint-skill --strict`?** It's free and needs no git, but it diverges from what a critique
+actually packages on four measured axes: it counts (1) an untracked file staging would drop and (3) a
+symlink pointing outside the plugin that the packager's containment rule refuses — both **over-counts**
+— and it cannot see (2) a plugin-root reference read at run time, and (4) sums `st_size` where the
+packager measures decoded UTF-8 length — both **under-counts**. Axis (4) moves only where a file is NOT
+valid UTF-8 (each invalid byte decodes to a 3-byte U+FFFD); clean multibyte text — em dashes, curly
+quotes — round-trips byte-exact, so on ordinary markdown its delta is zero. It also emits nothing below 80% of the
+ceiling, so a skill in that band gets no number at all. On a clean tree — everything tracked, no symlinks,
+clean UTF-8, and before any run — the two numbers agree exactly (measured: all six skills of a consumer
+plugin, delta zero); the axes bite only when one of those conditions is violated, which is precisely
+when you cannot tell from the static number alone. `--corpus-only` closes (1) and (3) by construction
+(it runs the real staging filter and the real containment rule) and states (2) as the floor rather than
+guessing at it.
+
+**Known gap — a skill that is a git submodule of its plugin, or any `--skill` subdirectory with nothing
+tracked under it.** Staging never delivers a gitlink's contents (nor an untracked subdirectory), so the
+mount carries an empty `skills/<name>/`; a LIVE critique's packager consults that directory's OWN git
+index (`corpusAcceptFor(skillDir)`) and packages `SKILL.md` anyway — grading a skill the agent never
+received. `--corpus-only` refuses both cases up front, in staging's terms (exit 2, "`skills/<name>/` has
+0 git-tracked files under …"). A second shape of the same gap is NOT caught by the preview: `critique
+<plugin>/skills/<name>` mounts only that folder, yet the packager walks up to the enclosing plugin and
+packages its `agents/**.md` — sub-agent prompts the mounted agent could never dispatch — so `--corpus-only`
+on that positional reports a floor that already over-counts. Both shapes have one cause (the packager
+reads a git-tracked set per class from that class's own directory, where staging reads one at the mount
+root) and one fix, tracked as
+[#182](https://github.com/yaniv-golan/cowork-harness/issues/182); the live-packager side is pre-existing,
+pinned by a test, and not fixed here. Until then, run `critique` on the plugin root with `--skill`.
+
+**`--dry-run` is refused on `critique`** with a reason pointing here: there is no meaningful two-turn
+preview, so `--corpus-only` answers the no-spend evidence-corpus question and `skill --dry-run` answers
+the no-spend invocation-plan question.
 
 **`scripts/` is outside the evaluator's corpus — deliberately, and with one consequence worth knowing.**
 The four classes above are the whole corpus: `SKILL.md`, the skill's own `references/**`, every
@@ -579,3 +673,13 @@ immediately and survive a reflection turn that never finishes. Prefer them, or `
   **0 dropped citations (0%)** — models quote body content, not across headings. Since a pre-armor rate
   cannot be below zero, armor costs nothing measurable here. DROPPED items are always shown, so any future
   regression would be visible rather than silent.
+- **`[deliberate]` An invocation the record cannot attribute to one skill is reported absent, never
+  false.** `skillInvocationObserved` reads three channels — the main agent's `Skill` tool calls, a
+  sub-agent's `Skill` calls (from the turn's `events.jsonl`, which carries the skill name on the parented
+  frame), and a leading slash token in the prompt. Two shapes leave a channel readable but the answer
+  undecidable: a bare `/name` that more than one staged skill answers to (the binary resolves it to a
+  plugin skill; the record does not say which when several qualify), and a plugin shipping both
+  `commands/<n>.md` and `skills/<n>/SKILL.md`, where the slash entry and the `Skill` tool launch either
+  through one registry and the run records the name, not the kind. Both report *absent* rather than a
+  guessed `true` — and the text report says so in a NOTE, so "could not observe" never reads like "not
+  applicable".

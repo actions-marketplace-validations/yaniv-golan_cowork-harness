@@ -28,7 +28,10 @@ section itself is guarded by the sync-side two-branch fingerprint sentinel.
 
 Tokens: {{vmCwd}} = the VM session root `/sessions/<id>`. Note that unlike its predecessor this
 section no longer names the HOST working directory at all — `{{cwd}}` moved into the generated
-manifest's relative-paths clause, which is where production now states it.
+manifest's relative-paths clause. THAT CLAUSE IS GONE as of Desktop 2.7032.0, which this asset is still the
+current pointer for: the manifest now says the constant "Pass absolute paths to these tools." and states no cwd
+at all, because production moved the agent process cwd off the outputs dir. So `{{cwd}}` is no longer stated to a
+sub-agent anywhere — not here, and not in the manifest.
 -->
 ## Cowork environment
 

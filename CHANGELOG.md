@@ -4,6 +4,287 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project uses
 [Semantic Versioning](https://semver.org/); as of 1.0.0, a backwards-incompatible change to a covered surface ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)) requires a major bump.
 
+## [Unreleased]
+
+## [3.8.0] — 2026-09-22
+
+### Upgrade notes
+
+- **Cassettes: RE-RECORD ALL THREE committed example cassettes. This release carries a parity sync.**
+  Two independent reasons. (1) The `web_fetch` DNS-pin fix below: a recording made before it froze
+  `Fetch failed: Invalid IP address: undefined` for every resolvable hostname, so a scenario asserting on
+  that fetch recorded the outage, not the behaviour. (2) The Desktop 2.7032.0 sync changed the generated
+  sub-agent folder manifest, which moves `promptAssetsHash` — measured, all three committed cassettes
+  carry the old one and `verify-cassettes` reports `[stale] the baseline's committed prompt assets changed
+  since this cassette was recorded`. **Re-stamping `fingerprint.baseline` does NOT clear that**: it swaps
+  one finding for another, and hand-editing `promptAssetsHash` would assert a recorded run saw prompt text
+  it never saw. The three cassettes in `examples/replays/` ship UN-re-recorded here and their staleness
+  findings are expected; `hostloop-computer-links` additionally still contains the retired manifest
+  sentence verbatim. The rest of the record/replay path is untouched: `src/runtime`, `src/staging`,
+  `baselines/` apart from the new baseline file, and the cassette constants (`CASSETTE_VERSION` 12 /
+  `MIN_SUPPORTED_CASSETTE_VERSION` 9). (This verdict line is now a fixed part of every release's upgrade
+  notes — see [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog
+  reports no tool-surface change" is a statement someone made, not an absence.)
+- **If you followed 3.7.0's recommendation to pre-check the corpus with `lint-skill --strict`, know its
+  limits before relying on it further.** That instrument emits nothing below 80% of the evidence
+  ceiling — `lint-skill --json` prints `[]`, exit 0, indistinguishable from "counted, you're fine" — and
+  even where it emits, it diverges from what a critique actually packages on four measured axes: (1) it
+  counts an untracked file that staging would never deliver; (2) it cannot see a plugin-root reference the
+  graded agent only reaches by reading it during the run; (3) it counts a symlink pointing outside the
+  plugin that the packager's containment rule refuses; (4) it sums `st_size` while the packager measures
+  decoded UTF-8 length — an axis that moves only where a file is NOT valid UTF-8 (each invalid byte becomes
+  a 3-byte U+FFFD); clean multibyte text round-trips byte-exact. `critique --corpus-only` (above) replaces it as the cheapest correct pre-check — it
+  IS the packager's own floor, computed by the packager — and it applies staging's git rules, which the
+  static count did not: a work tree with nothing tracked, or a `--skill` subdirectory with nothing tracked
+  under it, is refused, not counted.
+
+### Added
+
+- **`critique <skill-folder> [--skill <name>] --corpus-only [--output-format json] [--out <path>]` — NO
+  SPEND.** Runs the real packager (`packageEvidence`, the same call a paid critique makes, same
+  git-tracked filter, same 512 KiB ceiling) over an empty run dir and prints the six corpus fields —
+  `corpusBytes` / `corpusCeiling` / `corpusCuts` / `corpusExcluded` / `corpusPackaged` / `corpusOmitted` —
+  then exits. `--prompt` becomes optional; every other flag is still parsed and type-checked as a
+  critique line, but a run-shaping one is not acted on and is named in `ignoredFlags` (JSON) and one
+  stderr line — a path value (`--upload`, `--folder`, `--plugin`) is only checked when a turn stages, so a
+  missing one does not fail the preview. Exit `0` means *measured*, even over the ceiling — it is a measurement, not a gate, so
+  gate yourself with `jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'`; exit `2` is a usage error, an
+  unresolvable target, no readable `SKILL.md`, a git work tree with 0 tracked files (mirrors staging's
+  own refusal), or a `--skill` subdirectory with nothing tracked under it (staging would mount the plugin
+  WITHOUT that skill, so a critique would grade a skill the agent never received). A folder that is not a
+  work tree is measured raw, exactly as staging copies it. **The number is a FLOOR**: a plugin-root reference
+  the agent READS during the graded turn is added to the corpus at critique time, so a paid run's
+  `corpusBytes` is always `>=` the preview's, and a `corpusOmitted[].reason` can change from `not-linked`
+  to `ambiguous-read` once a real run has happened. The JSON is the standard `jsonPayloadEnvelope`
+  (`tool`/`command` are the discriminator; a critique REPORT carries neither) with a `corpus` object that is
+  a documented six-field subset of a report's `evidenceBudget`. Like the report, it is EXPERIMENTAL and
+  **not §12-frozen** — listed as such in SPEC.md alongside the report's own entry; parse it, but expect
+  additive change while it stabilizes.
+
+- **`hook_event_fired: <HookEvent>` / `hook_event_blocked: <HookEvent>` assertions.** A plugin's command hook
+  (`hooks/hooks.json` or a manifest hook) is now gradable for any event the agent recognises, from the
+  `hook_response` system frames the agent streams — content-class, so a cassette replays them without
+  `controlOut`. Until now only the harness's own PreToolUse decisions were assertable (`hook_blocked`), and
+  the unserved-hook notice told authors there was "no assertion key" for anything else; the notice (CLI and
+  linter) now names these two. `exit_code` is optional on the wire and is reported, never inferred: a frame
+  without it is "fired", never "blocked". Recorded end-to-end for `Stop`
+  (`examples/probes/stop-hook-probe.scenario.yaml`, a hook that blocks once with exit 2 and passes on the
+  resend), with a live-lane test (`test/live-stop-hook.test.ts`) so the committed frames cannot go stale
+  unnoticed. Other event names match the same frame shape but have not each been recorded.
+- **The spawn passes `--include-hook-events` when a staged plugin declares hooks.** The agent emits hook
+  lifecycle frames only for `SessionStart`/`Setup` by default (measured: the identical block-and-resend
+  produced zero hook frames without the flag and four with it); this flag is what puts every other event on
+  the stream. It gates exactly three frame emitters and nothing the model sees. Desktop's own spawn never
+  passes it, so the harness emits it only when there is something to observe — the default argv and the
+  golden snapshots are unchanged.
+
+### Parity — Desktop 2.7032.0 (agent 2.1.280)
+
+- **Baseline `desktop-2.7032.0`.** Desktop removed the distinct `hostLoopCwd` / `hostCwd` concept:
+  `hostLoopCwd` 6 occurrences → 0, `hostCwd` 9 → 1, a new `getHostProcessCwd` accessor, and the
+  writable-paths helper collapsed from `[hostCwd, hostOutputsDir]` to `[hostOutputsDir]`. The agent's
+  process cwd did NOT move to outputs — it is `/var/empty` when that path passes a stat check (the stock
+  macOS case), else a per-session `host-cwd` dir.
+- **The one user-visible consequence: the sub-agent folder manifest's "Relative paths in these tools
+  start at `<hostCwd>`." became the constant "Pass absolute paths to these tools."** Verified both
+  directions against both asars, with every other manifest template character-identical modulo minifier
+  renames. A sub-agent is no longer told where a relative path resolves; it is told not to use one.
+- **OPEN fidelity gap, recorded not fixed, and MEASURED in production:** `hostLoopCwds()` still models
+  the agent process cwd as the outputs dir. A host-loop Cowork task running hourly across the Desktop
+  upgrade splits cleanly on it — the agent's patched `cwd` is `<sessionDir>/outputs` in 43 occurrences
+  before `appVersion` becomes `2.7032.0` and `/var/empty` in 10 after, with the agent held at 2.1.280
+  throughout. Production REFUSES a relative `Read`/`Write`/`Edit` rather than mis-writing it — the AGENT
+  validates before hooks run, expands the path against its own cwd and hits the spawn's `/var/empty` deny
+  rule (*"File is in a directory that is denied by your permission settings."*), so Desktop's path gate
+  never sees it. The harness's gap is that it silently accepts what production rejects. See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+- **The agent RETIRED THE `TaskOutput` TOOL, which is why its canonicalizer shrank 12 → 8.**
+  `AgentOutputTool`, `BashOutputTool`, `AgentOutput` and `BashOutput` are gone from 2.1.280's map — and
+  so is the tool they pointed at: measured across three builds, 2.1.260 and **2.1.275** both define
+  `TaskOutput` while 2.1.280 carries it only inside a removed-tools set whose consumers warn "names a
+  removed tool" (the agent's own changelog attributes the removal to 2.1.277). So
+  against a 2.1.280 run there is nothing to canonicalize into, and `tool_called: "TaskOutput"` will not
+  match. `BINARY_TOOL_CANONICALIZATION` keeps all four names deliberately — they still appear in
+  cassettes and kept runs from older agents — and its guard is now four assertions that each catch a
+  distinct drift, replacing an equality check with a count floor that mistook this retirement for
+  breakage.
+- **RC and stable serve DIFFERENT builds under the same version number.** 2.1.280's `releaseBaseUrl` is
+  an RC path, and both bases return HTTP 200 for it with different bytes, checksums and commits — the
+  staged binary is the RC one. The CI recipes' agent-download step now says so: "the stable URL returns
+  200" is not evidence of the right build; take `B` from the baseline's `agentBinary.releaseBaseUrl`.
+- **The VM rootfs did not change** — same origin hash, byte-identical toolchain (tesseract included).
+  The provisioning manifest was re-captured and re-stamped to 2.7032.0 regardless.
+- **No live pass was run against this baseline.** It was skipped, not blocked; `DESIGN.md`'s scope note
+  says so plainly.
+- **All three committed cassettes in `examples/replays/` were re-recorded** against
+  `desktop-2.7032.0` / agent 2.1.280 (protocol, container and hostloop respectively), because the
+  generated sub-agent manifest change moves `promptAssetsHash` and re-stamping does not clear that.
+  `verify-cassettes` is clean on all three with 0 PII findings; the protocol fixture was recorded with
+  `ANTHROPIC_API_KEY` set, which switches it to a fresh managed config dir so it captures the product's
+  own built-ins rather than an operator inventory, and the hostloop fixture's MCP servers are the four
+  product ones (`cowork`, `plugins`, `skills`, `workspace`).
+- **Sync-extractor anchors, and two defects found in the first attempt at fixing them.** The
+  `hostOutputsDir` anchor is now scoped to the sub-agent delivery site and pinned to the FIRST occurrence
+  after it: an unscoped version was satisfied by an unrelated main-loop site, and a lazy window then
+  walked past the ungated site to a gated one. The manifest anchor now BINDS the render's gate to the
+  generator's own `hostLoopMode` parameter — it previously captured that identifier and never compared
+  it, so gating the manifest on anything at all (including a constant) passed. Both re-verified by
+  mutating the real bundle, not the fixture. The OTLP egress anchor's distance budget widened from 320 to
+  1200 characters, which is where four of the five "unknown deltas" came from being reported at all.
+- **Modelling comments corrected where the collapse made them false** — `SubagentManifestInputs.hostCwd`
+  is now dead and says so, `prompt.ts`'s `{{cwd}}` and `hostOutputsDir` docs name the 2.7032.0 behaviour,
+  and the 1.46388.3 hl asset's header no longer claims the manifest's relative-paths clause is "where
+  production now states it".
+- **`docs/fidelity-gaps.md` overstated the plugin-MCP gap: production does NOT stub a plugin's remote MCP
+  servers unconditionally.** The page claimed the remote arm fires for every `config.url` server and drew
+  its "mechanically reproducible, so modelling it is a design decision about the other half" conclusion
+  from that. Read in asar 2.7032.0, the remote arm runs only when the session shadows remote servers at
+  all — gate `2529235968`, or at least one third-party direct MCP server — **and** a stand-in already
+  provides that server, matched by URL hostname or name against the session's enabled claude.ai
+  connectors; the stand-in narrowing arrives with 2.2553.1, replacing the blanket stubbing of
+  1.37937.0–1.46388.x. The local/`.mcpb` arm is unchanged and still policy-gated. So on an ordinary
+  session neither arm fires, the harness and production already agree, and the open decision is no longer
+  "which half to hard-code" but what a session should be able to declare about its own Desktop state.
+
+### Fixed
+
+- **`critique`'s `skillInvocationObserved` reported `false` over runs that fully invoked the skill, and
+  `true` over runs that invoked nothing.** Two independent defects in one advisory field.
+  - It was a substring scan — `JSON.stringify(skillActivity).includes(name)` — over a structure that
+    also contains tool names and JSON keys. Measured against a real run with **zero** invocations, a
+    selector of `fetch`, `root` or `skill` reported `true`, and `root` collided with the `(root)`
+    sentinel itself. Ids are now matched structurally: a bare id must equal the selector; a
+    `<plugin>:<name>` id must match the name AND the qualifier the binary itself uses for the graded
+    plugin — `.claude-plugin/plugin.json#name`, else the directory basename; a root-level `plugin.json`
+    is ignored, because the binary ignores it (measured: `rootpj-dir/plugin.json` naming `rootpj-name`
+    still registers as `rootpj-dir:qux`). That rule is now one function (`binaryPluginIdentity`) shared
+    with staging, not a second derivation. On `hostloop` / `protocol` the host's own plugins are in the
+    inventory, and a same-named skill from another plugin (`anthropic-skills:skill-creator` for a critique
+    of `skill-creator:skill-creator`) must not count. Never a substring, never a parenthesised sentinel.
+  - It was blind to the channel a `/plugin:skill` prompt actually uses. The binary auto-registers a
+    slash command per staged skill, and expanding one **inlines SKILL.md as a user message** — no
+    `Skill` tool call at all, so `skillsInvoked` is legitimately `[]`; the field read `false` over a
+    graded run with 109 KB of SKILL.md in its context. Detection now reads the prompt's leading token
+    against the init frame's staged-skill inventory (`context.availableSkills`), by **the binary's own
+    rule, measured** — six prompts through the real host agent with the API unreachable, so the persisted
+    transcript shows what it did: the slash must be the first character (leading whitespace is sent as
+    prose), the token runs to the first whitespace (`/plugin:skill.` and `/plugin:skill,` are NOT
+    expanded — an earlier draft of this fix stripped the punctuation and would have reported `true`
+    over a run the model saw as plain text), and a **bare** `/name` resolves to the plugin skill even
+    though the inventory spells it qualified. Deliberately not `slash_commands`, which mixes plugin
+    commands with skills and carries no distinguisher (`founder-skills:feedback` and
+    `creative-problem-solving:ideas` are both real, both plain commands).
+  - A sub-agent's own `Skill` call now counts. `timeline.jsonl` records the parented call without its
+    input, but the turn's `events.jsonl` — which critique already snapshots — carries `input.skill` on
+    the same frame, so the name is read from there rather than declared unrecoverable.
+- **`skillInvocationObserved` is now tri-state, and the text report SAYS when it is absent.** Absent
+  means "could not be observed or is ambiguous", never "no": the prompt or skill inventory was not
+  recorded; the sub-agent channel could not be read; a top-level `Skill` call's id could not be read
+  (the `(unknown)` sentinel); a bare `/name` that more than one staged skill answers to; or a plugin
+  that ships both `commands/<n>.md` and `skills/<n>/SKILL.md` (`vercel@0.48.0` does) — where the
+  `Skill` tool launches either through the same registry, so the shadow makes the **tool** channel
+  ambiguous too, not only the slash one. An absent verdict gets a NOTE listing the routes to absence
+  (the report does not carry which one fired), so a `--skill` user can tell "could not observe" from
+  "not applicable"; the shadow NOTE prints only beside an absent verdict, since a `false` under a shadow
+  is sound (no channel named the skill at all). The advisory now also fires for a
+  `critique <plugin>/skills/<name>` positional, whose skill name the resolver already knew. The new `commandShadowsSkill` field, and the
+  pre-existing `referenceAccessUnobservable`, are now declared in `schema/critique-report.json` — both
+  were emitted while the schema said `additionalProperties: false`, so every real report carrying either
+  failed validation; the tripwire test's fixture did not include them. `referenceAccessUnobservable` is
+  now emitted only when true (it was always-present, 21 of 21 corpus reports carrying `false`). `skillsInvoked` is deliberately
+  unchanged: it is a documented contract meaning "via the `Skill` tool" that the `skill_triggered`
+  assertion reads.
+- **`docs/critique.md` claimed off-allowlist `web_fetch` is "denied at `container`".** It is not: since
+  `a459c80` (2.4.0) the container tier registers the same host-side workspace handler as `hostloop`
+  under `coworkWebFetchViaApi`, so neither tier's `web_fetch` reaches the sidecar proxy, and a
+  provenanced URL consults no hostname allowlist on either tier. The way to tell the two apart in
+  `RunResult.egress` is `ts`: every proxy row carries one (stamped by its single log call, ahead of four
+  per-decision detail shapes); a `web_fetch` row is bare `{host, decision}`. `test/egress-entry-shape.test.ts`
+  pins both halves at their source, not at one of the four shapes. Added because the stale claim was found
+  by a consumer mis-reading a real run's `egress.log`, not by any guard.
+- **`mcp__workspace__web_fetch` could not reach any resolvable hostname** — every fetch to a non-literal-IP
+  host died with `Fetch failed: Invalid IP address: undefined`, on both the provenanced (Path A) and
+  allowlisted (Path B) paths. `pinnedRequest` overrides Node's DNS `lookup` so the address the SSRF
+  backstop vetted is the one actually dialled, but it answered with the legacy `(err, address, family)`
+  triple only. `net.Socket.connect` asks for `{all: true}` whenever `autoSelectFamily` is on — Node's
+  **default since v20**, and this package has required `>=20` since its first commit — and then reads
+  `addresses[0].address` off what it expects to be an array. It read `.address` off a string, got
+  `undefined`, and threw. The override now honours `opts.all` and hands back **every** vetted address, so
+  Happy Eyeballs keeps its candidates. Literal-IP hosts were never affected: they skip pinning entirely.
+  **Two different outage windows, because the two tiers grew this path at different times** — `hostloop`
+  has been broken since the pinning landed in `90360f5` (2026-06-21, ~2.6 months); `container` only since
+  `a459c80` (2026-08-27, released in 2.4.0) gave it a host-routed web_fetch at all, and there only when
+  `coworkWebFetchViaApi` is on, which is every baseline from `desktop-1.13576.1` onward.
+- **`test/hostloop-webfetch-pinned-lookup.test.ts`** — the regression test, and the first thing in the repo
+  to execute `pinnedRequest` rather than imitate it. Every other web_fetch test injects a `rawFetch` fake;
+  one is named "pinnedRequest-style fake" and asserts against a hand-built copy of the function's return
+  value. **No test had ever run the function** — measured, not inferred: the full suite passes 6471/6471
+  against the pre-fix source with this file removed. No e2e scenario or cassette performs a `web_fetch`
+  either, so nothing else covered it. The new cases drive the real Node http stack over a loopback server
+  and cover the `{all: true}` shape, the forced-off legacy shape, the never-re-resolve guarantee, and a
+  multi-address pin whose first entry blackholes (which fails only if the fix stops returning all of them).
+- **The "real Cowork ships them" claim behind `missing_capability` is now DATED, and was two baselines
+  stale.** `baselines/provisioning/rootfs-provisioning.json` — the captured rootfs toolchain that is the
+  sole evidence for that sentence — carried no Desktop version and no capture date, no shipped doc
+  referenced it, and `sync` never refreshes it (it needs a privileged loop-mount of the local
+  `rootfs.img`). It had last been captured 2026-08-29 from the Desktop 1.40609.0 rootfs; five baselines
+  shipped since with nothing saying so. Re-captured from the current rootfs (Desktop 2.2553.1, origin
+  `8825183…`): `tesseract-ocr` and the rest of the apt document stack unchanged, Node unchanged, 14
+  pip packages moved by a patch version (`pypdf` 6.15→6.18, `pikepdf`, `lxml`, `reportlab`, …), nothing
+  added or removed. The manifest now carries `desktopVersion`, `capturedAt` and `rootfsOrigin`;
+  `check:versions` invariant 14 fails when a shipped citation of it names a different Desktop version, or
+  when the manifest lags the newest baseline without the citation saying by how many; and the runtime
+  message itself now reads "likely a FALSE NEGATIVE (real Cowork ships them — per its rootfs manifest
+  captured at Desktop `X`)". A consumer who distrusted an inherited note now has the date to check.
+- **`critique --skill` is a NAME, not a path.** A selector such as `--skill ../../elsewhere` was joined
+  onto `<plugin>/skills/` unchecked, so it resolved to a directory the mount can never contain and the
+  packager graded it — and the same string was then used as the agent-match name, so no `agents/*.md`
+  could ever match. Both turns still mounted the positional, so the evaluator judged content the agent
+  never had. The selector now goes through staging's own single-segment rule (`safePathSegment`): any
+  value containing `/`, `\\`, `:`, a control character, `.` or `..` is a usage error (exit 2) before
+  any spend, on the paid path and under `--corpus-only` alike.
+
+### Changed
+
+- **`critique`'s `--dry-run` refusal now names `--corpus-only`.** The rejection reason for `--dry-run` on
+  `critique` reads: "there is no meaningful two-turn preview — `critique --corpus-only` answers the
+  no-spend question for the evidence corpus, and `skill --dry-run` for the invocation plan" (previously it
+  named only `skill --dry-run`).
+- **The packager's over-ceiling `::warning::` line is tense-aware.** Under `critique --corpus-only` it now
+  reads "content WOULD BE cut before grading" instead of "content was cut before grading," so a CI
+  annotation from the no-spend preview never describes a grading that did not happen.
+
+### Documentation
+
+- **The bundled `scenario.py`'s functions and constants are declared NOT an API** (SPEC.md, the
+  not-covered list). The `lint` / `lint-skill` / `scaffold` subcommands are the surface; a consumer that
+  vendors or imports a `_helper` from the script is copying an implementation detail that may be renamed,
+  re-split or removed in any release. Prompted by a consumer who had vendored two of them to get the corpus
+  number the CLI did not expose — which is what `--corpus-only` now exposes.
+- **The remote lane's toolchain is a different image, not the local rootfs with extras** — stated with
+  numbers in `docs/fidelity-gaps.md`. A `pip list` from a session with "Only on this computer" OFF showed
+  pandas 3.0.2 / numpy 2.4.4 and fourteen packages (scipy, scikit-learn, playwright, `claude-agent-sdk`,
+  `mcp`, …) that the local rootfs, captured the same day at Desktop 2.2553.1, does not carry; the same
+  session with the setting ON matched the captured manifest exactly. A provisioning observation made
+  with the setting off is evidence about nothing this harness models.
+- **`COWORK_AGENT_IMAGE` governs the Bash sidecar at `hostloop` too, and is recorded in cassettes, not
+  `result.json`.** `docs/cli.md`'s entry said neither. hostloop's agent is a native host process, but its
+  `mcp__workspace__bash` runs in the Docker sidecar, so a full-parity image changes what a skill's
+  shell-outs find at either tier; the image tag + digest are stamped into a recorded cassette's
+  environment, while `result.json` records the fidelity tier only. A consumer asked both questions.
+- **The companion skill said a critique is "four model workloads"; it is up to four.** Evaluator pass 2
+  is skipped entirely when no self-report was captured (nothing to verify), so a completed critique can be
+  three workloads and its roll-up row covers three. `docs/critique.md` already said so; the shipped
+  `SKILL.md` and the in-plugin `references/critique.md` — the copy the skill-authoring agent reads —
+  stated the fixed count. Corrected to match.
+- **`docs/fidelity-gaps.md` — the remote lane, measured from inside.** One in-app cloud-lane session
+  reported its environment, filesystem, upload path, link rendering and hook timing; the lane section now
+  carries that table (every row n = 1, dated), a concrete check for placing a live bug report on a lane
+  before comparing it to a harness run, and the fact that `CLAUDE_CODE_REMOTE` is the switch that makes
+  hook frames visible there (the same one as `--include-hook-events`). It reconciles two earlier probes
+  that disagreed about `/mnt/user-data/outputs` (absent one day, an empty symlink another — neither is a
+  delivery channel) and records that a plugin's MCP servers are not started in the cloud container but are
+  bridged from the Mac as `<server>__<tool>` tools.
+
 ## [3.7.0] — 2026-09-20
 
 > **Live-validated.** A full live pass ran on 2026-09-20 against `desktop-2.2553.1` / agent `2.1.275`,

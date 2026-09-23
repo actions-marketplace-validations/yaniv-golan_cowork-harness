@@ -70,6 +70,22 @@ function verifiedElf(path: string, baseline: PlatformBaseline, opts: { intention
 
 export const BASELINES_DIR = join(fileURLToPath(new URL("..", import.meta.url)), "baselines");
 
+/** The Desktop version the shipped rootfs provisioning manifest was captured from
+ *  (`baselines/provisioning/rootfs-provisioning.json`), or `undefined` when the file is absent or undated.
+ *  It is the dated evidence behind every "real Cowork ships them" sentence the harness prints, so the
+ *  sentence can carry its date instead of asking the reader to trust an unstamped claim. Never throws:
+ *  a verdict must not fail because a provenance footnote could not be read. */
+export function rootfsManifestDesktopVersion(): string | undefined {
+  try {
+    const m = JSON.parse(readFileSync(join(BASELINES_DIR, "provisioning", "rootfs-provisioning.json"), "utf8")) as {
+      desktopVersion?: unknown;
+    };
+    return typeof m.desktopVersion === "string" && /^\d+\.\d+\.\d+$/.test(m.desktopVersion) ? m.desktopVersion : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The Desktop release boundary at which Cowork's runtime switched to BOTH bare-name work-folder mounts
  * (`mnt/<name>` instead of `mnt/.projects/<id>`) AND the dynamically-generated host-loop "## Shell access"

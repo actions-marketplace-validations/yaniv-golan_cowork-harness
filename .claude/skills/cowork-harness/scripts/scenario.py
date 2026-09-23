@@ -111,6 +111,8 @@ CONTENT_KEYS = {
     "max_redundant_tool_calls",
     "max_turns",
     "compaction_occurred",
+    "hook_event_fired",
+    "hook_event_blocked",
     "all_tasks_completed",
     "task_count_min",
     "task_status",
@@ -218,7 +220,9 @@ _FALLBACK_SERVED_HOOK_EVENTS = {"PreToolUse"}
 # Re-sourced 2026-09-06 from the agent's OWN hooks-config validator array (ELF 2.1.260), not from a grep
 # for event-name constants. The previous 9-name set reported the other 24 -- PostCompact and
 # MessageDisplay among them -- identically to a misspelling, at ERROR severity below.
-_FALLBACK_KNOWN_HOOK_EVENTS = {
+# Ordered exactly like the TS `KNOWN_HOOK_EVENTS` array: the `hook_event_fired`/`hook_event_blocked` enum
+# values in _EMBEDDED_ENUMS are derived from this list and must compare equal to the generated map.
+_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED = [
     "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
     "Notification", "UserPromptSubmit", "UserPromptExpansion", "SessionStart",
     "SessionEnd", "Stop", "StopFailure", "SubagentStart", "SubagentStop",
@@ -227,11 +231,12 @@ _FALLBACK_KNOWN_HOOK_EVENTS = {
     "TaskCreated", "TaskCompleted", "Elicitation", "ElicitationResult",
     "ConfigChange", "WorktreeCreate", "WorktreeRemove", "InstructionsLoaded",
     "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
-}
+]
+_FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
 # The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
 # hostloop). Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
-_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse"}
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"}
 
 
 def _load_hook_events():
@@ -350,6 +355,8 @@ _EMBEDDED_ENUMS = {
     "assert.path_denied.source": ["pretooluse", "can_use_tool", "permission_denied"],
     "assert.path_denied.agent_scope": ["main", "subagent", "any"],
     "assert.question_options.order": ["exact", "any"],
+    "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
 }
 
 
@@ -1569,14 +1576,15 @@ def _lint_hook_events(path):
             findings.append(Finding(
                 "INFO", "hook-event-not-served",
                 f"`{name}` {fires} — but cowork-harness "
-                f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. Two "
-                f"consequences: there is no assertion key for this event, so a scenario cannot GATE on it; "
-                f"and if real Cowork installs a `{name}` hook of its own, the harness does not reproduce it, "
-                f"so anything driven by that is absent here. (Cowork installs hooks of its own for "
+                f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. "
+                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` grade it from the agent's own "
+                f"hook_response frames (the harness passes --include-hook-events because this plugin declares "
+                f"hooks); but if real Cowork installs a `{name}` hook of its own, the harness does not reproduce "
+                f"it, so anything driven by that is absent here. (Cowork installs hooks of its own for "
                 f"PreToolUse, PostToolUse and UserPromptSubmit only.)",
-                "The harness does not block your hook — this is about assertability, not breakage. To gate "
-                "on its effect, assert the OBSERVABLE result instead (a file it writes, a tool it blocks), "
-                "not the hook itself.",
+                "The harness does not block your hook — this is about what is reproduced, not breakage. Assert "
+                "the hook with those keys, and its OBSERVABLE result as well (a file it writes, a tool it blocks) "
+                "for anything Cowork's own hooks would have driven.",
                 path, line_no,
             ))
         elif name.lower() in {e.lower() for e in KNOWN_HOOK_EVENTS}:
@@ -2269,9 +2277,16 @@ def _lint_skill_corpus_size(md_path):
     content the packager would cut. A proximity check that greens a corpus destined to be cut is worse
     than no check.
 
-    Still approximate in ONE direction only, and it now over- rather than under-counts: the packager
-    applies staging's git-tracked filter, so an untracked reference inflates this figure. That errs
-    toward warning early. The report's corpusCuts stays the authority."""
+    It diverges from what a critique actually packages on four axes, two each way. OVER-counts: an untracked reference that staging would never deliver (the
+    packager applies staging's git-tracked filter; this walk does not), and a symlink pointing outside
+    the plugin, which the packager's containment rule refuses to follow. UNDER-counts: a plugin-root
+    reference the graded agent only reaches by reading it during the run (added to the corpus at
+    critique time -- invisible to any static count), and any byte that fails strict UTF-8 decoding, which
+    the packager replaces with a 3-byte U+FFFD that st_size never sees (clean multibyte text round-trips
+    byte-exact, so this axis is zero on ordinary markdown). `cowork-harness critique
+    <folder> --corpus-only` runs the packager's own packageEvidence call over an empty run and prints the
+    six corpus fields directly: the packager's own git filter, containment rule and byte measurement,
+    and a stated FLOOR for the run-time-read clause (a read can only add to it)."""
     skill_dir = Path(md_path).parent
     total = 0
     files = [Path(md_path)]

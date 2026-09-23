@@ -65,6 +65,14 @@
 //       ci-recipe.md and examples/replays/README.md to drift unseen. Covers the Action's own
 //       `version:` input too: `version: ">=1.11.0"` is the same unbounded floor with no `@` in it,
 //       so the `@>=` pattern could not see it.
+//   14. the rootfs provisioning manifest is DATED, and every shipped doc that cites it cites the same
+//       date: `baselines/provisioning/rootfs-provisioning.json` must carry `desktopVersion`, and every
+//       shipped "(rootfs manifest captured at Desktop `X`…)" sentence must name that X. When the manifest
+//       lags the newest baseline the sentence must ALSO say so, in the invariant-11 shape ("<N> baseline(s)
+//       have shipped since"), with the right N; when it does not lag, the sentence must NOT say so. The
+//       manifest is the sole evidence behind the user-facing "likely a FALSE NEGATIVE (real Cowork ships
+//       them)" claim, and until this invariant it had sat two baselines behind with nothing saying so — a
+//       consumer who correctly distrusted an inherited note had nothing to check it against.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -833,6 +841,48 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       }),
     );
 
+  // Invariant 14 — the provisioning manifest is dated, and the docs that cite it say how dated.
+  const manifest = json("baselines/provisioning/rootfs-provisioning.json");
+  const manifestDesktop = manifest.desktopVersion as string | undefined;
+  if (!manifestDesktop || !/^\d+\.\d+\.\d+$/.test(manifestDesktop)) {
+    errors.push(
+      'baselines/provisioning/rootfs-provisioning.json has no `desktopVersion` — re-run `npx tsx scripts/capture-rootfs-manifest.ts`; an undated manifest is an undated "real Cowork ships them" claim',
+    );
+  } else {
+    const newerBaselines = baselineVersions.filter((v) => cmp(v, manifestDesktop) > 0).sort(cmp);
+    // Tolerates a Markdown wrap (newline + indent) anywhere in the phrase, like invariant 10's regex does.
+    const cite = /rootfs\s+manifest\s+captured\s+at\s+Desktop\s+`(\d+\.\d+\.\d+)`([^)]*)\)/g;
+    let sites = 0;
+    for (const { path, text } of shippedDocs()) {
+      for (const m of text.matchAll(cite)) {
+        sites++;
+        if (m[1] !== manifestDesktop)
+          errors.push(`${path} cites the rootfs manifest as captured at Desktop ${m[1]}, but the manifest says ${manifestDesktop}`);
+        const lagText = m[2];
+        const said = lagText.match(/(\d+) baselines? have shipped since/);
+        if (newerBaselines.length > 0) {
+          if (!said)
+            errors.push(
+              `${path}: the rootfs manifest (Desktop ${manifestDesktop}) lags ${newerBaselines.length} newer baseline(s) (${newerBaselines.join(", ")}) — the citation must say "; ${newerBaselines.length} baseline(s) have shipped since without a re-capture"`,
+            );
+          else if (Number(said[1]) !== newerBaselines.length)
+            errors.push(
+              `${path} says ${said[1]} baseline(s) have shipped since the rootfs manifest; the count is ${newerBaselines.length}`,
+            );
+        } else if (said) {
+          errors.push(
+            `${path} says baselines have shipped since the rootfs manifest, but the manifest (Desktop ${manifestDesktop}) is current — drop the lag clause`,
+          );
+        }
+      }
+    }
+    // The claim must be cited where the false-negative message is explained — the skill and docs/scenario.md.
+    if (sites < 2)
+      errors.push(
+        `expected at least 2 shipped-doc citations of the form "rootfs manifest captured at Desktop \`X\`" (SKILL.md + docs/scenario.md), found ${sites}`,
+      );
+  }
+
   return {
     ok: errors.length === 0,
     errors,
@@ -841,6 +891,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
       readmeFloors: readmeFloors.join(","),
       baselineVersions: baselineVersions.join(","),
       maxAgentVersion,
+      rootfsManifestDesktop: manifestDesktop,
     },
   };
 }

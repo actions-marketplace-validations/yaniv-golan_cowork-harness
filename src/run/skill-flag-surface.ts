@@ -159,7 +159,11 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
   {
     flag: "--dry-run",
     arity: 0,
-    critique: { kind: "reject", reason: "there is no meaningful two-turn preview — use `skill --dry-run` directly" },
+    critique: {
+      kind: "reject",
+      reason:
+        "there is no meaningful two-turn preview — `critique --corpus-only` answers the no-spend question for the evidence corpus, and `skill --dry-run` for the invocation plan",
+    },
   },
 
   // ---- critique implements or pins these itself ----

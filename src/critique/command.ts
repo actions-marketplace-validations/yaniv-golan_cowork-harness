@@ -19,17 +19,23 @@ import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
+import { observedSkillInvocation, slashCommandSkillInvocation, subagentSkillCalls } from "./skill-invocation.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
-import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, writeFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
+import { jsonPayloadEnvelope } from "../run/envelope.js";
+import { gitModeEnabled, gitStageStats } from "../run/skill-files.js";
+import { binaryPluginIdentity } from "../session.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
 import { findEnclosingPluginDir } from "../run/analyze-skill.js";
-import { snapshotTurnBoundary, readTurn1Result } from "./evidence.js";
+import { safePathSegment } from "../staging/resolve.js";
+import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice, type TurnBoundary } from "./evidence.js";
 import { runCritique, DEFAULT_EVALUATOR_MODEL } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
@@ -71,7 +77,17 @@ Answer plainly, in prose. Do not restate the task's final answer.`;
 
 interface ParsedArgs {
   skillFolder: string;
-  prompt: string;
+  /** The probe. Present on every spending invocation — parseArgs enforces it — and absent ONLY under
+   *  `--corpus-only`, where no turn runs and a prompt would be a value with nothing to consume it. */
+  prompt?: string;
+  /** `--corpus-only`: package the skill corpus over an EMPTY run dir and stop — no session, no spawn, no
+   *  spend. The answer to "how close is this skill to the evidence ceiling" BEFORE paying for a critique. */
+  corpusOnly: boolean;
+  /** Under `--corpus-only`, every flag that was validated but shapes a RUN that will not happen (`--prompt`,
+   *  `--upload`, `--model`, …). Carried into the JSON payload as `ignoredFlags` so a machine consumer sees
+   *  the no-op — stderr text is not a contract, and silently accepting an unsatisfied flag is this repo's
+   *  anti-pattern. Empty when not in corpus-only mode. */
+  ignoredFlags: string[];
   dotenv?: string;
   /** The tier BOTH turns run at. Always a concrete tier — `--fidelity cowork` is resolved at parse time,
    *  never forwarded as-is. */
@@ -133,6 +149,18 @@ Critique's own:
   --fidelity <tier>         container (default), hostloop, or cowork — which resolves via the baseline's
                             loop gate to one of the two and pins BOTH turns to it; microvm/protocol refused
   --keep                    accepted as a no-op — runs are always kept
+  --corpus-only             NO SPEND: package the skill corpus with the packager a critique uses (same
+                            code, same git-tracked filter, same ceiling) over an EMPTY run and print the six
+                            corpus fields — corpusBytes / corpusCeiling / corpusCuts / corpusExcluded /
+                            corpusPackaged / corpusOmitted — then exit. --prompt becomes optional. The number
+                            is a FLOOR: plugin-root references the agent READS during the graded turn are
+                            added at critique time, so a paid run's corpusBytes is >= this. Every other flag
+                            is still parsed and type-checked as a critique line, but a run-shaping one is not
+                            acted on and is named in ignoredFlags — a PATH value (--upload, --folder,
+                            --plugin) is only checked when a turn stages, so a missing one does not fail here. Applies staging's git rules: a work
+                            tree with 0 tracked files, or a --skill subdirectory with nothing tracked under
+                            it, is refused in staging's terms; a non-git folder is measured raw, as staging
+                            copies it.
   --dotenv <path>           credentials
   Global --run-dir <path>   must PRECEDE the subcommand
 
@@ -174,7 +202,8 @@ RUN-DIR ARTIFACTS (written best-effort alongside turns/):
 EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
   finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
   killed, reflection protocol broke, evaluator never invoked or threw) — no critique was produced. Findings
-  NEVER gate.
+  NEVER gate. --corpus-only: 0 = measured (even over the ceiling — it is a measurement, not a gate; gate on
+  corpusBytes <= corpusCeiling yourself), 2 = usage error, unresolvable target, or 0 git-tracked files.
 
 ${renderKnownLimitations()}
 
@@ -276,9 +305,17 @@ function parseArgs(
   let skillSelector: string | undefined;
   let promptFile: string | undefined;
   let taskTimeoutMs: number | undefined;
+  let corpusOnly = false;
   const forwardBoth: string[] = [];
   const forwardTask: string[] = [];
   const seen = new Set<string>();
+  /** Every flag that shapes the RUN, in arrival order, deduped — the set `--corpus-only` reports as
+   *  `ignoredFlags`. Recorded for critique-owned flags and forwarded ones alike; `--skill`, `--out`,
+   *  `--output-format` and `--keep` are NOT run-shaping (they select, format or are already satisfied). */
+  const runShaping: string[] = [];
+  const shapes = (flag: string) => {
+    if (!runShaping.includes(flag)) runShaping.push(flag);
+  };
   /** A repeat of a non-repeatable flag silently discards the earlier value — the exact no-op this
    *  command's refusal design exists to prevent. Applied to critique's OWN flags too: an earlier version
    *  guarded only the forwarded branch, so `--prompt a --prompt b` quietly dropped a probe the user typed.
@@ -294,21 +331,25 @@ function parseArgs(
       once("--prompt");
       const { value: v, adv } = flagVal(argv, i, "--prompt");
       prompt = v;
+      shapes("--prompt");
       i += adv;
     } else if (a === "--dotenv" || a.startsWith("--dotenv=")) {
       once("--dotenv");
       const { value: v, adv } = flagVal(argv, i, "--dotenv");
       dotenv = v;
+      shapes("--dotenv");
       i += adv;
     } else if (a === "--fidelity" || a.startsWith("--fidelity=")) {
       once("--fidelity");
       const { value: v, adv } = flagVal(argv, i, "--fidelity");
       fidelity = v;
+      shapes("--fidelity");
       i += adv;
     } else if (a === "--evaluator-model" || a.startsWith("--evaluator-model=")) {
       once("--evaluator-model");
       const { value: v, adv } = flagVal(argv, i, "--evaluator-model");
       evaluatorModel = v;
+      shapes("--evaluator-model");
       i += adv;
     } else if (a === "--output-format" || a.startsWith("--output-format=")) {
       once("--output-format");
@@ -319,6 +360,7 @@ function parseArgs(
       once("--prompt-file");
       const { value: v, adv } = flagVal(argv, i, "--prompt-file");
       promptFile = v;
+      shapes("--prompt-file");
       i += adv;
     } else if (a === "--out" || a.startsWith("--out=")) {
       once("--out");
@@ -337,6 +379,9 @@ function parseArgs(
       // accepted no-op: critique always keeps its runs, so the flag's promise already holds. Erroring on
       // an already-satisfied request is hostile; silently ignoring an UNsatisfied one is this repo's
       // anti-pattern — this is the former.
+    } else if (a === "--corpus-only" || a.startsWith("--corpus-only=")) {
+      if (a.includes("=")) throw new Error(`--corpus-only takes no value (got "${a}")\n${usage()}`);
+      corpusOnly = true; // arity 0, idempotent on repeat — same exemption `once()` gives every boolean
     } else if (a.startsWith("-")) {
       // Not critique-owned: consult THE shared spec rather than a hand-mirrored list here. A skill flag
       // with no disposition is impossible — the parity test makes that red CI.
@@ -380,6 +425,7 @@ function parseArgs(
       // them up from there.
       if (spec.critique.turns === "both") forwardBoth.push(...fragment);
       else forwardTask.push(...fragment);
+      shapes(name);
     } else positional.push(a);
   }
   if (positional.length !== 1) throw new Error(usage());
@@ -388,7 +434,12 @@ function parseArgs(
     if (!existsSync(promptFile)) throw new Error(`--prompt-file not found: ${promptFile}`);
     prompt = readFileSync(promptFile, "utf8");
   }
-  if (!prompt || !prompt.trim()) throw new Error(`--prompt "<probe>" or --prompt-file <path> is required\n${usage()}`);
+  // `--corpus-only` runs no turn, so a probe has nothing to consume it — the ONLY invocation that may omit
+  // one. Every other line keeps the requirement, and a prompt that IS given under --corpus-only is still
+  // validated (mutual exclusion above, file existence) and then listed as ignored: the drop-in property is
+  // that an existing critique line gains the flag without being rewritten, not that its flags stop meaning
+  // anything.
+  if (!corpusOnly && (!prompt || !prompt.trim())) throw new Error(`--prompt "<probe>" or --prompt-file <path> is required\n${usage()}`);
   if (fidelity !== "container" && fidelity !== "hostloop" && fidelity !== "cowork") {
     // Two proven tiers, plus `cowork` which RESOLVES to one of them below. Each refusal states its OWN
     // reason rather than a generic "unknown tier": the reflection turn RESUMES the task turn's mounted
@@ -441,6 +492,8 @@ function parseArgs(
   return {
     skillFolder: positional[0],
     prompt,
+    corpusOnly,
+    ignoredFlags: corpusOnly ? runShaping : [],
     dotenv,
     fidelity: fidelity as ParsedArgs["fidelity"],
     requestedFidelity,
@@ -504,6 +557,11 @@ export function resolveCritiquedSkillDir(
     }
   };
   if (skillSelector !== undefined) {
+    // A NAME, not a path: `--skill ../../elsewhere` joined blindly resolved to a directory the mount can
+    // never contain and was graded (measured: exit 0, `skillDir` outside the plugin) — and the same string
+    // was then used as the agent-match name, so no agent could ever match it. The staging layer already
+    // owns the single-segment rule; reuse it rather than mint a second one.
+    safePathSegment(skillSelector, "--skill name");
     const candidate = join(skillFolder, "skills", skillSelector);
     if (!existsSync(join(candidate, "SKILL.md"))) {
       const available = listPluginSkills();
@@ -1098,10 +1156,17 @@ interface ReportState {
    *  keys the MOUNTED folder (per-plugin), so pairing critiques by skillHash alone cross-pairs different
    *  skills of the same plugin — pair by (gradedSkillHash, gradedSkill). */
   gradedSkill?: string;
-  /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether the graded
-   *  run's own skillActivity mentions it. `false` = the critique may be grading a run that never invoked
-   *  the selected skill. `undefined` = not applicable or no evidence either way. */
+  /** Advisory graded-run validity: when a plugin skill was selected (--skill / auto), whether an
+   *  OBSERVABLE channel named it — a `Skill` tool call, or a leading staged-skill slash command.
+   *  `false` = both channels were observable and neither fired, so the critique may be grading a run
+   *  that never invoked the selected skill. `undefined` = not applicable, or a channel could not be
+   *  observed at all (absent prompt/inventory, a same-named command shadowing the skill, or an
+   *  unnameable sub-agent `Skill` call). Absent is never a synonym for `false`. */
   skillInvocationObserved?: boolean;
+  /** The plugin ships BOTH `commands/<skill>.md` and `skills/<skill>/SKILL.md`, so the one registered
+   *  slash command is ambiguous and the run does not say which ran. Surfaced so *absent* is an
+   *  actionable outcome rather than a dead end. */
+  commandShadowsSkill?: boolean;
   /** The graded run's resolved gate answers (from its result.json's gateProvenance), lifted so a
    *  follow-up run can be made deterministic — the text report echoes them as copy-pasteable --answer
    *  lines, mirroring the `skill` lane's footer. */
@@ -1221,6 +1286,61 @@ export const VERDICT_PROVENANCE = {
 
 /** Pure report-text builder (no I/O) so it's directly unit-testable. `printTextReport` below just flushes
  *  this to fd 1. */
+/** The six corpus fields of `evidenceBudget` — what the packager knows about the SKILL'S OWN text, independent
+ *  of any run. `trimRecord` and `packageTruncated` are deliberately NOT here: they describe the package a
+ *  graded run produced, and `critique --corpus-only` has no run to describe. */
+type CorpusFields = Pick<
+  NonNullable<ReportState["evidenceBudget"]>,
+  "corpusBytes" | "corpusCeiling" | "corpusCuts" | "corpusExcluded" | "corpusPackaged" | "corpusOmitted"
+>;
+
+/** The text lines for the corpus fields, shared by the full report and `--corpus-only`. ONE renderer on
+ *  purpose: the preview's promise is "the same answer a critique would give", and two copies of these lines
+ *  would let that promise drift silently. The caller supplies the headline because it is the one line whose
+ *  tense differs — "packaged WHOLE" on a report, "pre-run floor" on a preview. */
+function renderCorpusLines(eb: CorpusFields, headline: string): string[] {
+  const out: string[] = [headline];
+  for (const c of eb.corpusCuts)
+    out.push(
+      c.omitted
+        ? `  corpus OMITTED ${c.name} (${c.totalBytes.toLocaleString()} B) — its share would be below the minimum useful slice; SPLIT this file`
+        : `  corpus CUT ${c.name}: kept ${c.keptBytes.toLocaleString()} of ${c.totalBytes.toLocaleString()} B — the corpus as a whole exceeds the ceiling`,
+    );
+  // Plugin-root references present in the mount but not packaged. A SEPARATE line from corpusExcluded:
+  // these files ARE tracked and WERE delivered, so the "git add them" remedy would be a lie. Rendering
+  // them at all is the point of the narrow selection rule — an author who expected a shared file to be
+  // graded is told it was not, and why, rather than the omission being silent.
+  if (eb.corpusOmitted?.length) {
+    const byReason = new Map<string, string[]>();
+    for (const o of eb.corpusOmitted) byReason.set(o.reason, [...(byReason.get(o.reason) ?? []), o.name]);
+    const explain: Record<string, string> = {
+      "not-linked": "this skill's SKILL.md, references/ and sub-agents never point at them",
+      "not-utf8": "not valid UTF-8 (a binary asset), so never shown to a text evaluator",
+      "ambiguous-read": "read during the run, but the access path cannot distinguish them from a same-named skill-local file",
+      unreadable: "resolved but could not be read, so the evaluator got a placeholder instead of the content",
+    };
+    for (const [reason, names] of [...byReason].sort())
+      out.push(`  plugin-root references NOT graded (${explain[reason] ?? reason}): ${names.join(", ")}`);
+    // Only files we actually EVALUATED for trackedness. `alsoUntracked` is absent when the tracked set
+    // could not be read at all, and printing "also untracked" — or silently not printing it — for an
+    // unevaluated file would state a fact nothing established.
+    // ONLY the not-linked rows. "git add them as well as linking them" is wrong advice for a `not-utf8`
+    // binary (no amount of linking packages it) and for an `ambiguous-read` file (the agent already
+    // reached it) — the flag is computed on every reason for the JSON consumer, but this sentence is not
+    // true of every reason.
+    const alsoUntracked = eb.corpusOmitted.filter((o) => o.reason === "not-linked" && o.alsoUntracked === true).map((o) => o.name);
+    if (alsoUntracked.length)
+      out.push(
+        `  ...and staging would not deliver these anyway (untracked): ${alsoUntracked.join(", ")} — 'git add' them as well as linking them`,
+      );
+  }
+  if (eb.corpusExcluded.length)
+    out.push(
+      `  NOT graded (staging would not deliver them — untracked): ${eb.corpusExcluded.join(", ")} — 'git add' them to grade as-published`,
+    );
+  return out;
+}
+
 export function buildTextReport(state: ReportState): string {
   const {
     skillFolder,
@@ -1298,7 +1418,22 @@ export function buildTextReport(state: ReportState): string {
     );
   if (state.skillInvocationObserved === false)
     out.push(
-      `  NOTE: the graded run's recorded skillActivity never mentions the selected skill — this critique may be grading a run that did not actually invoke it.`,
+      `  NOTE: no observable invocation channel (the main agent's Skill tool calls, a sub-agent's Skill calls, or a staged-skill slash token leading the prompt) names the selected skill — this critique may be grading a run that did not actually invoke it.`,
+    );
+  if (state.commandShadowsSkill && state.skillInvocationObserved === undefined)
+    // Only when the shadow is what withheld the verdict. A `false` alongside a shadow is sound — nothing
+    // named the skill by ANY channel — and printing "not decidable" next to "none named it" contradicts.
+    out.push(
+      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so a positive invocation verdict is not decidable here. Rename one of the two to make it observable.`,
+    );
+  else if (state.gradedSkill !== undefined && state.skillInvocationObserved === undefined)
+    // Absence is a real outcome and must be SAID: without this line "could not observe" read exactly
+    // like "not applicable", and a --skill user could not tell which they had. One generic line: the
+    // report does not carry WHICH of the five routes to absent fired, so it lists them rather than
+    // pretend to know. (Printed on an instrument failure too — the field is absent there for the same
+    // reason, no observable record.)
+    out.push(
+      `  NOTE: whether the graded run invoked ${state.gradedSkill} could NOT be observed — no graded result, or one with no prompt/skill inventory; an unreadable events slice; a top-level Skill call whose id the record could not read; a sub-agent Skill call it cannot name; or a bare slash token more than one staged skill answers to. Not evidence either way.`,
     );
   out.push(`  self-report: ${selfReportStatus}`);
   if (selfReportStatus === "unavailable")
@@ -1325,49 +1460,13 @@ export function buildTextReport(state: ReportState): string {
   // branches only fire on a genuinely pathological skill or an untracked-file mistake, and both tell the
   // author what to DO rather than only what happened.
   const eb = state.evidenceBudget;
-  if (eb) {
+  if (eb)
     out.push(
-      `  evidence corpus: ${eb.corpusBytes.toLocaleString()} B of skill content packaged WHOLE (ceiling ${eb.corpusCeiling.toLocaleString()} B)`,
+      ...renderCorpusLines(
+        eb,
+        `  evidence corpus: ${eb.corpusBytes.toLocaleString()} B of skill content packaged WHOLE (ceiling ${eb.corpusCeiling.toLocaleString()} B)`,
+      ),
     );
-    for (const c of eb.corpusCuts)
-      out.push(
-        c.omitted
-          ? `  corpus OMITTED ${c.name} (${c.totalBytes.toLocaleString()} B) — its share would be below the minimum useful slice; SPLIT this file`
-          : `  corpus CUT ${c.name}: kept ${c.keptBytes.toLocaleString()} of ${c.totalBytes.toLocaleString()} B — the corpus as a whole exceeds the ceiling`,
-      );
-    // Plugin-root references present in the mount but not packaged. A SEPARATE line from corpusExcluded:
-    // these files ARE tracked and WERE delivered, so the "git add them" remedy would be a lie. Rendering
-    // them at all is the point of the narrow selection rule — an author who expected a shared file to be
-    // graded is told it was not, and why, rather than the omission being silent.
-    if (eb.corpusOmitted?.length) {
-      const byReason = new Map<string, string[]>();
-      for (const o of eb.corpusOmitted) byReason.set(o.reason, [...(byReason.get(o.reason) ?? []), o.name]);
-      const explain: Record<string, string> = {
-        "not-linked": "this skill's SKILL.md, references/ and sub-agents never point at them",
-        "not-utf8": "not valid UTF-8 (a binary asset), so never shown to a text evaluator",
-        "ambiguous-read": "read during the run, but the access path cannot distinguish them from a same-named skill-local file",
-        unreadable: "resolved but could not be read, so the evaluator got a placeholder instead of the content",
-      };
-      for (const [reason, names] of [...byReason].sort())
-        out.push(`  plugin-root references NOT graded (${explain[reason] ?? reason}): ${names.join(", ")}`);
-      // Only files we actually EVALUATED for trackedness. `alsoUntracked` is absent when the tracked set
-      // could not be read at all, and printing "also untracked" — or silently not printing it — for an
-      // unevaluated file would state a fact nothing established.
-      // ONLY the not-linked rows. "git add them as well as linking them" is wrong advice for a `not-utf8`
-      // binary (no amount of linking packages it) and for an `ambiguous-read` file (the agent already
-      // reached it) — the flag is computed on every reason for the JSON consumer, but this sentence is not
-      // true of every reason.
-      const alsoUntracked = eb.corpusOmitted.filter((o) => o.reason === "not-linked" && o.alsoUntracked === true).map((o) => o.name);
-      if (alsoUntracked.length)
-        out.push(
-          `  ...and staging would not deliver these anyway (untracked): ${alsoUntracked.join(", ")} — 'git add' them as well as linking them`,
-        );
-    }
-    if (eb.corpusExcluded.length)
-      out.push(
-        `  NOT graded (staging would not deliver them — untracked): ${eb.corpusExcluded.join(", ")} — 'git add' them to grade as-published`,
-      );
-  }
   // Three states, and the report must not collapse them: `true` = nothing was Read, `false` = something
   // was, `undefined` = we could not tell (a degraded turn-1 result) or there was nothing to read. Printing
   // a line only for `true` left "could not tell" indistinguishable from "reads happened" — the exact
@@ -1554,6 +1653,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     costUsd: state.costUsd,
     gradedSkill: state.gradedSkill,
     skillInvocationObserved: state.skillInvocationObserved,
+    commandShadowsSkill: state.commandShadowsSkill,
     gateAnswers: state.gateAnswers,
     taskResult,
     // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
@@ -1572,7 +1672,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     skillMdStatus,
     evidenceBudget: state.evidenceBudget,
     noSkillFilesRead: state.noSkillFilesRead,
-    referenceAccessUnobservable: state.referenceAccessUnobservable,
+    referenceAccessUnobservable: state.referenceAccessUnobservable || undefined,
     verdictProvenance: VERDICT_PROVENANCE,
   };
   // The phase/kind ride WITH the reason, never separately: a consumer that reads `infraFailure` and not
@@ -1677,7 +1777,12 @@ function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" 
   }
 }
 
+/** A task turn cannot be built without a probe. The only invocation that lacks one (`--corpus-only`)
+ *  returns from `main` before this is reached, so a missing prompt here is an internal error — thrown,
+ *  not typed away: an intersection type on the parameter made every existing caller that passes a bare
+ *  `parseArgs()` result fail to compile, for an invariant the runtime already holds. */
 export function buildTaskTurnArgs(opts: ParsedArgs, sessionId: string): string[] {
+  if (opts.prompt === undefined || !opts.prompt.trim()) throw new Error("critique: internal — buildTaskTurnArgs called with no probe");
   const dotenvArgs = opts.dotenv ? ["--dotenv", opts.dotenv] : [];
   return [
     ...dotenvArgs,
@@ -1729,6 +1834,231 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
   ];
 }
 
+/** `critique --corpus-only`: the packager's answer for a skill, with no run behind it.
+ *
+ *  WHY THE REAL PACKAGER AND NOT A STATIC COUNT. `lint-skill`'s corpus check is a static approximation that
+ *  diverges from what a critique actually packages on four measured axes (untracked files it counts and
+ *  staging drops; symlinks out of the tree it counts and the walk refuses; `st_size` vs decoded UTF-8
+ *  length; and plugin-root references read at run time). It also emits NOTHING below 80% of the ceiling,
+ *  so a consumer below that band could not get a number without paying for a critique. This is the same
+ *  `packageEvidence` call the graded run makes, over an EMPTY run dir — the packager was built to degrade,
+ *  not throw, on missing run artifacts (measured: no writes, no stderr, ~40 ms) — so there is exactly one
+ *  derivation of the number, and it is the one the evaluator sees.
+ *
+ *  WHAT IT CANNOT KNOW. A plugin-root reference the agent READS during the graded turn is added to the corpus
+ *  at critique time (resolve-references clause 3). No pre-run instrument can see that read, so the preview's
+ *  `corpusBytes` is a FLOOR: a paid run's is equal or larger, and a `corpusOmitted` reason can change
+ *  (`not-linked` → `ambiguous-read`). Said in the output rather than left for the reader to discover.
+ *
+ *  WHAT IT REFUSES. Staging throws on a plugin with 0 git-tracked files ("would mount EMPTY") before any
+ *  spend; the packager instead treats an empty tracked set as "not ours" and walks raw. A preview that
+ *  printed a number there would green a critique that exits 2 — so the same check runs here first, with
+ *  staging's own message. Likewise a target with no readable SKILL.md is exit 2, not `corpusBytes: 0`: a
+ *  measurement of nothing is not a measurement, and a mistyped-but-existing path must not green a CI
+ *  pre-check. */
+function runCorpusPreview(opts: ParsedArgs, resolved: ReturnType<typeof resolveCritiquedSkillDir>): number {
+  // Mirror staging's hard-fail on the MOUNTED folder — the positional, exactly what `stageFilterFor` is
+  // handed — not on the resolved skill dir, which for a multi-skill plugin is a subdirectory whose tracked
+  // set staging never consults on its own.
+  if (gitModeEnabled()) {
+    let stats: ReturnType<typeof gitStageStats>;
+    try {
+      stats = gitStageStats(opts.skillFolder);
+    } catch (e) {
+      process.stderr.write(
+        `critique --corpus-only: could not read the git-tracked set for ${tildeify(opts.skillFolder)}: ${(e as Error).message}\n`,
+      );
+      return 2;
+    }
+    if (stats.tracked && stats.tracked.size === 0) {
+      process.stderr.write(
+        `critique --corpus-only: ${tildeify(opts.skillFolder)} has 0 git-tracked files — staging delivers tracked files only, so a critique would mount EMPTY and refuse to run. ` +
+          `Fix: 'git add' it, or set COWORK_HARNESS_GITSET=0 to copy untracked files.\n`,
+      );
+      return 2;
+    }
+    // The graded skill is a SUBDIRECTORY of the mount (multi-skill plugin + --skill) with nothing tracked
+    // under it: staging mounts the plugin WITHOUT that skill and succeeds, so the mount-root check above
+    // passes — while the packager's own `corpusAcceptFor(skillDir)` sees an empty tracked set inside the
+    // subdir, takes its "empty is staging's hard-fail, not ours" branch and walks raw, packaging a SKILL.md
+    // the agent will never receive. That comment is true only when the dir IS the mount root. Measured:
+    // a brand-new `skills/b/` created after `git add` — the most likely thing a consumer pre-checks —
+    // previewed as 28 B, `corpusExcluded: []`, exit 0. Refuse here, in staging's terms, with the same
+    // remedy; the packager-side root-keyed fix is a separate, deferred change.
+    if (stats.tracked) {
+      // POSIX keys, like the tracked set (`skill-files.ts` splits on `sep` and joins with "/").
+      const rel = relative(resolve(opts.skillFolder), resolve(resolved.skillDir)).split("\\").join("/");
+      if (rel.startsWith("..")) {
+        // Unreachable after `safePathSegment` on the selector, kept as the closed default: a skill dir
+        // OUTSIDE the mount is never measurable, and a guard that exempts the one shape it cannot vouch
+        // for is the unsafe-default pattern.
+        process.stderr.write(
+          `critique --corpus-only: ${tildeify(resolved.skillDir)} is outside the mounted folder ${tildeify(opts.skillFolder)} — never measurable.\n`,
+        );
+        return 2;
+      }
+      if (rel !== "" && ![...stats.tracked].some((t) => t.startsWith(`${rel}/`))) {
+        // A case-insensitive filesystem lets `--skill Alpha` find `skills/alpha`; git does not. Name the
+        // real cause rather than prescribing a `git add` that would change nothing.
+        const lower = `${rel.toLowerCase()}/`;
+        const caseHit = [...stats.tracked].find((t) => t.toLowerCase().startsWith(lower));
+        const why = caseHit
+          ? `its case differs from the tracked path (${caseHit.slice(0, caseHit.indexOf("/", rel.length))}) — pass --skill with the name exactly as tracked`
+          : `staging would mount the plugin WITHOUT this skill, so a critique would grade a skill the agent never received. Fix: 'git add' it, or set COWORK_HARNESS_GITSET=0 to copy untracked files`;
+        process.stderr.write(`critique --corpus-only: ${rel}/ has 0 git-tracked files under ${tildeify(opts.skillFolder)} — ${why}.\n`);
+        return 2;
+      }
+    }
+  }
+  const runDir = mkdtempSync(join(tmpdir(), "cwh-critique-corpus-"));
+  let pkg: ReturnType<typeof packageEvidence>;
+  try {
+    pkg = packageEvidence(runDir, { events: { size: 0 }, timeline: { size: 0 } }, resolved.skillDir, false, {
+      agents: resolved.agents,
+      pluginRoot: resolved.pluginRoot,
+      mode: "preview",
+    });
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+  if (pkg.skillMdStatus !== "readable") {
+    const hint =
+      pkg.skillMdStatus === "untracked"
+        ? "It is on the host but not git-tracked, so staging would never deliver it: 'git add' it."
+        : pkg.skillMdStatus === "missing"
+          ? "A multi-skill plugin root needs --skill <name>; a plain skill folder needs a root SKILL.md."
+          : "It exists but could not be read — check permissions, or whether SKILL.md is a regular file.";
+    process.stderr.write(
+      `critique --corpus-only: no readable SKILL.md at ${tildeify(resolved.skillDir)} (${pkg.skillMdStatus}) — nothing to measure. ${hint}\n`,
+    );
+    return 2;
+  }
+  const corpus: CorpusFields = {
+    corpusBytes: pkg.corpusBytes,
+    corpusCeiling: pkg.corpusCeiling,
+    corpusCuts: pkg.corpusCuts,
+    corpusExcluded: pkg.corpusExcluded,
+    corpusPackaged: pkg.corpusPackaged,
+    corpusOmitted: pkg.corpusOmitted,
+  };
+  const skill = opts.skillSelector ?? resolved.autoSelectedSkill ?? null;
+  const note =
+    "lower bound — plugin-root references the agent READS during the graded turn are added at critique time, so a paid run's corpusBytes is >= this";
+  if (opts.ignoredFlags.length)
+    process.stderr.write(
+      `[critique] --corpus-only: ${opts.ignoredFlags.length} run-shaping flag(s) validated but not acted on: ${opts.ignoredFlags.join(", ")}\n`,
+    );
+  let content: string;
+  if (opts.outputFormat === "json") {
+    // The standard envelope, not the critique REPORT shape: `tool`/`command` are the discriminator (a
+    // report carries neither), and the six-field `corpus` object is a documented SUBSET of a report's
+    // `evidenceBudget` — same field names, so a consumer reading `evidenceBudget.corpusBytes` off a report
+    // reads `corpus.corpusBytes` here with the same code and the same meaning.
+    content =
+      jsonPayloadEnvelope("critique", true, {
+        mode: "corpus-only",
+        // Raw paths by machine-capture contract — the full JSON report keeps `skillFolder` raw too, and a
+        // consumer resolving `~/…` gets `<cwd>/~/…`. `tildeify` is a display formatter for text and stderr.
+        skillFolder: opts.skillFolder,
+        skillDir: resolved.skillDir,
+        skill,
+        corpus,
+        ignoredFlags: opts.ignoredFlags,
+        note,
+      }) + "\n";
+  } else {
+    const pct = ((corpus.corpusBytes * 100) / corpus.corpusCeiling).toFixed(1);
+    content =
+      [
+        `critique --corpus-only  ${tildeify(resolved.skillDir)}${skill ? `  (--skill ${skill})` : ""}`,
+        ...renderCorpusLines(
+          corpus,
+          `  evidence corpus (pre-run FLOOR): ${corpus.corpusBytes.toLocaleString()} B = ${pct}% of the ${corpus.corpusCeiling.toLocaleString()} B ceiling`,
+        ),
+        `  packaged: ${corpus.corpusPackaged?.length ?? 0} file(s)`,
+        `  ${note}`,
+      ].join("\n") + "\n";
+  }
+  writeAllSync(1, content);
+  if (opts.out) {
+    try {
+      writeFileSync(opts.out, content);
+    } catch (e) {
+      process.stderr.write(`critique: --out ${tildeify(opts.out)} could not be written: ${String(e)}\n`);
+    }
+  }
+  return 0;
+}
+
+/** The skill whose invocation the advisory checks, or undefined when there is no single named skill to
+ *  check (a plain skill folder). `--skill` wins; then a single-skill plugin's auto-selection; then the
+ *  shape-2 positional (`critique <plugin>/skills/<name>`) — its name is the directory's, and the
+ *  resolver already found the enclosing plugin, so leaving the advisory off for the recommended
+ *  invocation form was an omission, not a decision. */
+export function gradedSkillNameFor(
+  skillSelector: string | undefined,
+  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "skillDir" | "pluginRoot" | "autoSelectedSkill">,
+): string | undefined {
+  if (skillSelector !== undefined) return skillSelector;
+  if (resolved.autoSelectedSkill !== undefined) return resolved.autoSelectedSkill;
+  if (resolved.pluginRoot !== undefined && resolve(resolved.pluginRoot) !== resolve(resolved.skillDir)) return basename(resolved.skillDir);
+  return undefined;
+}
+
+/** A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash command,
+ *  and the `Skill` tool launches either through the same registry; the run records the name, not the
+ *  kind (vercel@0.48.0 does exactly this). That makes EVERY channel undecidable for this skill — a match
+ *  is reported absent, never true. */
+export function commandShadowsSkillFor(
+  gradedSkillName: string | undefined,
+  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "pluginRoot">,
+): boolean {
+  return (
+    gradedSkillName !== undefined &&
+    resolved.pluginRoot !== undefined &&
+    existsSync(join(resolved.pluginRoot, "commands", `${gradedSkillName}.md`))
+  );
+}
+
+/** critique's `skillInvocationObserved`, computed from a graded run's on-disk record. Extracted from
+ *  `main` so it can be exercised over a real result.json + events.jsonl + plugin tree without a run —
+ *  every earlier test sat at the function boundary below this, and the defect that motivated the
+ *  extraction (the qualifier read from the wrong manifest) lived exactly in this wiring. */
+export function computeSkillInvocationVerdict(args: {
+  outDir: string;
+  boundary: TurnBoundary;
+  taskRaw: Record<string, unknown> | null;
+  resolved: Pick<ReturnType<typeof resolveCritiquedSkillDir>, "skillDir" | "pluginRoot" | "autoSelectedSkill">;
+  gradedSkillName: string | undefined;
+}): boolean | undefined {
+  const { outDir, boundary, taskRaw, resolved, gradedSkillName } = args;
+  if (gradedSkillName === undefined) return undefined;
+  // The qualifier a plugin-qualified observed id must carry to count — derived the way the BINARY
+  // derives it (`.claude-plugin/plugin.json#name`, else the directory basename; a root `plugin.json` is
+  // ignored), not via `readPluginName`, whose root-`plugin.json` leniency made a fully-invoked
+  // `rootpj-dir:qux` run read as never invoked. Without the qualifier a same-named skill from ANOTHER
+  // installed plugin (present in the inventory at hostloop/protocol) would satisfy the match.
+  const gradedPluginName = resolved.pluginRoot !== undefined ? binaryPluginIdentity(resolved.pluginRoot).name : undefined;
+  const subagentSkills = (() => {
+    try {
+      return subagentSkillCalls(readTurn1Slice(outDir, "events.jsonl", boundary));
+    } catch {
+      return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
+    }
+  })();
+  return observedSkillInvocation(
+    gradedSkillName,
+    gradedPluginName,
+    taskRaw?.skillActivity as Array<{ skillId?: unknown }> | undefined,
+    subagentSkills,
+    slashCommandSkillInvocation(
+      typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
+      (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
+    ),
+    commandShadowsSkillFor(gradedSkillName, resolved),
+  );
+}
+
 async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
     writeAllSync(1, usage() + "\n");
@@ -1749,7 +2079,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // know from a plain run — and so the resolution is on the record when the report is read later.
   // A bare stderr line, NOT `warn()`: that helper prefixes `::warning::`, which would annotate every
   // cowork critique in CI as a problem. This is a routine resolution, not a fault.
-  if (opts.requestedFidelity === "cowork") process.stderr.write(`[loop] cowork → ${opts.fidelity} (per gate 1143815894)\n`);
+  if (opts.requestedFidelity === "cowork" && !opts.corpusOnly)
+    process.stderr.write(`[loop] cowork → ${opts.fidelity} (per gate 1143815894)\n`);
 
   // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
   // a multi-skill plugin root with no --skill would burn four workloads to produce a critique whose every
@@ -1764,8 +2095,23 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   }
   if (resolvedSkill.autoSelectedSkill)
     process.stderr.write(
-      `::notice:: [critique] ${tildeify(opts.skillFolder)} is a single-skill plugin — grading skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
+      `::notice:: [critique] ${tildeify(opts.skillFolder)} is a single-skill plugin — ${opts.corpusOnly ? "measuring" : "grading"} skills/${resolvedSkill.autoSelectedSkill}/SKILL.md (pass --skill to be explicit)\n`,
     );
+
+  // --corpus-only stops HERE: after target resolution (so the multi-skill-root refusal above still applies,
+  // now for free) and before a session id is minted — nothing under --run-dir, no index row, no spawn.
+  if (opts.corpusOnly) {
+    process.exit(runCorpusPreview(opts, resolvedSkill));
+    return;
+  }
+  // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
+  // narrowing is for the type, not a second validation.
+  const prompt = opts.prompt;
+  if (prompt === undefined || !prompt.trim()) {
+    process.stderr.write(`critique: internal — no probe on a spending invocation\n`);
+    process.exit(2);
+    return;
+  }
 
   // Minted from the SHARED constant the index detector matches on — see `critiqueRoleFor`.
   const sessionId = `${CRITIQUE_SESSION_PREFIX}${randomUUID()}`;
@@ -1806,7 +2152,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     if (taskInfra) {
       const state: ReportState = {
         skillFolder: opts.skillFolder,
-        prompt: opts.prompt,
+        prompt,
         sessionId,
         outDir,
         fidelity: opts.fidelity,
@@ -1855,14 +2201,13 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // envelope. A quota exhaustion and a skill defect both render as `result:"error"` otherwise.
     const gradedErrorReason = taskResult === "error" ? resultRowDiagnosis(task)?.text : undefined;
     // Graded-run validity (advisory): when a specific plugin skill was selected, check the run's own
-    // skillActivity actually mentions it — packaging can be perfectly plugin-aware and still be grading a
-    // run that never invoked the selected skill. Best-effort string scan of the recorded activity;
-    // `undefined` = not applicable (plain skill folder) or no evidence either way (absent result).
-    const gradedSkillName = opts.skillSelector ?? resolvedSkill.autoSelectedSkill;
-    const skillInvocationObserved =
-      gradedSkillName !== undefined && taskRaw?.skillActivity !== undefined
-        ? JSON.stringify(taskRaw.skillActivity).includes(gradedSkillName)
-        : undefined;
+    // skillActivity actually names it — packaging can be perfectly plugin-aware and still be grading a
+    // run that never invoked the selected skill. `undefined` = not applicable (plain skill folder) or
+    // no evidence either way (absent result).
+    const gradedSkillName = gradedSkillNameFor(opts.skillSelector, resolvedSkill);
+    const commandShadowsSkill = commandShadowsSkillFor(gradedSkillName, resolvedSkill);
+    // NOTE: the verdict itself is computed after `snapshotTurnBoundary` below — it needs the turn-1
+    // events slice, which does not exist until the boundary is captured.
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
     // does this in its footer; critique's report gets the same courtesy). Defensive over the raw shape.
     const gpGates = (taskRaw?.gateProvenance as { gates?: unknown } | undefined)?.gates;
@@ -1888,6 +2233,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
     // 2. Snapshot the turn-1/turn-2 boundary BEFORE the reflection turn touches anything.
     const boundary = snapshotTurnBoundary(outDir);
+
+    // Graded-run validity (advisory), now that the turn-1 timeline slice is available. Three channels,
+    // and the ABSENCE of a verdict is a real outcome: a run whose invocation we cannot observe must
+    // never be reported as one that did not invoke.
+    const skillInvocationObserved = computeSkillInvocationVerdict({ outDir, boundary, taskRaw, resolved: resolvedSkill, gradedSkillName });
 
     // 3. Reflection turn: resume the SAME session.
     // The reflection turn keeps the FIXED default budget deliberately (a forwarded --timeout stretches
@@ -2085,7 +2435,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     }
     const state: ReportState = {
       skillFolder: opts.skillFolder,
-      prompt: opts.prompt,
+      prompt,
       sessionId,
       outDir,
       fidelity: opts.fidelity,
@@ -2095,6 +2445,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       costUsd,
       gradedSkill: gradedSkillName,
       skillInvocationObserved,
+      commandShadowsSkill: commandShadowsSkill || undefined,
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,

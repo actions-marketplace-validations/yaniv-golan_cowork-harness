@@ -131,6 +131,16 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
     },
     docsAnchor: "not an independent attestation",
   },
+  {
+    id: "skill-invocation-ambiguous-channel",
+    summary: "an invocation the record cannot attribute to ONE skill is reported absent, never false",
+    provenance: {
+      kind: "deliberate",
+      rationale:
+        "Two shapes leave the channel readable but the answer undecidable. (1) A bare leading `/name` that more than one staged skill answers to: the binary resolves it to a plugin skill (measured: `/deck-review` expands `founder-skills:deck-review`) but the record does not say which one it picked when several qualify. (2) A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md (vercel@0.48.0): the slash entry and the Skill tool launch either through one registry, and the run records the name, not the kind. Both report skillInvocationObserved absent rather than a guessed true — and never false, which is the part that matters. A sub-agent's own Skill call is NOT in this class any more: its name is read from the turn's events.jsonl, which carries input.skill on the parented frame",
+    },
+    docsAnchor: "cannot attribute to one skill",
+  },
 ];
 
 const CLASS_GLOSS: Record<LimitationProvenance["kind"], string> = {

@@ -12,6 +12,7 @@ import { containedRealPath } from "./boundary-paths.js";
 import { gitModeEnabled, gitFilterFromSet, gitStageStats, gitCpFilter } from "./run/skill-files.js";
 import { BoundaryError } from "./errors.js";
 import { readSkillDescription, type PluginSkillRoot } from "./run/skill-metadata.js";
+import { pluginRootsWithRunnableHooks } from "./run/hook-events.js";
 
 /** Expand a leading `~` the way a shell would for THE CURRENT user only, then resolve whatever's left
  *  against `base`. `~` and `~/x` become `homedir()` / `join(homedir(), "x")`; a bare absolute path is
@@ -360,6 +361,13 @@ export interface LaunchPlan {
   // forces empty). Omitted ⇒ no flag ⇒ the API's per-model default applies. Real Cowork passes none.
   debugThinkingDisplay?: "summarized" | "omitted";
   agentMaxTurns?: number; // session turn budget → --max-turns (omitted ⇒ agent default; distinct from the max_turns assertion)
+  /** Emit `--include-hook-events` so the agent streams `hook_started`/`hook_progress`/`hook_response`
+   *  frames for EVERY hook event, not just SessionStart/Setup (the binary's default list). Telemetry only:
+   *  the flag gates the three frame emitters and nothing the model sees. Desktop's own spawn never passes
+   *  it, so it is emitted ONLY when a staged plugin declares runnable hooks — otherwise there is nothing
+   *  to observe and the argv stays byte-identical to production's. Powers `hook_event_fired` /
+   *  `hook_event_blocked`. */
+  includeHookEvents?: boolean;
   // The tier-uniform agent-env knob (agentEnvOverrides(session.agent_env)) — each runtime layers this
   // LAST over its own env construction (knob wins), after scrubbing SCRUBBED_AGENT_ENV_KEYS from the
   // operator layer on the tiers that inherit one (hostloop/protocol). Optional (like extendedThinking
@@ -439,19 +447,35 @@ export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
   const out: PluginSkillRoot[] = [];
   for (const m of plan.mounts) {
     if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
-    let name = basename(m.hostPath);
-    let skillsSubdir = "skills";
-    const pj = join(m.hostPath, ".claude-plugin", "plugin.json");
-    try {
-      const parsed = JSON.parse(readFileSync(pj, "utf8")) as { name?: unknown; skills?: unknown };
-      if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
-      if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
-    } catch {
-      /* missing/corrupt manifest — best-effort fallback */
-    }
+    const { name, skillsSubdir } = binaryPluginIdentity(m.hostPath);
     out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir, stageFilter: m.stageFilter });
   }
   return out;
+}
+
+/** The plugin NAME and skills subdir exactly as the agent binary derives them: `.claude-plugin/plugin.json`'s
+ *  `name` when present and non-empty, else the directory basename — a root-level `plugin.json` is NOT
+ *  consulted, because the binary does not consult it (measured: a plugin dir `rootpj-dir/` with only
+ *  `rootpj-dir/plugin.json` = `{"name":"rootpj-name"}` registers as `rootpj-dir:qux` in the init frame and
+ *  expands `/rootpj-dir:qux`). This is the qualifier the binary puts in `Skill{skill:"<q>:<name>"}` and in
+ *  `context.availableSkills[].id`, so it is the ONE rule to use wherever an observed id is compared to a
+ *  graded plugin. `readPluginName` in resolve-agents.ts is a different, deliberately lenient contract
+ *  (it mirrors the Python linter and accepts a root `plugin.json`) and must not be used for that
+ *  comparison: doing so turned a fully-invoked run into `skillInvocationObserved: false`. Never throws. */
+export function binaryPluginIdentity(pluginRoot: string): { name: string; skillsSubdir: string } {
+  let name = basename(pluginRoot);
+  let skillsSubdir = "skills";
+  try {
+    const parsed = JSON.parse(readFileSync(join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8")) as {
+      name?: unknown;
+      skills?: unknown;
+    };
+    if (typeof parsed.name === "string" && parsed.name) name = parsed.name;
+    if (typeof parsed.skills === "string" && parsed.skills) skillsSubdir = parsed.skills.replace(/^\.\//, "");
+  } catch {
+    /* missing/corrupt manifest — best-effort fallback */
+  }
+  return { name, skillsSubdir };
 }
 
 /** A plugin the `plugins` SDK-MCP server's `list_plugins` (and the skills server's `installed_plugins`
@@ -600,6 +624,15 @@ function validateEffort(effort: string | undefined, model: string | undefined, b
       throw new Error(`effort "${effort}" is not offered by model "${model}" — supported levels: ${regexDefault.effortLevels.join(", ")}`);
   }
   // else: class 4 (unknown model id, or no model declared) — accept any of the six tokens, no throw.
+}
+
+/** True iff any PLUGIN mount declares runnable hooks. Folder/upload mounts never count even if a
+ *  hooks.json happens to sit inside them — the agent only loads hooks from --plugin-dir roots. */
+export function includeHookEventsFor(mounts: ReadonlyArray<{ kind: string; hostPath: string }>): boolean {
+  const roots = mounts
+    .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
+    .map((m) => m.hostPath);
+  return pluginRootsWithRunnableHooks(roots).length > 0;
 }
 
 /**
@@ -1082,6 +1115,7 @@ export function buildLaunchPlan(
     debugMaxThinkingTokens: session.debug.max_thinking_tokens,
     debugThinkingDisplay: session.debug.thinking_display,
     agentMaxTurns: session.agent_max_turns,
+    includeHookEvents: includeHookEventsFor(presentMounts),
     agentEnv: agentEnvOverrides(session.agent_env),
     permissionMode: session.permission_mode,
     permissionParity: session.permission_parity,

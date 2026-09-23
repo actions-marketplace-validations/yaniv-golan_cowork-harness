@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, hostMatches, budgetFields, type AssertContext } from "../src/assert.js";
 import { Assertion as AssertionSchema } from "../src/types.js";
+import { parseMessage } from "../src/agent/session.js";
+import { loadHookFrames } from "./helpers/hook-frames.js";
 
 function ctx(over: Partial<AssertContext> = {}): AssertContext {
   return {
@@ -493,6 +495,58 @@ describe("max_turns (Wave 2 / E6b — the last budget key, built on Wave 0's usa
     const r = evaluate([{ max_turns: 5 }], ctx({ turns: undefined }));
     expect(pass(r)).toBe(false);
     expect(r[0].message).toContain("evidence unavailable");
+  });
+});
+
+/** contextEvents exactly as Run records them: parseMessage output over the recorded frames, never a
+ *  hand-typed literal. `only` narrows to a subset of the SAME recorded frames (still verbatim). */
+function recordedContextEvents(only?: (f: Record<string, unknown>) => boolean) {
+  return loadHookFrames()
+    .filter((f) => (only ? only(f) : true))
+    .flatMap((f) => parseMessage(f))
+    .flatMap((e) => (e.type === "system_event" ? [{ subtype: e.subtype, data: e.data }] : []));
+}
+
+describe("hook_event_fired / hook_event_blocked over recorded hook_response frames", () => {
+  it("hook_event_fired: Stop passes on the recording", () => {
+    const [r] = evaluate([{ hook_event_fired: "Stop" }], ctx({ contextEvents: recordedContextEvents() }));
+    expect(r.pass).toBe(true);
+  });
+  it("hook_event_fired: PostToolUse fails — no such frame was recorded", () => {
+    const [r] = evaluate([{ hook_event_fired: "PostToolUse" }], ctx({ contextEvents: recordedContextEvents() }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no hook_response frame for `PostToolUse`/);
+  });
+  it("hook_event_blocked: Stop passes — a Stop hook_response carried exit_code 2", () => {
+    const [r] = evaluate([{ hook_event_blocked: "Stop" }], ctx({ contextEvents: recordedContextEvents() }));
+    expect(r.pass).toBe(true);
+  });
+  it("hook_event_blocked fails naming the exit codes seen when the hook fired without blocking (the recording's exit-0 frame alone)", () => {
+    const passOnly = recordedContextEvents((f) => f.subtype !== "hook_response" || f.exit_code === 0);
+    expect(passOnly.some((e) => e.subtype === "hook_response")).toBe(true);
+    const [r] = evaluate([{ hook_event_blocked: "Stop" }], ctx({ contextEvents: passOnly }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/fired 1× but never blocked \(exit codes seen: 0\)/);
+  });
+  it("a hook_response without exit_code counts as fired but is reported as such, never as blocked", () => {
+    const [r] = evaluate(
+      [{ hook_event_blocked: "Stop" }],
+      ctx({ contextEvents: [{ subtype: "hook_response", data: { hook_event: "Stop", hook_name: "Stop", outcome: "error" } }] }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/error \(no exit code\)/);
+  });
+  it("both keys are cannot-verify (fail) when contextEvents is undefined — never a vacuous pass", () => {
+    for (const a of [{ hook_event_fired: "Stop" as const }, { hook_event_blocked: "Stop" as const }]) {
+      const [r] = evaluate([a], ctx({ contextEvents: undefined }));
+      expect(r.pass).toBe(false);
+      expect(r.message).toMatch(/cannot verify/);
+    }
+  });
+  it("an empty contextEvents is a real 'nothing fired', not cannot-verify", () => {
+    const [r] = evaluate([{ hook_event_fired: "Stop" }], ctx({ contextEvents: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).not.toMatch(/cannot verify/);
   });
 });
 

@@ -61,14 +61,26 @@ describe("generateSubagentFolderManifest", () => {
     ]) {
       expect(out).toContain("Read, Write, Edit, Glob, Grep");
       expect(out).toContain("reject `/sessions/` paths");
-      expect(out).toContain(`Relative paths in these tools start at \`${HOST}\`.`);
+      expect(out).toContain("Pass absolute paths to these tools.");
     }
   });
 
-  it("the relative-paths clause names the HOST cwd, not the VM root (host/VM swap guard)", () => {
-    const out = generateSubagentFolderManifest({ vmCwd: VM, hostCwd: HOST, hostOutputsDir: HOST, folders: [] });
-    expect(out).toContain(`start at \`${HOST}\``);
-    expect(out).not.toContain(`start at \`${VM}\``);
+  // Desktop 2.7032.0 replaced the cwd sentence with a constant, so the host/VM swap this used to guard
+  // can no longer be expressed in the manifest's PROSE — there is no path in it any more. The swap is
+  // still possible in the MOUNT lines, which is where the guard moves: the host path is the user's, the
+  // shell path is the VM's, and rendering either under the other's root is the same defect this caught.
+  it("the mount lines keep host and VM paths on their own sides (host/VM swap guard)", () => {
+    const out = generateSubagentFolderManifest({
+      vmCwd: VM,
+      hostCwd: HOST,
+      hostOutputsDir: HOST,
+      folders: [{ hostPath: `${HOST}/docs`, mountPath: "docs", reachable: true }],
+    });
+    expect(out).toContain(`- \`${HOST}/docs\` (shell: \`${VM}/mnt/docs/\`)`);
+    expect(out).not.toContain(`\`${VM}/docs\``);
+    expect(out).not.toContain(`shell: \`${HOST}/mnt/`);
+    // And the retired sentence must not come back without this file being updated.
+    expect(out).not.toContain("Relative paths in these tools start at");
   });
 
   it("subagentGeneratedPromptText covers every constant the module can emit", () => {
