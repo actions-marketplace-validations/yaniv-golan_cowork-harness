@@ -2135,13 +2135,13 @@ function subagentBundle(
   // in the baselines JSON.
   const manifest =
     overrides.manifest ??
-    'function mani(e,n,r,i,a){const o=nm(i,!0),s=new Set(rc(i,a));const c=[...r?[`- \\`${r}\\` (synthetic outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
+    'function mani(e,n,usf,mn,a){const o=nm(usf,!0),s=new Set(rc(usf,a));const c=[...r?[`- \\`${r}\\` (synthetic outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
   const suffix = overrides.suffix ?? `var SUF="\\n\\nSynthetic trailing sentence appended to BOTH branches.";`;
-  const call = overrides.call ?? '${h?mani(i,t??i,od,usf,hof):""}';
+  const call = overrides.call ?? '${h?mani(i,t,usf,mn,hof):""}';
   const delivery =
     overrides.delivery ??
-    "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,hostOutputsDir:f?R.getOutputsDir(y):void 0,userSelectedFolders:A.userSelectedFolders,hostOnlyFolders:N.mk(R.getActiveSession(y)?.resolvedFolders),spSectionPrompts:P})";
-  return `const SP={${keys}};${gate};const TOOLS=${tools};${manifest};${suffix};function zo({vmProcessName:v,hostLoopMode:h,hostCwd:t,hostOutputsDir:od,userSelectedFolders:usf,hostOnlyFolders:hof,spSectionPrompts:P}){const i=\`/sessions/\${v}\`;const s=h?\`${hl}\`:\`${vm}\`;const a=h${ternary};const l=krt(P,a,s);return\`\\n\\n\${sub(l,${map},a)}${call}\${SUF}\`}const buildSubagentEnvironmentPrompt=zo;const opts={${delivery}};`;
+    "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostOutputsDir:od??void 0,userSelectedFolders:A.userSelectedFolders,mountNames:mn,hostOnlyFolders:N.mk(R.getActiveSession(y)?.resolvedFolders),spSectionPrompts:P})";
+  return `const SP={${keys}};${gate};const TOOLS=${tools};${manifest};${suffix};function zo({vmProcessName:v,hostLoopMode:h,hostCwd:t,hostOutputsDir:od,userSelectedFolders:usf,mountNames:mn,hostOnlyFolders:hof,spSectionPrompts:P}){const i=\`/sessions/\${v}\`;const s=h?\`${hl}\`:\`${vm}\`;const a=h${ternary};const l=krt(P,a,s);return\`\\n\\n\${sub(l,${map},a)}${call}\${SUF}\`}const buildSubagentEnvironmentPrompt=zo;const opts={${delivery}};`;
 }
 // The sentinel takes a per-MODULE file map (readMainBundleFiles' output). One synthetic "generator
 // module" is enough for these fixtures; a real bundle has three modules — the join covers the literal
@@ -2293,17 +2293,37 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
   });
 
   it("manifest call host/VM SWAP → flags the manifest call bindings specifically", () => {
-    // vmRoot arg `i` but the hostCwd fallback bound to a DIFFERENT root — every relative path the
-    // sub-agent's file tools resolve would be misdirected.
-    const files = genFiles({ call: '${h?mani(i,t??j,od,usf,hof):""}' });
-    expect(checkSubagentPromptFacts(files, committed).some((f) => /manifest call bindings/.test(f))).toBe(true);
+    // Host and VM swapped in the manifest call: `mani(t, i, …)` passes the HOST cwd where the vm root
+    // belongs. Asserted on the MESSAGE, not just the anchor id — the shape check and the swap check share
+    // an id, and a fixture that fails the shape would pass this test while proving nothing about swaps
+    // (which is exactly what the previous `mani(i,t??j,…)` fixture did: arg 2 could not match at all).
+    const files = genFiles({ call: '${h?mani(t,i,usf,mn,hof):""}' });
+    const flags = checkSubagentPromptFacts(files, committed);
+    expect(flags.some((f) => /manifest call bindings/.test(f) && /vmRoot argument is/.test(f))).toBe(true);
   });
 
-  it("hostOutputsDir no longer hostLoopMode-gated → flags that anchor specifically", () => {
-    const files = genFiles({
+  it("manifest render gated on the WRONG local → flags the manifest call bindings", () => {
+    // The gate must be the generator's own hostLoopMode parameter. Capturing it without comparing it made
+    // this unfalsifiable on the real bundle — measured: gating the manifest on an unrelated local, or on a
+    // constant, produced zero flags. The manifest is the only composed part that names a host outputs
+    // path, so this is what keeps a VM-loop sub-agent from being told about one.
+    const files = genFiles({ call: '${P?mani(i,t,usf,mn,hof):""}' });
+    const flags = checkSubagentPromptFacts(files, committed);
+    expect(flags.some((f) => /manifest call bindings/.test(f) && /gated on P/.test(f))).toBe(true);
+  });
+
+  it("hostOutputsDir no longer gated AT THE SUB-AGENT SITE → flags that anchor, even with a decoy elsewhere", () => {
+    // The decoy models the real bundle: 2.7032.0 carries a SECOND `hostOutputsDir:x??void 0` at the
+    // main-loop prompt-options builder, and an unscoped anchor was satisfied by that one alone while the
+    // sub-agent site had lost its gating entirely (measured on the real asar: zero flags).
+    const base = genFiles({
       delivery:
         "appendSubagentSystemPrompt:I.buildSubagentEnvironmentPrompt({vmProcessName:v,hostLoopMode:f,hostCwd:S??void 0,hostOutputsDir:R.getOutputsDir(y),userSelectedFolders:A.userSelectedFolders,hostOnlyFolders:N.mk(R.getActiveSession(y)?.resolvedFolders),spSectionPrompts:P})",
     });
+    // …plus an unrelated, correctly-gated site, exactly as the real bundle has one.
+    const files = new Map(
+      [...base].map(([k, v]) => [k, v + ";const mainLoopOpts={hostLoopMode:d,hostOutputsDir:f??void 0,hostUploadsDir:Gt};"]),
+    );
     expect(checkSubagentPromptFacts(files, committed).some((f) => /hostOutputsDir gating/.test(f))).toBe(true);
   });
 

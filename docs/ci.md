@@ -80,13 +80,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified — see docs/maintenance.md)
         run: |
-          V=2.1.275   # match your scenario's pinned baseline's agentVersion
+          V=2.1.280   # match your scenario's pinned baseline's agentVersion
           # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
-          # served only from .../claude-code-releases/rc/<commit>/ — the stable path 404s for those, and
-          # 2.1.255 is one. Take B from your pinned baseline's agentBinary.releaseBaseUrl; baselines
-          # written before that field existed were stable-staged, so their base is the plain
-          # https://downloads.claude.ai/claude-code-releases.
-          B=https://downloads.claude.ai/claude-code-releases
+          # served from .../claude-code-releases/rc/<commit>/. For some versions the stable path 404s
+          # (2.1.255); for others it returns 200 and serves a DIFFERENT BUILD UNDER THE SAME VERSION
+          # NUMBER — measured for 2.1.280 on 2026-09-23: stable linux-arm64 233,103,352 B / 92f2b4fd…
+          # (commit 80abbfe7) vs RC 233,037,816 B / a1b25d70… (commit bddba3ab), and the staged binary is
+          # the RC one. So "the stable URL works" is NOT evidence you have the right build: always take B
+          # from your pinned baseline's agentBinary.releaseBaseUrl. The checksum step fails closed if you
+          # don't, but it cannot tell you why. Baselines written before that field existed were
+          # stable-staged, so their base is the plain https://downloads.claude.ai/claude-code-releases.
+          B=https://downloads.claude.ai/claude-code-releases/rc/bddba3abd5da53d0c540cfc76a8d18b44633d568
           # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here,
           # or read it with jq if you vendor the baseline. An unverified download is an unverified
           # agent: this step FAILS rather than staging one, which is the point of calling it verified.

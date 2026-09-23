@@ -1351,6 +1351,25 @@ Both cwds come from a single function (`hostLoopCwds`, `src/runtime/hostloop.ts`
 in one test, because a single-value assertion cannot express "the shell and the file tools disagree, on
 purpose" — and collapsing them into one value is the mistake this arrangement exists to prevent.
 
+> **OPEN as of Desktop 2.7032.0: the agent process cwd moved, and the harness has not followed.** The
+> "outputs dir" row above was measured on 2026-08-27 against an older Desktop, and `hostLoopCwds()` still
+> returns it. At 2.7032.0 production computes the agent's cwd as `sessionDirPaths().hostProcessCwd` —
+> **`/var/empty`** when that path passes a stat check (a directory, root-owned, not group- or
+> world-writable, which is the stock macOS case), otherwise a per-session `<sessionStorageDir>/host-cwd`
+> directory. It is NOT the outputs dir. Two corroborating changes in the same build: the writable-paths
+> helper collapsed from `[hostCwd, hostOutputsDir]` to `[hostOutputsDir]`, and the sub-agent folder
+> manifest states the constant *"Pass absolute paths to these tools."* where it once named a cwd — with
+> the process cwd off the outputs dir, there is no useful cwd for it to name.
+>
+> **Why it matters, and it is the direction this section already warns about:** a skill that writes a bare
+> relative path from its file tools lands in `outputs/` under this harness and would land in `/var/empty`
+> (unwritable) in production. That is a skill passing here and failing there — the exact asymmetry the
+> cwd SPLIT exists to prevent, reintroduced by a Desktop change rather than by a harness edit.
+>
+> Not fixed in the sync that recorded it: following production means changing what every host-loop run
+> does, which wants its own change and its own live evidence. Found by an internals session reading the
+> 2.7032.0 asar and confirmed here against the same bundle.
+
 Confirmed by Cowork's own sub-agent prompt: *"Each command starts in `<vmCwd>`; anything written outside
 `<vmCwd>/mnt/` (including `/tmp`) stays in that environment and never reaches the user or your file
 tools."* Bash also **resets its cwd between every call** (*"no cwd/env carryover"*), so a relative path

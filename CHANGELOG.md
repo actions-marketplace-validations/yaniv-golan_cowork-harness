@@ -10,24 +10,21 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **Cassettes: re-record ONLY a cassette that performs a `web_fetch` at `hostloop` or `container`, OR that
-  stages a plugin declaring hooks and wants `hook_event_fired`/`hook_event_blocked` to grade; everything
-  else replays unchanged.** Two things moved on the record/replay path. (1) One emulated-tool change:
-  `src/hostloop/workspace-handler.ts`'s `pinnedRequest` (the `web_fetch` DNS pin, below) — a recording made
-  before this fix froze `Fetch failed: Invalid IP address: undefined` for every resolvable hostname, and a
-  scenario asserting on that fetch's outcome recorded the outage, not the behaviour. (2) One spawn-argv
-  change, conditional: `src/session.ts` + `src/runtime/argv.ts` add `--include-hook-events` **only when a
-  staged plugin declares runnable hooks** (below). It is telemetry-only — the agent then streams
-  `hook_started`/`hook_response` frames for every hook event; nothing the model sees changes — so an
-  existing cassette of such a plugin replays with the same verdict on every key that existed before, and
-  the two NEW keys report "never fired" on it until it is re-recorded (fail-loud, never a false green).
-  Everything else is untouched: `src/runtime` beyond that one spread, `src/staging`, the cassette
-  constants (`CASSETTE_VERSION` 12 / `MIN_SUPPORTED_CASSETTE_VERSION` 9) and `baselines/`; `src/run/cassette.ts`
-  changes only by adding the two keys to `ALWAYS_CONTENT_KEYS`. The rest of the diff is `src/critique/**`,
-  one rejection string in `src/run/skill-flag-surface.ts`, the assertion evaluator, docs and tests. (This
-  verdict line is now a fixed part of every release's upgrade notes — see
-  [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog reports no
-  tool-surface change" is a statement someone made, not an absence.)
+- **Cassettes: RE-RECORD ALL THREE committed example cassettes. This release carries a parity sync.**
+  Two independent reasons. (1) The `web_fetch` DNS-pin fix below: a recording made before it froze
+  `Fetch failed: Invalid IP address: undefined` for every resolvable hostname, so a scenario asserting on
+  that fetch recorded the outage, not the behaviour. (2) The Desktop 2.7032.0 sync changed the generated
+  sub-agent folder manifest, which moves `promptAssetsHash` — measured, all three committed cassettes
+  carry the old one and `verify-cassettes` reports `[stale] the baseline's committed prompt assets changed
+  since this cassette was recorded`. **Re-stamping `fingerprint.baseline` does NOT clear that**: it swaps
+  one finding for another, and hand-editing `promptAssetsHash` would assert a recorded run saw prompt text
+  it never saw. The three cassettes in `examples/replays/` ship UN-re-recorded here and their staleness
+  findings are expected; `hostloop-computer-links` additionally still contains the retired manifest
+  sentence verbatim. The rest of the record/replay path is untouched: `src/runtime`, `src/staging`,
+  `baselines/` apart from the new baseline file, and the cassette constants (`CASSETTE_VERSION` 12 /
+  `MIN_SUPPORTED_CASSETTE_VERSION` 9). (This verdict line is now a fixed part of every release's upgrade
+  notes — see [docs/cassette.md](./docs/cassette.md#upgrading-cowork-harness) — so that "the changelog
+  reports no tool-surface change" is a statement someone made, not an absence.)
 - **If you followed 3.7.0's recommendation to pre-check the corpus with `lint-skill --strict`, know its
   limits before relying on it further.** That instrument emits nothing below 80% of the evidence
   ceiling — `lint-skill --json` prints `[]`, exit 0, indistinguishable from "counted, you're fine" — and
@@ -80,6 +77,52 @@ All notable changes to this project are documented here. The format is based on
   the stream. It gates exactly three frame emitters and nothing the model sees. Desktop's own spawn never
   passes it, so the harness emits it only when there is something to observe — the default argv and the
   golden snapshots are unchanged.
+
+### Parity — Desktop 2.7032.0 (agent 2.1.280)
+
+- **Baseline `desktop-2.7032.0`.** Desktop removed the distinct `hostLoopCwd` / `hostCwd` concept:
+  `hostLoopCwd` 6 occurrences → 0, `hostCwd` 9 → 1, a new `getHostProcessCwd` accessor, and the
+  writable-paths helper collapsed from `[hostCwd, hostOutputsDir]` to `[hostOutputsDir]`. The agent's
+  process cwd did NOT move to outputs — it is `/var/empty` when that path passes a stat check (the stock
+  macOS case), else a per-session `host-cwd` dir.
+- **The one user-visible consequence: the sub-agent folder manifest's "Relative paths in these tools
+  start at `<hostCwd>`." became the constant "Pass absolute paths to these tools."** Verified both
+  directions against both asars, with every other manifest template character-identical modulo minifier
+  renames. A sub-agent is no longer told where a relative path resolves; it is told not to use one.
+- **OPEN fidelity gap, recorded not fixed:** `hostLoopCwds()` still models the agent process cwd as the
+  outputs dir. A skill writing a bare relative path lands in `outputs/` here and in `/var/empty` in
+  production. See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
+- **The agent's tool canonicalizer retired four names.** `AgentOutputTool`, `BashOutputTool`,
+  `AgentOutput` and `BashOutput` (all → `TaskOutput`) are gone from 2.1.280's map;
+  `BINARY_TOOL_CANONICALIZATION` keeps them deliberately, because a cassette or kept run from an older
+  agent still carries them.
+- **RC and stable serve DIFFERENT builds under the same version number.** 2.1.280's `releaseBaseUrl` is
+  an RC path, and both bases return HTTP 200 for it with different bytes, checksums and commits — the
+  staged binary is the RC one. The CI recipes' agent-download step now says so: "the stable URL returns
+  200" is not evidence of the right build; take `B` from the baseline's `agentBinary.releaseBaseUrl`.
+- **The VM rootfs did not change** — same origin hash, byte-identical toolchain (tesseract included).
+  The provisioning manifest was re-captured and re-stamped to 2.7032.0 regardless.
+- **No live pass was run against this baseline.** It was skipped, not blocked; `DESIGN.md`'s scope note
+  says so plainly.
+- **All three committed cassettes in `examples/replays/` were re-recorded** against
+  `desktop-2.7032.0` / agent 2.1.280 (protocol, container and hostloop respectively), because the
+  generated sub-agent manifest change moves `promptAssetsHash` and re-stamping does not clear that.
+  `verify-cassettes` is clean on all three with 0 PII findings; the protocol fixture was recorded with
+  `ANTHROPIC_API_KEY` set, which switches it to a fresh managed config dir so it captures the product's
+  own built-ins rather than an operator inventory, and the hostloop fixture's MCP servers are the four
+  product ones (`cowork`, `plugins`, `skills`, `workspace`).
+- **Sync-extractor anchors, and two defects found in the first attempt at fixing them.** The
+  `hostOutputsDir` anchor is now scoped to the sub-agent delivery site and pinned to the FIRST occurrence
+  after it: an unscoped version was satisfied by an unrelated main-loop site, and a lazy window then
+  walked past the ungated site to a gated one. The manifest anchor now BINDS the render's gate to the
+  generator's own `hostLoopMode` parameter — it previously captured that identifier and never compared
+  it, so gating the manifest on anything at all (including a constant) passed. Both re-verified by
+  mutating the real bundle, not the fixture. The OTLP egress anchor's distance budget widened from 320 to
+  1200 characters, which is where four of the five "unknown deltas" came from being reported at all.
+- **Modelling comments corrected where the collapse made them false** — `SubagentManifestInputs.hostCwd`
+  is now dead and says so, `prompt.ts`'s `{{cwd}}` and `hostOutputsDir` docs name the 2.7032.0 behaviour,
+  and the 1.46388.3 hl asset's header no longer claims the manifest's relative-paths clause is "where
+  production now states it".
 
 ### Fixed
 

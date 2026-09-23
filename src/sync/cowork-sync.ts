@@ -1642,7 +1642,7 @@ export function checkEgressContractFacts(bundle: string): string[] {
   // list is already unrestricted. A second append here would be an asar-side allowlist contribution
   // the pin does not model.
   const otlpAppend =
-    /\(\s*!\s*([\w$]+)\s*\?\.endpoint\s*\|\|\s*!\s*([\w$]+)\s*\|\|\s*\2\s*\.includes\(\s*"\*"\s*\)\s*\)\s*return\s+\2\s*;[\s\S]{0,320}?\[\s*\.\.\.\s*\2\s*,\s*([\w$]+)\s*\]/;
+    /\(\s*!\s*([\w$]+)\s*\?\.endpoint\s*\|\|\s*!\s*([\w$]+)\s*\|\|\s*\2\s*\.includes\(\s*"\*"\s*\)\s*\)\s*return\s+\2\s*;[\s\S]{0,1200}?\[\s*\.\.\.\s*\2\s*,\s*([\w$]+)\s*\]/;
   if (!otlpAppend.test(bundle))
     miss(
       "the OTLP-endpoint augmenter no longer appends exactly one host onto an unmodified allowlist",
@@ -2698,18 +2698,38 @@ export function checkSubagentPromptFacts(
   // (6) delivery-call argument-list connectivity at the appendSubagentSystemPrompt: site (S16 proves
   //     only that SOME call exists).
   if (
-    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,80}hostCwd[\s\S]{0,120}hostOutputsDir[\s\S]{0,120}userSelectedFolders[\s\S]{0,120}hostOnlyFolders[\s\S]{0,120}spSectionPrompts/.test(
+    !/appendSubagentSystemPrompt:(?:[\w$]+\.)?[\w$]+\(\{vmProcessName[\s\S]{0,80}hostLoopMode[\s\S]{0,120}hostOutputsDir[\s\S]{0,120}userSelectedFolders[\s\S]{0,120}mountNames[\s\S]{0,160}hostOnlyFolders[\s\S]{0,160}spSectionPrompts/.test(
       bundle,
     )
   )
     miss(
       "delivery argument list",
-      "the {vmProcessName, hostLoopMode, hostCwd, hostOutputsDir, userSelectedFolders, hostOnlyFolders, spSectionPrompts} argument list at the delivery site changed",
+      "the {vmProcessName, hostLoopMode, hostOutputsDir, userSelectedFolders, mountNames, hostOnlyFolders, spSectionPrompts} argument list at the delivery site changed",
     );
-  // (6b) hostOutputsDir is hostLoopMode-GATED at the call site (`<hl>?<getOutputsDir>:void 0`). If that
-  //      gating were dropped, a VM-loop sub-agent would start receiving an outputs path it cannot reach.
-  if (!/hostOutputsDir:[\w$]+\?[\w$.]+\([^)]*\):void 0/.test(bundle))
-    miss("hostOutputsDir gating", "hostOutputsDir is no longer `hostLoopMode ? <outputsDir> : void 0` at the delivery site");
+  // (6b) hostOutputsDir must still be ABSENT-able at the delivery site. Through 2.2553.1 the gating was
+  //      inline (`<hl>?<getOutputsDir>:void 0`) and this anchor asserted that shape; at 2.7032.0 the
+  //      hostLoopMode test moved upstream into a local and the site reads `<x>??void 0`, so the inline
+  //      form is gone without the guarantee being gone. Assert what is still checkable HERE — the slot
+  //      admits undefined — and assert the guarantee itself where it actually reaches the model, in (7b)
+  //      below: the folder manifest, which is the only part that renders an outputs path, is rendered
+  //      only on the hostLoopMode branch. That is strictly closer to the model than an argument shape.
+  // SCOPED to the delivery site, not the bundle. An unscoped test passes on ANY `hostOutputsDir:x??void 0`
+  // anywhere in the asar — and 2.7032.0 has a second one at the main-loop prompt-options builder, so a
+  // mutation that stripped the gating from the SUB-AGENT site alone produced zero flags (measured). An
+  // anchor whose subject is "somewhere in 17 MB" asserts nothing about the site it names.
+  // The `(?:(?!hostOutputsDir)[\s\S])` body is load-bearing: a plain lazy `[\s\S]{0,400}?` walks PAST an
+  // ungated `hostOutputsDir:` at the delivery site and matches a later, correctly-gated one — which a
+  // decoy test caught. This pins the FIRST occurrence after the delivery marker, so the site being
+  // asserted is the site being named.
+  if (
+    !/appendSubagentSystemPrompt:(?:(?!hostOutputsDir)[\s\S]){0,400}hostOutputsDir:[\w$]+(?:\?[\w$.]+\([^)]*\)|\?\?)\s*(?:void 0|undefined)/.test(
+      bundle,
+    )
+  )
+    miss(
+      "hostOutputsDir gating",
+      "hostOutputsDir no longer resolves to `void 0` at the SUB-AGENT delivery site — a VM-loop sub-agent may now receive a host outputs path",
+    );
   // (7) The composed parts that live OUTSIDE the ternary (Desktop >=1.46388.3). NOT covered by the two
   //     branch fingerprints — which is exactly how the trailing sentence reached BOTH branches at
   //     1.46388.3 while the vm fingerprint stayed 859aa136fc15b38f. Fingerprinting the composition is
@@ -2734,17 +2754,49 @@ export function checkSubagentPromptFacts(
       );
     if (!/[\w$]+\.[\w$]+\.join\(", "\)/.test(bundle))
       miss("manifest tool-list join", 'the manifest no longer joins a tool-name list with ", "');
-    // The manifest CALL must pass (vmRoot, hostCwd??vmRoot, …) — this is where the `${hostCwd??vmRoot}`
-    // binding that left the hl branch now lives, and a host/VM swap here would misdirect every relative
-    // path the sub-agent's file tools resolve.
-    if (!/\}\$\{[\w$]+\?[\w$]+\(([\w$]+),([\w$]+)\?\?([\w$]+),/.test(comp.module))
-      miss("manifest call bindings", "the hl-gated manifest call no longer passes (vmRoot, hostCwd??vmRoot, …)");
+    // (7b) The manifest CALL, and the hostLoopMode gate that is the real subject of (6b) above.
+    // Composition at 2.7032.0: `${<hl> ? <manifest>(<vmRoot>, <hostCwd>, <folders>, <mountNames>, …) : ""}`.
+    // Two things are asserted, and each catches a different mistake:
+    //   - the render is HL-GATED. The manifest is the only composed part that names an outputs path, so
+    //     this — not the delivery site's argument shape — is what keeps a VM-loop sub-agent from being
+    //     told about a host folder it cannot reach.
+    //   - the FIRST argument is the same identifier the substitution map binds as `vmCwd`. A host/VM swap
+    //     here would misdirect every relative path the sub-agent's file tools resolve, and it is the one
+    //     error a prose fingerprint cannot see (the generator source is unchanged by its arguments).
+    // The `hostCwd ?? vmRoot` fallback that used to sit in this call moved into the substitution map
+    // (`{vmCwd, hostCwd: hostCwd ?? vmRoot, …}`), which anchor (5) above already pins — so requiring it
+    // here as well would now fail on a build that still holds the invariant.
+    const manifestCall = /\}\$\{([\w$]+)\?([\w$]+)\(([\w$]+),([\w$]+),/.exec(comp.module);
+    if (!manifestCall) miss("manifest call bindings", 'the hl-gated manifest call `${hl ? manifest(vmRoot, hostCwd, …) : ""}` is gone');
     else {
-      const m = /\}\$\{[\w$]+\?[\w$]+\(([\w$]+),([\w$]+)\?\?([\w$]+),/.exec(comp.module)!;
-      if (m[1] !== m[3])
+      // The GATE identifier must be the generator's own `hostLoopMode` parameter. Capturing it and not
+      // comparing it made this unfalsifiable: measured, swapping the gate for a different local — or for
+      // the constant `1`, i.e. the manifest always rendered — produced zero flags. The manifest is the
+      // only composed part that names a host outputs path, so this test IS the guarantee that a VM-loop
+      // sub-agent is never told about one; (6b) above only keeps the argument itself absent-able.
+      const hlParam = /\(\{vmProcessName:[\w$]+,hostLoopMode:([\w$]+)[,}]/.exec(comp.module);
+      if (!hlParam)
         miss(
           "manifest call bindings",
-          `the manifest's vmRoot argument is ${m[1]} but its hostCwd ?? fallback is ${m[3]} — the fallback must be the same vm root`,
+          "the generator's ({vmProcessName, hostLoopMode, …}) parameter list is gone — the manifest's gate cannot be bound",
+        );
+      else if (manifestCall[1] !== hlParam[1])
+        miss(
+          "manifest call bindings",
+          `the manifest render is gated on ${manifestCall[1]} but the generator's hostLoopMode parameter is ${hlParam[1]} — the folder manifest, which is the only part naming a host outputs path, may now render for a VM-loop sub-agent`,
+        );
+      const subst = /\{vmCwd:([\w$]+),hostCwd:([\w$]+)\?\?([\w$]+),workspaceBash:/.exec(comp.module);
+      if (!subst)
+        miss("manifest call bindings", "the {vmCwd, hostCwd ?? vmRoot, workspaceBash} substitution map is not in the composition module");
+      else if (manifestCall[3] !== subst[1])
+        miss(
+          "manifest call bindings",
+          `the manifest's vmRoot argument is ${manifestCall[3]} but the substitution map binds vmCwd to ${subst[1]} — a host/VM swap would misdirect every relative path`,
+        );
+      else if (subst[1] !== subst[3])
+        miss(
+          "manifest call bindings",
+          `the substitution map's vmCwd is ${subst[1]} but its hostCwd fallback is ${subst[3]} — the fallback must be the same vm root`,
         );
     }
     const manifestFp = subagentBranchFingerprint(comp.manifest);
