@@ -98,8 +98,9 @@ All notable changes to this project are documented here. The format is based on
   production rejects. See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md).
 - **The agent RETIRED THE `TaskOutput` TOOL, which is why its canonicalizer shrank 12 → 8.**
   `AgentOutputTool`, `BashOutputTool`, `AgentOutput` and `BashOutput` are gone from 2.1.280's map — and
-  so is the tool they pointed at: measured on both staged ELFs, 2.1.260 defines `TaskOutput` while
-  2.1.280 carries it only inside a removed-tools set whose consumers warn "names a removed tool". So
+  so is the tool they pointed at: measured across three builds, 2.1.260 and **2.1.275** both define
+  `TaskOutput` while 2.1.280 carries it only inside a removed-tools set whose consumers warn "names a
+  removed tool" (the agent's own changelog attributes the removal to 2.1.277). So
   against a 2.1.280 run there is nothing to canonicalize into, and `tool_called: "TaskOutput"` will not
   match. `BINARY_TOOL_CANONICALIZATION` keeps all four names deliberately — they still appear in
   cassettes and kept runs from older agents — and its guard is now four assertions that each catch a
