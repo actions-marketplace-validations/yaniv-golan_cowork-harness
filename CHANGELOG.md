@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.8.1] — 2026-09-24
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed.** Nothing in this release changes what a run declares or spawns for
+  any committed baseline: the proactive-mode fix resolves to the same value on every baseline it touches
+  (all from 1.46388.3 on already carry the gate on), and the other edits under `src/runtime`,
+  `src/hostloop`, `src/session.ts` and `baselines/` are comments, schema description text and one
+  baseline annotation string. `verify-cassettes examples/replays` reports all three committed cassettes
+  clean.
+- **Live-validated against `desktop-2.7032.0`**, which 3.8.0 shipped without. On agent 2.1.280, all four
+  tiers: `boundary-check` 6/6, e2e self-tests 9/9, `test:live` 19/20 on the first run, and
+  `run examples/scenarios/` 6/7. The `test:live` red was model variance in `live-matrix` (the model asked
+  in plain text instead of calling `AskUserQuestion`); the file passed on two re-runs. The seventh example,
+  `subagent-manifest-probe`, stopped when the operator account hit its usage limit and was not re-run.
+  Details in `DESIGN.md`'s scope note.
+
 ### Fixed
 
 - **Proactive `suggest_skills` mode follows the Desktop version, not a gate Desktop no longer reads.**
