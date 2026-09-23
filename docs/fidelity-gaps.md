@@ -1372,13 +1372,17 @@ purpose" — and collapsing them into one value is the mistake this arrangement 
 > 10 after, with no overlap and the agent held at 2.1.280 throughout. Desktop `2.2553.13` still used
 > outputs, so the change arrived at 2.7032.0.
 >
-> **Production REFUSES a relative path; it does not mis-write.** The path gate resolves no relative path
-> into outputs: a relative `Write`/`Edit`/`MultiEdit` is blocked with *"needs an absolute path here — use
-> `<outputs>/x`"*, `Grep`/`Glob` are re-anchored to outputs, and the agent backfills `file_path` against
-> its cwd before hooks so a relative write arrives as `/var/empty/x`, which `disallowedTools` and `deny`
-> also cover. So the harness's gap is that it silently ACCEPTS what production refuses with an actionable
-> message — the skill still behaves differently, but the production symptom is a clear refusal rather
-> than a file in the wrong place.
+> **Production REFUSES a relative path; it does not mis-write — and the refusal comes from the AGENT, not
+> from Desktop's path gate.** For `Read`/`Write`/`Edit` the agent validates input BEFORE `PreToolUse`
+> hooks run: it expands `file_path` against its own cwd, so a bare `x` becomes `/private/var/empty/x`,
+> and checks it against the spawn's deny rules — which cover `/var/empty` — refusing with *"File is in a
+> directory that is denied by your permission settings."* Desktop's gate never sees the call, so its
+> *"needs an absolute path here"* message is effectively unreachable for those three tools. Verified by
+> where each string lives: the deny message is in the 2.1.280 agent ELF (2 hits, 0 in the asar), the two
+> gate messages are in the asar (2 and 1 hits, 0 in the ELF). `Grep`/`Glob` skip that validation, reach
+> the hook, and have their input re-anchored to outputs. So the harness's gap is that it silently ACCEPTS
+> what production refuses — the production symptom is a clear permission refusal, not a file in the wrong
+> place. Static reading; not yet observed in a live run.
 >
 > Not fixed in the sync that recorded it: following production means changing what every host-loop run
 > does, which wants its own change. Found by an internals session and verified here against both the
