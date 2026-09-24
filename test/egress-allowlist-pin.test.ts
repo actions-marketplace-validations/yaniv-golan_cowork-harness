@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkEgressContractFacts, readPinnedAllowDomains } from "../src/sync/cowork-sync.js";
+import {
+  checkEgressContractFacts,
+  readPinnedAllowDomains,
+  syncedNetworkBlock,
+  NETWORK_ALLOWDOMAINS_COMMENT,
+} from "../src/sync/cowork-sync.js";
 import { loadBaseline } from "../src/baseline.js";
 import { PlatformBaseline } from "../src/types.js";
 
@@ -64,6 +69,57 @@ describe("checkEgressContractFacts (guards the pinned allowDomains)", () => {
     // 1.32885.1 S14b: the minifier assigns `$`-initial names; a `\w+` callee slot silently false-flags.
     const renamed = ok.replace("t.Qh()", "t.$q()").replace("t.$h(r)", "t.$z(r)").replace("t.Wc(i,n)", "t.$w(i,n)");
     expect(checkEgressContractFacts(renamed)).toEqual([]);
+  });
+
+  describe("the resolver's list wrapper (Desktop 2.9939.2's HIPAA all-domains filter)", () => {
+    // The real wrapper's SHAPE, paraphrased hosts: identity unless the list holds `*` AND the org is
+    // HIPAA-restricted; only then is `*` dropped and a fixed host list appended.
+    const hipaa =
+      'Object.defineProperty(exports,"TM",{enumerable:!0,get:function(){return Jan}});var qan="*";' +
+      "function Jan(e){if(!e?.includes(qan)||!Jb())return e;let t=e.filter((e=>e!==qan));return[...new Set([...t,...jSe])]}" +
+      'var jSe=["a.example.com"];function Jb(){return qb()==="restricted"}' +
+      'function qb(){return Kb?"restricted":Vb("coworkHipaaRestricted")?(Kb=!0,"restricted"):"unrestricted"}';
+    const wrapped = ok.replace("i=r?t.$h(r):e;", "i=t.TM(r?t.$h(r):e);") + hipaa;
+    const flagged = (b: string) => checkEgressContractFacts(b).filter((f) => f.includes("resolveVmAllowedDomains"));
+
+    it("admits the wrapper once it resolves to the identity-unless-HIPAA-and-* filter", () => {
+      expect(checkEgressContractFacts(wrapped)).toEqual([]);
+    });
+
+    it("flags a wrapper that adds hosts unconditionally — the asar-side contribution the pin exists to catch", () => {
+      const evil = wrapped.replace(
+        "function Jan(e){if(!e?.includes(qan)||!Jb())return e;",
+        'function Jan(e){return[...e,"evil.example.com"];',
+      );
+      expect(flagged(evil).join("\n")).toMatch(/not the HIPAA all-domains filter — its first statement/);
+    });
+
+    it("flags a guard that no longer requires BOTH the all-domains entry and the restriction", () => {
+      const both = wrapped.replace("||!Jb())return e;", "&&!Jb())return e;");
+      expect(flagged(both).join("\n")).toMatch(/its first statement/);
+    });
+
+    it("flags a guarded entry that is no longer `*`", () => {
+      expect(flagged(wrapped.replace('var qan="*";', 'var qan="x";')).join("\n")).toMatch(/no longer the all-domains/);
+    });
+
+    it("flags a restriction reader that stops reading coworkHipaaRestricted", () => {
+      const inert = wrapped.replace('Vb("coworkHipaaRestricted")?(Kb=!0,"restricted"):"unrestricted"', '"unrestricted"');
+      expect(flagged(inert).join("\n")).toMatch(/no longer consults coworkHipaaRestricted/);
+    });
+
+    it("flags a wrapper it cannot resolve rather than admitting it", () => {
+      expect(flagged(ok.replace("i=r?t.$h(r):e;", "i=t.ZZ(r?t.$h(r):e);")).join("\n")).toMatch(/could not be resolved/);
+    });
+
+    it("resolves `$`-initial wrapper, parameter and reader names", () => {
+      const dollar = wrapped
+        .replace("i=t.TM(", "i=t.$T(")
+        .replace('"TM",{enumerable:!0,get:function(){return Jan}}', '"$T",{enumerable:!0,get:function(){return $an}}')
+        .replace("function Jan(e){if(!e?.includes(qan)||!Jb())return e;", "function $an($e){if(!$e?.includes(qan)||!$b())return $e;")
+        .replace("function Jb(){", "function $b(){");
+      expect(checkEgressContractFacts(dollar)).toEqual([]);
+    });
   });
 
   it("does NOT treat a bare claude.ai host literal as an egress fact", () => {
@@ -144,6 +200,21 @@ describe("the pin documents itself, durably", () => {
       network: { $comment: "why this list is pinned", mode: "gvisor", allowKind: "allowlist", allowDomains: ["a.example.com"] },
     });
     expect((parsed.network as Record<string, unknown>).$comment).toBe("why this list is pinned");
+  });
+
+  it("a sync writes the generated note, not the previous baseline's", () => {
+    const prior = { $comment: "a stale sentence from an older release", mode: "gvisor", allowKind: "allowlist", allowDomains: ["x"] };
+    const net = syncedNetworkBlock(prior, null, ["a.example.com"]);
+    expect(net.$comment).toBe(NETWORK_ALLOWDOMAINS_COMMENT);
+    expect(net.allowDomains).toEqual(["a.example.com"]);
+    expect(Object.keys(net)[0], "key order is carried from the prior block, so the diff stays a one-line change").toBe("$comment");
+  });
+
+  it("the generated note states the HIPAA wrapper instead of claiming OTLP is the only bundle-side host", () => {
+    expect(NETWORK_ALLOWDOMAINS_COMMENT).toMatch(/PINNED/);
+    expect(NETWORK_ALLOWDOMAINS_COMMENT).toMatch(/egressAllowedDomains/);
+    expect(NETWORK_ALLOWDOMAINS_COMMENT).toMatch(/HIPAA/);
+    expect(NETWORK_ALLOWDOMAINS_COMMENT).not.toMatch(/the only host the bundle contributes/);
   });
 
   it("the committed newest baseline actually carries the provenance note", () => {

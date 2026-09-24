@@ -30,6 +30,27 @@ All notable changes to this project are documented here. The format is based on
   the old pair did not. The prompt now asks for the outputs folder by name. Re-run live against
   `desktop-2.7032.0` (agent 2.1.280): passed. `docs/subagents.md` and `DESIGN.md`'s scope note are
   updated to match.
+- **`sync` no longer refuses a healthy Desktop 2.9939.2 asar**, and its guards stay armed on it. Checked
+  against a downloaded copy of that asar before any install; no baseline is written here.
+  - **Egress:** the resolver now passes the session allowlist through a HIPAA filter. For a
+    HIPAA-restricted org whose list holds `*`, the filter drops `*` and appends four fixed hosts; any
+    other list is returned unchanged. The fall-through check accepts that wrapper only after resolving
+    it and confirming its first statement returns the list unchanged unless both conditions hold.
+    A wrapper that adds hosts unconditionally, or that drops either condition, is still an unknown
+    delta.
+  - **Minified names containing `$`:** eight dynamic regexes interpolated a captured name without
+    escaping it. In a regex, `$` is an end-of-input anchor, so the lookup could never match.
+    - Six sites refused a healthy build. The sub-agent trailing sentence is one: Desktop named it `$D`.
+    - Two sites could never fire at all: the un-awaited-async checks on the path hook's pre-pass and
+      chain links.
+
+    All eight now escape the name, and a new test fails on any unescaped interpolation into a dynamic
+    RegExp in `src/sync/`.
+  - **`CLAUDE_CODE_DISABLE_FAST_MODE`** is new in the 3p-only spawn branch. It is allowlisted, not
+    pinned, and a default first-party session never receives it.
+  - **`network.$comment`:** `sync` used to copy it forward from the previous baseline. It is now
+    generated in code, and it describes the HIPAA filter instead of saying the OTLP endpoint is the only
+    host the bundle adds.
 - `docs/fidelity-gaps.md` said `save_skill`, being ToolSearch-deferred, does not appear in
   `system/init.tools`. Only its schema is deferred: real init frames list it by name.
 

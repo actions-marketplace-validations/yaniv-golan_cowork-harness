@@ -39,7 +39,7 @@ import {
 import { claudeCliComplete } from "./decide/llm-transport.js";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName } from "./runtime/lima.js";
-import { sync, canonicalizeEnv } from "./sync/cowork-sync.js";
+import { sync, canonicalizeEnv, syncedNetworkBlock } from "./sync/cowork-sync.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
@@ -3018,7 +3018,7 @@ async function cmdSync(args: string[]) {
     capturedAt,
     agentVersion: res.agentVersion,
     agentBinary: nextAgentBinary,
-    network: { ...(base.network as object), mode: res.networkMode ?? "gvisor", allowKind: "allowlist", allowDomains: res.allowDomains },
+    network: syncedNetworkBlock(base.network as Record<string, unknown> | undefined, res.networkMode, res.allowDomains),
     requireFullVmSandbox: res.requireFullVmSandbox,
     // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
     // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated
