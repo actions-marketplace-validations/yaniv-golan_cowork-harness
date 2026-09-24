@@ -3,6 +3,7 @@
 //
 //   npx tsx scripts/release-preflight.ts             # pre-flight for the release branch/PR
 //   npx tsx scripts/release-preflight.ts --for-tag    # ALSO run the tag-time HEAD/CI check (hard fail)
+//   npx tsx scripts/release-preflight.ts --allow-unobserved-init-surface   # emergency: downgrade check 7 to WARN
 //
 // Checks 1-4 mirror (and check 2 tightens) the gates release.yml enforces after the tag push:
 //   1. check:versions passes (scripts/check-versions.ts).
@@ -14,13 +15,18 @@
 //   6. --for-tag only, HARD fail: HEAD == origin/main HEAD, and a successful push-event ci.yml run
 //      exists for HEAD — the exact check that would have caught the 0.33.0 mis-tag (tagging a
 //      release-branch head instead of the merge commit).
+//   7. The NEWEST baseline's provenance.desktopInitSurface is observed (HARD fail). `sync` records
+//      `observed:false` when no Cowork session ran on the synced Desktop — a routine local state, so it
+//      is allowed in a commit but must not ship. Emergency override: --allow-unobserved-init-surface
+//      (dedicated on purpose: never --allow-empty, which would waive sync's other guards).
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
+import { compareBaselineVersions } from "../src/baseline.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -102,6 +108,33 @@ function run(cmd: string, args: string[]): { ok: boolean; status: number | null;
   const res = spawnSync(cmd, args, { encoding: "utf8", cwd: REPO_ROOT });
   if (res.error) return { ok: false, status: null, stdout: "", stderr: String(res.error.message ?? res.error) };
   return { ok: res.status === 0, status: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+export const ALLOW_UNOBSERVED_INIT_SURFACE_FLAG = "--allow-unobserved-init-surface";
+
+/** Check 7 — pure over the newest baseline's parsed JSON, so it is unit-testable without a checkout. */
+export function checkInitSurfaceObserved(newest: { name: string; json: unknown }, allowUnobserved: boolean): CheckResult {
+  const name = "newest baseline's Desktop init surface is observed";
+  const block = (newest.json as { provenance?: { desktopInitSurface?: { observed?: unknown } } } | null)?.provenance?.desktopInitSurface;
+  if (block?.observed === true) return { name, status: "PASS", detail: `${newest.name}: observed` };
+  const why =
+    block === undefined
+      ? `${newest.name} carries no provenance.desktopInitSurface — re-sync it with a current cowork-harness`
+      : `${newest.name} records desktopInitSurface.observed:false — start one Cowork session on that Desktop, then re-run \`cowork-harness sync\``;
+  if (allowUnobserved)
+    return {
+      name,
+      status: "WARN",
+      detail: `${why} (overridden by ${ALLOW_UNOBSERVED_INIT_SURFACE_FLAG} — ship notes should say the surface is unverified)`,
+    };
+  return { name, status: "FAIL", detail: `${why}. Emergency override: ${ALLOW_UNOBSERVED_INIT_SURFACE_FLAG}` };
+}
+
+function newestBaseline(): { name: string; json: unknown } {
+  const files = readdirSync(join(REPO_ROOT, "baselines")).filter((f) => /^desktop-.+\.json$/.test(f));
+  const newest = files.sort(compareBaselineVersions).at(-1);
+  if (!newest) return { name: "(no baselines)", json: null };
+  return { name: newest, json: json(join("baselines", newest)) };
 }
 
 function checkCheckVersions(): CheckResult {
@@ -325,6 +358,7 @@ function printResult(res: CheckResult): void {
 
 function main(): void {
   const forTag = process.argv.includes("--for-tag");
+  const allowUnobserved = process.argv.includes(ALLOW_UNOBSERVED_INIT_SURFACE_FLAG);
   const pkg = json("package.json");
   const version = pkg.version as string;
   if (!isValidSemver(version)) {
@@ -340,6 +374,7 @@ function main(): void {
     checkChangelog(version),
     checkTagDoesNotExist(version),
     checkWorkingTreeClean(),
+    checkInitSurfaceObserved(newestBaseline(), allowUnobserved),
   ];
   const warnResults = [checkRulesetContexts(), checkLiveSuiteKeyReminder()];
 
