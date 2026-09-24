@@ -427,8 +427,10 @@ production, so a container/microvm sub-agent sees only the section plus the trai
 gets none of the three — see [fidelity-gaps.md](./fidelity-gaps.md).
 
 This is exercised live by `examples/scenarios/subagent-manifest-probe.yaml`, which asserts on
-consequences rather than on the sub-agent quoting its own prompt back: a bare relative write must land
-in `outputs/`, both tool families must actually be invoked, and the total must be right.
+consequences rather than on the sub-agent quoting its own prompt back. A sub-agent write must reach the
+outputs folder through its host path, and no file tool may be sent a `/sessions/` path. Both tool
+families must actually be invoked, and the total must be right. The manifest tells a sub-agent to
+pass absolute paths and says nothing about where a relative one resolves, so the probe does not test that.
 
 ## Sub-agent tool composition
 

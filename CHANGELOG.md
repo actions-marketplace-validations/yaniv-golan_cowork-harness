@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **`subagent-manifest-probe` tests what the sub-agent manifest says now.** Since Desktop 2.7032.0
+  the manifest tells a sub-agent to pass absolute paths to the file tools; it no longer says where a
+  relative path resolves. The probe still graded a relative write, and it passed without one. It now
+  asserts that a sub-agent write reaches the outputs folder through its host path
+  (`subagent_file_write` with a `/`-anchored suffix) and that no file tool was sent a `/sessions/` path
+  (`no_vm_path_file_op`). Both assertions go red on a relative, wrong-folder or VM-path write, which
+  the old pair did not. The prompt now asks for the outputs folder by name. Re-run live against
+  `desktop-2.7032.0` (agent 2.1.280): passed. `docs/subagents.md` and `DESIGN.md`'s scope note are
+  updated to match.
+
 ## [3.8.1] — 2026-09-24
 
 ### Upgrade notes
