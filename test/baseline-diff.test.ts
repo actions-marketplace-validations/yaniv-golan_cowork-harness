@@ -220,3 +220,99 @@ describe("renderChangelog — fcache snapshot identity + served-key drift", () =
     expect(out).toMatch(/now SERVES key `coworkWebFetchDedup`/);
   });
 });
+
+// provenance.desktopInitSurface has block-level rendering (renderInitSurfaceEntries). Each case asserts
+// the DEDICATED line AND that no generic `provenance.desktopInitSurface…` line leaked through — the generic
+// fallback already names paths and values, so a test asserting only the tool name would pass with no
+// renderer at all.
+describe("renderChangelog / formatDiffLines — Desktop init surface", () => {
+  const srv = (toolsAll: string[], toolsSome: string[] = [], presence = "all") => ({ presence, toolsAll, toolsSome });
+  const block = (servers: Record<string, unknown>, observed = true, appVersion = "2.1.0", agentVersion = "2.1.10") => ({
+    provenance: { desktopInitSurface: { agentVersion, appVersion, observed, servers } },
+  });
+  const observed = block({
+    cowork: srv(["present_files", "save_skill"], ["create_artifact"]),
+    plugins: srv(["list_plugins"]),
+    skills: srv(["list_skills"]),
+  });
+  const GENERIC = "`provenance.desktopInitSurface";
+  const md = (a: object, b: object) => renderChangelog(diffBaselines(a, b));
+  const plain = (a: object, b: object) => formatDiffLines(diffBaselines(a, b)).join("\n");
+
+  it("first introduction renders the whole surface (the differ emits one whole-object added and never recurses)", () => {
+    const out = md({ provenance: {} }, observed);
+    expect(out).toContain(
+      "- Desktop init surface now recorded: `cowork` (all): `present_files`, `save_skill`; in some sessions only: `create_artifact`",
+    );
+    expect(out).not.toContain(GENERIC);
+  });
+
+  it("a tool disappearing is named", () => {
+    const next = block({
+      cowork: srv(["present_files"], ["create_artifact"]),
+      plugins: srv(["list_plugins"]),
+      skills: srv(["list_skills"]),
+    });
+    const out = md(observed, next);
+    expect(out).toContain("- Desktop server `cowork`: tool(s) DISAPPEARED: `save_skill`");
+    expect(out).not.toContain(GENERIC);
+    expect(plain(observed, next)).toContain("Desktop server `cowork`: tool(s) DISAPPEARED: `save_skill`");
+  });
+
+  it("a tool appearing is named", () => {
+    const next = block({
+      cowork: srv(["present_files", "propose_skills", "save_skill"], ["create_artifact"]),
+      plugins: srv(["list_plugins"]),
+      skills: srv(["list_skills"]),
+    });
+    expect(md(observed, next)).toContain("- Desktop server `cowork`: tool(s) APPEARED: `propose_skills`");
+  });
+
+  it("an all↔some move is one line flagged as mix-sensitive, not an appear plus a disappear", () => {
+    const next = block({
+      cowork: srv(["present_files"], ["create_artifact", "save_skill"]),
+      plugins: srv(["list_plugins"]),
+      skills: srv(["list_skills"]),
+    });
+    const out = md(observed, next);
+    expect(out).toContain(
+      "- Desktop server `cowork`: `save_skill` moved from every session to some sessions (sensitive to the mix of session kinds read",
+    );
+    expect(out).not.toContain("APPEARED");
+    expect(out).not.toContain("DISAPPEARED");
+    expect(out).not.toContain(GENERIC);
+  });
+
+  it("a server appearing and disappearing are named", () => {
+    const { skills: _s, ...withoutSkills } = observed.provenance.desktopInitSurface.servers;
+    const next = block(withoutSkills);
+    expect(md(observed, next)).toContain("- Desktop server `skills` DISAPPEARED (declared: `list_skills`)");
+    expect(md(next, observed)).toContain("- Desktop server `skills` APPEARED: `list_skills`");
+    expect(md(observed, next)).not.toContain(GENERIC);
+  });
+
+  it("observed → UNOBSERVED is ONE line; the per-server removals it causes are suppressed, in both renderers", () => {
+    const next = block({}, false, "2.2.0", "2.1.11");
+    const out = md(observed, next);
+    expect(out).toContain("- Desktop init surface UNOBSERVED at `2.2.0` / agent `2.1.11`");
+    expect(out).not.toContain("DISAPPEARED");
+    expect(out).not.toContain(GENERIC);
+    const text = plain(observed, next);
+    expect(text).toContain("Desktop init surface UNOBSERVED");
+    expect(text).not.toContain("provenance.desktopInitSurface.servers");
+  });
+
+  it("unobserved → observed says so and lists what appeared", () => {
+    const prev = block({}, false);
+    const out = md(prev, observed);
+    expect(out).toContain("- Desktop init surface now OBSERVED (was unobserved)");
+    expect(out).toContain("- Desktop server `cowork` APPEARED: `present_files`, `save_skill`");
+    expect(out).not.toContain(GENERIC);
+  });
+
+  it("an unrecognized leaf under the block still renders generically (never dropped)", () => {
+    const a = { provenance: { desktopInitSurface: { ...observed.provenance.desktopInitSurface, oddity: 1 } } };
+    const b = { provenance: { desktopInitSurface: { ...observed.provenance.desktopInitSurface, oddity: 2 } } };
+    expect(md(a, b)).toContain("`provenance.desktopInitSurface.oddity`: `1` → `2`");
+  });
+});

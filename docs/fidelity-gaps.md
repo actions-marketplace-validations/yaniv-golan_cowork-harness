@@ -1259,8 +1259,10 @@ tool's existence:
   is one of the two tools gate `4202409342` releases to the auto-mode classifier. Auto mode is
   unreachable here, so the statement above holds for this harness — see the Hooks section.
 - **It is ToolSearch-deferred, not `alwaysLoad`.** Unlike `present_files` (see *File delivery* below
-  for the `present_files`/`SendUserFile` lane split), it does not occupy
-  `system/init.tools`; it materialises only when the model looks for it.
+  for the `present_files`/`SendUserFile` lane split), its schema is not loaded up front; it
+  materialises only when the model looks for it. Its **name** is still listed in `system/init.tools`,
+  like every declared MCP tool: real Desktop init frames carry `mcp__cowork__save_skill` in every
+  session from agent 2.1.219 on.
 
 The rendered `<available_skills>` block also carries a `canSaveSkill`-dependent sentence: with the
 gate on, staged skill files are described as a read-only cache whose edits do not persist, and the
@@ -1289,6 +1291,13 @@ Desktop 1.44121.1 asar, so the row records what the server sends and nothing mor
 reach Desktop's behaviour, and the baseline row carries a `note` saying exactly that. `canProposeSkills`
 remains a live sentinel. Either way the harness's position is the same — the tool is undeclared at every
 tier, and the gap is the tool, not the gate.
+
+**What does watch it:** `provenance.desktopInitSurface` in each synced baseline records the tools
+Desktop's own `cowork`, `plugins` and `skills` servers declared in real Cowork sessions of that release,
+so `save_skill` appearing or disappearing in production shows up as a `sync --diff` line (see
+[maintenance.md](./maintenance.md)). That is a record of production, not a model of it. No harness
+assertion can stand in for it: the harness never declares `save_skill`, so a `tool_absent` check over a
+harness run passes whatever production does.
 
 ### Why it isn't modeled
 

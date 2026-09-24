@@ -5,6 +5,8 @@ import {
   isValidSemver,
   ciJobNames,
   unreportedRequiredContexts,
+  checkInitSurfaceObserved,
+  ALLOW_UNOBSERVED_INIT_SURFACE_FLAG,
 } from "../scripts/release-preflight.js";
 
 describe("isValidSemver", () => {
@@ -155,5 +157,28 @@ describe("unreportedRequiredContexts", () => {
 
   it("returns [] when nothing is required", () => {
     expect(unreportedRequiredContexts([], jobs)).toEqual([]);
+  });
+});
+
+describe("checkInitSurfaceObserved (check 7)", () => {
+  const block = (observed: boolean) => ({ provenance: { desktopInitSurface: { observed } } });
+
+  it("passes an observed newest baseline", () => {
+    expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(true) }, false).status).toBe("PASS");
+  });
+
+  it("FAILS an unobserved one, and names the dedicated override (never --allow-empty)", () => {
+    const r = checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, false);
+    expect(r.status).toBe("FAIL");
+    expect(r.detail).toContain(ALLOW_UNOBSERVED_INIT_SURFACE_FLAG);
+    expect(r.detail).not.toContain("--allow-empty");
+  });
+
+  it("FAILS a newest baseline with no block at all", () => {
+    expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: { provenance: {} } }, false).status).toBe("FAIL");
+  });
+
+  it("the override downgrades to WARN, never PASS", () => {
+    expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, true).status).toBe("WARN");
   });
 });

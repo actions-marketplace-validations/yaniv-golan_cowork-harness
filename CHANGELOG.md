@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`sync` records the tool surface real Cowork sessions declared** for Desktop's own `cowork`, `plugins`
+  and `skills` servers, as `provenance.desktopInitSurface`, so a production change such as `save_skill`
+  turning on or off shows up in `sync --diff`. It is read from the synced Desktop's own session logs,
+  limited to that release's agent version and install time. No other server name is recorded, and a strict
+  schema over every committed baseline enforces that. When no Cowork session has run since the install,
+  `sync` records `observed: false` with a warning instead of reusing the previous release's surface.
+  `desktop-2.7032.0` carries the first recorded block (`save_skill` declared in every session read).
+- **`npm run preflight` refuses to release an unobserved Desktop init surface.** New check: the newest
+  baseline's `desktopInitSurface` must be observed. `--allow-unobserved-init-surface` downgrades it to a
+  warning for an emergency release; `--allow-empty` does not.
+
 ### Fixed
 
 - **`subagent-manifest-probe` tests what the sub-agent manifest says now.** Since Desktop 2.7032.0
@@ -17,6 +30,8 @@ All notable changes to this project are documented here. The format is based on
   the old pair did not. The prompt now asks for the outputs folder by name. Re-run live against
   `desktop-2.7032.0` (agent 2.1.280): passed. `docs/subagents.md` and `DESIGN.md`'s scope note are
   updated to match.
+- `docs/fidelity-gaps.md` said `save_skill`, being ToolSearch-deferred, does not appear in
+  `system/init.tools`. Only its schema is deferred: real init frames list it by name.
 
 ## [3.8.1] — 2026-09-24
 
