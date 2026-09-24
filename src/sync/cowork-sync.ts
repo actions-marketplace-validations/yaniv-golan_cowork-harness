@@ -682,6 +682,37 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
   ];
 }
 
+/** The `network.$comment` every synced baseline carries. It used to be copied forward verbatim from the
+ *  previous baseline (the writer spreads `base.network`), which is how a sentence that stopped being true
+ *  would have been re-published under each new release with nothing to notice. Generated here instead,
+ *  next to `checkEgressContractFacts`, whose facts it restates — change one, change the other. The
+ *  UNVERIFIED entries it names are part of the curated list itself; editing that list means editing this. */
+export const NETWORK_ALLOWDOMAINS_COMMENT =
+  "network.allowDomains is a PINNED, hand-curated list — `sync` carries it forward and never re-derives it. " +
+  "On the first-party deployment this harness models, the VM egress allowlist is NOT in the app bundle: the 1p " +
+  "deployment class returns `vmEgressPolicy(){return null}`, so `resolveVmAllowedDomains` falls through to the " +
+  "session's SERVER-DELIVERED `egressAllowedDomains`. On that path the bundle adds at most the OTLP endpoint host " +
+  "(appended by the augmenter). The only other bundle-side hosts sit behind a HIPAA filter the resolver wraps the " +
+  "list in: for a HIPAA-restricted org whose list holds the all-domains entry `*`, it drops `*` and appends four " +
+  "fixed Anthropic/Claude hosts; for every other list it returns the list unchanged. The harness models neither " +
+  "HIPAA nor an all-domains list. The entries below are therefore a curated RECONSTRUCTION, not an extraction — " +
+  "and this field is the allowlist the harness ENFORCES (boundaryAllowList + the session egress plan). UNVERIFIED " +
+  "as VM egress, retained deliberately rather than pruned on a guess because the true 1p list cannot be read from " +
+  "the asar: www.anthropic.com, console.anthropic.com, support.anthropic.com, docs.anthropic.com — these read as " +
+  "Desktop UI/help links swept in by the predecessor's bundle-wide domain regex. Removing one is a deliberate, " +
+  "reviewed act. checkEgressContractFacts in src/sync/cowork-sync.ts fails closed if the construction that " +
+  "justifies pinning moves.";
+
+/** The `network` block a sync writes: the previous baseline's block, with the facts this sync owns
+ *  replaced. `$comment` is replaced too — carrying it forward is how a stale sentence gets republished. */
+export function syncedNetworkBlock(
+  prior: Record<string, unknown> | undefined,
+  networkMode: string | null,
+  allowDomains: string[],
+): Record<string, unknown> {
+  return { ...prior, $comment: NETWORK_ALLOWDOMAINS_COMMENT, mode: networkMode ?? "gvisor", allowKind: "allowlist", allowDomains };
+}
+
 /** Read `network.allowDomains` from the NEWEST committed baseline — the pinned, hand-curated egress
  *  allowlist that `sync` carries forward instead of re-deriving (see `checkEgressContractFacts`).
  *
@@ -1165,7 +1196,7 @@ export function resolveNamespaceRef(ref: string, siteChunk: string, files?: Map<
   const prop = ref.slice(ref.lastIndexOf(".") + 1);
   const ns = ref.slice(0, ref.indexOf("."));
   if (files) {
-    const reqM = siteChunk.match(new RegExp(`(?<![\\w$])${ns}=require\\("\\./([^"]+)"\\)`));
+    const reqM = siteChunk.match(new RegExp(`(?<![\\w$])${reEsc(ns)}=require\\("\\./([^"]+)"\\)`));
     const target = reqM ? files.get(reqM[1].slice(reqM[1].lastIndexOf("/") + 1)) : undefined;
     if (target) {
       const local = exportLocalOf(target, prop);
@@ -1411,7 +1442,7 @@ function extractFromAsar(
     // Egress: the allowlist is NOT derived here. On 1p it is server-delivered and absent from the
     // asar, so `network.allowDomains` is a pinned, hand-curated list carried forward by sync(). These
     // checks fail CLOSED if the construction that justifies pinning moves.
-    for (const f of checkEgressContractFacts(bundle)) flag(unknown, f);
+    for (const f of checkEgressContractFacts(bundle, bundleFiles)) flag(unknown, f);
     // drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
@@ -1658,7 +1689,7 @@ export function checkWebFetchFacts(bundle: string): string[] {
  * and THESE checks are what make that pin safe: they fail CLOSED if the construction that justifies
  * pinning moves. A flag here means "re-derive how Cowork computes egress before trusting the pin".
  */
-export function checkEgressContractFacts(bundle: string): string[] {
+export function checkEgressContractFacts(bundle: string, files?: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) =>
     flags.push(
@@ -1675,13 +1706,28 @@ export function checkEgressContractFacts(bundle: string): string[] {
   // (i.e. 1p), the allowlist is the CALLER-SUPPLIED argument (the server-delivered session list).
   // Backreferences bind the ternary to the same identifiers, so a reordered/rewritten resolver cannot
   // satisfy this by accident. Callee slots admit `$` (minifiers emit `$`-initial names — 1.32885.1 S14b).
+  //
+  // Desktop 2.9939.2 wraps the ternary in one call, `i=t.TM(r?t._N(r):e)`. The wrapper is admitted ONLY
+  // after it resolves to the HIPAA all-domains filter (see egressWrapperDefect): a wrapper is exactly
+  // where an asar-side allowlist contribution would hide, so widening the match without pinning the
+  // wrapper would have turned this sentinel into one that cannot fire.
   const resolver =
-    /resolveVmAllowedDomains\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)\s*\{\s*let\s+([\w$]+)\s*=\s*[\w$.]+\(\)\s*\.vmEgressPolicy\(\)\s*,\s*([\w$]+)\s*=\s*\3\s*\?\s*[\w$.]+\(\s*\3\s*\)\s*:\s*\1\s*;\s*return\s+[\w$.]+\(\s*\4\s*,\s*\2\s*\)\s*\}/;
-  if (!resolver.test(bundle))
+    /resolveVmAllowedDomains\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)\s*\{\s*let\s+([\w$]+)\s*=\s*[\w$.]+\(\)\s*\.vmEgressPolicy\(\)\s*,\s*([\w$]+)\s*=\s*(?:([\w$.]+)\(\s*)?\3\s*\?\s*[\w$.]+\(\s*\3\s*\)\s*:\s*\1\s*(\)\s*)?;\s*return\s+[\w$.]+\(\s*\4\s*,\s*\2\s*\)\s*\}/;
+  const rm = resolver.exec(bundle);
+  if (!rm || (rm[5] === undefined) !== (rm[6] === undefined))
     miss(
       "`resolveVmAllowedDomains` no longer falls through to its first argument when the deployment policy is null",
       "the 1p allowlist may no longer be the server-delivered session list",
     );
+  else if (rm[5] !== undefined) {
+    const site = (files && [...files.values()].find((c) => resolver.test(c))) ?? bundle;
+    const defect = egressWrapperDefect(rm[5], site, files);
+    if (defect)
+      miss(
+        `\`resolveVmAllowedDomains\` wraps the resolved list in \`${rm[5]}\`, which is not the HIPAA all-domains filter`,
+        `${defect} — the asar may now contribute or remove hosts on the first-party path`,
+      );
+  }
 
   // E3 — the augmenter appends the OTLP endpoint host and NOTHING else, and short-circuits when the
   // list is already unrestricted. A second append here would be an asar-side allowlist contribution
@@ -1695,6 +1741,38 @@ export function checkEgressContractFacts(bundle: string): string[] {
     );
 
   return flags;
+}
+
+/** Why the E2 list wrapper is NOT the known HIPAA filter, or null when it is.
+ *
+ *  Desktop 2.9939.2's wrapper, resolved through the resolver chunk's own import:
+ *
+ *      var qan="*";
+ *      function Jan(e){if(!e?.includes(qan)||!Jb())return e;let t=e.filter(e=>e!==qan);…;return[...new Set([...t,...jSe])]}
+ *      function Jb(){return qb()==="restricted"}            // qb() reads coworkHipaaRestricted
+ *
+ *  Everything after the guard runs only for a HIPAA-restricted org whose list contains the all-domains
+ *  entry: it drops `*` and appends four fixed Anthropic/Claude hosts. The harness models neither HIPAA
+ *  nor an all-domains list, so the pin is on the GUARD — the wrapper's FIRST statement must return the
+ *  list unchanged unless it contains `"*"` AND the restriction reader says `"restricted"`. That is what
+ *  keeps the wrapper the identity on the path the pinned allowDomains stands in for. Resolution failure is
+ *  a defect, never a skip. */
+function egressWrapperDefect(ref: string, site: string, files?: Map<string, string>): string | null {
+  const w = resolveNamespaceRef(ref, site, files);
+  if (!w) return `\`${ref}\` could not be resolved to its definition`;
+  const head = w.chunk.match(new RegExp(`function ${reEsc(w.local)}\\(([\\w$]+)\\)\\{`));
+  if (!head) return `\`${ref}\` is not a one-parameter function`;
+  const body = braceBodyOf(w.chunk, `function ${w.local}(`);
+  const p = reEsc(head[1]);
+  const guard = body?.match(new RegExp(`^if\\(!${p}\\?\\.includes\\(([\\w$]+)\\)\\|\\|!([\\w$]+)\\(\\)\\)return ${p};`));
+  if (!guard)
+    return "its first statement no longer returns the list unchanged unless it holds a guarded entry and a restriction reader passes";
+  if (resolveConst(w.chunk, guard[1]) !== '"*"') return 'the guarded entry is no longer the all-domains `"*"`';
+  const h1 = w.chunk.match(new RegExp(`function ${reEsc(guard[2])}\\(\\)\\{return ([\\w$]+)\\(\\)==="restricted"\\}`));
+  if (!h1) return 'the guard\'s reader is no longer a `<f>()==="restricted"` comparison';
+  const hb = braceBodyOf(w.chunk, `function ${h1[1]}(`);
+  if (!hb || !hb.includes("coworkHipaaRestricted")) return "the restriction reader no longer consults coworkHipaaRestricted";
+  return null;
 }
 
 /** Path-gate sentinel (1.20186.1 shapes). Module-bounded: anchors run against the CORRECT chunk only
@@ -2078,7 +2156,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
         const [, resultId, awaited, preFn] = pre;
         // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
         // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
-        if (!awaited && new RegExp(`async function ${preFn}\\(`).test(consuming))
+        if (!awaited && new RegExp(`async function ${reEsc(preFn)}\\(`).test(consuming))
           miss(
             "canUseTool wrapper await",
             `the pre-pass \`${preFn}\` is async but is not awaited — the early deny and the post-pass are both inert`,
@@ -2092,10 +2170,10 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
             miss("canUseTool wrapper finish", "the pre-pass no longer builds a finish() continuation — the post-pass veto cannot fire");
         }
         // The early deny must be consulted BEFORE the chain runs.
-        if (!new RegExp(`${resultId}\\?\\.[\\w$]+\\)return`).test(block))
+        if (!new RegExp(`(?<![\\w$])${reEsc(resultId)}\\?\\.[\\w$]+\\)return`).test(block))
           miss("canUseTool wrapper early-deny", "the pre-pass result is no longer checked for an early deny ahead of the chain");
         // The chain's result must flow through finish(), or the ALLOW-veto is gone.
-        if (!new RegExp(`${resultId}===null\\?([\\w$]+):${resultId}\\.finish\\(\\1\\)`).test(block))
+        if (!new RegExp(`(?<![\\w$])${reEsc(resultId)}===null\\?([\\w$]+):${reEsc(resultId)}\\.finish\\(\\1\\)`).test(block))
           miss(
             "canUseTool wrapper post-pass",
             "the chain result no longer flows through the pre-pass's finish() — an approved call can no longer be vetoed after the fact",
@@ -2118,7 +2196,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     for (const op of operands) {
       const fn = calleeOf(op);
       if (!fn) continue;
-      if (new RegExp(`async function ${fn}\\(`).test(consuming) && !/^await\s/.test(op))
+      if (new RegExp(`async function ${reEsc(fn)}\\(`).test(consuming) && !/^await\s/.test(op))
         miss(
           "canUseTool chain await",
           `link \`${fn}\` is an async function but is not awaited — its Promise is never nullish, so every later link (and the original callback) is bypassed`,
@@ -2632,7 +2710,7 @@ export function extractSubagentComposition(files: Map<string, string>): { module
   // this module's own `<ident>="…"` binding. Never matched by name.
   const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\([^)]*\):""\}\$\{([\w$]+)\}`/);
   if (!comp) return null;
-  const decl = module.match(new RegExp(`\\b${comp[1]}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+  const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
   return { module, manifest, suffix: decl[1]! };
 }
@@ -2942,6 +3020,9 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   // Desktop 2.2553.1. 3p-only: constructed inside the `...<isThirdParty>&&{DISABLE_GROWTHBOOK:"1",…}`
   // spread in W3, never on first-party. Allowlisted, never pinned — the standing rule for a 3p-only key.
   CLAUDE_CODE_MODEL_CATALOG: "3p-only deployment branch (DISABLE_GROWTHBOOK sibling); never constructed on first-party",
+  // Desktop 2.9939.2. Same spread, same rule: `CLAUDE_CODE_DISABLE_FAST_MODE:"1"` sits in the 3p-only
+  // `...<isThirdParty>&&{DISABLE_GROWTHBOOK:"1",…}` member list and has no first-party site.
+  CLAUDE_CODE_DISABLE_FAST_MODE: "3p-only deployment branch (DISABLE_GROWTHBOOK sibling); never constructed on first-party",
   // Desktop 2.2553.1. Doubly conditional in W1: the frame-artifacts predicate AND a server-delivered
   // `artifactHostGrant` session field. Both are off/absent on the modeled default first-party session, so
   // there is no value to pin. NOTE: its spread condition is asserted to be the SAME predicate as the
@@ -3777,12 +3858,12 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         else {
           // Attended-turn wrapper: function F(e,t){return P(e,t)&&e._isUnattended!==!0}
           const wrap = toolsSite.match(
-            new RegExp(`function ${whole[2]}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`),
+            new RegExp(`function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`),
           );
           if (!wrap) miss("S6c Artifact gate", "the attended-turn wrapper body changed — _isUnattended may no longer restrict Artifact");
           else if (
             !new RegExp(
-              `function ${wrap[3]}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?`,
+              `function ${reEsc(wrap[3])}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?`,
             ).test(toolsSite)
           )
             miss(

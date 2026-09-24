@@ -137,6 +137,67 @@ describe("sync sentinels admit `$` in every minified-identifier position", () =>
 });
 
 /**
+ * The second half of the same bug class. Desktop 2.9939.2 named the sub-agent trailing-sentence binding
+ * `$D`, and `extractSubagentComposition` interpolated that raw name into its lookup RegExp: unescaped, `$` is an
+ * end-of-input anchor, so the lookup failed on a healthy build. The atom scan above cannot see this —
+ * the offending character arrives at runtime, through an interpolation. An audit found eight such sites;
+ * two could fail OPEN (an un-awaited async pre-pass or chain link passed in silence).
+ *
+ * Invariant: every `${…}` inside a `new RegExp(\`…\`)` is an escape call, the inline escape idiom, or a
+ * name listed here with the reason it cannot carry a regex metacharacter.
+ */
+const ESCAPED_OR_CONSTANT_SPANS: Record<string, string> = {
+  esc: "a local bound to `<name>.replace(/[.*+?^${}()|[\\]\\\\]/g, …)` in every function that uses it",
+  idEsc: "bound to the escape idiom (extractPromptFingerprint)",
+  escC: "bound to the escape idiom (S6c Artifact condition)",
+  e: "bound to reEsc(local) (bindsGatedToolSet / bindsPathKeys)",
+  p: "bound to reEsc(param) (egressWrapperDefect)",
+  PATH_GATE_MAP_LITERAL: "a regex SOURCE constant, interpolated as pattern on purpose",
+  GRANT_KEY: "a string constant naming an env key",
+  taskArray: "a regex source fragment built from constants",
+  "arrayRe.source": "a regex literal's own source, interpolated as pattern on purpose",
+  'forms.join("|")': "an alternation of regex source constants",
+};
+const ESCAPE_CALL = /^(?:reEsc|esc)\(/;
+const ESCAPE_IDIOM = '.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")';
+
+function regexTemplateSpans(): { line: number; expr: string }[] {
+  const text = readFileSync(SRC, "utf8");
+  const sf = ts.createSourceFile(SRC, text, ts.ScriptTarget.Latest, true);
+  const out: { line: number; expr: string }[] = [];
+  (function walk(n: ts.Node) {
+    if (ts.isNewExpression(n) && n.expression.getText(sf) === "RegExp" && n.arguments?.[0] && ts.isTemplateExpression(n.arguments[0]))
+      for (const sp of n.arguments[0].templateSpans)
+        out.push({ line: sf.getLineAndCharacterOfPosition(sp.expression.getStart(sf)).line + 1, expr: sp.expression.getText(sf) });
+    ts.forEachChild(n, walk);
+  })(sf);
+  return out;
+}
+
+const spanIsSafe = (expr: string) => ESCAPE_CALL.test(expr) || expr.endsWith(ESCAPE_IDIOM) || expr in ESCAPED_OR_CONSTANT_SPANS;
+
+describe("sync sentinels escape every name interpolated into a dynamic RegExp", () => {
+  it("the AST scan actually finds interpolations (guards against a silently empty invariant)", () => {
+    expect(regexTemplateSpans().length).toBeGreaterThan(30);
+  });
+
+  it("every interpolation is escaped or a listed constant", () => {
+    const bad = regexTemplateSpans().filter((s) => !spanIsSafe(s.expr));
+    expect(
+      bad.map((s) => `${SRC}:${s.line}  \${${s.expr}}`),
+      "wrap a captured minified name in reEsc(…) — a `$` in it is an end-of-input anchor otherwise",
+    ).toEqual([]);
+  });
+
+  it("the check rejects a raw captured name and a bare capture group", () => {
+    expect(spanIsSafe("comp[1]")).toBe(false);
+    expect(spanIsSafe("resultId")).toBe(false);
+    expect(spanIsSafe("reEsc(comp[1])")).toBe(true);
+    expect(spanIsSafe(`ref.local${ESCAPE_IDIOM}`)).toBe(true);
+  });
+});
+
+/**
  * Behavioural fixtures. Each spawn sentinel is fed a bundle whose minified bindings all carry
  * `$`-initial names — the shape that broke S14b live — and must NOT flag.
  */
