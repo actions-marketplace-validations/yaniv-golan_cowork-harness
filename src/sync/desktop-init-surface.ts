@@ -17,18 +17,30 @@
 // evidence that the filter holds is the strict schema over committed baselines plus the mutation and bait
 // tests in test/desktop-init-surface.test.ts.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DESKTOP_OWN_SERVERS, type DesktopInitSurface } from "../types.js";
 
 /** Fixed display form of the sessions dir — messages use this, never the resolved (username-bearing) path. */
 export const DESKTOP_SESSIONS_DISPLAY = "~/Library/Application Support/Claude/local-agent-mode-sessions";
 
+/** When the Desktop bundle at `asarPath` was installed: the file's ctime, or null when it is unreadable.
+ *
+ *  Not its mtime. The updater preserves the packaged file's timestamps, so the asar's mtime (and birth
+ *  time) is when the release was BUILT. Measured on Desktop 2.9939.2: mtime 17:40 on the release day,
+ *  install and first launch 00:37 the next day. Selecting frames from that mtime would have counted
+ *  seven hours of the previous release's sessions as this release's. The kernel sets ctime on the
+ *  rename that installs the file, and no tool can backdate it. Any later metadata change only moves it
+ *  forward, which selects fewer frames: an unobserved surface, a loud state, never a misattributed one. */
+export function desktopInstalledAtMs(asarPath: string): number | null {
+  return existsSync(asarPath) ? statSync(asarPath).ctimeMs : null;
+}
+
 export interface InitSurfaceInput {
   dir: string;
   agentVersion: string;
   appVersion: string;
-  /** mtime of the synced Desktop's app.asar — its install time. Frames older than this were written by a
+  /** The synced Desktop's install time (see `desktopInstalledAtMs`). Frames older than this were written by a
    *  PREVIOUS Desktop release, which may run the same agent version (22 of 36 committed baselines share an
    *  agentVersion with another release), so the agent-version match alone would attribute the previous
    *  release's surface to this one. null = unknown install time, which selects nothing. */

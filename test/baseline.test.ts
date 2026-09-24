@@ -964,6 +964,14 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(env).not.toHaveProperty("CLAUDE_CODE_COWORK_FRAME_ARTIFACTS");
   });
 
+  // Desktop 2.9939.2 named a minified identifier `$D`. The attended-turn wrapper and the predicate are
+  // resolved from CAPTURED names that are then interpolated into a new RegExp — a `$` there is an
+  // end-of-input anchor unless escaped, so a healthy build would false-flag.
+  it("`$`-named attended-turn wrapper and predicate still resolve", () => {
+    const dollar = fixture1289290().replaceAll("zFo(", "$Fo(").replaceAll("zPo(", "$Po(");
+    expect(checkSpawnContractFacts(dollar)).toEqual([]);
+  });
+
   // Mutation matrix. Every row is a way the Artifact gate / tools tail could WIDEN; each must fail loud.
   // A guard that cannot fail is worthless, so each row asserts the SPECIFIC check that catches it — an
   // earlier draft of S6c passed R1/R2/R3/M7/M8 silently while looking correct.
@@ -1554,6 +1562,15 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       expect(flags.some((f) => f.includes("CLAUDE_CODE_BRAND_NEW_3P_KEY") && f.includes("3p-only deployment branch"))).toBe(true);
     });
 
+    it("CLAUDE_CODE_DISABLE_FAST_MODE in the 3p branch is classified (Desktop 2.9939.2) and never pinned", () => {
+      const withFastMode = fixture().replace('DISABLE_GROWTHBOOK:"1",', 'DISABLE_GROWTHBOOK:"1",CLAUDE_CODE_DISABLE_FAST_MODE:"1",');
+      const { env, flags, keys } = deriveSpawnEnv(withFastMode, greenGates());
+      expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(keys).toContain("CLAUDE_CODE_DISABLE_FAST_MODE");
+      expect(env).not.toBeNull();
+      expect(env).not.toHaveProperty("CLAUDE_CODE_DISABLE_FAST_MODE");
+    });
+
     it("3p-branch keys stay ENUMERATED, so their allowlist entries do not read as stale prune candidates", () => {
       const { keys, flags } = deriveSpawnEnv(fixture(), greenGates());
       expect(keys).toContain("DISABLE_GROWTHBOOK");
@@ -1595,7 +1612,15 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const gates = decodeFcacheGates();
     if (!gates) return; // no live fcache on this machine
     const { env, flags } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
-    expect(flags).toEqual([]);
+    // Allowlist entries classified from a NEWER Desktop's asar before this machine updated: against an
+    // older install they are "no longer constructed", which is the prune NOTE, not a defect. Only that
+    // NOTE, only for these keys. Remove a key once the installed Desktop constructs it.
+    const prestaged = ["CLAUDE_CODE_DISABLE_FAST_MODE"]; // Desktop 2.9939.2
+    const isPrestagedPrune = (f: string) =>
+      prestaged.some(
+        (k) => f === `NOTE: spawn.env allowlist entry ${k} is no longer constructed in the asar — prune it from SPAWN_ENV_ALLOWLIST`,
+      );
+    expect(flags.filter((f) => !isPrestagedPrune(f))).toEqual([]);
     expect(env).toEqual(golden);
   });
 
@@ -2172,6 +2197,11 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
   it("clean bundle → no flags", () => {
     expect(checkSubagentPromptFacts(genFiles(), committed)).toEqual([]);
   });
+  it("a `$`-named trailing-sentence binding still resolves (Desktop 2.9939.2 minified it to `$D`)", () => {
+    const dollar = new Map([["index.chunk-gen.js", subagentBundle().replaceAll("SUF", "$D")]]);
+    expect(extractSubagentComposition(dollar)?.suffix).toBe(cleanComp.suffix);
+    expect(checkSubagentPromptFacts(dollar, committed)).toEqual([]);
+  });
   it("body-text edit → fingerprint mismatch flags (head phrases alone would miss it)", () => {
     // The mutation must APPLY: a `.replace` naming a phrase the fixture no longer contains is a
     // no-op, and the test then reads as "the guard is redundant" while proving nothing.
@@ -2451,6 +2481,34 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
 
   it("block-bodied install with pre/post-pass → no flags", () => {
     expect(checkPathHookFacts(blockFiles())).toEqual([]);
+  });
+
+  // `$`-named pre-pass, pre-pass result and chain link (Desktop 2.9939.2 emits `$`-initial names). The
+  // captured names reach `new RegExp`; unescaped, the result checks false-flag a healthy build and the
+  // two await checks can never match, so an un-awaited async call would pass in silence.
+  const dollarBlock = (mutate?: (s: string) => string) =>
+    blockFiles((s) => {
+      const d = s
+        .replace("async function ss(", "async function $s(")
+        .replace("const a=await ss(", "const $a=await $s(")
+        .replace("if(a?.vmPathDeny)return a.vmPathDeny;", "if($a?.vmPathDeny)return $a.vmPathDeny;")
+        .replace("return a===null?o:a.finish(o)", "return $a===null?o:$a.finish(o)");
+      return mutate ? mutate(d) : d;
+    });
+
+  it("`$`-named pre-pass and result binding → no flags", () => {
+    expect(checkPathHookFacts(dollarBlock())).toEqual([]);
+  });
+
+  it("MUTATION: a `$`-named pre-pass is not awaited → flags (not a silent pass)", () => {
+    expect(checkPathHookFacts(dollarBlock((s) => s.replace("const $a=await $s(", "const $a=$s("))).join("\n")).toMatch(
+      /is async but is not awaited/,
+    );
+  });
+
+  it("MUTATION: a `$`-named async chain link is not awaited → flags (not a silent pass)", () => {
+    const files = pathHookFiles({ consuming: (c) => c.replaceAll("Xt(", "$X(").replace("??await $X(", "??$X(") });
+    expect(checkPathHookFacts(files).join("\n")).toMatch(/is an async function but is not awaited/);
   });
 
   it("MUTATION: the pre-pass is not awaited → flags", () => {
@@ -2821,6 +2879,16 @@ describe("1.25927.0 bundler change: exportLocalOf / resolveNamespaceRef", () => 
     const ref = resolveNamespaceRef("E.i", site, files);
     expect(ref?.local).toBe("V");
     expect(ref?.chunk).toBe(defining);
+  });
+
+  it("follows a `$`-named require() binding", () => {
+    const defining = 'var V=[];Object.defineProperty(exports,"i",{enumerable:!0,get:function(){return V}});';
+    const site = 'var $E=require("./index.chunk-DEF.js");tools:[...$E.i]';
+    const files = new Map([
+      ["index.chunk-DEF.js", defining],
+      ["index.chunk-SITE.js", site],
+    ]);
+    expect(resolveNamespaceRef("$E.i", site, files)?.local).toBe("V");
   });
 
   it("returns null when the namespace is unbound and the export is absent — never a silent wrong hop", () => {
