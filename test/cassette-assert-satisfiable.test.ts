@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { anyGlobMatches } from "../src/glob";
 
 // A committed cassette's `tool_not_called` must be VIOLABLE by that cassette's own recorded run.
@@ -27,15 +28,14 @@ import { anyGlobMatches } from "../src/glob";
 //     `Task` to `Agent` and only ever EMITS `Agent`. That is a separate fix (canonicalize at ingest);
 //     this guard is about offeredness alone. Do not read a green here as "the assertion is meaningful".
 
-// `readdirSync`, not `fs.globSync`: the repo deliberately avoids that dependency (see the hand-rolled
-// expander in src/run/analyze-skill.ts, "no `engines.node` bump (owner decision)"), and two shallow
-// listings do not justify breaking the convention.
-const CASSETTE_DIRS = ["cassettes", "examples/replays"];
-const CASSETTES = CASSETTE_DIRS.flatMap((d) =>
-  readdirSync(resolve(d))
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => join(d, f)),
-).sort();
+// "Committed" is taken from git, never from a hand-kept directory list. The list this replaced named the
+// gitignored `cassettes/` — which holds zero tracked files — so in a fresh checkout the scan threw ENOENT
+// and the file contributed no tests, CI was green only because an unrelated test file happened to create
+// the directory first, and on a developer machine it scanned private, uncommitted recordings instead.
+// The suffix set is the right one: test/cassette-gate.test.ts proves it equals the content-derived set of
+// every tracked recording. A missing tracked file throws in `readFileSync` below; an empty listing fails
+// the "finds cassettes" test. Neither case is filtered away.
+const CASSETTES = execFileSync("git", ["ls-files", "*.cassette.json"], { encoding: "utf8" }).split("\n").filter(Boolean).sort();
 
 interface Cassette {
   scenario?: { fidelity?: string; assert?: Record<string, unknown>[] };

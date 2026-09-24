@@ -10,8 +10,10 @@
 #
 # WHAT THIS PROBE MEASURES, AND WHAT IT DELIBERATELY DOES NOT.
 #
-# The manifest's load-bearing claim is a SPLIT: file tools take the HOST path, the shell takes
-# `<vmCwd>/mnt/<name>/`, and relative paths in the file tools resolve at the host cwd.
+# The manifest's load-bearing claim is a SPLIT: the file tools take the HOST path listed for each folder
+# (and reject `/sessions/` paths), the shell takes `<vmCwd>/mnt/<name>/`. Since Desktop 2.7032.0 it tells
+# the sub-agent to pass ABSOLUTE paths to the file tools; it no longer says where a relative path resolves,
+# so this probe no longer tests one.
 #
 # The obvious probe — ask the sub-agent to report the two path strings and assert on them — is
 # WORTHLESS, and an earlier draft of this file made exactly that mistake. Both strings are sitting
@@ -20,14 +22,17 @@
 # unit tests already do. Those assertions were removed rather than weakened.
 #
 # What is asserted instead is CAUSAL — outcomes a recitation cannot fake:
-#   * a sub-agent WRITE with a bare relative filename produced a non-error result AND the file landed
-#     in `outputs/` — that is the "relative paths start at the host cwd" claim, tested by consequence;
+#   * a sub-agent delivered its note through a file tool at the outputs folder's HOST path (non-error
+#     result), and no file tool was ever sent a `/sessions/` path. The user asks for the "outputs
+#     folder" by name only, so the path has to be resolved from a folder list, not copied from the prompt;
 #   * both tool families were actually invoked (`Read`, and hostloop's shell `mcp__workspace__bash`);
 #   * the total is right, so the ledger was really read and summed rather than guessed.
 #
-# HONEST LIMIT, stated so nobody reads more into a green than it carries: this proves the manifest is
+# HONEST LIMITS, stated so nobody reads more into a green than it carries. (1) This proves the manifest is
 # ACTIONABLE — a sub-agent given it reaches the right files through both tool families. It does not
-# prove our paraphrase matches Desktop's wording. That is the `manifest`/`suffix` fingerprint axes'
+# prove our paraphrase matches Desktop's wording. (2) The parent sees its own copy of these paths and may
+# spell the outputs path out in its dispatch prompt; a green then shows the sub-agent USED the host path,
+# not where it learned it. Read the dispatch prompt in result.json's `subagents[].prompt` to tell which. That is the `manifest`/`suffix` fingerprint axes'
 # job (`baselines/prompts/cowork-system-prompt-fingerprints.json`), and they hash production's own text.
 #
 # Run: cowork-harness run examples/scenarios/subagent-manifest-probe.yaml
@@ -43,7 +48,7 @@ prompt: |
   Please hand this to a sub-agent and have it:
     1. read ledger.csv and add up the amount column;
     2. re-derive the same total with a shell command, without reusing the first result;
-    3. save a one-line note recording the total, as manifest-probe-check.md.
+    3. save a one-line note recording the total, as manifest-probe-check.md in the outputs folder.
 
   Then tell me the total and whether the two methods agreed.
 
@@ -60,11 +65,17 @@ assert:
   # Cost guard: Opus at effort:high, and the prompt asks for doubled work.
   - dispatch_count_max: 3
 
-  # --- CAUSAL: the host-cwd claim, tested by consequence ---
-  # A bare relative filename was written by the SUB-AGENT and the write returned a non-error result…
-  - subagent_file_write: { path_suffix: "manifest-probe-check.md" }
-  # …and it landed in outputs/, which is where the manifest says relative paths resolve. If the file
-  # tools resolved relative paths anywhere else, this pair fails.
+  # --- CAUSAL: file tools take the manifest's HOST path, never a /sessions/ one ---
+  # A SUB-AGENT write ending in /outputs/manifest-probe-check.md returned a non-error result. A bare
+  # relative write or a write into the attached folder fails it, and a VM path is rejected by the file
+  # tool, so it fails too. The leading slash matters: without it a bare `manifest-probe-check.md` would
+  # satisfy the suffix. (Not `subagent_dispatch_healthy`: with no `type` it requires EVERY dispatch to
+  # deliver, so a legitimate one-sub-agent-per-method split would fail it.)
+  - subagent_file_write: { path_suffix: "/outputs/manifest-probe-check.md" }
+  # …and no file tool was sent a /sessions/ path at all.
+  - no_vm_path_file_op: true
+  # The suffix cannot name THIS session's outputs folder (its host path is per-run), so the file must
+  # also be on disk there.
   - file_exists: outputs/manifest-probe-check.md
 
   # --- CAUSAL: both tool families really ran ---
