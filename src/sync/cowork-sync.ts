@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -7,6 +7,8 @@ import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
+import type { DesktopInitSurface } from "../types.js";
+import { readDesktopInitSurface } from "./desktop-init-surface.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -56,6 +58,10 @@ export interface SyncResult {
    *  checksum cross-check is SKIPPED rather than guessed against the stable path. Derived from the
    *  LOCAL asar, so it is available offline — only the checksum fetch needs the network. */
   agentReleaseBaseUrl: string | null;
+  /** Tool surface of Desktop's own SDK-MCP servers, read from real Desktop init frames written since this
+   *  release was installed (see desktop-init-surface.ts). `observed:false` when no such session exists.
+   *  NEVER carried forward from the base baseline: that would stamp one release's surface with the next's. */
+  desktopInitSurface: DesktopInitSurface;
   unknownDeltas: string[];
   notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
@@ -765,8 +771,23 @@ export function sync(): SyncResult {
     modelEffortConfig,
     promptFingerprint,
     agentReleaseChannel,
+    bundleHasLiteral,
     notes,
   } = extractFromAsar(unknown, gates);
+
+  // 6. Desktop's own server tool surface, from real Desktop init frames of THIS release (see
+  // desktop-init-surface.ts). An unobserved surface is a WARNING, never an unknown delta: every Desktop
+  // update produces it until a Cowork session runs, and clearing a delta takes --allow-empty, which would
+  // waive every other guard on the same run. The release preflight refuses to ship it instead.
+  const initSurface = readDesktopInitSurface({
+    dir: join(SUPPORT, "local-agent-mode-sessions"),
+    agentVersion,
+    appVersion,
+    installedAtMs: existsSync(ASAR) ? statSync(ASAR).mtimeMs : null,
+    bundleHasLiteral,
+  });
+  for (const d of initSurface.deltas) flag(unknown, d);
+  notes.push(...initSurface.notes);
 
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
@@ -810,6 +831,7 @@ export function sync(): SyncResult {
     modelEffortConfig,
     promptFingerprint,
     agentReleaseBaseUrl: agentReleaseChannel?.baseUrl ?? null,
+    desktopInitSurface: initSurface.surface,
     unknownDeltas: unknown,
     notes,
   };
@@ -1359,6 +1381,8 @@ function extractFromAsar(
   modelEffortConfig: ModelEffortConfig | null;
   promptFingerprint: PromptFingerprint | null;
   agentReleaseChannel: AgentReleaseChannel | null;
+  /** Quoted-literal membership over the normalized bundle; null when the bundle could not be read. */
+  bundleHasLiteral: ((name: string) => boolean) | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1372,6 +1396,7 @@ function extractFromAsar(
       modelEffortConfig: null,
       promptFingerprint: null,
       agentReleaseChannel: null,
+      bundleHasLiteral: null,
       notes: [],
     };
   }
@@ -1444,6 +1469,8 @@ function extractFromAsar(
       modelEffortConfig,
       promptFingerprint,
       agentReleaseChannel: extractAgentReleaseChannel(bundle),
+      // Quoted, after normalizeBundleQuotes: a bare substring would match any identifier fragment.
+      bundleHasLiteral: (name: string) => bundle.includes(`"${name}"`),
       notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
     };
   } catch (e) {
@@ -1457,6 +1484,7 @@ function extractFromAsar(
       modelEffortConfig: null,
       promptFingerprint: null,
       agentReleaseChannel: null,
+      bundleHasLiteral: null,
       notes: [],
     };
   } finally {

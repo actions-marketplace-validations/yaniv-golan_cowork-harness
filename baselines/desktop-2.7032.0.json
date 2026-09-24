@@ -1043,7 +1043,47 @@
       "4282876673",
       "4286026368",
       "4293378213"
-    ]
+    ],
+    "desktopInitSurface": {
+      "agentVersion": "2.1.280",
+      "appVersion": "2.7032.0",
+      "observed": true,
+      "servers": {
+        "cowork": {
+          "presence": "all",
+          "toolsAll": [
+            "allow_cowork_file_delete",
+            "present_files",
+            "read_widget_context",
+            "request_cowork_directory",
+            "save_skill"
+          ],
+          "toolsSome": [
+            "create_artifact",
+            "list_artifacts",
+            "update_artifact",
+            "verify_artifact"
+          ]
+        },
+        "plugins": {
+          "presence": "all",
+          "toolsAll": [
+            "list_plugins",
+            "search_plugins",
+            "suggest_plugin_install"
+          ],
+          "toolsSome": []
+        },
+        "skills": {
+          "presence": "all",
+          "toolsAll": [
+            "list_skills",
+            "suggest_skills"
+          ],
+          "toolsSome": []
+        }
+      }
+    }
   },
   "requireFullVmSandbox": null
 }

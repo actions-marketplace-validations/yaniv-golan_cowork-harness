@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import {
+  BASELINES_DIR,
   compareBaselineVersions,
   loadBaseline,
   resolveAgentBinary,
@@ -17,7 +18,7 @@ import {
 } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
-import { PlatformBaseline as PlatformBaselineSchema } from "../src/types.js";
+import { PlatformBaseline as PlatformBaselineSchema, DesktopInitSurface } from "../src/types.js";
 import {
   decodeFcacheGates,
   sync,
@@ -3299,5 +3300,35 @@ describe("checkSyspromptMapFacts — prompt-patch channel sentinel", () => {
     const files = readRealBundleFilesOrSkip();
     if (!files) return;
     expect(checkSyspromptMapFacts(files)).toEqual([]);
+  });
+});
+
+// provenance.desktopInitSurface is PUBLISHED data read from the operator's real Desktop session logs, whose
+// init frames also list every connector and private MCP server they have. This is the guard on what
+// actually got committed — the reader filters at parse time, but a check over the reader's own output is a
+// tautology; this one reads the files a reader of the repo would read.
+describe("committed baselines: provenance.desktopInitSurface is allowlisted and well-formed", () => {
+  const files = readdirSync(BASELINES_DIR)
+    .filter((f) => /^desktop-.+\.json$/.test(f))
+    .sort(compareBaselineVersions);
+  const withBlock = files.filter(
+    (f) => JSON.parse(readFileSync(join(BASELINES_DIR, f), "utf8")).provenance?.desktopInitSurface !== undefined,
+  );
+
+  it("is present on the NEWEST baseline (non-vacuity: a guard over zero blocks is green by construction)", () => {
+    console.log(`desktopInitSurface present on ${withBlock.length} of ${files.length} baselines: ${withBlock.join(", ")}`);
+    expect(withBlock.length).toBeGreaterThanOrEqual(1);
+    expect(withBlock).toContain(files[files.length - 1]);
+  });
+
+  it.each(withBlock)("%s: strict schema, and coherent with the baseline's own versions", (file) => {
+    const b = JSON.parse(readFileSync(join(BASELINES_DIR, file), "utf8"));
+    const block = b.provenance.desktopInitSurface;
+    const parsed = DesktopInitSurface.safeParse(block);
+    // Paths only: an issue message can echo the offending value.
+    expect(parsed.success, parsed.success ? "" : parsed.error.issues.map((i) => i.path.join(".")).join(", ")).toBe(true);
+    // Tautological on sync-written data (sync stamps both sides); guards hand edits and cross-file copies.
+    expect(block.agentVersion).toBe(b.agentVersion);
+    expect(block.appVersion).toBe(b.appVersion);
   });
 });

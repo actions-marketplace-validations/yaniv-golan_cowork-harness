@@ -61,13 +61,125 @@ export function diffBaselines(a: unknown, b: unknown, path = "", pathAnnotation 
   return [{ path, kind: "scalar", from: a, to: b, annotation: pathAnnotation }];
 }
 
+const INIT = "provenance.desktopInitSurface";
+
+type InitServer = { presence?: string; toolsAll?: string[]; toolsSome?: string[] };
+type InitBlock = { agentVersion?: string; appVersion?: string; observed?: boolean; servers?: Record<string, InitServer> };
+
+const code = (xs: readonly string[]) => xs.map((x) => `\`${x}\``).join(", ");
+
+function describeInitServer(s: InitServer | undefined): string {
+  const all = s?.toolsAll ?? [];
+  const some = s?.toolsSome ?? [];
+  return `${all.length ? code(all) : "(none in every session)"}${some.length ? `; in some sessions only: ${code(some)}` : ""}`;
+}
+
+function describeInitBlock(b: InitBlock): string {
+  if (!b.observed) return `UNOBSERVED at \`${b.appVersion}\` / agent \`${b.agentVersion}\` (no Cowork session since install)`;
+  const servers = Object.entries(b.servers ?? {});
+  if (servers.length === 0) return `observed at \`${b.appVersion}\`, but no Desktop server was connected`;
+  return servers.map(([name, s]) => `\`${name}\` (${s.presence}): ${describeInitServer(s)}`).join(" · ");
+}
+
+/** Block-level rendering for `provenance.desktopInitSurface`, run BEFORE the per-entry loop because two of
+ *  its cases are not expressible per entry: an `observed` true→false transition must replace the per-server
+ *  removals it causes (otherwise "unobserved" reads as every Desktop server disappearing), and a tool that
+ *  moved between `toolsAll` and `toolsSome` arrives as two array entries that only mean something together.
+ *  Also handles first introduction, where the differ emits ONE whole-object `added` and never recurses.
+ *  Entries under the block that none of this recognizes are returned in `rest`, so they still render
+ *  generically — never silently dropped. */
+export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines: string[]; rest: BaselineDiffEntry[] } {
+  const mine = entries.filter((e) => e.path === INIT || e.path.startsWith(`${INIT}.`));
+  const rest = entries.filter((e) => !mine.includes(e));
+  const lines: string[] = [];
+  if (mine.length === 0) return { lines, rest };
+
+  const unhandled: BaselineDiffEntry[] = [];
+  const whole = mine.find((e) => e.path === INIT);
+  if (whole) {
+    if (whole.kind === "added") lines.push(`- Desktop init surface now recorded: ${describeInitBlock(whole.to as InitBlock)}`);
+    else if (whole.kind === "removed") lines.push("- Desktop init surface no longer recorded (field removed)");
+    else unhandled.push(whole);
+  }
+
+  const observed = mine.find((e) => e.path === `${INIT}.observed` && e.kind === "scalar");
+  const becameUnobserved = observed?.kind === "scalar" && observed.from === true && observed.to === false;
+  const scalarTo = (leaf: string) => {
+    const e = mine.find((x) => x.path === `${INIT}.${leaf}` && x.kind === "scalar");
+    return e?.kind === "scalar" ? String(e.to) : undefined;
+  };
+  const app = scalarTo("appVersion");
+  const agent = scalarTo("agentVersion");
+  if (becameUnobserved) {
+    lines.push(
+      `- Desktop init surface UNOBSERVED${app ? ` at \`${app}\`` : ""}${agent ? ` / agent \`${agent}\`` : ""} — no Cowork session since install, so the server/tool removals below it are NOT evidence (not shown). Start a Cowork session and re-sync; the release preflight refuses this state`,
+    );
+  } else {
+    if (observed?.kind === "scalar") lines.push("- Desktop init surface now OBSERVED (was unobserved)");
+    if (app || agent)
+      lines.push(
+        `- Desktop init surface re-read for ${app ? `\`${app}\`` : "the same Desktop"} / agent ${agent ? `\`${agent}\`` : "unchanged"}`,
+      );
+  }
+
+  const toolMoves = new Map<string, { addAll: string[]; addSome: string[]; rmAll: string[]; rmSome: string[] }>();
+  for (const e of mine) {
+    if (e === whole || e === observed) continue;
+    if (e.path === `${INIT}.appVersion` || e.path === `${INIT}.agentVersion`) {
+      if (e.kind !== "scalar") unhandled.push(e);
+      continue;
+    }
+    const server = e.path.match(/^provenance\.desktopInitSurface\.servers\.([^.]+)$/);
+    if (server) {
+      if (becameUnobserved && e.kind === "removed") continue;
+      if (e.kind === "added") lines.push(`- Desktop server \`${server[1]}\` APPEARED: ${describeInitServer(e.to as InitServer)}`);
+      else if (e.kind === "removed")
+        lines.push(`- Desktop server \`${server[1]}\` DISAPPEARED (declared: ${describeInitServer(e.from as InitServer)})`);
+      else unhandled.push(e);
+      continue;
+    }
+    const presence = e.path.match(/^provenance\.desktopInitSurface\.servers\.([^.]+)\.presence$/);
+    if (presence && e.kind === "scalar") {
+      lines.push(
+        `- Desktop server \`${presence[1]}\` presence: \`${e.from}\` → \`${e.to}\` (sensitive to the mix of session kinds read — a prompt to look, not evidence)`,
+      );
+      continue;
+    }
+    const list = e.path.match(/^provenance\.desktopInitSurface\.servers\.([^.]+)\.(toolsAll|toolsSome)$/);
+    if (list && e.kind === "array") {
+      const m = toolMoves.get(list[1]) ?? { addAll: [], addSome: [], rmAll: [], rmSome: [] };
+      const [add, rm] = list[2] === "toolsAll" ? [m.addAll, m.rmAll] : [m.addSome, m.rmSome];
+      add.push(...(e.added as string[]));
+      rm.push(...(e.removed as string[]));
+      toolMoves.set(list[1], m);
+      continue;
+    }
+    unhandled.push(e);
+  }
+  for (const [server, m] of [...toolMoves.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    const moved = (from: string[], to: string[]) => to.filter((t) => from.includes(t));
+    const toAll = moved(m.rmSome, m.addAll);
+    const toSome = moved(m.rmAll, m.addSome);
+    const appeared = [...m.addAll, ...m.addSome].filter((t) => !toAll.includes(t) && !toSome.includes(t));
+    const disappeared = [...m.rmAll, ...m.rmSome].filter((t) => !toAll.includes(t) && !toSome.includes(t));
+    if (appeared.length) lines.push(`- Desktop server \`${server}\`: tool(s) APPEARED: ${code(appeared.sort())}`);
+    if (disappeared.length) lines.push(`- Desktop server \`${server}\`: tool(s) DISAPPEARED: ${code(disappeared.sort())}`);
+    const mix = "(sensitive to the mix of session kinds read — a prompt to look, not evidence)";
+    if (toAll.length) lines.push(`- Desktop server \`${server}\`: ${code(toAll.sort())} moved from some sessions to every session ${mix}`);
+    if (toSome.length)
+      lines.push(`- Desktop server \`${server}\`: ${code(toSome.sort())} moved from every session to some sessions ${mix}`);
+  }
+  return { lines, rest: [...rest, ...unhandled] };
+}
+
 /** Maps KNOWN baseline fields to prose; an unrecognized path still renders (never silently dropped),
  *  just as a generic line. Annotation-class entries are grouped into their own de-emphasized section
  *  instead of interleaved with real drift. */
-export function renderChangelog(entries: BaselineDiffEntry[]): string {
+export function renderChangelog(allEntries: BaselineDiffEntry[]): string {
+  const { lines: initLines, rest: entries } = renderInitSurfaceEntries(allEntries);
   const notable = entries.filter((e) => !e.annotation);
   const annotations = entries.filter((e) => e.annotation);
-  const lines: string[] = [];
+  const lines: string[] = [...initLines];
 
   const known: Record<string, (e: BaselineDiffEntry) => string | undefined> = {
     agentVersion: (e) => (e.kind === "scalar" ? `- staged agent bumped: \`${e.from}\` → \`${e.to}\`` : undefined),
@@ -169,11 +281,17 @@ export function renderChangelog(entries: BaselineDiffEntry[]): string {
  *  entry at its exact leaf path, replacing the old one-level `diff()` which printed the WHOLE subtree
  *  under any top-level key that changed (so a single gate flip three levels deep used to dump all of
  *  `provenance`). No annotation/known-field prose here — that's `renderChangelog`'s job. */
-export function formatDiffLines(entries: BaselineDiffEntry[]): string[] {
-  return entries.map((e) => {
-    if (e.kind === "scalar") return `${e.path}: ${JSON.stringify(e.from)} -> ${JSON.stringify(e.to)}`;
-    if (e.kind === "added") return `${e.path}: (absent) -> ${JSON.stringify(e.to)}`;
-    if (e.kind === "removed") return `${e.path}: ${JSON.stringify(e.from)} -> (absent)`;
-    return `${e.path}: +${JSON.stringify(e.added)} -${JSON.stringify(e.removed)}`;
-  });
+export function formatDiffLines(allEntries: BaselineDiffEntry[]): string[] {
+  // The init-surface block needs block-level context (see renderInitSurfaceEntries) — without it an
+  // unobserved re-sync prints as three bare server removals here too.
+  const { lines: initLines, rest: entries } = renderInitSurfaceEntries(allEntries);
+  return [
+    ...initLines.map((l) => l.replace(/^- /, "")),
+    ...entries.map((e) => {
+      if (e.kind === "scalar") return `${e.path}: ${JSON.stringify(e.from)} -> ${JSON.stringify(e.to)}`;
+      if (e.kind === "added") return `${e.path}: (absent) -> ${JSON.stringify(e.to)}`;
+      if (e.kind === "removed") return `${e.path}: ${JSON.stringify(e.from)} -> (absent)`;
+      return `${e.path}: +${JSON.stringify(e.added)} -${JSON.stringify(e.removed)}`;
+    }),
+  ];
 }

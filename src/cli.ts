@@ -4,7 +4,16 @@ import { unionReferenceAccesses } from "./run/run.js";
 import { join, basename, resolve, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { Scenario, AnswerRule, Assertion, FIDELITY_TIERS, type RunResult, type RunStatus, type PlatformBaseline } from "./types.js";
+import {
+  Scenario,
+  AnswerRule,
+  Assertion,
+  FIDELITY_TIERS,
+  DesktopInitSurface,
+  type RunResult,
+  type RunStatus,
+  type PlatformBaseline,
+} from "./types.js";
 import { writeAllSync } from "./io.js";
 import { loadBaseline, BASELINES_DIR, cmpVersionStrings, sha256File, countStringInFile, newestStagedSibling } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, expandUserPath } from "./session.js";
@@ -2987,6 +2996,19 @@ async function cmdSync(args: string[]) {
     log(`note: asarFingerprint changed (${prevFingerprint} → ${res.asarFingerprint}); gates re-synced above.`);
   }
 
+  // The strict schema guards what is about to be PUBLISHED. Only issue paths are printed — an issue
+  // message can echo the offending value, and that value is exactly what must not reach a terminal log.
+  const initSurfaceCheck = DesktopInitSurface.safeParse(res.desktopInitSurface);
+  if (!initSurfaceCheck.success) {
+    fail(
+      "sync",
+      "runtime",
+      `ERROR: provenance.desktopInitSurface failed its schema — refusing to write baseline (issue paths: ${initSurfaceCheck.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`,
+      "This is a reader bug in src/sync/desktop-init-surface.ts, not a Desktop change.",
+      isJsonOutput(normalizedArgs),
+      1,
+    );
+  }
   const capturedAt = new Date().toISOString().slice(0, 10);
   const next = {
     ...base,
@@ -3034,6 +3056,11 @@ async function cmdSync(args: string[]) {
       // Carried forward when extraction yields nothing (asar missing / extract failed), so an offline
       // sync never blanks it into a false "every gate reference disappeared".
       asarGateIds: res.asarGateIds.length > 0 ? res.asarGateIds : (baseProvenance.asarGateIds ?? []),
+      // Desktop's own server tool surface, from real Desktop init frames of THIS release. Deliberately
+      // NEVER carried forward from `baseProvenance` (unlike the two fields above): a carried value would
+      // stamp the previous release's surface with this release's identity. Unobserved is written as
+      // `observed:false`, which the release preflight refuses to ship.
+      desktopInitSurface: res.desktopInitSurface,
     },
   };
   const diffFlag = !!syncParsed.flags["--diff"];

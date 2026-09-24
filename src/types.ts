@@ -172,6 +172,59 @@ export const PlatformBaseline = z.looseObject({
 });
 export type PlatformBaseline = z.infer<typeof PlatformBaseline>;
 
+/** Desktop's OWN SDK-MCP servers — the only server names `sync` may record from a real Desktop init frame
+ *  (`provenance.desktopInitSurface`). A closed literal set, matched with `===`: never a pattern and never a
+ *  denylist, because every other name in a real init frame is the operator's connector/MCP inventory.
+ *
+ *  Deliberately NOT `KNOWN_COWORK_SERVERS` (src/scan.ts): that set is what the HARNESS serves, it includes
+ *  `workspace`, and it guards cassettes. Coupling the two would let an edit made for the cassette guard
+ *  widen what sync publishes. Adding a server here is a reviewed decision (`workspace` was declined). */
+export const DESKTOP_OWN_SERVERS = ["cowork", "plugins", "skills"] as const;
+
+/** A recorded tool name: a SHAPE allowlist (lowercase identifier, no `__`), so a UUID, a path or a
+ *  second-level `mcp__` split can never be a valid entry. */
+const DesktopToolList = z.array(
+  z
+    .string()
+    .regex(/^[a-z][a-z0-9_]{0,63}$/)
+    .refine((s) => !s.includes("__")),
+);
+const DesktopInitServer = z.strictObject({
+  presence: z.enum(["all", "some"]),
+  toolsAll: DesktopToolList,
+  toolsSome: DesktopToolList,
+});
+const isSortedUnique = (xs: readonly string[]) => xs.every((x, i) => i === 0 || xs[i - 1] < x);
+
+/** `provenance.desktopInitSurface` — the tool surface Desktop's own servers declared in real Cowork
+ *  sessions of the synced release. STRICT at every level, so any key beyond these (a `cwd`, a raw server
+ *  list, a frame count) fails validation. Enforced before sync writes it and over every committed baseline
+ *  (test/baseline.test.ts). Deliberately NOT attached to `PlatformBaseline`: `loadBaseline` parses at every
+ *  call site, so a malformed block there would brick `sync` itself and could only be fixed by hand. */
+export const DesktopInitSurface = z
+  .strictObject({
+    agentVersion: z.string().min(1),
+    appVersion: z.string().min(1),
+    observed: z.boolean(),
+    servers: z.strictObject({
+      cowork: DesktopInitServer.optional(),
+      plugins: DesktopInitServer.optional(),
+      skills: DesktopInitServer.optional(),
+    }),
+  })
+  .superRefine((v, ctx) => {
+    const names = Object.keys(v.servers);
+    if (!v.observed && names.length > 0) ctx.addIssue({ code: "custom", message: "observed:false must carry no servers" });
+    for (const [name, s] of Object.entries(v.servers)) {
+      if (!s) continue;
+      if (!isSortedUnique(s.toolsAll) || !isSortedUnique(s.toolsSome))
+        ctx.addIssue({ code: "custom", message: `servers.${name}: tool lists must be sorted and duplicate-free` });
+      if (s.toolsAll.some((t) => s.toolsSome.includes(t)))
+        ctx.addIssue({ code: "custom", message: `servers.${name}: toolsAll and toolsSome must be disjoint` });
+    }
+  });
+export type DesktopInitSurface = z.infer<typeof DesktopInitSurface>;
+
 /** Scenario — what the user authors. */
 export const AnswerRule = z
   .strictObject({

@@ -342,6 +342,31 @@ committed baseline and say why in that baseline's `$comment`.
    is how `PINNED_GATES` was built, and it resolves 157 of the 278 live ids. Some numeric noise survives
    the filter by design: a constant is invisible in the delta, which is what the field is read for.
 
+   **`provenance.desktopInitSurface` → which tools Desktop's own servers actually declared.** Gates and
+   bundle literals are inputs; this is the outcome. `sync` reads the `system/init` frames that real Cowork
+   sessions write to `~/Library/Application Support/Claude/local-agent-mode-sessions/**/audit.jsonl` and
+   records, for Desktop's own `cowork`, `plugins` and `skills` servers only, the tools declared in **every**
+   session read (`toolsAll`) and in only **some** of them (`toolsSome`). It is how a server-side change such
+   as `save_skill` turning on or off becomes a diff line: no gate pin can see that, and the harness cannot
+   either, because it never declares `save_skill`.
+   - **Which sessions.** Only frames from the synced agent version **and** written after the synced
+     Desktop's `app.asar` was installed. The agent version alone is not enough: 22 of 36 committed
+     baselines share their `agentVersion` with another Desktop release.
+   - **Unobserved.** If no Cowork session has run since the install, `sync` prints a `WARNING` and records
+     `observed: false` (never the previous release's surface — the block is not carried forward). It does
+     not block the write, so you do not need `--allow-empty` for this, and should not use it. **Remedy:**
+     start one Cowork session in Claude Desktop, then re-run `sync`. `npm run preflight` refuses to release
+     an unobserved newest baseline; `--allow-unobserved-init-surface` downgrades that to a warning for an
+     emergency release.
+   - **Reading the diff.** A tool or server appearing or disappearing is the signal. A tool moving between
+     `toolsAll` and `toolsSome` depends on which kinds of session happened to be read (at 2.7032.0 some
+     sessions lack the four artifact tools), so treat that as a prompt to look, not as evidence.
+   - **Privacy.** Real init frames list every MCP server the operator has, connectors included. Nothing but
+     the three allowlisted server names and their tool names is recorded (a strict schema over every
+     committed baseline enforces it), and sync's messages carry counts, never names or paths. The recorded
+     set still reflects what **this account** is served — `save_skill` needs org skill-creation access — the
+     same class of fact `provenance.gates` already records.
+
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
    key silently falls back to a code default that need not match production.
