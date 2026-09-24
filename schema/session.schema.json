@@ -200,7 +200,7 @@
           "type": "boolean"
         },
         "proactive_suggest_enabled": {
-          "description": "override for gate 1598976391 (proactiveSkillSuggestEnabled): when true (and suggest_enabled is not false), suggest_skills swaps to the proactive description, gains an optional `trigger` enum param, and chains its empty-catalog note into search_plugins. Omit to use the synced baseline gate — on from the 1.24012.11 baseline, matching what production serves; the fallback for a baseline that predates the gate is false.",
+          "description": "override for gate 1598976391 (proactiveSkillSuggestEnabled): when true (and suggest_enabled is not false), suggest_skills swaps to the proactive description, gains an optional `trigger` enum param, and chains its empty-catalog note into search_plugins. Omit to follow the baseline: from the 1.46388.3 baseline Desktop does not read the gate and proactive mode is always on; for an older baseline the synced gate decides (on from 1.24012.11; false for a baseline that predates the gate). On a 1.46388.3+ baseline, false builds a non-proactive surface production does not ship there.",
           "type": "boolean"
         }
       },

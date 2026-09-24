@@ -106,14 +106,15 @@ export interface MakeSkillsHandlerOptions {
   /** Gate 245679952 (readGateBool ▸ session knob ▸ default true) — whether `suggest_skills` is declared
    *  at all. */
   suggestSkillsEnabled: boolean;
-  /** Gate 1598976391 (readGateBool ▸ session knob ▸ the synced baseline's value) — only consulted when
+  /** Proactive suggest mode, resolved by `resolveSkillDiscoveryGates` (session knob ▸ always true for a
+   *  baseline from 1.46388.3 ▸ gate 1598976391 for an older one) — only consulted when
    *  `suggestSkillsEnabled` is true. In the harness it swaps `suggest_skills`'s description, adds
-   *  `trigger`, and re-shapes the empty-catalog `note`. In PRODUCTION it has a third effect the harness
-   *  does not model: the flag is also passed into Desktop's `generateSkillsSystemPrompt`, where it swaps
-   *  the suggest-guidance line inside the dynamically-generated `<skills_instructions>` block and appends
-   *  a suggest-at-most-once-per-conversation sentence. The harness renders no `<skills_instructions>`
-   *  section at all, so that effect lands in an already-unmodeled surface — recorded here so the gap is
-   *  disclosed rather than implied absent. */
+   *  `trigger`, and re-shapes the empty-catalog `note`. PRODUCTION has a third effect the harness does not
+   *  model: a proactive suggest-guidance line (plus a suggest-at-most-once-per-conversation sentence) inside
+   *  the generated `<skills_instructions>` block. Up to 1.44121.1 the gate selects it; from 1.46388.3 it is
+   *  emitted whenever `suggest_skills`/`search_plugins` are available. The harness renders no
+   *  `<skills_instructions>` section at all, so that effect lands in an already-unmodeled surface —
+   *  recorded here so the gap is disclosed rather than implied absent. */
   proactiveSkillSuggestEnabled: boolean;
   /** TEST SEAM — called for every `tools/call`, before dispatch. Deliberately not wired by
    *  container.ts/hostloop.ts (there is no run-telemetry sink for discovery calls today, and the

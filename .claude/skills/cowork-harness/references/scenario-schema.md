@@ -1,6 +1,6 @@
 # Scenario & session schema, assertion catalog, web_fetch, authoring gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.8.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 3.8.1`
 (baseline `desktop-2.7032.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -192,7 +192,7 @@ plugins:
 skills:
   local: []                      # extra host skill dirs
   suggest_enabled: true          # gate 245679952 override — `mcp__skills__suggest_skills` on/off (default true)
-  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param; unset = synced baseline gate (ON from 1.24012.11)
+  proactive_suggest_enabled: false  # gate 1598976391 override — proactive description + `trigger` param; unset = always on from the 1.46388.3 baseline (where `false` models a surface production does not ship there), synced gate before it
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map)
   enabled: []

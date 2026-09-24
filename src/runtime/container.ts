@@ -58,9 +58,9 @@ export function spawnContainer(
     /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
      *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
     suggestSkillsEnabled?: boolean;
-    /** Resolved gate 1598976391 (same call site — readGateBool ▸ session knob ▸ the synced baseline gate,
-     *  which is ON from the 1.24012.11 baseline; the fallback for an older baseline is false). Only
-     *  consulted when `suggestSkillsEnabled` is true. */
+    /** Resolved proactive suggest mode (`resolveSkillDiscoveryGates`: session knob ▸ for a baseline from
+     *  1.46388.3, always true — Desktop reads no gate there ▸ for an older baseline gate 1598976391, on from
+     *  1.24012.11, false when absent). Only consulted when `suggestSkillsEnabled` is true. */
     proactiveSkillSuggestEnabled?: boolean;
     /** Resolved gate 1978029737 ▸ `coworkWebFetchViaApi` (execute.ts). When ON, production's VM-LOOP site
      *  registers a workspace server exposing **web_fetch only**, disallows the built-in `WebFetch`, and

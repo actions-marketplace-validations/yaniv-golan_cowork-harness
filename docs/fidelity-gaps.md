@@ -327,7 +327,7 @@ ordinary session**:
   session shadows remote servers at all (gate `2529235968`, or at least one third-party direct MCP server
   present) **and** a stand-in already provides that server, matched by URL hostname or by name. The
   stand-ins are the session's claude.ai connectors that carry at least one enabled tool, plus those direct
-  servers. Logged *"Plugin `<name>` declares remote MCP servers (…). Overriding with no-ops so the CLI does
+  servers. Logged *"Plugin `<id>` declares remote MCP servers (…). Overriding with no-ops so the CLI does
   not open its own client."* With the gate off and no such server, the remote arm never runs, and a
   plugin's remote servers reach the CLI intact. Earlier builds (1.37937.0 through 1.46388.x) stubbed
   **every** remote plugin server once the gate was on; the stand-in narrowing arrives with 2.2553.1.
@@ -339,9 +339,28 @@ A plugin Desktop treats as official is exempt from both arms unless a policy is 
 
 A replaced server is renamed `plugin:<pluginName>:<serverName>` and constructed as
 `createSdkMcpServer({name, tools: []})` — **the server name is present in the session's inventory and offers
-zero tools.** The rewritten set is written to `cowork-plugin-mcp-shadow.json` and delivered to the agent as
-an `--mcp-config` payload; when the session shadows remote servers *and* an MCP policy is active, a failed
-delivery makes Desktop refuse to start the session rather than launch with unenforced plugin servers.
+zero tools.** Every stub reaches the agent in Desktop's in-process SDK server map. Which stubs are _also_
+named in `cowork-plugin-mcp-shadow.json`, delivered as an `--mcp-config` payload, depends on whether
+Desktop enforces remote shadowing for the session: gate `2529235968` on **and** no enterprise
+managed-configuration override in force. When it does, the file names every replaced server, policy stubs
+included. When it does not, the file names only the remote servers a stand-in replaced, and a session with
+none writes no file at all; local and `.mcpb` policy stubs then travel in the SDK map alone.
+
+While an MCP policy is active, Desktop refuses to start the session rather than launch with unenforced
+plugin servers whenever building the overrides fails, whatever the gate: a failed plugin scan (*"Plugin MCP
+scan failed while an MCP policy is active"*) or any other error in that step. It also refuses when the
+shadow file cannot be written, but only while it enforces remote shadowing; otherwise a failed write is
+logged and the spawn goes ahead without the file.
+
+Desktop's own MCP pool, `LocalMcpServerManager`, takes only a plugin's local stdio and `.mcpb` servers, and
+skips any a policy blocks. Remote plugin servers that no stand-in replaced are left for the CLI to open
+itself. **A stub therefore never appears as a `LocalMcpServerManager` connection**, which makes Desktop's
+`main.log` an unambiguous record of the remote arm: each replacement logs
+`Replacing plugin "<plugin>" MCP server "<server>": "<connector>" already provides it (matched by url)`,
+then `Plugin "<id>" declares remote MCP servers (…). Overriding with no-ops …`. On a Desktop whose
+connected Slack, Notion or Airtable connector matches a plugin's declared server by URL, both lines appear
+for every session that loads the plugin, and the plugin servers that connect through
+`LocalMcpServerManager` are only local stdio ones.
 
 **What the harness does:** nothing. Plugins are staged with `--plugin-dir` and the CLI reads each plugin's
 own declaration, so a plugin under test gets **working** MCP servers with their real tools.
@@ -852,19 +871,23 @@ over the control protocol (`sdkMcpServers` in `initialize`, tunneled as `mcp_mes
 `list_skills` returns no match, and the result renders an "Add" card. The call has **no side effect**
 (nothing installs; the user's Add click happens out of band). Ground truth: these tools appear in the
 `system/init` `tools` array of real on-disk sessions (`local-agent-mode-sessions/**/audit.jsonl`); the
-`suggestSkillsEnabled` gate `245679952` is on. A proactive-suggestion mode sits behind a second gate
-`1598976391` (`proactiveSkillSuggestEnabled`), which is **served ON** for a standard account as of the
-`1.24012.11` baseline — by a server-side rollout, not a Desktop change (the gate reads ON on earlier
-Desktop versions too). With it off, `suggest_skills` keeps its base description and the model suggests
-only when the conversation invites it. With it on, the tool gains an optional `trigger` parameter
+`suggestSkillsEnabled` gate `245679952` is on. `suggest_skills` also has a proactive-suggestion mode.
+From Desktop `1.46388.3` (the first backed-up build after `1.44121.1`) that mode is **unconditional** whenever `suggest_skills` is declared: no gate
+is read for it. Up to `1.44121.1` it sits behind gate `1598976391`
+(`proactiveSkillSuggestEnabled`), which the server serves **on** for a standard account from the
+`1.24012.11` baseline; the server still serves that gate, but Desktop from `1.46388.3` never reads it.
+With the mode off, `suggest_skills` keeps its base description and the model suggests only when the
+conversation invites it. With it on, the tool gains an optional `trigger` parameter
 (`user_asked` | `proactive`), a proactive description that also carries production's *constraints* (a
 do-not-call list, a suggest-at-most-once-per-conversation rule, a no-lead-in rule, and forwarding the
 same keywords **and trigger** to `search_plugins`), and an empty-catalog `note` that chains into
 `search_plugins` for every trigger state — silence is only the `proactive` tail, and a trigger the model
-never supplied is never forwarded back to it. One production effect is **not** modeled: the flag is also
-passed into Desktop's `generateSkillsSystemPrompt`, where it swaps a guidance line inside the generated
-`<skills_instructions>` block. The harness renders no such section at all, so that effect lands in an
-already-unmodeled surface.
+never supplied is never forwarded back to it. One production effect is **not** modeled: a proactive
+suggest-guidance line (with a suggest-at-most-once-per-conversation sentence) inside the generated
+`<skills_instructions>` block. Up to `1.44121.1` the gate selects it; from `1.46388.3` Desktop emits it
+whenever `suggest_skills` and `search_plugins` are available, so on a current baseline this gap applies to
+every session that declares `suggest_skills`. The harness renders no such section at all, so the effect
+lands in an already-unmodeled surface.
 
 **Harness behaviour:** `container` and `hostloop` (and `cowork`, which resolves to one of those) now
 declare a `skills` and a `plugins` SDK-MCP server alongside `cowork`/`workspace` (`combineSdkMcp`,
@@ -878,9 +901,11 @@ synced baseline (`readGateBool`, bare-boolean shape — distinct from the sub-fl
 reads) with a session-level override (`skills.suggest_enabled` / `skills.proactive_suggest_enabled`, see
 [session.md](./session.md)). Precedence is knob ▸ baseline gate ▸ hardcoded fallback, and the three are
 distinct: omit the knob and the value comes from the **synced baseline** (on `latest` that is
-`suggestSkillsEnabled` on and `proactiveSkillSuggestEnabled` **on**, mirroring what production serves);
-the hardcoded fallback, which applies only to a baseline old enough to predate the gate entirely, stays
-on for `suggestSkillsEnabled` and **off** for `proactiveSkillSuggestEnabled`.
+`suggestSkillsEnabled` on); the hardcoded fallback, which applies only to a baseline old enough to predate
+the gate entirely, is on. Proactive mode follows the Desktop version the same way production does: from
+the `1.46388.3` baseline it is **always on** and the `1598976391` row is ignored, so a server-side flip of
+a gate Desktop does not read cannot change a run; for an older baseline the synced gate decides, with a
+hardcoded fallback of **off** for a baseline that predates it.
 
 **How exact is the model?** Not uniformly — and the difference matters, so it is stated plainly. The
 tool **inventory** (which five tools exist), their **inputSchemas**, the **gating** semantics, and the

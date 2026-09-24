@@ -95,11 +95,11 @@ plugins:
 skills:
   local: []                      # extra host skill dirs → CLAUDE_CONFIG_DIR/skills
   # Overrides for the skill-discovery SDK-MCP gates (container/hostloop only — see fidelity-gaps.md
-  # "Skill/plugin discovery SDK-MCP servers"). Precedence: this knob → the synced baseline gate → the
-  # documented default. Both omit-able; the harness resolves gate 245679952/1598976391 from the baseline
-  # when unset.
+  # "Skill/plugin discovery SDK-MCP servers"). Precedence: this knob → the baseline → the documented
+  # default. Both omit-able; unset, suggest_enabled follows gate 245679952, and proactive_suggest_enabled is
+  # always on from the 1.46388.3 baseline and follows gate 1598976391 before it.
   suggest_enabled: true          # gate 245679952 (suggestSkillsEnabled) override; default true when unset
-  proactive_suggest_enabled: false # gate 1598976391 (proactiveSkillSuggestEnabled) override; unset = the synced baseline gate (ON from 1.24012.11)
+  proactive_suggest_enabled: false # gate 1598976391 (proactiveSkillSuggestEnabled) override; unset = always on from the 1.46388.3 baseline, the synced gate before it
 mcp:
   config: null                   # --mcp-config file (standard mcpServers map), e.g. ../data/mcp.json
   enabled: []                    # enabledMcpjsonServers
@@ -229,7 +229,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `plugins.local_plugins[]` / `remote_plugins[]` | Cowork plugin mounts | → `mnt/.local-plugins/marketplaces/<marketplace>/<plugin>` (≥1.14271.0; older baselines use `.local-plugins/cache`) / `mnt/.remote-plugins/plugin_<id>` (migrated-Cowork uploaded/org-remote shape; the id is a stable hash of the declared source). A skill that references these via `${CLAUDE_PLUGIN_ROOT}` must mind [the two-namespace resolution model](./plugin-root.md) — the token is unset in host-loop VM bash. |
 | `skills.local[]` | `CLAUDE_CONFIG_DIR/skills` | extra host **skill** dirs (a folder *without* `.claude-plugin/plugin.json`) staged into the config dir's `skills/`. Use this for a single-skill folder; use `plugins.local_plugins` for a plugin root. |
 | `skills.suggest_enabled` | gate `245679952` (`suggestSkillsEnabled`) override | `container`/`hostloop` (and `cowork`) only. `true` (or unset, if the synced baseline gate is on/absent) declares the `skills` SDK-MCP server's `suggest_skills` tool; `false` omits it and drops `list_skills`' fallback-to-`suggest_skills` clause. See [fidelity-gaps.md](./fidelity-gaps.md). |
-| `skills.proactive_suggest_enabled` | gate `1598976391` (`proactiveSkillSuggestEnabled`) override | Only consulted when `suggest_enabled` (effective) is true. `true` swaps `suggest_skills` to the proactive description, adds an optional `trigger` enum param (`user_asked` \| `proactive`), and chains the empty-catalog `note` into `search_plugins`. Omit to use the synced baseline gate — **on** from the `1.24012.11` baseline, which is what production serves; the fallback for a baseline predating the gate is `false`. |
+| `skills.proactive_suggest_enabled` | gate `1598976391` (`proactiveSkillSuggestEnabled`) override | Only consulted when `suggest_enabled` (effective) is true. `true` swaps `suggest_skills` to the proactive description, adds an optional `trigger` enum param (`user_asked` \| `proactive`), and chains the empty-catalog `note` into `search_plugins`. Omit to follow the baseline: from the `1.46388.3` baseline Desktop does not read the gate and proactive mode is **always on**, so the gate row is ignored; for an older baseline the synced gate decides (**on** from `1.24012.11`; `false` for a baseline predating the gate). On a baseline from `1.46388.3`, `false` builds a non-proactive `suggest_skills` that production does not ship there; use it only to exercise the older surface. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
