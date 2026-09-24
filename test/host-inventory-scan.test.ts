@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -277,10 +277,19 @@ describe("hostInventoryPreflight — Layer B", () => {
   // created first because `cassettes/` is gitignored and therefore absent in a fresh clone — without it this
   // test passes through the nonexistent-ancestor branch instead, and the check-ignore call could be deleted
   // entirely with the test still green.
+  //
+  // The dir is removed again when this test created it. Left behind, it leaked into every later test file
+  // in the worker: a guard that listed the gitignored `cassettes/` passed in CI only because this ran first,
+  // while failing in any fresh checkout. `rmdirSync` is non-recursive, so a recording someone wrote there
+  // in the meantime is never deleted — the removal just fails instead.
   it("allows a gitignored in-repo path (the default cassettes/ dir) at protocol", () => {
-    mkdirSync(dirname(ignoredPath), { recursive: true });
-    expect(existsSync(dirname(ignoredPath)), "the gitignored dir must exist or this asserts nothing").toBe(true);
-    expect(hostInventoryPreflight(scn("protocol"), ignoredPath, false).kind).toBe("ok");
+    const created = mkdirSync(dirname(ignoredPath), { recursive: true });
+    try {
+      expect(existsSync(dirname(ignoredPath)), "the gitignored dir must exist or this asserts nothing").toBe(true);
+      expect(hostInventoryPreflight(scn("protocol"), ignoredPath, false).kind).toBe("ok");
+    } finally {
+      if (created !== undefined) rmdirSync(created);
+    }
   });
 
   // REGRESSION (fail-open): a first-ever record into a NEW subdirectory. `git -C <nonexistent>` exits 128,
