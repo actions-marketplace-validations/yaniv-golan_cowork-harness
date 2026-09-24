@@ -21,6 +21,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`sync` dated the Desktop install from the wrong clock.** It skips session logs written before the
+  synced Desktop was installed, and it took that time from `app.asar`'s mtime. The updater preserves
+  the packaged file's timestamps, so that mtime is when the release was built. On Desktop 2.9939.2 it
+  read 17:40 on the release day, while the install and first launch were at 00:37 the next day. Any
+  session in between would have been attributed to the new release whenever the two releases share an
+  agent version, which 22 of 36 committed baselines do. `sync` now uses the file's ctime, which the
+  kernel sets when the file is renamed into place.
 - **`subagent-manifest-probe` tests what the sub-agent manifest says now.** Since Desktop 2.7032.0
   the manifest tells a sub-agent to pass absolute paths to the file tools; it no longer says where a
   relative path resolves. The probe still graded a relative write, and it passed without one. It now

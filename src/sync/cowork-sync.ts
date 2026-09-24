@@ -8,7 +8,7 @@ import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 import type { DesktopInitSurface } from "../types.js";
-import { readDesktopInitSurface } from "./desktop-init-surface.js";
+import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -814,7 +814,7 @@ export function sync(): SyncResult {
     dir: join(SUPPORT, "local-agent-mode-sessions"),
     agentVersion,
     appVersion,
-    installedAtMs: existsSync(ASAR) ? statSync(ASAR).mtimeMs : null,
+    installedAtMs: desktopInstalledAtMs(ASAR),
     bundleHasLiteral,
   });
   for (const d of initSurface.deltas) flag(unknown, d);
