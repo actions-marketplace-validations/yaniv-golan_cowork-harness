@@ -1,9 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readDesktopInitSurface, DESKTOP_SESSIONS_DISPLAY, type InitSurfaceInput } from "../src/sync/desktop-init-surface.js";
+import {
+  readDesktopInitSurface,
+  desktopInstalledAtMs,
+  DESKTOP_SESSIONS_DISPLAY,
+  type InitSurfaceInput,
+} from "../src/sync/desktop-init-surface.js";
 import { DESKTOP_OWN_SERVERS, DesktopInitSurface } from "../src/types.js";
 
 // Every frame here is SYNTHETIC. Bait names use reserved shapes only — UUIDs of the form
@@ -361,5 +377,34 @@ describe("fixture hygiene: this file carries no real identifiers", () => {
   it("every bait server name uses the reserved prefix", () => {
     expect(BAIT.userServer.startsWith("fixture-")).toBe(true);
     expect(BAIT.doubleServer).toBe("cowork__fixturex");
+  });
+});
+
+describe("desktopInstalledAtMs — the install time, not the build time", () => {
+  // The updater installs a bundle whose timestamps were preserved from packaging, so the asar's mtime is
+  // when the release was BUILT. Desktop 2.9939.2 measured it: mtime 17:40 on the release day, installed
+  // 00:37 the next day. Reproduced here the same way, with real files: backdate a staged file, then
+  // rename it into place.
+  it("returns the time the file was renamed into place, not its preserved mtime", () => {
+    const dir = mkdtempSync(join(tmpdir(), "install-time-"));
+    try {
+      const staged = join(dir, "staged.asar");
+      const installed = join(dir, "app.asar");
+      writeFileSync(staged, "bundle");
+      const built = new Date("2020-01-01T00:00:00Z");
+      utimesSync(staged, built, built);
+      const beforeInstall = Date.now() - 1000;
+      renameSync(staged, installed);
+      expect(statSync(installed).mtimeMs, "fixture: the preserved build time survived the rename").toBe(built.getTime());
+      const at = desktopInstalledAtMs(installed)!;
+      expect(at).toBeGreaterThanOrEqual(beforeInstall);
+      expect(at).toBeGreaterThan(built.getTime());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is null when there is no bundle, which selects no frames", () => {
+    expect(desktopInstalledAtMs(join(tmpdir(), "no-such-dir-xyz", "app.asar"))).toBeNull();
   });
 });
