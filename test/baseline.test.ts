@@ -210,12 +210,18 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(PINNED_GATES["1447478638"]).toBe("scheduledTaskToolsApprovableByAutoMode");
   });
 
-  it("PINNED_GATES tracks the three skill-discovery gates (present in fcache, so NOT dark)", () => {
-    // The gates that govern whether the Desktop SDK-MCP skill/plugin discovery tools render.
-    // 245679952 is live on/force; a flip of any of these changes the model's tool surface, and
-    // none was pinned before — so a live change was invisible to the drift guard.
+  it("PINNED_GATES tracks the skill-discovery gates (present in fcache, so NOT dark)", () => {
+    // 245679952 is live on/force and gates whether suggest_skills is declared: a flip of it changes the
+    // model's tool surface. 1598976391 is dead in Desktop code from 1.46388.3 (proactive mode is
+    // unconditional there), so its row is a record only; the harness reads it only for older baselines.
     expect(PINNED_GATES["245679952"]).toBe("suggestSkillsEnabled");
     expect(PINNED_GATES["1598976391"]).toBe("proactiveSkillSuggestEnabled");
+  });
+
+  it("PINNED_GATES keeps canSaveSkill as a RECORD only — the id is dead in Desktop code", () => {
+    // Absent from every asar from 1.44121.1 on, so this row round-trips whatever the server sends and a
+    // flip of it changes nothing. Kept because baselines and docs name the row; it is not a sentinel and
+    // this test does not claim it guards the `save_skill` tool surface.
     expect(PINNED_GATES["3246569822"]).toBe("canSaveSkill");
   });
 

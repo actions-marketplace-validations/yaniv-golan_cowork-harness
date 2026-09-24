@@ -150,24 +150,38 @@ export const PINNED_GATES: Record<string, string> = {
   // init.tools of 8 real sessions) render, and in what mode. None was pinned before, so 245679952
   // being live on/force was invisible to the drift guard. Present in the live fcache (NOT dark), so
   // they are read at their real state — no DARK_GATES entry. BEHAVIORALLY MODELED since A2: the harness
-  // declares the skills/plugins SDK-MCP servers and reads BOTH gates at spawn
-  // (`resolveSkillDiscoveryGates`), so a flip here CHANGES the declared tool set on container/hostloop
-  // (see `src/hostloop/skills-handler.ts`) — it is NOT inert. A pinned drift alone WARNS + still writes.
+  // declares the skills/plugins SDK-MCP servers and reads 245679952 at spawn (`resolveSkillDiscoveryGates`),
+  // so a flip of it CHANGES the declared tool set on container/hostloop (see
+  // `src/hostloop/skills-handler.ts`) — it is NOT inert. 1598976391 is read only for a baseline older than
+  // 1.46388.3 (see its entry below). A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
-  // proactive (unprompted) suggest mode. (A prior note speculated this widens at agent >=2.1.217 to gate
-  // the whole discovery-tool family; REFUTED — 2.1.205-2.1.217 sessions carry the full skills family with
-  // this gate OFF.) It has THREE effects, not two: it swaps suggest_skills's description, adds `trigger`,
-  // AND is passed into generateSkillsSystemPrompt, where it swaps the suggest-guidance line inside the
-  // dynamically-generated `<skills_instructions>` block (plus a once-per-conversation sentence). A prior
-  // version of this comment claimed "only swaps the description and adds `trigger`" — that was wrong about
-  // the product. The harness models the first two and renders no `<skills_instructions>` section at all,
-  // so the prompt effect is a disclosed gap, not a modelled surface (same shape as canSaveSkill below).
+  // proactive (unprompted) suggest mode. DEAD IN DESKTOP CODE FROM 1.46388.3: 2 occurrences in the 1.40609.1
+  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 2.7032.0, and the `proactiveSkillSuggestEnabled`
+  // name is gone too. From that build Desktop gives suggest_skills its proactive description and `trigger`
+  // param unconditionally whenever the tool is declared. Up to 1.44121.1 the gate was live, with three effects:
+  // the description swap, `trigger`, and a swapped suggest-guidance line in the generated
+  // `<skills_instructions>` block (a prompt effect the harness never models).
+  // The harness reads this row at spawn ONLY for a baseline older than 1.46388.3; from there
+  // `resolveSkillDiscoveryGates` ignores it and proactive mode is always on, as in production. So a
+  // server-side flip here is a sync diff with no effect on runs against a current baseline. Like
+  // canSaveSkill below, the row is a record of what the server sends, not a sentinel.
   "1598976391": "proactiveSkillSuggestEnabled",
-  // Flipped off/defaultValue -> ON/force server-side (fcache) as of 2026-07-25, i.e. for current users on
-  // any Desktop version — NOT a Desktop change; the machinery already shipped in 1.24012.1 gated off. ON
-  // adds a `save_skill` tool to the session's SDK-MCP inventory AND is passed into
-  // generateSkillsSystemPrompt, so it changes both the tool set and the skills prompt. The harness models
-  // NEITHER yet, so this is a known fidelity gap, not a modelled surface.
+  // DEAD IN DESKTOP CODE SINCE 1.44121.1 — THIS PIN PROVIDES NO COVERAGE OF `save_skill`. The id has 3
+  // occurrences in the 1.40609.1 asar and 0 in every asar from 1.44121.1 through 2.7032.0 (count with
+  // `grep -ao <id> app.asar | wc -l`; `grep -c` counts lines of a minified file and undercounts). The
+  // fcache still serves it on/force, so sync round-trips it and reports "no change": a green light on a
+  // disconnected sensor. Up to 1.40609.1 the gate was live, and its off -> on flip on 2026-07-25 is what
+  // put `mcp__cowork__save_skill` into real sessions. The row is kept only as a record of what the server
+  // sends: baselines from 1.24012.1 on carry it (from 1.44121.1 on with a `note` saying it is unread), and
+  // docs/fidelity-gaps.md names it. Do not read it as a tripwire.
+  // At 2.7032.0 the tool follows `skillsEnabled`, the managed `skillCreationEnabled` setting and two gates
+  // that first appear in that build: 3656976882 (org skills off) and 3469616823 (bypass for the org skill-
+  // creation block). The org check reads a `skill_creation` status from an account access list Desktop
+  // fetches at runtime (`/api/bootstrap/<org>/current_user_access`, held in memory, absent from the fcache)
+  // and can only turn the tool OFF — an unloaded list allows it. Pinning the two newer gates would NOT make
+  // this a sentinel: the access list sits outside the fcache. The observable outcome is whether a REAL
+  // Desktop session's init tool list carries `mcp__cowork__save_skill` — never a harness run's, which lists
+  // only what the harness itself declares and does not declare `save_skill` at any tier.
   "3246569822": "canSaveSkill",
   // off/defaultValue and PRESENT in the fcache (so NOT dark — no DARK_GATES entry) — the `propose_skills`
   // render-only sibling. Pinned so a production flip surfaces as a sync diff instead of silently widening

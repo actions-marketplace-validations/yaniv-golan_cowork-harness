@@ -6,6 +6,56 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.8.1] — 2026-09-24
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed.** Nothing in this release changes what a run declares or spawns for
+  any committed baseline: the proactive-mode fix resolves to the same value on every baseline it touches
+  (all from 1.46388.3 on already carry the gate on), and the other edits under `src/runtime`,
+  `src/hostloop`, `src/session.ts` and `baselines/` are comments, schema description text and one
+  baseline annotation string. `verify-cassettes examples/replays` reports all three committed cassettes
+  clean.
+- **Live-validated against `desktop-2.7032.0`**, which 3.8.0 shipped without. On agent 2.1.280, all four
+  tiers: `boundary-check` 6/6, e2e self-tests 9/9, `test:live` 19/20 on the first run, and
+  `run examples/scenarios/` 6/7. The `test:live` red was model variance in `live-matrix` (the model asked
+  in plain text instead of calling `AskUserQuestion`); the file passed on two re-runs. The seventh example,
+  `subagent-manifest-probe`, stopped when the operator account hit its usage limit and was not re-run.
+  Details in `DESIGN.md`'s scope note.
+
+### Fixed
+
+- **Proactive `suggest_skills` mode follows the Desktop version, not a gate Desktop no longer reads.**
+  From Desktop 1.46388.3 the asar has no reference to gate `1598976391` (`proactiveSkillSuggestEnabled`):
+  `suggest_skills` always carries the proactive description and `trigger` param when it is declared. The
+  server still serves the gate, and the harness read it for every baseline, so a server-side flip to off
+  would have switched proactive mode off here while production kept it on. For a baseline at 1.46388.3 or
+  later the row is now ignored and proactive mode is on; older baselines still read the gate, and
+  `skills.proactive_suggest_enabled` still overrides both. No change for any committed baseline: all of
+  them from 1.46388.3 on carry the gate on.
+
+### Documentation
+
+- **`docs/fidelity-gaps.md` — what the plugin-MCP shadow file carries depends on enforcement.** The page
+  said the whole rewritten server set goes into `cowork-plugin-mcp-shadow.json`. Read in the 2.7032.0
+  asar, that holds only when Desktop enforces remote shadowing (gate `2529235968` on and no enterprise
+  managed-configuration override); otherwise the file names only the remote servers a stand-in replaced,
+  policy stubs travel in the in-process SDK server map alone, and a failed write is logged rather than
+  refusing the session. The section also states that any failure building the stubs refuses the session
+  while an MCP policy is active, that a stub never appears as a `LocalMcpServerManager` connection, and
+  which `main.log` lines record the remote arm.
+- **Two pinned gate rows are records, not sentinels.** `canSaveSkill` (`3246569822`) has no reference in
+  any Desktop asar from 1.44121.1 on, and `proactiveSkillSuggestEnabled` (`1598976391`) none from
+  1.46388.3 on; the server still serves both, so `sync` keeps recording them. The gates `$comment` in the
+  2.7032.0 baseline, which `sync` carries forward, says so, and a flip of either row changes no run
+  against a current baseline.
+- **The unmodeled proactive skills-prompt line applies to every current session.** From Desktop 1.46388.3,
+  Desktop's generated `<skills_instructions>` block always carries its proactive suggestion guidance when
+  `suggest_skills` and `search_plugins` are available; the harness renders no such block, and
+  `docs/fidelity-gaps.md` states the gap at that scope. `skills.proactive_suggest_enabled: false` on such
+  a baseline builds a non-proactive `suggest_skills` that production does not ship there —
+  `docs/session.md`, the session schema's description and the companion skill's schema reference say so.
+
 ## [3.8.0] — 2026-09-22
 
 ### Upgrade notes

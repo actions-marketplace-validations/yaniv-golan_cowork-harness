@@ -1,4 +1,5 @@
 import type { PlatformBaseline } from "./types.js";
+import { cmpVersionStrings } from "./baseline.js";
 
 /**
  * Replicates Cowork's loop-mode decision verbatim (asar 1.12603.1):
@@ -149,6 +150,13 @@ export function readGateBool(baseline: PlatformBaseline, id: string): boolean | 
  *
  * Defaults when the gate is absent from the baseline: `suggestSkills` → true, `proactiveSuggest` → false
  * (the documented production state).
+ *
+ * Proactive mode is version-dependent. Up to Desktop 1.44121.1 it is gate `1598976391`. From
+ * {@link PROACTIVE_SUGGEST_UNCONDITIONAL_FROM} the gate id is gone from the asar and `suggest_skills` always
+ * carries the proactive description and `trigger` param whenever it is declared — so for those baselines
+ * the gate row is IGNORED even though the fcache still serves it. Reading it there would let a server-side
+ * flip of a gate Desktop no longer reads turn the harness's proactive mode off while production keeps it on.
+ * The session knob still wins either way.
  */
 export function resolveSkillDiscoveryGates(
   baseline: PlatformBaseline,
@@ -156,8 +164,22 @@ export function resolveSkillDiscoveryGates(
 ): { suggestSkillsEnabled: boolean; proactiveSkillSuggestEnabled: boolean } {
   return {
     suggestSkillsEnabled: knobs.suggest_enabled ?? readGateBool(baseline, "245679952") ?? true,
-    proactiveSkillSuggestEnabled: knobs.proactive_suggest_enabled ?? readGateBool(baseline, "1598976391") ?? false,
+    proactiveSkillSuggestEnabled: knobs.proactive_suggest_enabled ?? proactiveFromBaseline(baseline),
   };
+}
+
+/** First backed-up Desktop build whose asar has no reference to gate `1598976391` (0 occurrences from
+ *  here through 2.7032.0; 2 in 1.44121.1, the previous backup — builds in between are unobserved, and a
+ *  baseline for one would take the gate path, the conservative side). From this build proactive suggest
+ *  mode is unconditional. */
+export const PROACTIVE_SUGGEST_UNCONDITIONAL_FROM = "1.46388.3";
+
+function proactiveFromBaseline(baseline: PlatformBaseline): boolean {
+  // `appVersion` is required by the schema, but synthetic test baselines omit it; a missing version
+  // compares as 0.0.0 and takes the gate path, which is the pre-1.46388.3 behaviour.
+  const v = (baseline as { appVersion?: unknown }).appVersion;
+  if (typeof v === "string" && cmpVersionStrings(v, PROACTIVE_SUGGEST_UNCONDITIONAL_FROM) >= 0) return true;
+  return readGateBool(baseline, "1598976391") ?? false;
 }
 
 export function decideLoop(inputs: LoopInputs): Loop {
